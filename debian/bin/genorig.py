@@ -62,6 +62,11 @@ class Main(object):
             self.orig_dir = '%s-%s' % (self.source, self.version.upstream)
             self.orig_tar = '%s_%s.orig.tar.gz' % (self.source, self.version.upstream)
 
+        try:
+            os.symlink(os.path.join('orig', self.orig_tar), os.path.join('..', self.orig_tar))
+        except OSError:
+            pass
+
     def __call__(self):
         import tempfile
         self.temp_dir = tempfile.mkdtemp(prefix='genorig', dir='debian')
