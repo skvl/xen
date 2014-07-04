@@ -48,19 +48,21 @@ class Main(object):
         if options.override_version:
             self.version = VersionXen('%s-0' % options.override_version)
 
-        if os.path.exists(os.path.join(repo, '.hg')):
-            self.repo = RepoHg(repo, options)
-        elif os.path.exists(os.path.join(repo, '.git')):
-            self.repo = RepoGit(repo, options)
-        else:
-            raise NotImplementedError
-
         if options.component:
             self.orig_dir = options.component
             self.orig_tar = '%s_%s.orig-%s.tar.gz' % (self.source, self.version.upstream, options.component)
         else:
             self.orig_dir = '%s-%s' % (self.source, self.version.upstream)
             self.orig_tar = '%s_%s.orig.tar.gz' % (self.source, self.version.upstream)
+            if options.tag is None:
+                options.tag = 'RELEASE-' + self.version.upstream
+
+        if os.path.exists(os.path.join(repo, '.hg')):
+            self.repo = RepoHg(repo, options)
+        elif os.path.exists(os.path.join(repo, '.git')):
+            self.repo = RepoGit(repo, options)
+        else:
+            raise NotImplementedError
 
         try:
             os.symlink(os.path.join('orig', self.orig_tar), os.path.join('..', self.orig_tar))
