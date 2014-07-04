@@ -43,11 +43,10 @@ class Main(object):
 
         self.changelog_entry = Changelog(version=VersionXen)[0]
         self.source = self.changelog_entry.source
+        self.version = self.changelog_entry.version
 
-        if options.version:
-            self.version = options.version
-        else:
-            raise NotImplementedError
+        if options.override_version:
+            self.version = VersionXen('%s-0' % options.override_version)
 
         if os.path.exists(os.path.join(repo, '.hg')):
             self.repo = RepoHg(repo, options)
@@ -58,10 +57,10 @@ class Main(object):
 
         if options.component:
             self.orig_dir = options.component
-            self.orig_tar = '%s_%s.orig-%s.tar.gz' % (self.source, self.version, options.component)
+            self.orig_tar = '%s_%s.orig-%s.tar.gz' % (self.source, self.version.upstream, options.component)
         else:
-            self.orig_dir = '%s-%s' % (self.source, self.version)
-            self.orig_tar = '%s_%s.orig.tar.gz' % (self.source, self.version)
+            self.orig_dir = '%s-%s' % (self.source, self.version.upstream)
+            self.orig_tar = '%s_%s.orig.tar.gz' % (self.source, self.version.upstream)
 
     def __call__(self):
         import tempfile
@@ -93,7 +92,7 @@ if __name__ == '__main__':
     p = OptionParser(prog=sys.argv[0], usage='%prog [OPTION]... DIR')
     p.add_option('-c', '--component', dest='component')
     p.add_option('-t', '--tag', dest='tag')
-    p.add_option('-v', '--version', dest='version')
+    p.add_option('-V', '--override-version', dest='override_version')
     options, args = p.parse_args()
     if len(args) != 1:
         raise RuntimeError
