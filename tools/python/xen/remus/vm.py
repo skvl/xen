@@ -1,5 +1,3 @@
-#!/usr/bin/env python
-
 import xmlrpclib
 
 from xen.xend.XendClient import server
