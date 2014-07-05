@@ -632,7 +632,7 @@ main(int argc, char **argv)
 	    max_width = ws.ws_col - 2;
     }
 
-    xsh = xs_open(socket ? XS_OPEN_SOCKETONLY : 0);
+    xsh = xs_open(socket ? XS_OPEN_SOCKETONLY : XS_OPEN_DOMAINONLY);
     if (xsh == NULL) err(1, "xs_open");
 
 again:
