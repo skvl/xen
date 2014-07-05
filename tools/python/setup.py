@@ -5,6 +5,7 @@ import os, sys
 XEN_ROOT = "../.."
 
 extra_compile_args  = [ "-fno-strict-aliasing", "-Werror" ]
+extra_link_args = [ "-Wl,-rpath,${ORIGIN}/../../.." ]
 
 PATH_XEN      = XEN_ROOT + "/tools/include"
 PATH_LIBXC    = XEN_ROOT + "/tools/libxc"
@@ -13,6 +14,7 @@ PATH_XENSTORE = XEN_ROOT + "/tools/xenstore"
 
 xc = Extension("xc",
                extra_compile_args = extra_compile_args,
+               extra_link_args    = extra_link_args,
                include_dirs       = [ PATH_XEN, PATH_LIBXC + "/include", "xen/lowlevel/xc" ],
                library_dirs       = [ PATH_LIBXC ],
                libraries          = [ "xenctrl", "xenguest" ],
@@ -21,6 +23,7 @@ xc = Extension("xc",
 
 xs = Extension("xs",
                extra_compile_args = extra_compile_args,
+               extra_link_args    = extra_link_args,
                include_dirs       = [ PATH_XEN, PATH_XENSTORE + "/include", "xen/lowlevel/xs" ],
                library_dirs       = [ PATH_XENSTORE ],
                libraries          = [ "xenstore" ],
@@ -29,6 +32,7 @@ xs = Extension("xs",
 
 xl = Extension("xl",
                extra_compile_args = extra_compile_args,
+               extra_link_args    = extra_link_args,
                include_dirs       = [ PATH_XEN, PATH_LIBXL, PATH_LIBXC + "/include", "xen/lowlevel/xl" ],
                library_dirs       = [ PATH_LIBXL ],
                libraries          = [ "xenlight" ],
