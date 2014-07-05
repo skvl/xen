@@ -282,17 +282,19 @@ struct xs_handle *xs_daemon_open_readonly(void)
 
 struct xs_handle *xs_domain_open(void)
 {
-	return xs_open(0);
+	return xs_open(XS_OPEN_DOMAINONLY);
 }
 
 struct xs_handle *xs_open(unsigned long flags)
 {
 	struct xs_handle *xsh = NULL;
 
+	if (!(flags & XS_OPEN_DOMAINONLY)) {
 	if (flags & XS_OPEN_READONLY)
 		xsh = get_handle(xs_daemon_socket_ro());
 	else
 		xsh = get_handle(xs_daemon_socket());
+	}
 
 	if (!xsh && !(flags & XS_OPEN_SOCKETONLY))
 		xsh = get_handle(xs_domain_dev());
