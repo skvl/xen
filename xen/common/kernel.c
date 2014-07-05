@@ -251,8 +251,8 @@ DO(xen_version)(int cmd, XEN_GUEST_HANDLE_PARAM(void) arg)
 
         memset(&info, 0, sizeof(info));
         safe_strcpy(info.compiler,       xen_compiler());
-        safe_strcpy(info.compile_by,     xen_compile_by());
-        safe_strcpy(info.compile_domain, xen_compile_domain());
+        safe_strcpy(info.compile_by,     xen_compile_system_maintainer_local());
+        safe_strcpy(info.compile_domain, xen_compile_system_maintainer_domain());
         safe_strcpy(info.compile_date,   xen_compile_date());
         if ( copy_to_guest(arg, &info, 1) )
             return -EFAULT;

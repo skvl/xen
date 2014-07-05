@@ -129,7 +129,7 @@ delete-unfresh-files:
 	@mv -f $@.tmp $@
 
 # compile.h contains dynamic build info. Rebuilt on every 'make' invocation.
-include/xen/compile.h: include/xen/compile.h.in .banner
+include/xen/compile.h: include/xen/compile.h.in
 	@sed -e 's/@@date@@/$(XEN_BUILD_DATE)/g' \
 	    -e 's/@@time@@/$(XEN_BUILD_TIME)/g' \
 	    -e 's/@@whoami@@/$(XEN_WHOAMI)/g' \
@@ -140,9 +140,11 @@ include/xen/compile.h: include/xen/compile.h.in .banner
 	    -e 's/@@subversion@@/$(XEN_SUBVERSION)/g' \
 	    -e 's/@@extraversion@@/$(XEN_EXTRAVERSION)/g' \
 	    -e 's!@@changeset@@!$(shell tools/scmversion $(XEN_ROOT) || echo "unavailable")!g' \
+	    -e 's/@@system_distribution@@/$(shell lsb_release -is)/g' \
+	    -e 's/@@system_maintainer_domain@@/$(shell cd ../../../..; dpkg-parsechangelog | sed -ne 's,^Maintainer: .[^<]*<[^@>]*@\([^>]*\)>,\1,p')/g' \
+	    -e 's/@@system_maintainer_local@@/$(shell cd ../../../..; dpkg-parsechangelog | sed -ne 's,^Maintainer: .[^<]*<\([^@>]*\)@.*>,\1,p')/g' \
+	    -e 's/@@system_version@@/$(shell cd ../../../..; dpkg-parsechangelog | awk '/^Version:/ {print $$2}')/g' \
 	    < include/xen/compile.h.in > $@.new
-	@cat .banner
-	@$(PYTHON) tools/fig-to-oct.py < .banner >> $@.new
 	@mv -f $@.new $@
 
 include/asm-$(TARGET_ARCH)/asm-offsets.h: arch/$(TARGET_ARCH)/asm-offsets.s
