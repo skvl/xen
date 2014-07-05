@@ -1,5 +1,3 @@
-#!/usr/bin/env python
-
 import os, select, socket, threading, time, signal, xmlrpclib
 
 from xen.xend.XendClient import server
