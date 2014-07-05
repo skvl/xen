@@ -239,7 +239,7 @@ SEABIOS_UPSTREAM_TAG ?= rel-1.7.3.1
 # Fri Aug 2 14:12:09 2013 -0400
 # Fix bug in CBFS file walking with compressed files.
 
-ETHERBOOT_NICS ?= rtl8139 8086100e
+ETHERBOOT_NICS ?= rtl8139 e1000_82540
 
 # Specify which qemu-dm to use. This may be `ioemu' to use the old
 # Mercurial in-tree version, or a local directory, or a git URL.
