@@ -13,6 +13,10 @@
 XEN_ROOT=$(CURDIR)/../..
 include $(XEN_ROOT)/tools/Rules.mk
 
+DEFAULT_PYTHON_PATH := $(shell $(XEN_ROOT)/tools/python/get-path)
+PYTHON_PATH ?= $(DEFAULT_PYTHON_PATH)
+INSTALL_PYTHON_PROG = $(XEN_ROOT)/tools/python/install-wrap "$(PYTHON_PATH)" $(INSTALL_PROG)
+
 CFLAGS  += -Werror
 CFLAGS  += $(CFLAGS_libxenevtchn)
 CFLAGS  += $(CFLAGS_libxenctrl)
