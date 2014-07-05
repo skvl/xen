@@ -3244,7 +3244,7 @@ class XendDomainInfo:
         else:
             # Boot using bootloader
             if not blexec or blexec == 'pygrub':
-                blexec = auxbin.pathTo('pygrub')
+                blexec = auxbin.path_bin('pygrub')
 
             blcfg = None
             disks = [x for x in self.info['vbd_refs']
