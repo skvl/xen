@@ -46,9 +46,10 @@ $(SHLIB): $(OBJECTS-y)
 
 .PHONY: install
 install: all
+	$(INSTALL_DIR) $(DESTDIR)$(LIBDIR) $(DESTDIR)$(LIBEXEC_LIB)
 	$(INSTALL_DATA) src/xenstat.h $(DESTDIR)$(INCLUDEDIR)
 	$(INSTALL_DATA) $(LIB) $(DESTDIR)$(LIBDIR)/libxenstat.a
-	$(INSTALL_PROG) src/libxenstat.so $(DESTDIR)$(LIBDIR)
+	$(INSTALL_PROG) src/libxenstat.so $(DESTDIR)$(LIBEXEC_LIB)
 
 PYLIB=bindings/swig/python/_xenstat.so
 PYMOD=bindings/swig/python/xenstat.py
