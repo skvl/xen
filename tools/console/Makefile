@@ -8,6 +8,7 @@ CFLAGS  += $(CFLAGS_libxenstore)
 LDLIBS += $(LDLIBS_libxenctrl)
 LDLIBS += $(LDLIBS_libxenstore)
 LDLIBS += $(SOCKET_LIBS)
+LDFLAGS += $(call LDFLAGS_RPATH,../lib)
 
 LDLIBS_xenconsoled += $(UTIL_LIBS)
 LDLIBS_xenconsoled += -lrt
@@ -37,9 +38,7 @@ $(eval $(genpath-target))
 
 .PHONY: install
 install: $(BIN)
-	$(INSTALL_DIR) $(DESTDIR)/$(sbindir)
-	$(INSTALL_PROG) xenconsoled $(DESTDIR)/$(sbindir)
 	$(INSTALL_DIR) $(DESTDIR)$(LIBEXEC_BIN)
-	$(INSTALL_PROG) xenconsole $(DESTDIR)$(LIBEXEC_BIN)
+	$(INSTALL_PROG) xenconsole xenconsoled $(DESTDIR)$(LIBEXEC_BIN)
 
 -include $(DEPS)
