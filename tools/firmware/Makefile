@@ -7,7 +7,6 @@ INST_DIR := $(DESTDIR)$(XENFIRMWAREDIR)
 
 SUBDIRS-y :=
 SUBDIRS-$(CONFIG_OVMF) += ovmf
-SUBDIRS-$(CONFIG_SEABIOS) += seabios-dir
 SUBDIRS-$(CONFIG_ROMBIOS) += rombios
 SUBDIRS-$(CONFIG_ROMBIOS) += vgabios
 SUBDIRS-y += hvmloader
@@ -47,9 +46,6 @@ distclean: subdirs-distclean
 
 subdir-distclean-ovmf: .phony
 	rm -rf ovmf ovmf-remote
-
-subdir-distclean-seabios-dir: .phony
-	rm -rf seabios-dir seabios-dir-remote
 
 .PHONY: ovmf-find
 ovmf-find:
