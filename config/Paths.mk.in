@@ -13,6 +13,7 @@
 # http://wiki.xen.org/wiki/Category:Host_Configuration#System_wide_xen_configuration
 
 PACKAGE_TARNAME          := @PACKAGE_TARNAME@
+PACKAGE_VERSION          := @PACKAGE_VERSION@
 prefix                   := @prefix@
 bindir                   := @bindir@
 sbindir                  := @sbindir@
@@ -33,8 +34,8 @@ PREFIX                   := $(prefix)
 
 SBINDIR                  := $(sbindir)
 BINDIR                   := $(bindir)
-LIBEXEC                  := $(libexecdir)/$(PACKAGE_TARNAME)
-LIBEXEC_BIN              := @LIBEXEC_BIN@
+LIBEXEC                  := $(libexecdir)/$(PACKAGE_TARNAME)-$(PACKAGE_VERSION)
+LIBEXEC_BIN              := $(LIBEXEC)/bin
 LIBEXEC_LIB              := $(LIBEXEC)/lib
 LIBEXEC_INC              := $(LIBEXEC)/include
 
