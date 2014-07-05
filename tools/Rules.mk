@@ -9,6 +9,8 @@ include $(XEN_ROOT)/Config.mk
 export _INSTALL := $(INSTALL)
 INSTALL = $(XEN_ROOT)/tools/cross-install
 
+LDFLAGS_RPATH = -Wl,-rpath,'$${ORIGIN}$(if $(1),/$(1))'
+
 XEN_INCLUDE        = $(XEN_ROOT)/tools/include
 XEN_LIBXENTOOLLOG  = $(XEN_ROOT)/tools/libs/toollog
 XEN_LIBXENEVTCHN   = $(XEN_ROOT)/tools/libs/evtchn
