@@ -19,8 +19,6 @@ SUBDIRS-$(CONFIG_Linux) += memshr
 ifeq ($(CONFIG_X86)$(CONFIG_Linux),yy)
 SUBDIRS-$(CONFIG_BLKTAP1) += blktap
 endif
-SUBDIRS-$(CONFIG_Linux) += blktap2
-SUBDIRS-$(CONFIG_NetBSD) += blktap2
 SUBDIRS-$(CONFIG_NetBSD) += xenbackendd
 SUBDIRS-y += libfsimage
 SUBDIRS-$(LIBXENAPI_BINDINGS) += libxen
