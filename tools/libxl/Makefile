@@ -12,6 +12,8 @@ CFLAGS += -I. -fPIC
 ifeq ($(CONFIG_Linux),y)
 LIBUUID_LIBS += -luuid
 endif
+LDFLAGS_XL = $(call LDFLAGS_RPATH,../lib)
+LDFLAGS_LIBXL = $(call LDFLAGS_RPATH)
 
 LIBXL_LIBS =
 LIBXL_LIBS = $(LDLIBS_libxenctrl) $(LDLIBS_libxenguest) $(LDLIBS_libxenstore) $(LDLIBS_libblktapctl) $(PTYFUNCS_LIBS) $(LIBUUID_LIBS)
@@ -204,7 +206,7 @@ libxenlight.so: libxenlight-$(PACKAGE_VERSION).so
 	$(SYMLINK_SHLIB) $< $@
 
 libxenlight-$(PACKAGE_VERSION).so: $(LIBXL_OBJS)
-	$(CC) $(LDFLAGS) -Wl,$(SONAME_LDFLAG),$@ $(SHLIB_LDFLAGS) -o $@ $^ $(LIBXL_LIBS) $(APPEND_LDFLAGS)
+	$(CC) $(LDFLAGS) -Wl,$(SONAME_LDFLAG),$@ $(LDFLAGS_LIBXL) $(SHLIB_LDFLAGS) -o $@ $^ $(LIBXL_LIBS) $(APPEND_LDFLAGS)
 
 libxenlight_test.so: $(LIBXL_OBJS) $(LIBXL_TEST_OBJS)
 	$(CC) $(LDFLAGS) -Wl,$(SONAME_LDFLAG) -Wl,libxenlight.so.$(MAJOR) $(SHLIB_LDFLAGS) -o $@ $^ $(LIBXL_LIBS) $(APPEND_LDFLAGS)
@@ -222,7 +224,7 @@ libxlutil.a: $(LIBXLU_OBJS)
 	$(AR) rcs libxlutil.a $^
 
 xl: $(XL_OBJS) libxlutil.so libxenlight.so
-	$(CC) $(LDFLAGS) -o $@ $(XL_OBJS) libxlutil.so $(LDLIBS_libxenlight) $(LDLIBS_libxenctrl) -lyajl $(APPEND_LDFLAGS)
+	$(CC) $(LDFLAGS) $(LDFLAGS_XL) -o $@ $(XL_OBJS) libxlutil.so $(LDLIBS_libxenlight) $(LDLIBS_libxenctrl) -lyajl $(APPEND_LDFLAGS)
 
 xen-init-dom0: $(XEN_INIT_DOM0_OBJS) libxenlight.so
 	$(CC) $(LDFLAGS) -o $@ $(XEN_INIT_DOM0_OBJS) $(LDLIBS_libxenstore) $(LDLIBS_libxenlight) $(LDLIBS_libxenctrl) $(APPEND_LDFLAGS)
@@ -238,12 +240,11 @@ testidl: testidl.o libxlutil.so libxenlight.so
 
 .PHONY: install
 install: all
-	$(INSTALL_DIR) $(DESTDIR)$(SBINDIR)
 	$(INSTALL_DIR) $(DESTDIR)$(LIBDIR)
 	$(INSTALL_DIR) $(DESTDIR)$(INCLUDEDIR)
 	$(INSTALL_DIR) $(DESTDIR)$(BASH_COMPLETION_DIR)
 	$(INSTALL_DIR) $(DESTDIR)$(LIBEXEC_BIN)
-	$(INSTALL_PROG) xl $(DESTDIR)$(SBINDIR)
+	$(INSTALL_PROG) xl $(DESTDIR)$(LIBEXEC_BIN)
 	$(INSTALL_PROG) xen-init-dom0 $(DESTDIR)$(LIBEXEC_BIN)
 	$(INSTALL_PROG) libxl-save-helper $(DESTDIR)$(LIBEXEC_BIN)
 	$(INSTALL_SHLIB) libxenlight-$(PACKAGE_VERSION).so $(DESTDIR)$(LIBDIR)
