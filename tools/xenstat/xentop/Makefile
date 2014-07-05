@@ -19,7 +19,9 @@ all install xentop:
 else
 
 CFLAGS += -DGCC_PRINTF -Werror $(CFLAGS_libxenstat)
+LDFLAGS += $(call LDFLAGS_RPATH,../lib)
 LDLIBS += $(LDLIBS_libxenstat) $(CURSES_LIBS) $(SOCKET_LIBS) -lm
+LDLIBS += $(LDLIBS_libxenctrl) $(LDLIBS_libxenstore)
 CFLAGS += -DHOST_$(XEN_OS)
 
 # Include configure output (config.h) to headers search path
@@ -31,8 +33,8 @@ all: xentop
 
 .PHONY: install
 install: xentop xentop.1
-	$(INSTALL_DIR) $(DESTDIR)$(SBINDIR)
-	$(INSTALL_PROG) xentop $(DESTDIR)$(SBINDIR)/xentop
+	$(INSTALL_DIR) $(DESTDIR)$(LIBEXEC_BIN)
+	$(INSTALL_PROG) xentop $(DESTDIR)$(LIBEXEC_BIN)/xentop
 	$(INSTALL_DIR) $(DESTDIR)$(MAN1DIR)
 	$(INSTALL_DATA) xentop.1 $(DESTDIR)$(MAN1DIR)/xentop.1
 
