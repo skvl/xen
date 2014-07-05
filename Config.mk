@@ -217,7 +217,7 @@ SEABIOS_UPSTREAM_TAG ?= 3a28511b46f0c2af5fae1b6ed2b0c19d7913cee3
 # Wed Jun 26 16:30:45 2013 +0100
 # xen: Don't perform SMP setup.
 
-ETHERBOOT_NICS ?= rtl8139 8086100e
+ETHERBOOT_NICS ?= rtl8139 e1000_82540
 
 # Specify which qemu-dm to use. This may be `ioemu' to use the old
 # Mercurial in-tree version, or a local directory, or a git URL.
