@@ -1,10 +1,7 @@
 XEN_ROOT := $(CURDIR)/../../../
 include $(XEN_ROOT)/tools/Rules.mk
 
-MAJOR              = 1.0
-MINOR              = 0
 LIBNAME            = libblktapctl
-LIBSONAME          = $(LIBNAME).so.$(MAJOR)
 
 IBIN               = tap-ctl
 
@@ -38,39 +35,32 @@ OBJS = $(CTL_OBJS) tap-ctl.o
 PICS = $(CTL_PICS)
 
 LIB_STATIC = $(LIBNAME).a
-LIB_SHARED = $(LIBSONAME).$(MINOR)
+LIB_SHARED = $(LIBNAME).so
 IBIN = tap-ctl
 
 all: build
 
 build: $(IBIN) $(LIB_STATIC) $(LIB_SHARED)
 
-$(LIBNAME).so: $(LIBSONAME)
-	ln -sf $< $@
-
-$(LIBSONAME): $(LIB_SHARED)
-	ln -sf $< $@
-
 tap-ctl: tap-ctl.o $(LIBNAME).so
-	$(CC) $(LDFLAGS) -o $@ $^
+	$(CC) $(LDFLAGS) $(call LDFLAGS_RPATH,../lib) -o $@ $^
 
 $(LIB_STATIC): $(CTL_OBJS)
 	$(AR) r $@ $^
 
 $(LIB_SHARED): $(CTL_PICS)
-	$(CC) $(LDFLAGS) -fPIC  -Wl,$(SONAME_LDFLAG) -Wl,$(LIBSONAME) $(SHLIB_LDFLAGS) -rdynamic $^ -o $@
+	$(CC) $(LDFLAGS) -fPIC $(SHLIB_LDFLAGS) -rdynamic $^ -o $@
 
 install: $(IBIN) $(LIB_STATIC) $(LIB_SHARED)
-	$(INSTALL_DIR) -p $(DESTDIR)$(SBINDIR)
-	$(INSTALL_PROG) $(IBIN) $(DESTDIR)$(SBINDIR)
+	$(INSTALL_DIR) -p $(DESTDIR)$(IBDIR)
+	$(INSTALL_DIR) -p $(DESTDIR)$(PRIVATE_LIBDIR)
+	$(INSTALL_DIR) -p $(DESTDIR)$(PRIVATE_SBINDIR)
+	$(INSTALL_PROG) $(IBIN) $(DESTDIR)$(PRIVATE_BINDIR)
 	$(INSTALL_DATA) $(LIB_STATIC) $(DESTDIR)$(LIBDIR)
-	$(INSTALL_PROG) $(LIB_SHARED) $(DESTDIR)$(LIBDIR)
-	ln -sf $(LIBSONAME) $(DESTDIR)$(LIBDIR)/$(LIBNAME).so
-	ln -sf $(LIB_SHARED) $(DESTDIR)$(LIBDIR)/$(LIBSONAME)
+	$(INSTALL_PROG) $(LIB_SHARED) $(DESTDIR)$(PRIVATE_LIBDIR)
 
 clean:
 	rm -f $(OBJS) $(PICS) $(DEPS) $(IBIN) $(LIB_STATIC) $(LIB_SHARED)
-	rm -f $(LIBNAME).so $(LIBSONAME)
 	rm -f *~
 
 .PHONY: all build clean install
