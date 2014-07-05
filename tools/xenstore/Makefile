@@ -17,6 +17,8 @@ LDFLAGS-$(CONFIG_SYSTEMD) += $(SYSTEMD_LIBS)
 CFLAGS  += $(CFLAGS-y)
 LDFLAGS += $(LDFLAGS-y)
 
+LDFLAGS_libxenctrl += $(call LDFLAGS_RPATH,../lib)
+
 CLIENTS := xenstore-exists xenstore-list xenstore-read xenstore-rm xenstore-chmod
 CLIENTS += xenstore-write xenstore-ls xenstore-watch
 
@@ -74,10 +76,10 @@ endif
 init-xenstore-domain.o: CFLAGS += $(CFLAGS_libxenguest)
 
 init-xenstore-domain: init-xenstore-domain.o $(LIBXENSTORE)
-	$(CC) $(LDFLAGS) $^ $(LDLIBS_libxenctrl) $(LDLIBS_libxenguest) $(LDLIBS_libxenstore) -o $@ $(APPEND_LDFLAGS)
+	$(CC) $(LDFLAGS) $^ $(LDLIBS_libxenctrl) $(LDLIBS_libxenguest) $(LDLIBS_libxenstore) $(call LDFLAGS_RPATH,../lib) -o $@ $(APPEND_LDFLAGS)
 
 xenstored: $(XENSTORED_OBJS)
-	$(CC) $(LDFLAGS) $^ $(LDLIBS_libxenctrl) $(SOCKET_LIBS) -o $@ $(APPEND_LDFLAGS)
+	$(CC) $(LDFLAGS) $^ $(LDLIBS_libxenctrl) $(SOCKET_LIBS) $(call LDFLAGS_RPATH,../lib) -o $@ $(APPEND_LDFLAGS)
 
 xenstored.a: $(XENSTORED_OBJS)
 	$(AR) cr $@ $^
@@ -125,18 +127,18 @@ tarball: clean
 
 .PHONY: install
 install: all
-	$(INSTALL_DIR) $(DESTDIR)$(BINDIR)
+	$(INSTALL_DIR) $(DESTDIR)$(LIBEXEC_BIN)
+	$(INSTALL_DIR) $(DESTDIR)$(SBINDIR)
 	$(INSTALL_DIR) $(DESTDIR)$(INCLUDEDIR)
 	$(INSTALL_DIR) $(DESTDIR)$(INCLUDEDIR)/xenstore-compat
 ifeq ($(XENSTORE_XENSTORED),y)
-	$(INSTALL_DIR) $(DESTDIR)$(SBINDIR)
 	$(INSTALL_DIR) $(DESTDIR)$(XEN_LIB_STORED)
-	$(INSTALL_PROG) xenstored $(DESTDIR)$(SBINDIR)
+	$(INSTALL_PROG) xenstored $(DESTDIR)$(LIBEXEC_BIN)
 endif
-	$(INSTALL_PROG) xenstore-control $(DESTDIR)$(BINDIR)
-	$(INSTALL_PROG) xenstore $(DESTDIR)$(BINDIR)
+	$(INSTALL_PROG) xenstore-control $(DESTDIR)$(LIBEXEC_BIN)
+	$(INSTALL_PROG) xenstore $(DESTDIR)$(SBINDIR)
 	set -e ; for c in $(CLIENTS) ; do \
-		ln -f $(DESTDIR)$(BINDIR)/xenstore $(DESTDIR)$(BINDIR)/$${c} ; \
+		ln -f $(DESTDIR)$(SBINDIR)/xenstore $(DESTDIR)$(SBINDIR)/$${c} ; \
 	done
 	$(INSTALL_DIR) $(DESTDIR)$(LIBDIR)
 	$(INSTALL_SHLIB) libxenstore.so.$(MAJOR).$(MINOR) $(DESTDIR)$(LIBDIR)
