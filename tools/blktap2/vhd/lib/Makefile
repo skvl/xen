@@ -2,25 +2,19 @@ XEN_ROOT=$(CURDIR)/../../../..
 BLKTAP_ROOT := ../..
 include $(XEN_ROOT)/tools/Rules.mk
 
-LIBVHD-MAJOR     = 1.0
-LIBVHD-MINOR     = 0
-LIBVHD-SONAME    = libvhd.so.$(LIBVHD-MAJOR)
-
 LVM-UTIL-OBJ    := $(BLKTAP_ROOT)/lvm/lvm-util.o
-
-LIBVHD-BUILD    := libvhd.a
-
-INST-DIR         = $(libdir)
 
 CFLAGS          += -Werror
 CFLAGS          += -Wno-unused
 CFLAGS          += -I../../include
 CFLAGS          += -D_GNU_SOURCE
 CFLAGS          += -fPIC
+CFLAGS		+= $(CFLAGS_libxenctrl)
 
 ifeq ($(CONFIG_Linux),y)
 LIBS            := -luuid
 endif
+LDFLAGS += $(LDFLAGS_libxenctrl) $(call LDFLAGS_RPATH)
 
 ifeq ($(CONFIG_LIBICONV),y)
 LIBS            += -liconv
@@ -50,27 +44,22 @@ LIB-OBJS        += $(LVM-UTIL-OBJ)
 
 LIB-PICOBJS      = $(patsubst %.o,%.opic,$(LIB-OBJS))
 
-LIBVHD           = libvhd.a libvhd.so.$(LIBVHD-MAJOR).$(LIBVHD-MINOR)
+LIBVHD           = libvhd.a libvhd.so
 
 all: build
 
-build: libvhd.a libvhd.so.$(LIBVHD-MAJOR).$(LIBVHD-MINOR)
+build: libvhd.a libvhd.so
 
 libvhd.a: $(LIB-OBJS)
 	$(AR) rc $@ $^
 
-libvhd.so.$(LIBVHD-MAJOR).$(LIBVHD-MINOR): $(LIB-PICOBJS)
-	$(CC) -Wl,$(SONAME_LDFLAG),$(LIBVHD-SONAME) $(SHLIB_LDFLAGS) \
-		$(LDFLAGS) -o libvhd.so.$(LIBVHD-MAJOR).$(LIBVHD-MINOR) $^ $(LIBS)
-	ln -sf libvhd.so.$(LIBVHD-MAJOR).$(LIBVHD-MINOR) libvhd.so.$(LIBVHD-MAJOR)
-	ln -sf libvhd.so.$(LIBVHD-MAJOR) libvhd.so
+libvhd.so: $(LIB-PICOBJS)
+	$(CC) $(SHLIB_LDFLAGS) $(LDFLAGS) -o libvhd.so $^ $(LIBS)
 
 install: all
-	$(INSTALL_DIR) -p $(DESTDIR)$(INST-DIR)
-	$(INSTALL_DATA) libvhd.a $(DESTDIR)$(INST-DIR)
-	$(INSTALL_PROG) libvhd.so.$(LIBVHD-MAJOR).$(LIBVHD-MINOR) $(DESTDIR)$(INST-DIR)
-	ln -sf libvhd.so.$(LIBVHD-MAJOR).$(LIBVHD-MINOR) $(DESTDIR)$(INST-DIR)/libvhd.so.$(LIBVHD-MAJOR)
-	ln -sf libvhd.so.$(LIBVHD-MAJOR) $(DESTDIR)$(INST-DIR)/libvhd.so
+	$(INSTALL_DIR) -p $(DESTDIR)$(libdir)
+	$(INSTALL_DATA) libvhd.a $(DESTDIR)$(libdir)
+	$(INSTALL_PROG) libvhd.so $(DESTDIR)$(libdir)
 
 clean:
 	rm -rf *.a *.so* *.o *.opic *~ $(DEPS) $(LIBVHD)
