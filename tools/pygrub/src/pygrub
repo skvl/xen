@@ -21,6 +21,8 @@ import xen.lowlevel.xc
 import curses, _curses, curses.wrapper, curses.textpad, curses.ascii
 import getopt
 
+sys.path.insert(1, sys.path[0] + '/../lib/python')
+
 import fsimage
 import grub.GrubConf
 import grub.LiloConf
