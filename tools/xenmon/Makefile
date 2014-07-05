@@ -16,6 +16,7 @@ include $(XEN_ROOT)/tools/Rules.mk
 CFLAGS  += -Werror
 CFLAGS  += $(CFLAGS_libxenctrl)
 LDLIBS  += $(LDLIBS_libxenctrl)
+LDFLAGS += $(call LDFLAGS_RPATH,../lib)
 
 SCRIPTS = xenmon.py
 
