@@ -18,18 +18,14 @@ include $(XEN_ROOT)/tools/Rules.mk
 LDCONFIG=ldconfig
 MAKE_LINK=ln -sf
 
-MAJOR=0
-MINOR=0
-
 LIB=src/libxenstat.a
-SHLIB=src/libxenstat.so.$(MAJOR).$(MINOR)
-SHLIB_LINKS=src/libxenstat.so.$(MAJOR) src/libxenstat.so
-OBJECTS-y=src/xenstat.o src/xenstat_qmp.o
+SHLIB=src/libxenstat.so
+OBJECTS-y=src/xenstat.o
 OBJECTS-$(CONFIG_Linux) += src/xenstat_linux.o
 OBJECTS-$(CONFIG_SunOS) += src/xenstat_solaris.o
 OBJECTS-$(CONFIG_NetBSD) += src/xenstat_netbsd.o
 OBJECTS-$(CONFIG_FreeBSD) += src/xenstat_freebsd.o
-SONAME_FLAGS=-Wl,$(SONAME_LDFLAG) -Wl,libxenstat.so.$(MAJOR)
+SONAME_FLAGS=-Wl,$(SONAME_LDFLAG),libxenstat.so
 
 CFLAGS+=-fPIC
 CFLAGS+=-Isrc $(CFLAGS_libxenctrl) $(CFLAGS_libxenstore) $(CFLAGS_xeninclude) -include $(XEN_ROOT)/tools/config.h
@@ -38,7 +34,7 @@ LDLIBS-y = $(LDLIBS_libxenstore) $(LDLIBS_libxenctrl) -lyajl
 LDLIBS-$(CONFIG_SunOS) += -lkstat
 
 PKG_CONFIG := xenstat.pc
-PKG_CONFIG_VERSION := $(MAJOR).$(MINOR)
+PKG_CONFIG_VERSION := $(PACKAGE_VERSION)
 
 ifneq ($(CONFIG_LIBXC_MINIOS),y)
 PKG_CONFIG_INST := $(PKG_CONFIG)
@@ -54,7 +50,7 @@ $(PKG_CONFIG_LOCAL): PKG_CONFIG_INCDIR = $(XEN_LIBXENSTAT)
 $(PKG_CONFIG_LOCAL): PKG_CONFIG_LIBDIR = $(CURDIR)
 
 .PHONY: all
-all: $(LIB) $(SHLIB) $(SHLIB_LINKS) $(PKG_CONFIG_INST) $(PKG_CONFIG_LOCAL)
+all: $(LIB) $(SHLIB) $(PKG_CONFIG_INST) $(PKG_CONFIG_LOCAL)
 
 $(OBJECTS-y): src/_paths.h
 
@@ -66,27 +62,17 @@ $(SHLIB): $(OBJECTS-y)
 	$(CC) $(LDFLAGS) $(SONAME_FLAGS) $(SHLIB_LDFLAGS) -o $@ \
 	    $(OBJECTS-y) $(LDLIBS-y) $(APPEND_LDFLAGS)
 
-src/libxenstat.so.$(MAJOR): $(SHLIB)
-	$(MAKE_LINK) $(<F) $@
-
-src/libxenstat.so: src/libxenstat.so.$(MAJOR)
-	$(MAKE_LINK) $(<F) $@
-
 .PHONY: install
 install: all
 	$(INSTALL_DATA) src/xenstat.h $(DESTDIR)$(includedir)
 	$(INSTALL_DATA) $(LIB) $(DESTDIR)$(libdir)/libxenstat.a
-	$(INSTALL_PROG) src/libxenstat.so.$(MAJOR).$(MINOR) $(DESTDIR)$(libdir)
-	ln -sf libxenstat.so.$(MAJOR).$(MINOR) $(DESTDIR)$(libdir)/libxenstat.so.$(MAJOR)
-	ln -sf libxenstat.so.$(MAJOR) $(DESTDIR)$(libdir)/libxenstat.so
+	$(INSTALL_PROG) src/libxenstat.so $(DESTDIR)$(libdir)
 	$(INSTALL_DATA) xenstat.pc $(DESTDIR)$(PKG_INSTALLDIR)
 
 .PHONY: uninstall
 uninstall:
 	rm -f $(DESTDIR)$(PKG_INSTALLDIR)/xenstat.pc
 	rm -f $(DESTDIR)$(libdir)/libxenstat.so
-	rm -f $(DESTDIR)$(libdir)/libxenstat.so.$(MAJOR)
-	rm -f $(DESTDIR)$(libdir)/libxenstat.so.$(MAJOR).$(MINOR)
 	rm -f $(DESTDIR)$(libdir)/libxenstat.a
 	rm -f $(DESTDIR)$(includedir)/xenstat.h
 
