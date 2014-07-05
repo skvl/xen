@@ -20,7 +20,7 @@ MAKE_LINK=ln -sf
 
 LIB=src/libxenstat.a
 SHLIB=src/libxenstat.so
-OBJECTS-y=src/xenstat.o
+OBJECTS-y=src/xenstat.o src/xenstat_qmp.o
 OBJECTS-$(CONFIG_Linux) += src/xenstat_linux.o
 OBJECTS-$(CONFIG_SunOS) += src/xenstat_solaris.o
 OBJECTS-$(CONFIG_NetBSD) += src/xenstat_netbsd.o
@@ -46,9 +46,11 @@ $(SHLIB): $(OBJECTS-y)
 
 .PHONY: install
 install: all
+	$(INSTALL_DIR) $(DESTDIR)$(includedir)
+	$(INSTALL_DIR) $(DESTDIR)$(LIBEXEC_LIB)
 	$(INSTALL_DATA) src/xenstat.h $(DESTDIR)$(includedir)
 	$(INSTALL_DATA) $(LIB) $(DESTDIR)$(libdir)/libxenstat.a
-	$(INSTALL_PROG) src/libxenstat.so $(DESTDIR)$(libdir)
+	$(INSTALL_PROG) src/libxenstat.so $(DESTDIR)$(LIBEXEC_LIB)
 
 PYLIB=bindings/swig/python/_xenstat.so
 PYMOD=bindings/swig/python/xenstat.py
