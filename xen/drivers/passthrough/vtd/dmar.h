@@ -118,7 +118,7 @@ do {                                                \
             break;                                  \
         if ( NOW() > start_time + DMAR_OPERATION_TIMEOUT ) {    \
             if ( !kexecing )                                    \
-                panic("%s:%d:%s: DMAR hardware is malfunctional\n",\
+                panic("%s:%d:%s: DMAR hardware is malfunctional",\
                       __FILE__, __LINE__, __func__);            \
             else                                                \
                 break;                                          \
@@ -126,8 +126,6 @@ do {                                                \
         cpu_relax();                                            \
     }                                                           \
 } while (0)
-
-void *map_to_nocache_virt(int nr_iommus, u64 maddr);
 
 int vtd_hw_check(void);
 void disable_pmr(struct iommu *iommu);

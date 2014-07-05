@@ -381,6 +381,17 @@ void libxl__ev_time_deregister(libxl__gc *gc, libxl__ev_time *ev)
     return;
 }
 
+static void time_occurs(libxl__egc *egc, libxl__ev_time *etime)
+{
+    DBG("ev_time=%p occurs abs=%lu.%06lu",
+        etime, (unsigned long)etime->abs.tv_sec,
+        (unsigned long)etime->abs.tv_usec);
+
+    libxl__ev_time_callback *func = etime->func;
+    etime->func = 0;
+    func(egc, etime, &etime->abs);
+}
+
 
 /*
  * xenstore watches
@@ -578,8 +589,7 @@ int libxl__ev_xswatch_register(libxl__gc *gc, libxl__ev_xswatch *w,
  out_rc:
     if (use)
         LIBXL_SLIST_INSERT_HEAD(&CTX->watch_freeslots, use, empty);
-    if (path_copy)
-        free(path_copy);
+    free(path_copy);
     CTX_UNLOCK;
     return rc;
 }
@@ -774,10 +784,6 @@ static int beforepoll_internal(libxl__gc *gc, libxl__poller *poller,
             REQUIRE_FD(efd->fd, efd->events, BODY);                    \
                                                                        \
         REQUIRE_FD(poller->wakeup_pipe[0], POLLIN, BODY);              \
-                                                                       \
-        int selfpipe = libxl__fork_selfpipe_active(CTX);               \
-        if (selfpipe >= 0)                                             \
-            REQUIRE_FD(selfpipe, POLLIN, BODY);                        \
                                                                        \
     }while(0)
 
@@ -1000,14 +1006,6 @@ static void afterpoll_internal(libxl__egc *egc, libxl__poller *poller,
         if (e) LIBXL__EVENT_DISASTER(egc, "read wakeup", e, 0);
     }
 
-    int selfpipe = libxl__fork_selfpipe_active(CTX);
-    if (selfpipe >= 0 &&
-        afterpoll_check_fd(poller,fds,nfds, selfpipe, POLLIN)) {
-        int e = libxl__self_pipe_eatall(selfpipe);
-        if (e) LIBXL__EVENT_DISASTER(egc, "read sigchld pipe", e, 0);
-        libxl__fork_selfpipe_woken(egc);
-    }
-
     for (;;) {
         libxl__ev_time *etime = LIBXL_TAILQ_FIRST(&CTX->etimes);
         if (!etime)
@@ -1020,11 +1018,7 @@ static void afterpoll_internal(libxl__egc *egc, libxl__poller *poller,
 
         time_deregister(gc, etime);
 
-        DBG("ev_time=%p occurs abs=%lu.%06lu",
-            etime, (unsigned long)etime->abs.tv_sec,
-            (unsigned long)etime->abs.tv_usec);
-
-        etime->func(egc, etime, &etime->abs);
+        time_occurs(egc, etime);
     }
 }
 
@@ -1105,7 +1099,8 @@ void libxl_osevent_occurred_timeout(libxl_ctx *ctx, void *for_libxl)
     assert(!ev->infinite);
 
     LIBXL_TAILQ_REMOVE(&CTX->etimes, ev, entry);
-    ev->func(egc, ev, &ev->abs);
+
+    time_occurs(egc, ev);
 
  out:
     CTX_UNLOCK;
@@ -1284,76 +1279,38 @@ int libxl_event_check(libxl_ctx *ctx, libxl_event **event_r,
 }
 
 /*
- * Manipulation of pollers
+ * Utilities for pipes (specifically, useful for self-pipes)
  */
 
-int libxl__poller_init(libxl_ctx *ctx, libxl__poller *p)
+void libxl__pipe_close(int fds[2])
+{
+    if (fds[0] >= 0) close(fds[0]);
+    if (fds[1] >= 0) close(fds[1]);
+    fds[0] = fds[1] = -1;
+}
+
+int libxl__pipe_nonblock(libxl_ctx *ctx, int fds[2])
 {
     int r, rc;
-    p->fd_polls = 0;
-    p->fd_rindices = 0;
 
-    r = pipe(p->wakeup_pipe);
+    r = libxl_pipe(ctx, fds);
     if (r) {
-        LIBXL__LOG_ERRNO(ctx, LIBXL__LOG_ERROR, "cannot create poller pipe");
+        fds[0] = fds[1] = -1;
         rc = ERROR_FAIL;
         goto out;
     }
 
-    rc = libxl_fd_set_nonblock(ctx, p->wakeup_pipe[0], 1);
+    rc = libxl_fd_set_nonblock(ctx, fds[0], 1);
     if (rc) goto out;
 
-    rc = libxl_fd_set_nonblock(ctx, p->wakeup_pipe[1], 1);
+    rc = libxl_fd_set_nonblock(ctx, fds[1], 1);
     if (rc) goto out;
 
     return 0;
 
  out:
-    libxl__poller_dispose(p);
+    libxl__pipe_close(fds);
     return rc;
-}
-
-void libxl__poller_dispose(libxl__poller *p)
-{
-    if (p->wakeup_pipe[1] > 0) close(p->wakeup_pipe[1]);
-    if (p->wakeup_pipe[0] > 0) close(p->wakeup_pipe[0]);
-    free(p->fd_polls);
-    free(p->fd_rindices);
-}
-
-libxl__poller *libxl__poller_get(libxl_ctx *ctx)
-{
-    /* must be called with ctx locked */
-    int rc;
-
-    libxl__poller *p = LIBXL_LIST_FIRST(&ctx->pollers_idle);
-    if (p) {
-        LIBXL_LIST_REMOVE(p, entry);
-        return p;
-    }
-
-    p = malloc(sizeof(*p));
-    if (!p) {
-        LIBXL__LOG_ERRNO(ctx, LIBXL__LOG_ERROR, "cannot allocate poller");
-        return 0;
-    }
-    memset(p, 0, sizeof(*p));
-
-    rc = libxl__poller_init(ctx, p);
-    if (rc) return NULL;
-
-    return p;
-}
-
-void libxl__poller_put(libxl_ctx *ctx, libxl__poller *p)
-{
-    LIBXL_LIST_INSERT_HEAD(&ctx->pollers_idle, p, entry);
-}
-
-void libxl__poller_wakeup(libxl__egc *egc, libxl__poller *p)
-{
-    int e = libxl__self_pipe_wakeup(p->wakeup_pipe[1]);
-    if (e) LIBXL__EVENT_DISASTER(egc, "cannot poke watch pipe", e, 0);
 }
 
 int libxl__self_pipe_wakeup(int fd)
@@ -1387,6 +1344,72 @@ int libxl__self_pipe_eatall(int fd)
 }
 
 /*
+ * Manipulation of pollers
+ */
+
+int libxl__poller_init(libxl_ctx *ctx, libxl__poller *p)
+{
+    int rc;
+    p->fd_polls = 0;
+    p->fd_rindices = 0;
+
+    rc = libxl__pipe_nonblock(ctx, p->wakeup_pipe);
+    if (rc) goto out;
+
+    return 0;
+
+ out:
+    libxl__poller_dispose(p);
+    return rc;
+}
+
+void libxl__poller_dispose(libxl__poller *p)
+{
+    libxl__pipe_close(p->wakeup_pipe);
+    free(p->fd_polls);
+    free(p->fd_rindices);
+}
+
+libxl__poller *libxl__poller_get(libxl_ctx *ctx)
+{
+    /* must be called with ctx locked */
+    int rc;
+
+    libxl__poller *p = LIBXL_LIST_FIRST(&ctx->pollers_idle);
+    if (p) {
+        LIBXL_LIST_REMOVE(p, entry);
+        return p;
+    }
+
+    p = malloc(sizeof(*p));
+    if (!p) {
+        LIBXL__LOG_ERRNO(ctx, LIBXL__LOG_ERROR, "cannot allocate poller");
+        return 0;
+    }
+    memset(p, 0, sizeof(*p));
+
+    rc = libxl__poller_init(ctx, p);
+    if (rc) {
+        free(p);
+        return NULL;
+    }
+
+    return p;
+}
+
+void libxl__poller_put(libxl_ctx *ctx, libxl__poller *p)
+{
+    if (!p) return;
+    LIBXL_LIST_INSERT_HEAD(&ctx->pollers_idle, p, entry);
+}
+
+void libxl__poller_wakeup(libxl__egc *egc, libxl__poller *p)
+{
+    int e = libxl__self_pipe_wakeup(p->wakeup_pipe[1]);
+    if (e) LIBXL__EVENT_DISASTER(egc, "cannot poke watch pipe", e, 0);
+}
+
+/*
  * Main event loop iteration
  */
 
@@ -1395,7 +1418,7 @@ static int eventloop_iteration(libxl__egc *egc, libxl__poller *poller) {
      * can unlock it when it polls.
      */
     EGC_GC;
-    int rc;
+    int rc, nfds;
     struct timeval now;
     
     rc = libxl__gettimeofday(gc, &now);
@@ -1404,7 +1427,7 @@ static int eventloop_iteration(libxl__egc *egc, libxl__poller *poller) {
     int timeout;
 
     for (;;) {
-        int nfds = poller->fd_polls_allocd;
+        nfds = poller->fd_polls_allocd;
         timeout = -1;
         rc = beforepoll_internal(gc, poller, &nfds, poller->fd_polls,
                                  &timeout, now);
@@ -1422,7 +1445,7 @@ static int eventloop_iteration(libxl__egc *egc, libxl__poller *poller) {
     }
 
     CTX_UNLOCK;
-    rc = poll(poller->fd_polls, poller->fd_polls_allocd, timeout);
+    rc = poll(poller->fd_polls, nfds, timeout);
     CTX_LOCK;
 
     if (rc < 0) {
@@ -1437,8 +1460,7 @@ static int eventloop_iteration(libxl__egc *egc, libxl__poller *poller) {
     rc = libxl__gettimeofday(gc, &now);
     if (rc) goto out;
 
-    afterpoll_internal(egc, poller,
-                       poller->fd_polls_allocd, poller->fd_polls, now);
+    afterpoll_internal(egc, poller, nfds, poller->fd_polls, now);
 
     rc = 0;
  out:
@@ -1539,7 +1561,7 @@ void libxl__ao__destroy(libxl_ctx *ctx, libxl__ao *ao)
     AO_GC;
     if (!ao) return;
     LOG(DEBUG,"ao %p: destroy",ao);
-    if (ao->poller) libxl__poller_put(ctx, ao->poller);
+    libxl__poller_put(ctx, ao->poller);
     ao->magic = LIBXL__AO_MAGIC_DESTROYED;
     libxl__free_all(&ao->gc);
     free(ao);
@@ -1569,6 +1591,7 @@ void libxl__ao_complete(libxl__egc *egc, libxl__ao *ao, int rc)
     LOG(DEBUG,"ao %p: complete, rc=%d",ao,rc);
     assert(ao->magic == LIBXL__AO_MAGIC);
     assert(!ao->complete);
+    assert(!ao->nested);
     ao->complete = 1;
     ao->rc = rc;
 
@@ -1733,6 +1756,7 @@ void libxl__ao_progress_report(libxl__egc *egc, libxl__ao *ao,
         const libxl_asyncprogress_how *how, libxl_event *ev)
 {
     AO_GC;
+    assert(!ao->nested);
     if (how->callback == dummy_asyncprogress_callback_ignore) {
         LOG(DEBUG,"ao %p: progress report: ignored",ao);
         libxl_event_free(CTX,ev);
@@ -1750,6 +1774,39 @@ void libxl__ao_progress_report(libxl__egc *egc, libxl__ao *ao,
             ao, ev, libxl_event_type_to_string(ev->type));
         libxl__event_occurred(egc, ev);
     }
+}
+
+
+/* nested ao */
+
+_hidden libxl__ao *libxl__nested_ao_create(libxl__ao *parent)
+{
+    /* We only use the parent to get the ctx.  However, we require the
+     * caller to provide us with an ao, not just a ctx, to prove that
+     * they are already in an asynchronous operation.  That will avoid
+     * people using this to (for example) make an ao in a non-ao_how
+     * function somewhere in the middle of libxl. */
+    libxl__ao *child = NULL;
+    libxl_ctx *ctx = libxl__gc_owner(&parent->gc);
+
+    assert(parent->magic == LIBXL__AO_MAGIC);
+
+    child = libxl__zalloc(&ctx->nogc_gc, sizeof(*child));
+    child->magic = LIBXL__AO_MAGIC;
+    child->nested = 1;
+    LIBXL_INIT_GC(child->gc, ctx);
+    libxl__gc *gc = &child->gc;
+
+    LOG(DEBUG,"ao %p: nested ao, parent %p", child, parent);
+    return child;
+}
+
+_hidden void libxl__nested_ao_free(libxl__ao *child)
+{
+    assert(child->magic == LIBXL__AO_MAGIC);
+    assert(child->nested);
+    libxl_ctx *ctx = libxl__gc_owner(&child->gc);
+    libxl__ao__destroy(ctx, child);
 }
 
 

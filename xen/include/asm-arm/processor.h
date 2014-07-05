@@ -2,77 +2,89 @@
 #define __ASM_ARM_PROCESSOR_H
 
 #include <asm/cpregs.h>
+#include <asm/sysregs.h>
 
 /* MIDR Main ID Register */
 #define MIDR_MASK    0xff0ffff0
 
+/* MPIDR Multiprocessor Affinity Register */
+#define _MPIDR_UP           (30)
+#define MPIDR_UP            (_AC(1,U) << _MPIDR_UP)
+#define _MPIDR_SMP          (31)
+#define MPIDR_SMP           (_AC(1,U) << _MPIDR_SMP)
+#define MPIDR_AFF0_SHIFT    (0)
+#define MPIDR_AFF0_MASK     (_AC(0xff,U) << MPIDR_AFF0_SHIFT)
+#define MPIDR_HWID_MASK     _AC(0xffffff,U)
+#define MPIDR_INVALID       (~MPIDR_HWID_MASK)
+
 /* TTBCR Translation Table Base Control Register */
-#define TTBCR_EAE    0x80000000
-#define TTBCR_N_MASK 0x07
-#define TTBCR_N_16KB 0x00
-#define TTBCR_N_8KB  0x01
-#define TTBCR_N_4KB  0x02
-#define TTBCR_N_2KB  0x03
-#define TTBCR_N_1KB  0x04
+#define TTBCR_EAE    _AC(0x80000000,U)
+#define TTBCR_N_MASK _AC(0x07,U)
+#define TTBCR_N_16KB _AC(0x00,U)
+#define TTBCR_N_8KB  _AC(0x01,U)
+#define TTBCR_N_4KB  _AC(0x02,U)
+#define TTBCR_N_2KB  _AC(0x03,U)
+#define TTBCR_N_1KB  _AC(0x04,U)
 
 /* SCTLR System Control Register. */
 /* HSCTLR is a subset of this. */
-#define SCTLR_TE        (1<<30)
-#define SCTLR_AFE       (1<<29)
-#define SCTLR_TRE       (1<<28)
-#define SCTLR_NMFI      (1<<27)
-#define SCTLR_EE        (1<<25)
-#define SCTLR_VE        (1<<24)
-#define SCTLR_U         (1<<22)
-#define SCTLR_FI        (1<<21)
-#define SCTLR_WXN       (1<<19)
-#define SCTLR_HA        (1<<17)
-#define SCTLR_RR        (1<<14)
-#define SCTLR_V         (1<<13)
-#define SCTLR_I         (1<<12)
-#define SCTLR_Z         (1<<11)
-#define SCTLR_SW        (1<<10)
-#define SCTLR_B         (1<<7)
-#define SCTLR_C         (1<<2)
-#define SCTLR_A         (1<<1)
-#define SCTLR_M         (1<<0)
+#define SCTLR_TE        (_AC(1,U)<<30)
+#define SCTLR_AFE       (_AC(1,U)<<29)
+#define SCTLR_TRE       (_AC(1,U)<<28)
+#define SCTLR_NMFI      (_AC(1,U)<<27)
+#define SCTLR_EE        (_AC(1,U)<<25)
+#define SCTLR_VE        (_AC(1,U)<<24)
+#define SCTLR_U         (_AC(1,U)<<22)
+#define SCTLR_FI        (_AC(1,U)<<21)
+#define SCTLR_WXN       (_AC(1,U)<<19)
+#define SCTLR_HA        (_AC(1,U)<<17)
+#define SCTLR_RR        (_AC(1,U)<<14)
+#define SCTLR_V         (_AC(1,U)<<13)
+#define SCTLR_I         (_AC(1,U)<<12)
+#define SCTLR_Z         (_AC(1,U)<<11)
+#define SCTLR_SW        (_AC(1,U)<<10)
+#define SCTLR_B         (_AC(1,U)<<7)
+#define SCTLR_C         (_AC(1,U)<<2)
+#define SCTLR_A         (_AC(1,U)<<1)
+#define SCTLR_M         (_AC(1,U)<<0)
 
-#define SCTLR_BASE        0x00c50078
-#define HSCTLR_BASE       0x30c51878
+#define HSCTLR_BASE     _AC(0x30c51878,U)
 
 /* HCR Hyp Configuration Register */
-#define HCR_TGE         (1<<27)
-#define HCR_TVM         (1<<26)
-#define HCR_TTLB        (1<<25)
-#define HCR_TPU         (1<<24)
-#define HCR_TPC         (1<<23)
-#define HCR_TSW         (1<<22)
-#define HCR_TAC         (1<<21)
-#define HCR_TIDCP       (1<<20)
-#define HCR_TSC         (1<<19)
-#define HCR_TID3        (1<<18)
-#define HCR_TID2        (1<<17)
-#define HCR_TID1        (1<<16)
-#define HCR_TID0        (1<<15)
-#define HCR_TWE         (1<<14)
-#define HCR_TWI         (1<<13)
-#define HCR_DC          (1<<12)
-#define HCR_BSU_MASK    (3<<10)
-#define HCR_BSU_NONE     (0<<10)
-#define HCR_BSU_INNER    (1<<10)
-#define HCR_BSU_OUTER    (2<<10)
-#define HCR_BSU_FULL     (3<<10)
-#define HCR_FB          (1<<9)
-#define HCR_VA          (1<<8)
-#define HCR_VI          (1<<7)
-#define HCR_VF          (1<<6)
-#define HCR_AMO         (1<<5)
-#define HCR_IMO         (1<<4)
-#define HCR_FMO         (1<<3)
-#define HCR_PTW         (1<<2)
-#define HCR_SWIO        (1<<1)
-#define HCR_VM          (1<<0)
+#define HCR_RW          (_AC(1,UL)<<31) /* Register Width, ARM64 only */
+#define HCR_TGE         (_AC(1,UL)<<27) /* Trap General Exceptions */
+#define HCR_TVM         (_AC(1,UL)<<26) /* Trap Virtual Memory Controls */
+#define HCR_TTLB        (_AC(1,UL)<<25) /* Trap TLB Maintenance Operations */
+#define HCR_TPU         (_AC(1,UL)<<24) /* Trap Cache Maintenance Operations to PoU */
+#define HCR_TPC         (_AC(1,UL)<<23) /* Trap Cache Maintenance Operations to PoC */
+#define HCR_TSW         (_AC(1,UL)<<22) /* Trap Set/Way Cache Maintenance Operations */
+#define HCR_TAC         (_AC(1,UL)<<21) /* Trap ACTLR Accesses */
+#define HCR_TIDCP       (_AC(1,UL)<<20) /* Trap lockdown */
+#define HCR_TSC         (_AC(1,UL)<<19) /* Trap SMC instruction */
+#define HCR_TID3        (_AC(1,UL)<<18) /* Trap ID Register Group 3 */
+#define HCR_TID2        (_AC(1,UL)<<17) /* Trap ID Register Group 2 */
+#define HCR_TID1        (_AC(1,UL)<<16) /* Trap ID Register Group 1 */
+#define HCR_TID0        (_AC(1,UL)<<15) /* Trap ID Register Group 0 */
+#define HCR_TWE         (_AC(1,UL)<<14) /* Trap WFE instruction */
+#define HCR_TWI         (_AC(1,UL)<<13) /* Trap WFI instruction */
+#define HCR_DC          (_AC(1,UL)<<12) /* Default cacheable */
+#define HCR_BSU_MASK    (_AC(3,UL)<<10) /* Barrier Shareability Upgrade */
+#define HCR_BSU_NONE     (_AC(0,UL)<<10)
+#define HCR_BSU_INNER    (_AC(1,UL)<<10)
+#define HCR_BSU_OUTER    (_AC(2,UL)<<10)
+#define HCR_BSU_FULL     (_AC(3,UL)<<10)
+#define HCR_FB          (_AC(1,UL)<<9) /* Force Broadcast of Cache/BP/TLB operations */
+#define HCR_VA          (_AC(1,UL)<<8) /* Virtual Asynchronous Abort */
+#define HCR_VI          (_AC(1,UL)<<7) /* Virtual IRQ */
+#define HCR_VF          (_AC(1,UL)<<6) /* Virtual FIQ */
+#define HCR_AMO         (_AC(1,UL)<<5) /* Override CPSR.A */
+#define HCR_IMO         (_AC(1,UL)<<4) /* Override CPSR.I */
+#define HCR_FMO         (_AC(1,UL)<<3) /* Override CPSR.F */
+#define HCR_PTW         (_AC(1,UL)<<2) /* Protected Walk */
+#define HCR_SWIO        (_AC(1,UL)<<1) /* Set/Way Invalidation Override */
+#define HCR_VM          (_AC(1,UL)<<0) /* Virtual MMU Enable */
 
+#define HSR_EC_UNKNOWN              0x00
 #define HSR_EC_WFI_WFE              0x01
 #define HSR_EC_CP15_32              0x03
 #define HSR_EC_CP15_64              0x04
@@ -83,13 +95,25 @@
 #define HSR_EC_JAZELLE              0x09
 #define HSR_EC_BXJ                  0x0a
 #define HSR_EC_CP14_64              0x0c
-#define HSR_EC_SVC                  0x11
-#define HSR_EC_HVC                  0x12
-#define HSR_EC_SMC                  0x13
-#define HSR_EC_INSTR_ABORT_GUEST    0x20
-#define HSR_EC_INSTR_ABORT_HYP      0x21
-#define HSR_EC_DATA_ABORT_GUEST     0x24
-#define HSR_EC_DATA_ABORT_HYP       0x25
+#define HSR_EC_SVC32                0x11
+#define HSR_EC_HVC32                0x12
+#define HSR_EC_SMC32                0x13
+#ifdef CONFIG_ARM_64
+#define HSR_EC_HVC64                0x16
+#define HSR_EC_SMC64                0x17
+#define HSR_EC_SYSREG               0x18
+#endif
+#define HSR_EC_INSTR_ABORT_LOWER_EL 0x20
+#define HSR_EC_INSTR_ABORT_CURR_EL  0x21
+#define HSR_EC_DATA_ABORT_LOWER_EL  0x24
+#define HSR_EC_DATA_ABORT_CURR_EL   0x25
+
+/* FSR format, common */
+#define FSR_LPAE                (_AC(1,UL)<<9)
+/* FSR short format */
+#define FSRS_FS_DEBUG           (_AC(0,UL)<<10|_AC(0x2,UL)<<0)
+/* FSR long format */
+#define FSRL_STATUS_DEBUG       (_AC(0x22,UL)<<0)
 
 #ifndef __ASSEMBLY__
 
@@ -209,6 +233,9 @@ extern void identify_cpu(struct cpuinfo_arm *);
 extern struct cpuinfo_arm cpu_data[];
 #define current_cpu_data cpu_data[smp_processor_id()]
 
+extern u32 __cpu_logical_map[];
+#define cpu_logical_map(cpu) __cpu_logical_map[cpu]
+
 union hsr {
     uint32_t bits;
     struct {
@@ -216,6 +243,15 @@ union hsr {
         unsigned long len:1;   /* Instruction length */
         unsigned long ec:6;    /* Exception Class */
     };
+
+    /* Common to all conditional exception classes (0x0N, except 0x00). */
+    struct hsr_cond {
+        unsigned long iss:20;  /* Instruction Specific Syndrome */
+        unsigned long cc:4;    /* Condition Code */
+        unsigned long ccvalid:1;/* CC Valid */
+        unsigned long len:1;   /* Instruction length */
+        unsigned long ec:6;    /* Exception Class */
+    } cond;
 
     /* reg, reg0, reg1 are 4 bits on AArch32, the fifth bit is sbzp. */
     struct hsr_cp32 {
@@ -237,12 +273,27 @@ union hsr {
         unsigned long reg1:5;   /* Rt1 */
         unsigned long reg2:5;   /* Rt2 */
         unsigned long sbzp2:1;
-        unsigned long op1:4;   /* Op1 */
-        unsigned long cc:4;    /* Condition Code */
+        unsigned long op1:4;    /* Op1 */
+        unsigned long cc:4;     /* Condition Code */
         unsigned long ccvalid:1;/* CC Valid */
-        unsigned long len:1;   /* Instruction length */
-        unsigned long ec:6;    /* Exception Class */
+        unsigned long len:1;    /* Instruction length */
+        unsigned long ec:6;     /* Exception Class */
     } cp64; /* HSR_EC_CP15_64, HSR_EC_CP14_64 */
+
+#ifdef CONFIG_ARM_64
+    struct hsr_sysreg {
+        unsigned long read:1;   /* Direction */
+        unsigned long crm:4;    /* CRm */
+        unsigned long reg:5;    /* Rt */
+        unsigned long crn:4;    /* CRn */
+        unsigned long op1:3;    /* Op1 */
+        unsigned long op2:3;    /* Op2 */
+        unsigned long op0:2;    /* Op0 */
+        unsigned long res0:3;
+        unsigned long len:1;    /* Instruction length */
+        unsigned long ec:6;
+    } sysreg; /* HSR_EC_SYSREG */
+#endif
 
     struct hsr_dabt {
         unsigned long dfsc:6;  /* Data Fault Status Code */
@@ -286,21 +337,36 @@ union hsr {
 #define HSR_CP64_CRM_SHIFT (1)
 #define HSR_CP64_REGS_MASK (HSR_CP64_OP1_MASK|HSR_CP64_CRM_MASK)
 
+/* HSR.EC == HSR_SYSREG */
+#define HSR_SYSREG_OP0_MASK (0x00300000)
+#define HSR_SYSREG_OP0_SHIFT (20)
+#define HSR_SYSREG_OP1_MASK (0x0001c000)
+#define HSR_SYSREG_OP1_SHIFT (14)
+#define HSR_SYSREG_CRN_MASK (0x00003c00)
+#define HSR_SYSREG_CRN_SHIFT (10)
+#define HSR_SYSREG_CRM_MASK (0x0000001e)
+#define HSR_SYSREG_CRM_SHIFT (1)
+#define HSR_SYSREG_OP2_MASK (0x000e0000)
+#define HSR_SYSREG_OP2_SHIFT (17)
+#define HSR_SYSREG_REGS_MASK (HSR_SYSREG_OP0_MASK|HSR_SYSREG_OP1_MASK|\
+                              HSR_SYSREG_CRN_MASK|HSR_SYSREG_CRM_MASK|\
+                              HSR_SYSREG_OP2_MASK)
+
 /* Physical Address Register */
-#define PAR_F           (1<<0)
+#define PAR_F           (_AC(1,U)<<0)
 
 /* .... If F == 1 */
 #define PAR_FSC_SHIFT   (1)
-#define PAR_FSC_MASK    (0x3f<<PAR_FSC_SHIFT)
-#define PAR_STAGE21     (1<<8)     /* Stage 2 Fault During Stage 1 Walk */
-#define PAR_STAGE2      (1<<9)     /* Stage 2 Fault */
+#define PAR_FSC_MASK    (_AC(0x3f,U)<<PAR_FSC_SHIFT)
+#define PAR_STAGE21     (_AC(1,U)<<8)     /* Stage 2 Fault During Stage 1 Walk */
+#define PAR_STAGE2      (_AC(1,U)<<9)     /* Stage 2 Fault */
 
 /* If F == 0 */
 #define PAR_MAIR_SHIFT  56                       /* Memory Attributes */
 #define PAR_MAIR_MASK   (0xffLL<<PAR_MAIR_SHIFT)
-#define PAR_NS          (1<<9)                   /* Non-Secure */
+#define PAR_NS          (_AC(1,U)<<9)                   /* Non-Secure */
 #define PAR_SH_SHIFT    7                        /* Shareability */
-#define PAR_SH_MASK     (3<<PAR_SH_SHIFT)
+#define PAR_SH_MASK     (_AC(3,U)<<PAR_SH_SHIFT)
 
 /* Fault Status Register */
 /*
@@ -313,11 +379,11 @@ union hsr {
  * 10xxxx -- Other
  * 11xxxx -- Implementation Defined
  */
-#define FSC_TYPE_MASK (0x3<<4)
-#define FSC_TYPE_FAULT (0x00<<4)
-#define FSC_TYPE_ABT   (0x01<<4)
-#define FSC_TYPE_OTH   (0x02<<4)
-#define FSC_TYPE_IMPL  (0x03<<4)
+#define FSC_TYPE_MASK (_AC(0x3,U)<<4)
+#define FSC_TYPE_FAULT (_AC(0x00,U)<<4)
+#define FSC_TYPE_ABT   (_AC(0x01,U)<<4)
+#define FSC_TYPE_OTH   (_AC(0x02,U)<<4)
+#define FSC_TYPE_IMPL  (_AC(0x03,U)<<4)
 
 #define FSC_FLT_TRANS  (0x04)
 #define FSC_FLT_ACCESS (0x08)
@@ -332,7 +398,7 @@ union hsr {
 #define FSC_LKD        (0x34) /* Lockdown Abort */
 #define FSC_CPR        (0x3a) /* Coprocossor Abort */
 
-#define FSC_LL_MASK    (0x03<<0)
+#define FSC_LL_MASK    (_AC(0x03,U)<<0)
 
 /* Time counter hypervisor control register */
 #define CNTHCTL_PA      (1u<<0)  /* Kernel/user access to physical counter */
@@ -344,11 +410,21 @@ union hsr {
 #define CNTx_CTL_PENDING  (1u<<2)  /* IRQ pending */
 
 /* Exception Vector offsets */
+/* ... ARM32 */
 #define VECTOR32_RST  0
 #define VECTOR32_UND  4
 #define VECTOR32_SVC  8
 #define VECTOR32_PABT 12
 #define VECTOR32_DABT 16
+/* ... ARM64 */
+#define VECTOR64_CURRENT_SP0_SYNC  0x000
+#define VECTOR64_CURRENT_SP0_IRQ   0x080
+#define VECTOR64_CURRENT_SP0_FIQ   0x100
+#define VECTOR64_CURRENT_SP0_ERROR 0x180
+#define VECTOR64_CURRENT_SPx_SYNC  0x200
+#define VECTOR64_CURRENT_SPx_IRQ   0x280
+#define VECTOR64_CURRENT_SPx_FIQ   0x300
+#define VECTOR64_CURRENT_SPx_ERROR 0x380
 
 #if defined(CONFIG_ARM_32)
 # include <asm/arm32/processor.h>

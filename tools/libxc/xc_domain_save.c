@@ -233,7 +233,7 @@ static int write_compressed(xc_interface *xch, comp_ctx *compress_ctx,
     int marker = XC_SAVE_ID_COMPRESSED_DATA;
     unsigned long compbuf_len = 0;
 
-    do
+    for(;;)
     {
         /* check for available space (atleast 8k) */
         if ((ob->pos + header + XC_PAGE_SIZE * 2) > ob->size)
@@ -250,7 +250,7 @@ static int write_compressed(xc_interface *xch, comp_ctx *compress_ctx,
                                            ob->size - ob->pos - header,
                                            &compbuf_len);
         if (!rc)
-            return 0;
+            break;
 
         if (outbuf_hardwrite(xch, ob, fd, &marker, sizeof(marker)) < 0)
         {
@@ -270,7 +270,7 @@ static int write_compressed(xc_interface *xch, comp_ctx *compress_ctx,
             ERROR("Error when writing compressed chunk");
             return -1;
         }
-    } while (rc != 0);
+    }
 
     return 0;
 }
@@ -773,11 +773,9 @@ static xen_pfn_t *map_and_save_p2m_table(xc_interface *xch,
     if ( live_p2m_frame_list )
         munmap(live_p2m_frame_list, P2M_FLL_ENTRIES * PAGE_SIZE);
 
-    if ( p2m_frame_list_list ) 
-        free(p2m_frame_list_list);
+    free(p2m_frame_list_list);
 
-    if ( p2m_frame_list ) 
-        free(p2m_frame_list);
+    free(p2m_frame_list);
 
     return success ? p2m : NULL;
 }

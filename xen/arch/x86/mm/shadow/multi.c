@@ -712,7 +712,7 @@ _sh_propagate(struct vcpu *v,
     // supervisor permissions, making the guest's _PAGE_USER bit irrelevant.
     // It is always shadowed as present...
     if ( (GUEST_PAGING_LEVELS == 4) && !is_pv_32on64_domain(d) 
-         && !is_hvm_domain(d) )
+         && is_pv_domain(d) )
     {
         sflags |= _PAGE_USER;
     }
@@ -1433,15 +1433,19 @@ void sh_install_xen_entries_in_l4(struct vcpu *v, mfn_t gl4mfn, mfn_t sl4mfn)
 {
     struct domain *d = v->domain;
     shadow_l4e_t *sl4e;
+    unsigned int slots;
 
     sl4e = sh_map_domain_page(sl4mfn);
     ASSERT(sl4e != NULL);
     ASSERT(sizeof (l4_pgentry_t) == sizeof (shadow_l4e_t));
     
     /* Copy the common Xen mappings from the idle domain */
+    slots = (shadow_mode_external(d)
+             ? ROOT_PAGETABLE_XEN_SLOTS
+             : ROOT_PAGETABLE_PV_XEN_SLOTS);
     memcpy(&sl4e[ROOT_PAGETABLE_FIRST_XEN_SLOT],
            &idle_pg_table[ROOT_PAGETABLE_FIRST_XEN_SLOT],
-           ROOT_PAGETABLE_XEN_SLOTS * sizeof(l4_pgentry_t));
+           slots * sizeof(l4_pgentry_t));
 
     /* Install the per-domain mappings for this domain */
     sl4e[shadow_l4_table_offset(PERDOMAIN_VIRT_START)] =
@@ -3918,7 +3922,7 @@ sh_update_cr3(struct vcpu *v, int do_locking)
 #endif
 
     /* Don't do anything on an uninitialised vcpu */
-    if ( !is_hvm_domain(d) && !v->is_initialised )
+    if ( is_pv_domain(d) && !v->is_initialised )
     {
         ASSERT(v->arch.cr3 == 0);
         return;

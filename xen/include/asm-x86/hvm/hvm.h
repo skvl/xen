@@ -90,6 +90,9 @@ struct hvm_function_table {
     /* Support Hardware-Assisted Paging? */
     int hap_supported;
 
+    /* Necessary hardware support for PVH mode? */
+    int pvh_supported;
+
     /* Indicate HAP capabilities. */
     int hap_capabilities;
 
@@ -156,7 +159,7 @@ struct hvm_function_table {
     int (*msr_read_intercept)(unsigned int msr, uint64_t *msr_content);
     int (*msr_write_intercept)(unsigned int msr, uint64_t msr_content);
     void (*invlpg_intercept)(unsigned long vaddr);
-    void (*set_uc_mode)(struct vcpu *v);
+    void (*handle_cd)(struct vcpu *v, unsigned long value);
     void (*set_info_guest)(struct vcpu *v);
     void (*set_rdtsc_exiting)(struct vcpu *v, bool_t);
 
@@ -186,6 +189,7 @@ struct hvm_function_table {
     void (*process_isr)(int isr, struct vcpu *v);
     void (*deliver_posted_intr)(struct vcpu *v, u8 vector);
     void (*sync_pir_to_irr)(struct vcpu *v);
+    void (*handle_eoi)(u8 vector);
 
     /*Walk nested p2m  */
     int (*nhvm_hap_walk_L1_p2m)(struct vcpu *v, paddr_t L2_gpa,
@@ -367,7 +371,7 @@ static inline int hvm_event_pending(struct vcpu *v)
         ((nestedhvm_enabled((_v)->domain) && cpu_has_vmx)\
                       ? X86_CR4_VMXE : 0)  |             \
         (cpu_has_pcid ? X86_CR4_PCIDE : 0) |             \
-        (xsave_enabled(_v) ? X86_CR4_OSXSAVE : 0))))
+        (cpu_has_xsave ? X86_CR4_OSXSAVE : 0))))
 
 /* These exceptions must always be intercepted. */
 #define HVM_TRAP_MASK ((1U << TRAP_machine_check) | (1U << TRAP_invalid_op))
@@ -437,6 +441,21 @@ static inline void hvm_set_info_guest(struct vcpu *v)
 }
 
 int hvm_debug_op(struct vcpu *v, int32_t op);
+
+static inline void hvm_invalidate_regs_fields(struct cpu_user_regs *regs)
+{
+#ifndef NDEBUG
+    regs->error_code = 0xbeef;
+    regs->entry_vector = 0xbeef;
+    regs->saved_upcall_mask = 0xbf;
+    regs->cs = 0xbeef;
+    regs->ss = 0xbeef;
+    regs->ds = 0xbeef;
+    regs->es = 0xbeef;
+    regs->fs = 0xbeef;
+    regs->gs = 0xbeef;
+#endif
+}
 
 int hvm_hap_nested_page_fault(paddr_t gpa,
                               bool_t gla_valid, unsigned long gla,

@@ -360,17 +360,39 @@ read_as_zero:
     return 1;
 }
 
-static void vgic_enable_irqs(struct vcpu *v, uint32_t r, int n)
+static void vgic_disable_irqs(struct vcpu *v, uint32_t r, int n)
 {
+    const unsigned long mask = r;
     struct pending_irq *p;
     unsigned int irq;
     int i = 0;
 
-    while ( (i = find_next_bit((const long unsigned int *) &r, 32, i)) < 32 ) {
+    while ( (i = find_next_bit(&mask, 32, i)) < 32 ) {
         irq = i + (32 * n);
         p = irq_to_pending(v, irq);
-        if ( !list_empty(&p->inflight) )
+        clear_bit(GIC_IRQ_GUEST_ENABLED, &p->status);
+        gic_remove_from_queues(v, irq);
+        if ( p->desc != NULL )
+            p->desc->handler->disable(p->desc);
+        i++;
+    }
+}
+
+static void vgic_enable_irqs(struct vcpu *v, uint32_t r, int n)
+{
+    const unsigned long mask = r;
+    struct pending_irq *p;
+    unsigned int irq;
+    int i = 0;
+
+    while ( (i = find_next_bit(&mask, 32, i)) < 32 ) {
+        irq = i + (32 * n);
+        p = irq_to_pending(v, irq);
+        set_bit(GIC_IRQ_GUEST_ENABLED, &p->status);
+        if ( !list_empty(&p->inflight) && !test_bit(GIC_IRQ_GUEST_VISIBLE, &p->status) )
             gic_set_guest_irq(v, irq, GICH_LR_PENDING, p->priority);
+        if ( p->desc != NULL )
+            p->desc->handler->enable(p->desc);
         i++;
     }
 }
@@ -487,8 +509,10 @@ static int vgic_distr_mmio_write(struct vcpu *v, mmio_info_t *info)
         rank = vgic_irq_rank(v, 1, gicd_reg - GICD_ICENABLER);
         if ( rank == NULL) goto write_ignore;
         vgic_lock_rank(v, rank);
+        tr = rank->ienable;
         rank->ienable &= ~*r;
         vgic_unlock_rank(v, rank);
+        vgic_disable_irqs(v, (*r) & tr, gicd_reg - GICD_ICENABLER);
         return 1;
 
     case GICD_ISPENDR ... GICD_ISPENDRN:
@@ -672,8 +696,17 @@ void vgic_vcpu_inject_irq(struct vcpu *v, unsigned int irq, int virtual)
 
     spin_lock_irqsave(&v->arch.vgic.lock, flags);
 
-    /* vcpu offline or irq already pending */
-    if (test_bit(_VPF_down, &v->pause_flags) || !list_empty(&n->inflight))
+    if ( !list_empty(&n->inflight) )
+    {
+        if ( (irq != current->domain->arch.evtchn_irq) ||
+             (!test_bit(GIC_IRQ_GUEST_VISIBLE, &n->status)) )
+            set_bit(GIC_IRQ_GUEST_PENDING, &n->status);
+        spin_unlock_irqrestore(&v->arch.vgic.lock, flags);
+        return;
+    }
+
+    /* vcpu offline */
+    if ( test_bit(_VPF_down, &v->pause_flags) )
     {
         spin_unlock_irqrestore(&v->arch.vgic.lock, flags);
         return;
@@ -682,14 +715,11 @@ void vgic_vcpu_inject_irq(struct vcpu *v, unsigned int irq, int virtual)
     priority = byte_read(rank->ipriority[REG_RANK_INDEX(8, idx)], 0, byte);
 
     n->irq = irq;
+    set_bit(GIC_IRQ_GUEST_PENDING, &n->status);
     n->priority = priority;
-    if (!virtual)
-        n->desc = irq_to_desc(irq);
-    else
-        n->desc = NULL;
 
     /* the irq is enabled */
-    if ( rank->ienable & (1 << (irq % 32)) )
+    if ( test_bit(GIC_IRQ_GUEST_ENABLED, &n->status) )
         gic_set_guest_irq(v, irq, GICH_LR_PENDING, priority);
 
     list_for_each_entry ( iter, &v->arch.vgic.inflight_irqs, inflight )

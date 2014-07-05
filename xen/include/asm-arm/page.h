@@ -115,7 +115,7 @@ typedef struct {
 
     /* These seven bits are only used in Block entries and are ignored
      * in Table entries. */
-    unsigned long hint:1;       /* In a block of 16 contiguous entries */
+    unsigned long contig:1;     /* In a block of 16 contiguous entries */
     unsigned long pxn:1;        /* Privileged-XN */
     unsigned long xn:1;         /* eXecute-Never */
     unsigned long avail:4;      /* Ignored by hardware */
@@ -150,10 +150,10 @@ typedef struct {
 
     /* These seven bits are only used in Block entries and are ignored
      * in Table entries. */
-    unsigned long hint:1;       /* In a block of 16 contiguous entries */
+    unsigned long contig:1;     /* In a block of 16 contiguous entries */
     unsigned long sbz2:1;
     unsigned long xn:1;         /* eXecute-Never */
-    unsigned long avail:4;      /* Ignored by hardware */
+    unsigned long type:4;       /* Ignore by hardware. Used to store p2m types */
 
     unsigned long sbz1:5;
 } __attribute__((__packed__)) lpae_p2m_t;
@@ -213,28 +213,6 @@ static inline lpae_t mfn_to_xen_entry(unsigned long mfn)
     return e;
 }
 
-static inline lpae_t mfn_to_p2m_entry(unsigned long mfn, unsigned int mattr)
-{
-    paddr_t pa = ((paddr_t) mfn) << PAGE_SHIFT;
-    lpae_t e = (lpae_t) {
-        .p2m.xn = 0,
-        .p2m.af = 1,
-        .p2m.sh = LPAE_SH_OUTER,
-        .p2m.write = 1,
-        .p2m.read = 1,
-        .p2m.mattr = mattr,
-        .p2m.table = 1,
-        .p2m.valid = 1,
-    };
-
-    ASSERT(!(pa & ~PAGE_MASK));
-    ASSERT(!(pa & ~PADDR_MASK));
-
-    e.bits |= pa;
-
-    return e;
-}
-
 #if defined(CONFIG_ARM_32)
 # include <asm/arm32/page.h>
 #elif defined(CONFIG_ARM_64)
@@ -251,29 +229,32 @@ extern size_t cacheline_bytes;
 /* Function for flushing medium-sized areas.
  * if 'range' is large enough we might want to use model-specific
  * full-cache flushes. */
-static inline void flush_xen_dcache_va_range(void *p, unsigned long size)
+static inline void clean_xen_dcache_va_range(void *p, unsigned long size)
 {
     void *end;
     dsb();           /* So the CPU issues all writes to the range */
     for ( end = p + size; p < end; p += cacheline_bytes )
-        asm volatile (__flush_xen_dcache_one(0) : : "r" (p));
+        asm volatile (__clean_xen_dcache_one(0) : : "r" (p));
     dsb();           /* So we know the flushes happen before continuing */
 }
 
 /* Macro for flushing a single small item.  The predicate is always
  * compile-time constant so this will compile down to 3 instructions in
  * the common case. */
-#define flush_xen_dcache(x) do {                                        \
+#define clean_xen_dcache(x) do {                                        \
     typeof(x) *_p = &(x);                                               \
     if ( sizeof(x) > MIN_CACHELINE_BYTES || sizeof(x) > alignof(x) )    \
-        flush_xen_dcache_va_range(_p, sizeof(x));                       \
+        clean_xen_dcache_va_range(_p, sizeof(x));                       \
     else                                                                \
         asm volatile (                                                  \
             "dsb sy;"   /* Finish all earlier writes */                 \
-            __flush_xen_dcache_one(0)                                   \
+            __clean_xen_dcache_one(0)                                   \
             "dsb sy;"   /* Finish flush before continuing */            \
             : : "r" (_p), "m" (*_p));                                   \
 } while (0)
+
+/* Flush the dcache for an entire page. */
+void flush_page_to_ram(unsigned long mfn);
 
 /* Print a walk of an arbitrary page table */
 void dump_pt_walk(lpae_t *table, paddr_t addr);
@@ -309,25 +290,35 @@ static inline int gva_to_ipa(vaddr_t va, paddr_t *paddr)
 
 #endif /* __ASSEMBLY__ */
 
-/* These numbers add up to a 39-bit input address space.  The  ARMv7-A
- * architecture actually specifies a 40-bit input address space for the p2m,
- * with an 8K (1024-entry) top-level table. */
+/*
+ * These numbers add up to a 48-bit input address space.
+ *
+ * On 32-bit the zeroeth level does not exist, therefore the total is
+ * 39-bits. The ARMv7-A architecture actually specifies a 40-bit input
+ * address space for the p2m, with an 8K (1024-entry) top-level table.
+ * However Xen only supports 16GB of RAM on 32-bit ARM systems and
+ * therefore 39-bits are sufficient.
+ */
 
 #define LPAE_SHIFT      9
 #define LPAE_ENTRIES    (1u << LPAE_SHIFT)
 #define LPAE_ENTRY_MASK (LPAE_ENTRIES - 1)
 
-#define THIRD_SHIFT  PAGE_SHIFT
-#define THIRD_SIZE   (1u << THIRD_SHIFT)
-#define THIRD_MASK   (~(THIRD_SIZE - 1))
-#define SECOND_SHIFT (THIRD_SHIFT + LPAE_SHIFT)
-#define SECOND_SIZE  (1u << SECOND_SHIFT)
-#define SECOND_MASK  (~(SECOND_SIZE - 1))
-#define FIRST_SHIFT  (SECOND_SHIFT + LPAE_SHIFT)
-#define FIRST_SIZE   (1u << FIRST_SHIFT)
-#define FIRST_MASK   (~(FIRST_SIZE - 1))
+#define THIRD_SHIFT    (PAGE_SHIFT)
+#define THIRD_SIZE     ((paddr_t)1 << THIRD_SHIFT)
+#define THIRD_MASK     (~(THIRD_SIZE - 1))
+#define SECOND_SHIFT   (THIRD_SHIFT + LPAE_SHIFT)
+#define SECOND_SIZE    ((paddr_t)1 << SECOND_SHIFT)
+#define SECOND_MASK    (~(SECOND_SIZE - 1))
+#define FIRST_SHIFT    (SECOND_SHIFT + LPAE_SHIFT)
+#define FIRST_SIZE     ((paddr_t)1 << FIRST_SHIFT)
+#define FIRST_MASK     (~(FIRST_SIZE - 1))
+#define ZEROETH_SHIFT  (FIRST_SHIFT + LPAE_SHIFT)
+#define ZEROETH_SIZE   ((paddr_t)1 << ZEROETH_SHIFT)
+#define ZEROETH_MASK   (~(ZEROETH_SIZE - 1))
 
 /* Calculate the offsets into the pagetables for a given VA */
+#define zeroeth_linear_offset(va) ((va) >> ZEROETH_SHIFT)
 #define first_linear_offset(va) ((va) >> FIRST_SHIFT)
 #define second_linear_offset(va) ((va) >> SECOND_SHIFT)
 #define third_linear_offset(va) ((va) >> THIRD_SHIFT)
@@ -336,8 +327,9 @@ static inline int gva_to_ipa(vaddr_t va, paddr_t *paddr)
 #define first_table_offset(va)  TABLE_OFFSET(first_linear_offset(va))
 #define second_table_offset(va) TABLE_OFFSET(second_linear_offset(va))
 #define third_table_offset(va)  TABLE_OFFSET(third_linear_offset(va))
+#define zeroeth_table_offset(va)  TABLE_OFFSET(zeroeth_linear_offset(va))
 
-#define clear_page(page)memset((void *)(page), 0, PAGE_SIZE)
+#define clear_page(page) memset((void *)(page), 0, PAGE_SIZE)
 
 #define PAGE_ALIGN(x) (((x) + PAGE_SIZE - 1) & PAGE_MASK)
 

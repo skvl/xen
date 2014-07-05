@@ -129,11 +129,11 @@
 #define GICH_LR_CPUID_SHIFT     9
 #define GICH_VTR_NRLRGS         0x3f
 
-/* XXX: write this into the DT */
-#define VGIC_IRQ_EVTCHN_CALLBACK 31
-
 #ifndef __ASSEMBLY__
 #include <xen/device_tree.h>
+
+#define DT_MATCH_GIC    DT_MATCH_COMPATIBLE("arm,cortex-a15-gic"), \
+                        DT_MATCH_COMPATIBLE("arm,cortex-a7-gic")
 
 extern int domain_vgic_init(struct domain *d);
 extern void domain_vgic_free(struct domain *d);
@@ -145,7 +145,8 @@ extern void vgic_clear_pending_irqs(struct vcpu *v);
 extern struct pending_irq *irq_to_pending(struct vcpu *v, unsigned int irq);
 
 /* Program the GIC to route an interrupt with a dt_irq */
-extern void gic_route_dt_irq(const struct dt_irq *irq, unsigned int cpu_mask,
+extern void gic_route_dt_irq(const struct dt_irq *irq,
+                             const cpumask_t *cpu_mask,
                              unsigned int priority);
 extern void gic_route_ppis(void);
 extern void gic_route_spis(void);
@@ -157,6 +158,7 @@ extern int gic_events_need_delivery(void);
 extern void __cpuinit init_maintenance_interrupt(void);
 extern void gic_set_guest_irq(struct vcpu *v, unsigned int irq,
         unsigned int state, unsigned int priority);
+extern void gic_remove_from_queues(struct vcpu *v, unsigned int virtual_irq);
 extern int gic_route_irq_to_guest(struct domain *d,
                                   const struct dt_irq *irq,
                                   const char * devname);

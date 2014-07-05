@@ -46,6 +46,7 @@
 #include <xen/hvm/params.h>
 #include <xen/xsm/flask_op.h>
 #include <xen/tmem.h>
+#include <xen/kexec.h>
 
 #include "xentoollog.h"
 
@@ -321,12 +322,42 @@ void xc__hypercall_buffer_free_pages(xc_interface *xch, xc_hypercall_buffer_t *b
 #define xc_hypercall_buffer_free_pages(_xch, _name, _nr) xc__hypercall_buffer_free_pages(_xch, HYPERCALL_BUFFER(_name), _nr)
 
 /*
+ * Array of hypercall buffers.
+ *
+ * Create an array with xc_hypercall_buffer_array_create() and
+ * populate it by declaring one hypercall buffer in a loop and
+ * allocating the buffer with xc_hypercall_buffer_array_alloc().
+ *
+ * To access a previously allocated buffers, declare a new hypercall
+ * buffer and call xc_hypercall_buffer_array_get().
+ *
+ * Destroy the array with xc_hypercall_buffer_array_destroy() to free
+ * the array and all its alocated hypercall buffers.
+ */
+struct xc_hypercall_buffer_array;
+typedef struct xc_hypercall_buffer_array xc_hypercall_buffer_array_t;
+
+xc_hypercall_buffer_array_t *xc_hypercall_buffer_array_create(xc_interface *xch, unsigned n);
+void *xc__hypercall_buffer_array_alloc(xc_interface *xch, xc_hypercall_buffer_array_t *array,
+                                       unsigned index, xc_hypercall_buffer_t *hbuf, size_t size);
+#define xc_hypercall_buffer_array_alloc(_xch, _array, _index, _name, _size) \
+    xc__hypercall_buffer_array_alloc(_xch, _array, _index, HYPERCALL_BUFFER(_name), _size)
+void *xc__hypercall_buffer_array_get(xc_interface *xch, xc_hypercall_buffer_array_t *array,
+                                     unsigned index, xc_hypercall_buffer_t *hbuf);
+#define xc_hypercall_buffer_array_get(_xch, _array, _index, _name, _size) \
+    xc__hypercall_buffer_array_get(_xch, _array, _index, HYPERCALL_BUFFER(_name))
+void xc_hypercall_buffer_array_destroy(xc_interface *xc, xc_hypercall_buffer_array_t *array);
+
+/*
  * CPUMAP handling
  */
 typedef uint8_t *xc_cpumap_t;
 
 /* return maximum number of cpus the hypervisor supports */
 int xc_get_max_cpus(xc_interface *xch);
+
+/* return the number of online cpus */
+int xc_get_online_cpus(xc_interface *xch);
 
 /* return array size for cpumap */
 int xc_get_cpumap_size(xc_interface *xch);
@@ -408,15 +439,14 @@ typedef union
     shared_info_t s;
 } shared_info_any_t;
 
+#if defined(__i386__) || defined(__x86_64__)
 typedef union
 {
-#if defined(__i386__) || defined(__x86_64__)
     start_info_x86_64_t x64;
     start_info_x86_32_t x32;
-#endif
     start_info_t s;
 } start_info_any_t;
-
+#endif
 
 int xc_domain_create(xc_interface *xch,
                      uint32_t ssidref,
@@ -560,6 +590,19 @@ int xc_vcpu_getaffinity(xc_interface *xch,
                         uint32_t domid,
                         int vcpu,
                         xc_cpumap_t cpumap);
+
+
+/**
+ * This function will return the guest_width (in bytes) for the
+ * specified domain.
+ *
+ * @param xch a handle to an open hypervisor interface.
+ * @param domid the domain id one wants the address size width of.
+ * @param addr_size the address size.
+ */
+int xc_domain_get_guest_width(xc_interface *xch, uint32_t domid,
+                              unsigned int *guest_width);
+
 
 /**
  * This function will return information about one or more domains. It is
@@ -756,11 +799,13 @@ int xc_sched_credit2_domain_get(xc_interface *xch,
 int
 xc_sched_arinc653_schedule_set(
     xc_interface *xch,
+    uint32_t cpupool_id,
     struct xen_sysctl_arinc653_schedule *schedule);
 
 int
 xc_sched_arinc653_schedule_get(
     xc_interface *xch,
+    uint32_t cpupool_id,
     struct xen_sysctl_arinc653_schedule *schedule);
 
 /**
@@ -834,6 +879,18 @@ int xc_domain_set_access_required(xc_interface *xch,
  * return 0 on success, -1 on failure
  */
 int xc_domain_set_virq_handler(xc_interface *xch, uint32_t domid, int virq);
+
+/**
+ * Set the maximum event channel port a domain may bind.
+ *
+ * This does not affect ports that are already bound.
+ *
+ * @param xch a handle to an open hypervisor interface
+ * @param domid the domain id
+ * @param max_port maximum port number
+ */
+int xc_domain_set_max_evtchn(xc_interface *xch, uint32_t domid,
+                             uint32_t max_port);
 
 /*
  * CPUPOOL MANAGEMENT FUNCTIONS
@@ -986,6 +1043,18 @@ int xc_evtchn_close(xc_evtchn *xce);
 
 /*
  * Return an fd that can be select()ed on.
+ *
+ * Note that due to bugs, setting this fd to non blocking may not
+ * work: you would hope that it would result in xc_evtchn_pending
+ * failing with EWOULDBLOCK if there are no events signaled, but in
+ * fact it may block.  (Bug is present in at least Linux 3.12, and
+ * perhaps on other platforms or later version.)
+ *
+ * To be safe, you must use poll() or select() before each call to
+ * xc_evtchn_pending.  If you have multiple threads (or processes)
+ * sharing a single xce handle this will not work, and there is no
+ * straightforward workaround.  Please design your program some other
+ * way.
  */
 int xc_evtchn_fd(xc_evtchn *xce);
 
@@ -1025,7 +1094,20 @@ int xc_evtchn_unbind(xc_evtchn *xce, evtchn_port_t port);
 
 /*
  * Return the next event channel to become pending, or -1 on failure, in which
- * case errno will be set appropriately.  
+ * case errno will be set appropriately.
+ *
+ * At the hypervisor level the event channel will have been masked,
+ * and then cleared, by the underlying machinery (evtchn kernel
+ * driver, or equivalent).  So if the event channel is signaled again
+ * after it is returned here, it will be queued up, and delivered
+ * again after you unmask it.  (See the documentation in the Xen
+ * public header event_channel.h.)
+ *
+ * On receiving the notification from xc_evtchn_pending, you should
+ * normally: check (by other means) what work needs doing; do the
+ * necessary work (if any); unmask the event channel with
+ * xc_evtchn_unmask (if you want to receive any further
+ * notifications).
  */
 evtchn_port_or_error_t
 xc_evtchn_pending(xc_evtchn *xce);
@@ -1395,8 +1477,10 @@ int xc_version(xc_interface *xch, int cmd, void *arg);
 int xc_flask_op(xc_interface *xch, xen_flask_op_t *op);
 
 /*
- * Subscribe to state changes in a domain via evtchn.
+ * Subscribe to domain suspend via evtchn.
  * Returns -1 on failure, in which case errno will be set appropriately.
+ * Just calls XEN_DOMCTL_subscribe - see the caveats for that domctl
+ * (in its doc comment in domctl.h).
  */
 int xc_domain_subscribe_for_suspend(
     xc_interface *xch, domid_t domid, evtchn_port_t port);
@@ -2288,5 +2372,59 @@ void xc_compression_reset_pagebuf(xc_interface *xch, comp_ctx *ctx);
 int xc_compression_uncompress_page(xc_interface *xch, char *compbuf,
 				   unsigned long compbuf_size,
 				   unsigned long *compbuf_pos, char *dest);
+
+/*
+ * Execute an image previously loaded with xc_kexec_load().
+ *
+ * Does not return on success.
+ *
+ * Fails with:
+ *   ENOENT if the specified image has not been loaded.
+ */
+int xc_kexec_exec(xc_interface *xch, int type);
+
+/*
+ * Find the machine address and size of certain memory areas.
+ *
+ *   KEXEC_RANGE_MA_CRASH       crash area
+ *   KEXEC_RANGE_MA_XEN         Xen itself
+ *   KEXEC_RANGE_MA_CPU         CPU note for CPU number 'nr'
+ *   KEXEC_RANGE_MA_XENHEAP     xenheap
+ *   KEXEC_RANGE_MA_EFI_MEMMAP  EFI Memory Map
+ *   KEXEC_RANGE_MA_VMCOREINFO  vmcoreinfo
+ *
+ * Fails with:
+ *   EINVAL if the range or CPU number isn't valid.
+ */
+int xc_kexec_get_range(xc_interface *xch, int range,  int nr,
+                       uint64_t *size, uint64_t *start);
+
+/*
+ * Load a kexec image into memory.
+ *
+ * The image may be of type KEXEC_TYPE_DEFAULT (executed on request)
+ * or KEXEC_TYPE_CRASH (executed on a crash).
+ *
+ * The image architecture may be a 32-bit variant of the hypervisor
+ * architecture (e.g, EM_386 on a x86-64 hypervisor).
+ *
+ * Fails with:
+ *   ENOMEM if there is insufficient memory for the new image.
+ *   EINVAL if the image does not fit into the crash area or the entry
+ *          point isn't within one of segments.
+ *   EBUSY  if another image is being executed.
+ */
+int xc_kexec_load(xc_interface *xch, uint8_t type, uint16_t arch,
+                  uint64_t entry_maddr,
+                  uint32_t nr_segments, xen_kexec_segment_t *segments);
+
+/*
+ * Unload a kexec image.
+ *
+ * This prevents a KEXEC_TYPE_DEFAULT or KEXEC_TYPE_CRASH image from
+ * being executed.  The crash images are not cleared from the crash
+ * region.
+ */
+int xc_kexec_unload(xc_interface *xch, int type);
 
 #endif /* XENCTRL_H */

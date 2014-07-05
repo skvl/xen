@@ -92,7 +92,7 @@ static unsigned int __initdata nr_bootmem_regions;
 
 static void __init boot_bug(int line)
 {
-    panic("Boot BUG at %s:%d\n", __FILE__, line);
+    panic("Boot BUG at %s:%d", __FILE__, line);
 }
 #define BOOT_BUG_ON(p) if ( p ) boot_bug(__LINE__);
 
@@ -257,11 +257,11 @@ unsigned long __init alloc_boot_pages(
  */
 
 #define MEMZONE_XEN 0
-#define NR_ZONES    (PADDR_BITS - PAGE_SHIFT)
+#define NR_ZONES    (PADDR_BITS - PAGE_SHIFT + 1)
 
-#define bits_to_zone(b) (((b) < (PAGE_SHIFT + 1)) ? 0 : ((b) - PAGE_SHIFT - 1))
+#define bits_to_zone(b) (((b) < (PAGE_SHIFT + 1)) ? 1 : ((b) - PAGE_SHIFT))
 #define page_to_zone(pg) (is_xen_heap_page(pg) ? MEMZONE_XEN :  \
-                          (fls(page_to_mfn(pg)) - 1))
+                          (fls(page_to_mfn(pg)) ? : 1))
 
 typedef struct page_list_head heap_by_zone_and_order_t[NR_ZONES][MAX_ORDER+1];
 static heap_by_zone_and_order_t *_heap[MAX_NUMNODES];
@@ -710,6 +710,11 @@ static struct page_info *alloc_heap_pages(
         /* Initialise fields which have other uses for free pages. */
         pg[i].u.inuse.type_info = 0;
         page_set_owner(&pg[i], NULL);
+
+        /* Ensure cache and RAM are consistent for platforms where the
+         * guest can control its own visibility of/through the cache.
+         */
+        flush_page_to_ram(page_to_mfn(&pg[i]));
     }
 
     spin_unlock(&heap_lock);
@@ -957,7 +962,6 @@ int offline_page(unsigned long mfn, int broken, uint32_t *status)
 {
     unsigned long old_info = 0;
     struct domain *owner;
-    int ret = 0;
     struct page_info *pg;
 
     if ( !mfn_valid(mfn) )
@@ -1007,16 +1011,28 @@ int offline_page(unsigned long mfn, int broken, uint32_t *status)
     if ( page_state_is(pg, offlined) )
     {
         reserve_heap_page(pg);
-        *status = PG_OFFLINE_OFFLINED;
+
+        spin_unlock(&heap_lock);
+
+        *status = broken ? PG_OFFLINE_OFFLINED | PG_OFFLINE_BROKEN
+                         : PG_OFFLINE_OFFLINED;
+        return 0;
     }
-    else if ( (owner = page_get_owner_and_reference(pg)) )
+
+    spin_unlock(&heap_lock);
+
+    if ( (owner = page_get_owner_and_reference(pg)) )
     {
         if ( p2m_pod_offline_or_broken_hit(pg) )
-            goto pod_replace;
+        {
+            put_page(pg);
+            p2m_pod_offline_or_broken_replace(pg);
+            *status = PG_OFFLINE_OFFLINED;
+        }
         else
         {
             *status = PG_OFFLINE_OWNED | PG_OFFLINE_PENDING |
-              (owner->domain_id << PG_OFFLINE_OWNER_SHIFT);
+                      (owner->domain_id << PG_OFFLINE_OWNER_SHIFT);
             /* Release the reference since it will not be allocated anymore */
             put_page(pg);
         }
@@ -1024,7 +1040,7 @@ int offline_page(unsigned long mfn, int broken, uint32_t *status)
     else if ( old_info & PGC_xen_heap )
     {
         *status = PG_OFFLINE_XENPAGE | PG_OFFLINE_PENDING |
-          (DOMID_XEN << PG_OFFLINE_OWNER_SHIFT);
+                  (DOMID_XEN << PG_OFFLINE_OWNER_SHIFT);
     }
     else
     {
@@ -1043,21 +1059,7 @@ int offline_page(unsigned long mfn, int broken, uint32_t *status)
     if ( broken )
         *status |= PG_OFFLINE_BROKEN;
 
-    spin_unlock(&heap_lock);
-
-    return ret;
-
-pod_replace:
-    put_page(pg);
-    spin_unlock(&heap_lock);
-
-    p2m_pod_offline_or_broken_replace(pg);
-    *status = PG_OFFLINE_OFFLINED;
-
-    if ( broken )
-        *status |= PG_OFFLINE_BROKEN;
-
-    return ret;
+    return 0;
 }
 
 /*
@@ -1305,7 +1307,7 @@ void __init scrub_heap_pages(void)
  * XEN-HEAP SUB-ALLOCATOR
  */
 
-#if !defined(CONFIG_X86)
+#if defined(CONFIG_SEPARATE_XENHEAP)
 
 void init_xenheap_pages(paddr_t ps, paddr_t pe)
 {
@@ -1364,7 +1366,7 @@ static unsigned int __read_mostly xenheap_bits;
 
 void __init xenheap_max_mfn(unsigned long mfn)
 {
-    xenheap_bits = fls(mfn) + PAGE_SHIFT - 1;
+    xenheap_bits = fls(mfn) + PAGE_SHIFT;
 }
 
 void init_xenheap_pages(paddr_t ps, paddr_t pe)
@@ -1429,6 +1431,9 @@ void init_domheap_pages(paddr_t ps, paddr_t pe)
     smfn = round_pgup(ps) >> PAGE_SHIFT;
     emfn = round_pgdown(pe) >> PAGE_SHIFT;
 
+    if ( emfn <= smfn )
+        return;
+
     init_heap_pages(mfn_to_page(smfn), emfn - smfn);
 }
 
@@ -1472,7 +1477,7 @@ int assign_pages(
         ASSERT(page_get_owner(&pg[i]) == NULL);
         ASSERT((pg[i].count_info & ~(PGC_allocated | 1)) == 0);
         page_set_owner(&pg[i], d);
-        wmb(); /* Domain pointer must be visible before updating refcnt. */
+        smp_wmb(); /* Domain pointer must be visible before updating refcnt. */
         pg[i].count_info = PGC_allocated | 1;
         page_list_add_tail(&pg[i], &d->page_list);
     }
@@ -1519,8 +1524,9 @@ struct page_info *alloc_domheap_pages(
 
 void free_domheap_pages(struct page_info *pg, unsigned int order)
 {
-    int            i, drop_dom_ref;
     struct domain *d = page_get_owner(pg);
+    unsigned int i;
+    bool_t drop_dom_ref;
 
     ASSERT(!in_irq());
 
@@ -1548,8 +1554,7 @@ void free_domheap_pages(struct page_info *pg, unsigned int order)
             page_list_del2(&pg[i], &d->page_list, &d->arch.relmem_list);
         }
 
-        domain_adjust_tot_pages(d, -(1 << order));
-        drop_dom_ref = (d->tot_pages == 0);
+        drop_dom_ref = !domain_adjust_tot_pages(d, -(1 << order));
 
         spin_unlock_recursive(&d->page_alloc_lock);
 
@@ -1652,10 +1657,12 @@ __initcall(pagealloc_keyhandler_init);
 
 void scrub_one_page(struct page_info *pg)
 {
-    void *p = __map_domain_page(pg);
+    void *p;
 
     if ( unlikely(pg->count_info & PGC_broken) )
         return;
+
+    p = __map_domain_page(pg);
 
 #ifndef NDEBUG
     /* Avoid callers relying on allocations returning zeroed pages. */

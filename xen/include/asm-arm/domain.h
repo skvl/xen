@@ -6,7 +6,9 @@
 #include <xen/sched.h>
 #include <asm/page.h>
 #include <asm/p2m.h>
+#include <asm/vfp.h>
 #include <public/hvm/params.h>
+#include <xen/serial.h>
 
 /* Represents state corresponding to a block of 32 interrupts */
 struct vgic_irq_rank {
@@ -20,6 +22,43 @@ struct vgic_irq_rank {
 struct pending_irq
 {
     int irq;
+    /*
+     * The following two states track the lifecycle of the guest irq.
+     * However because we are not sure and we don't want to track
+     * whether an irq added to an LR register is PENDING or ACTIVE, the
+     * following states are just an approximation.
+     *
+     * GIC_IRQ_GUEST_PENDING: the irq is asserted
+     *
+     * GIC_IRQ_GUEST_VISIBLE: the irq has been added to an LR register,
+     * therefore the guest is aware of it. From the guest point of view
+     * the irq can be pending (if the guest has not acked the irq yet)
+     * or active (after acking the irq).
+     *
+     * In order for the state machine to be fully accurate, for level
+     * interrupts, we should keep the GIC_IRQ_GUEST_PENDING state until
+     * the guest deactivates the irq. However because we are not sure
+     * when that happens, we simply remove the GIC_IRQ_GUEST_PENDING
+     * state when we add the irq to an LR register. We add it back when
+     * we receive another interrupt notification.
+     * Therefore it is possible to set GIC_IRQ_GUEST_PENDING while the
+     * irq is GIC_IRQ_GUEST_VISIBLE. We could also change the state of
+     * the guest irq in the LR register from active to active and
+     * pending, but for simplicity we simply inject a second irq after
+     * the guest EOIs the first one.
+     *
+     *
+     * An additional state is used to keep track of whether the guest
+     * irq is enabled at the vgicd level:
+     *
+     * GIC_IRQ_GUEST_ENABLED: the guest IRQ is enabled at the VGICD
+     * level (GICD_ICENABLER/GICD_ISENABLER).
+     *
+     */
+#define GIC_IRQ_GUEST_PENDING  0
+#define GIC_IRQ_GUEST_VISIBLE  1
+#define GIC_IRQ_GUEST_ENABLED  2
+    unsigned long status;
     struct irq_desc *desc; /* only set it the irq corresponds to a physical irq */
     uint8_t priority;
     /* inflight is used to append instances of pending_irq to
@@ -47,6 +86,9 @@ enum domain_type {
 #define is_pv64_domain(d) (0)
 #endif
 
+extern int dom0_11_mapping;
+#define is_domain_direct_mapped(d) ((d) == dom0 && dom0_11_mapping)
+
 struct vtimer {
         struct vcpu *v;
         int irq;
@@ -61,13 +103,24 @@ struct arch_domain
     enum domain_type type;
 #endif
 
+    /* Virtual MMU */
     struct p2m_domain p2m;
+    uint64_t vttbr;
+
     struct hvm_domain hvm_domain;
     xen_pfn_t *grant_table_gpfn;
 
+    /* Continuable domain_relinquish_resources(). */
+    enum {
+        RELMEM_not_started,
+        RELMEM_xen,
+        RELMEM_page,
+        RELMEM_mapping,
+        RELMEM_done,
+    } relmem;
+
     /* Virtual CPUID */
     uint32_t vpidr;
-    register_t vmpidr;
 
     struct {
         uint64_t offset;
@@ -100,13 +153,15 @@ struct arch_domain
         paddr_t cbase; /* CPU base address */
     } vgic;
 
-    struct vpl011 {
-#define VPL011_BUF_SIZE 128
-        char                  *buf;
-        int                    idx;
-        spinlock_t             lock;
-    } uart0;
+    struct vuart {
+#define VUART_BUF_SIZE 128
+        char                        *buf;
+        int                         idx;
+        const struct vuart_info     *info;
+        spinlock_t                  lock;
+    } vuart;
 
+    unsigned int evtchn_irq;
 }  __cacheline_aligned;
 
 struct arch_vcpu
@@ -159,15 +214,17 @@ struct arch_vcpu
 
     /* MMU */
     register_t vbar;
-    uint32_t ttbcr;
+    register_t ttbcr;
     uint64_t ttbr0, ttbr1;
 
     uint32_t dacr; /* 32-bit guests only */
     uint64_t par;
 #ifdef CONFIG_ARM_32
     uint32_t mair0, mair1;
+    uint32_t amair0, amair1;
 #else
     uint64_t mair;
+    uint64_t amair;
 #endif
 
     /* Control Registers */
@@ -188,8 +245,12 @@ struct arch_vcpu
     uint32_t joscr, jmcr;
 #endif
 
+    /* Float-pointer */
+    struct vfp_state vfp;
+
     /* CP 15 */
     uint32_t csselr;
+    register_t vmpidr;
 
     uint32_t gic_hcr, gic_vmcr, gic_apr;
     uint32_t gic_lr[64];

@@ -21,6 +21,8 @@ struct kernel_info {
     paddr_t dtb_paddr;
     paddr_t entry;
 
+    paddr_t initrd_paddr;
+
     void *kernel_img;
     unsigned kernel_order;
 
@@ -38,8 +40,6 @@ struct kernel_info {
     };
 
     void (*load)(struct kernel_info *info);
-    /* Callback to check overlap between the kernel and the device tree */
-    void (*check_overlap)(struct kernel_info *kinfo);
     int load_attr;
 };
 

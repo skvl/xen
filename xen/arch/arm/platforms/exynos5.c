@@ -25,6 +25,7 @@
 #include <xen/vmap.h>
 #include <asm/platforms/exynos5.h>
 #include <asm/platform.h>
+#include <asm/io.h>
 
 static int exynos5_init_time(void)
 {
@@ -41,8 +42,8 @@ static int exynos5_init_time(void)
     }
 
     /* Enable timer on Exynos 5250 should probably be done by u-boot */
-    reg = ioreadl(mct + EXYNOS5_MCT_G_TCON);
-    iowritel(mct + EXYNOS5_MCT_G_TCON, reg | EXYNOS5_MCT_G_TCON_START);
+    reg = readl(mct + EXYNOS5_MCT_G_TCON);
+    writel(reg | EXYNOS5_MCT_G_TCON_START, mct + EXYNOS5_MCT_G_TCON);
 
     iounmap(mct);
 
@@ -64,6 +65,26 @@ static int exynos5_specific_mapping(struct domain *d)
     return 0;
 }
 
+static int __init exynos5_smp_init(void)
+{
+    void __iomem *sysram;
+
+    sysram = ioremap_nocache(S5P_PA_SYSRAM, PAGE_SIZE);
+    if ( !sysram )
+    {
+        dprintk(XENLOG_ERR, "Unable to map exynos5 MMIO\n");
+        return -EFAULT;
+    }
+
+    printk("Set SYSRAM to %"PRIpaddr" (%p)\n",
+           __pa(init_secondary), init_secondary);
+    writel(__pa(init_secondary), sysram);
+
+    iounmap(sysram);
+
+    return 0;
+}
+
 static void exynos5_reset(void)
 {
     void __iomem *pmu;
@@ -77,27 +98,34 @@ static void exynos5_reset(void)
         return;
     }
 
-    iowritel(pmu + EXYNOS5_SWRESET, 1);
+    writel(1, pmu + EXYNOS5_SWRESET);
     iounmap(pmu);
 }
 
-static uint32_t exynos5_quirks(void)
-{
-    return PLATFORM_QUIRK_DOM0_MAPPING_11;
-}
-
-static const char const *exynos5_dt_compat[] __initdata =
+static const char * const exynos5_dt_compat[] __initconst =
 {
     "samsung,exynos5250",
     NULL
+};
+
+static const struct dt_device_match exynos5_blacklist_dev[] __initconst =
+{
+    /* Multi core Timer
+     * TODO: this device set up IRQ to CPU 1 which is not yet handled by Xen.
+     * This is result to random freeze.
+     */
+    DT_MATCH_COMPATIBLE("samsung,exynos4210-mct"),
+    { /* sentinel */ },
 };
 
 PLATFORM_START(exynos5, "SAMSUNG EXYNOS5")
     .compatible = exynos5_dt_compat,
     .init_time = exynos5_init_time,
     .specific_mapping = exynos5_specific_mapping,
+    .smp_init = exynos5_smp_init,
+    .cpu_up = cpu_up_send_sgi,
     .reset = exynos5_reset,
-    .quirks = exynos5_quirks,
+    .blacklist_dev = exynos5_blacklist_dev,
 PLATFORM_END
 
 /*

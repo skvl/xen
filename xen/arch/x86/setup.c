@@ -26,6 +26,7 @@
 #include <xen/pfn.h>
 #include <xen/nodemask.h>
 #include <xen/tmem_xen.h> /* for opt_tmem only */
+#include <xen/watchdog.h>
 #include <public/version.h>
 #include <compat/platform.h>
 #include <compat/xen.h>
@@ -377,9 +378,9 @@ static uint64_t __init consider_modules(
     return e;
 }
 
-static void __init setup_max_pdx(void)
+static void __init setup_max_pdx(unsigned long top_page)
 {
-    max_pdx = pfn_to_pdx(max_page - 1) + 1;
+    max_pdx = pfn_to_pdx(top_page - 1) + 1;
 
     if ( max_pdx > (DIRECTMAP_SIZE >> PAGE_SHIFT) )
         max_pdx = DIRECTMAP_SIZE >> PAGE_SHIFT;
@@ -547,7 +548,7 @@ void __init __start_xen(unsigned long mbi_p)
     unsigned int initrdidx;
     multiboot_info_t *mbi = __va(mbi_p);
     module_t *mod = (module_t *)__va(mbi->mods_addr);
-    unsigned long nr_pages, modules_headroom, *module_map;
+    unsigned long nr_pages, raw_max_page, modules_headroom, *module_map;
     int i, j, e820_warn = 0, bytes = 0;
     bool_t acpi_boot_table_init_done = 0;
     struct ns16550_defaults ns16550 = {
@@ -751,7 +752,7 @@ void __init __start_xen(unsigned long mbi_p)
     }
 
     /* Sanitise the raw E820 map to produce a final clean version. */
-    max_page = init_e820(memmap_type, e820_raw, &e820_raw_nr);
+    max_page = raw_max_page = init_e820(memmap_type, e820_raw, &e820_raw_nr);
 
     /* Create a temporary copy of the E820 map. */
     memcpy(&boot_e820, &e820, sizeof(e820));
@@ -820,7 +821,10 @@ void __init __start_xen(unsigned long mbi_p)
                              (end - s) >> PAGE_SHIFT, PAGE_HYPERVISOR);
         }
 
-        e = min_t(uint64_t, e, 1ULL << (PAGE_SHIFT + 32));
+        if ( e > min(HYPERVISOR_VIRT_END - DIRECTMAP_VIRT_START,
+                     1UL << (PAGE_SHIFT + 32)) )
+            e = min(HYPERVISOR_VIRT_END - DIRECTMAP_VIRT_START,
+                    1UL << (PAGE_SHIFT + 32));
 #define reloc_size ((__pa(&_end) + mask) & ~mask)
         /* Is the region suitable for relocating Xen? */
         if ( !xen_phys_start && e <= limit )
@@ -969,7 +973,7 @@ void __init __start_xen(unsigned long mbi_p)
     /* Late kexec reservation (dynamic start address). */
     kexec_reserve_area(&boot_e820);
 
-    setup_max_pdx();
+    setup_max_pdx(raw_max_page);
     if ( highmem_start )
         xenheap_max_mfn(PFN_DOWN(highmem_start));
 
@@ -995,7 +999,7 @@ void __init __start_xen(unsigned long mbi_p)
         {
             acpi_boot_table_init_done = 1;
             srat_parse_regions(s);
-            setup_max_pdx();
+            setup_max_pdx(raw_max_page);
         }
 
         if ( pfn_to_pdx((e - 1) >> PAGE_SHIFT) >= max_pdx )
@@ -1009,9 +1013,17 @@ void __init __start_xen(unsigned long mbi_p)
                     ASSERT(j);
                 }
                 map_e = boot_e820.map[j].addr + boot_e820.map[j].size;
-                if ( (map_e >> PAGE_SHIFT) < max_page )
+                for ( j = 0; j < mbi->mods_count; ++j )
                 {
-                    max_page = map_e >> PAGE_SHIFT;
+                    uint64_t end = pfn_to_paddr(mod[j].mod_start) +
+                                   mod[j].mod_end;
+
+                    if ( map_e < end )
+                        map_e = end;
+                }
+                if ( PFN_UP(map_e) < max_page )
+                {
+                    max_page = PFN_UP(map_e);
                     max_pdx = pfn_to_pdx(max_page - 1) + 1;
                 }
                 printk(XENLOG_WARNING "Ignoring inaccessible memory range"
@@ -1085,9 +1097,18 @@ void __init __start_xen(unsigned long mbi_p)
                          mod[i].mod_start,
                          PFN_UP(mod[i].mod_end), PAGE_HYPERVISOR);
     }
-    map_pages_to_xen((unsigned long)__va(kexec_crash_area.start),
-                     kexec_crash_area.start >> PAGE_SHIFT,
-                     PFN_UP(kexec_crash_area.size), PAGE_HYPERVISOR);
+
+    if ( kexec_crash_area.size )
+    {
+        unsigned long s = PFN_DOWN(kexec_crash_area.start);
+        unsigned long e = min(s + PFN_UP(kexec_crash_area.size),
+                              PFN_UP(__pa(HYPERVISOR_VIRT_END - 1)));
+
+        if ( e > s ) 
+            map_pages_to_xen((unsigned long)__va(kexec_crash_area.start),
+                             s, e - s, PAGE_HYPERVISOR);
+    }
+
     xen_virt_end = ((unsigned long)_end + (1UL << L2_PAGETABLE_SHIFT) - 1) &
                    ~((1UL << L2_PAGETABLE_SHIFT) - 1);
     destroy_xen_mappings(xen_virt_end, XEN_VIRT_START + BOOTSTRAP_MAP_BASE);
@@ -1133,7 +1154,7 @@ void __init __start_xen(unsigned long mbi_p)
 
     acpi_numa_init();
 
-    numa_initmem_init(0, max_page);
+    numa_initmem_init(0, raw_max_page);
 
     end_boot_allocator();
     system_state = SYS_STATE_boot;
@@ -1151,6 +1172,8 @@ void __init __start_xen(unsigned long mbi_p)
         {
             uint64_t s, e;
 
+            if ( boot_e820.map[i].type != E820_RAM )
+                continue;
             s = (boot_e820.map[i].addr + mask) & ~mask;
             e = (boot_e820.map[i].addr + boot_e820.map[i].size) & ~mask;
             if ( PFN_DOWN(e) <= limit )
@@ -1260,6 +1283,9 @@ void __init __start_xen(unsigned long mbi_p)
     if ( cpu_has_smep )
         set_in_cr4(X86_CR4_SMEP);
 
+    if ( cpu_has_fsgsbase )
+        set_in_cr4(X86_CR4_FSGSBASE);
+
     local_irq_enable();
 
     pt_pci_init();
@@ -1313,12 +1339,12 @@ void __init __start_xen(unsigned long mbi_p)
         watchdog_setup();
 
     if ( !tboot_protect_mem_regions() )
-        panic("Could not protect TXT memory regions\n");
+        panic("Could not protect TXT memory regions");
 
     /* Create initial domain 0. */
     dom0 = domain_create(0, DOMCRF_s3_integrity, 0);
     if ( IS_ERR(dom0) || (alloc_dom0_vcpu0() == NULL) )
-        panic("Error creating domain 0\n");
+        panic("Error creating domain 0");
 
     dom0->is_privileged = 1;
     dom0->target = NULL;
@@ -1373,7 +1399,7 @@ void __init __start_xen(unsigned long mbi_p)
                         (initrdidx > 0) && (initrdidx < mbi->mods_count)
                         ? mod + initrdidx : NULL,
                         bootstrap_map, cmdline) != 0)
-        panic("Could not set up DOM0 guest OS\n");
+        panic("Could not set up DOM0 guest OS");
 
     /* Scrub RAM that is still free and so may go to an unprivileged domain. */
     scrub_heap_pages();

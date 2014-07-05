@@ -36,6 +36,7 @@ struct nestedvmx {
     struct {
         unsigned long intr_info;
         u32           error_code;
+        u8            source;
     } intr;
     struct {
         bool_t   enabled;
@@ -222,6 +223,7 @@ void nvmx_idtv_handling(void);
 u64 nvmx_get_tsc_offset(struct vcpu *v);
 int nvmx_n2_vmexit_handler(struct cpu_user_regs *regs,
                           unsigned int exit_reason);
+void nvmx_set_cr_read_shadow(struct vcpu *v, unsigned int cr);
 
 uint64_t nept_get_ept_vpid_cap(void);
 

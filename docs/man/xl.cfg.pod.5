@@ -104,8 +104,8 @@ created online and the remainder will be offline.
 
 =item B<cpus="CPU-LIST">
 
-List of which cpus the guest is allowed to use. By default xl will pick
-some cpus on its own (see below). A C<CPU-LIST> may be specified as follows:
+List of which cpus the guest is allowed to use. Default is no pinning at
+all (more on this below). A C<CPU-LIST> may be specified as follows:
 
 =over 4
 
@@ -115,7 +115,25 @@ To allow all the vcpus of the guest to run on all the cpus on the host.
 
 =item "0-3,5,^1"
 
-To allow all the vcpus of the guest to run on cpus 0,2,3,5.
+To allow all the vcpus of the guest to run on cpus 0,2,3,5. Combining
+this with "all" is possible, meaning "all,^7" results in all the vcpus
+of the guest running on all the cpus on the host except cpu 7.
+
+=item "nodes:0-3,node:^2"
+
+To allow all the vcpus of the guest to run on the cpus from NUMA nodes
+0,1,3 of the host. So, if cpus 0-3 belongs to node 0, cpus 4-7 belongs
+to node 1 and cpus 8-11 to node 3, the above would mean all the vcpus
+of the guest will run on cpus 0-3,8-11.
+
+Combining this notation with the one above is possible. For instance,
+"1,node:2,^6", means all the vcpus of the guest will run on cpu 1 and
+on all the cpus of NUMA node 2, but not on cpu 6. Following the same
+example as above, that would be cpus 1,4,5,7.
+
+Combining this with "all" is also possible, meaning "all,^nodes:1"
+results in all the vcpus of the guest running on all the cpus on the
+host, except for the cpus belonging to the host NUMA node 1.
 
 =item ["2", "3"] (or [2, 3])
 
@@ -125,11 +143,19 @@ run on cpu #3 of the host.
 
 =back
 
-If this option is not specified, libxl automatically tries to place the new
-domain on the host's NUMA nodes (provided the host has more than one NUMA
-node) by pinning it to the cpus of those nodes. A heuristic approach is
-utilized with the goals of maximizing performance for the domain and, at
-the same time, achieving efficient utilization of the host's CPUs and RAM.
+If this option is not specified, no vcpu to cpu pinning is established,
+and the vcpus of the guest can run on all the cpus of the host.
+
+If we are on a NUMA machine (i.e., if the host has more than one NUMA
+node) and this option is not specified, libxl automatically tries to
+place the guest on the least possible number of nodes. That, however,
+will not affect vcpu pinning, so the guest will still be able to run on
+all the cpus, it will just prefer the ones from the node it has been
+placed on. A heuristic approach is used for choosing the best node (or
+set of nodes), with the goals of maximizing performance for the guest
+and, at the same time, achieving efficient utilization of host cpus
+and memory. See F<docs/misc/xl-numa-placement.markdown> for more
+details.
 
 =back
 
@@ -299,6 +325,11 @@ which are incompatible with migration. Currently this is limited to
 enabling the invariant TSC feature flag in cpuid results when TSC is
 not emulated.
 
+=item B<driver_domain=BOOLEAN>
+
+Specify that this domain is a driver domain. This enables certain
+features needed in order to run a driver domain.
+
 =back
 
 =head2 Devices
@@ -356,7 +387,10 @@ to the domain.
 
 This options does not control the emulated graphics card presented to
 an HVM guest. See L<Emulated VGA Graphics Device> below for how to
-configure the emulated device.
+configure the emulated device. If L<Emulated VGA Graphics Device> options
+are used in a PV guest configuration, xl will pick up B<vnc>, B<vnclisten>,
+B<vncpasswd>, B<vncdisplay> and B<vncunused> to construct paravirtual
+framebuffer device for the guest.
 
 Each B<VFB_SPEC_STRING> is a comma-separated list of C<KEY=VALUE>
 settings, from the following list:
@@ -572,6 +606,17 @@ Allow a guest to access specific physical IRQs.
 It is recommended to use this option only for trusted VMs under
 administrator control.
 
+=item B<max_event_channels=N>
+
+Limit the guest to using at most N event channels (PV interrupts).
+Guests use hypervisor resources for each event channel they use.
+
+The default of 1023 should be sufficient for typical guests.  The
+maximum value depends what the guest supports.  Guests supporting the
+FIFO-based event channel ABI support up to 131,071 event channels.
+Other guests are limited to 4095 (64-bit x86 and ARM) or 1023 (32-bit
+x86).
+
 =back
 
 =head2 Paravirtualised (PV) Guest Specific Options
@@ -633,6 +678,9 @@ to hotplug devices later then you should set this option. Conversely
 if your particular guest kernel does not require this behaviour then
 it is safe to allow this to be enabled but you may wish to disable it
 anyway.
+
+=item B<pvh=BOOLEAN>
+Selects whether to run this PV guest in an HVM container. Default is 0.
 
 =back
 
@@ -980,6 +1028,9 @@ drivers are available for various Operating Systems including HVM
 Linux L<http://wiki.xen.org/wiki/XenLinuxPVonHVMdrivers> and Microsoft
 Windows L<http://wiki.xen.org/wiki/XenWindowsGplPv>.
 
+Setting B<xen_platform_pci=0> with the default device_model "qemu-xen"
+requires at least QEMU 1.6.
+
 =item B<viridian=BOOLEAN>
 
 Turns on or off the exposure of MicroSoft Hyper-V (AKA viridian)
@@ -1009,14 +1060,16 @@ in the B<VFB_SPEC_STRING> for configuring virtual frame buffer devices
 Sets the amount of RAM which the emulated video card will contain,
 which in turn limits the resolutions and bit depths which will be
 available.
-The default amount of video ram for stdvga is 8MB which is sufficient
-for e.g. 1600x1200 at 32bpp and videoram option is currently working
-only when using the qemu-xen-traditional device-model.
 
-When using the emulated Cirrus graphics card (B<vga="cirrus">)
-the amount of video ram is fixed at 4MB which is sufficient
-for 1024x768 at 32 bpp and videoram option is currently working
-only when using the upstream qemu-xen device-model.
+When using the qemu-xen-traditional device-model, the default as well as
+minimum amount of video RAM for stdvga is 8 MB, which is sufficient for e.g.
+1600x1200 at 32bpp. For the upstream qemu-xen device-model, the default and
+minimum is 16 MB.
+
+When using the emulated Cirrus graphics card (B<vga="cirrus">) and the
+qemu-xen-traditional device-model, the amount of video RAM is fixed at 4 MB,
+which is sufficient for 1024x768 at 32 bpp. For the upstream qemu-xen
+device-model, the default and minimum is 8 MB.
 
 =item B<stdvga=BOOLEAN>
 
@@ -1130,6 +1183,27 @@ Specify the ticket password which is used by a client for connection.
 Whether SPICE agent is used for client mouse mode. The default is true (1)
 (turn on)
 
+=item B<spicevdagent=BOOLEAN>
+
+Enables spice vdagent. The Spice vdagent is an optional component for
+enhancing user experience and performing guest-oriented management
+tasks. Its features includes: client mouse mode (no need to grab mouse
+by client, no mouse lag), automatic adjustment of screen resolution,
+copy and paste (text and image) between client and domU. It also
+requires vdagent service installed on domU o.s. to work. The default is 0.
+
+=item B<spice_clipboard_sharing=BOOLEAN>
+
+Enables Spice clipboard sharing (copy/paste). It requires spicevdagent
+enabled. The default is false (0).
+
+=item B<spiceusbredirection=NUMBER>
+
+Enables spice usbredirection. Creates NUMBER usbredirection channels
+for redirection of up to 4 usb devices from spice client to domU's qemu.
+It requires an usb controller and if not defined it will automatically adds
+an usb2 controller. The default is disabled (0).
+
 =back
 
 =head3 Miscellaneous Emulated Hardware
@@ -1154,6 +1228,14 @@ device.
 
 Enables or disables an emulated USB bus in the guest.
 
+=item B<usbversion=NUMBER>
+
+Specifies the type of an emulated USB bus in the guest. 1 for usb1,
+2 for usb2 and 3 for usb3, it is available only with upstream qemu.
+Due to implementation limitations this is not compatible with the usb
+and usbdevice parameters.
+Default is 0 (no usb controller defined).
+
 =item B<usbdevice=[ "DEVICE", "DEVICE", ...]>
 
 Adds B<DEVICE>s to the emulated USB bus. The USB bus must also be
@@ -1169,10 +1251,35 @@ Host devices can also be passed through in this way, by specifying
 host:USBID, where USBID is of the form xxxx:yyyy.  The USBID can
 typically be found by using lsusb or usb-devices.
 
+If you wish to use the "host:bus.addr" format, remove any leading '0' from the
+bus and addr. For example, for the USB device on bus 008 dev 002, you should
+write "host:8.2".
+
 The form usbdevice=DEVICE is also accepted for backwards compatibility.
 
 More valid options can be found in the "usbdevice" section of the qemu
 documentation.
+
+=item B<vendor_device="VENDOR_DEVICE">
+
+Selects which variant of the QEMU xen-pvdevice should be used for this
+guest. Valid values are:
+
+=over 4
+
+=item B<none>
+
+The xen-pvdevice should be omitted. This is the default.
+
+=item B<xenserver>
+
+The xenserver variant of the xen-pvdevice (device-id=C000) will be
+specified, enabling the use of XenServer PV drivers in the guest.
+
+=back
+
+This parameter only takes effect when device_model_version=qemu-xen.
+See F<docs/misc/pci-device-reservations.txt> for more information.
 
 =back
 

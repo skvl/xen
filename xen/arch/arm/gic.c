@@ -30,6 +30,7 @@
 #include <xen/device_tree.h>
 #include <asm/p2m.h>
 #include <asm/domain.h>
+#include <asm/platform.h>
 
 #include <asm/gic.h>
 
@@ -57,6 +58,31 @@ static DEFINE_PER_CPU(uint64_t, lr_mask);
 
 static unsigned nr_lrs;
 
+/* The GIC mapping of CPU interfaces does not necessarily match the
+ * logical CPU numbering. Let's use mapping as returned by the GIC
+ * itself
+ */
+static DEFINE_PER_CPU(u8, gic_cpu_id);
+
+/* Maximum cpu interface per GIC */
+#define NR_GIC_CPU_IF 8
+
+static unsigned int gic_cpu_mask(const cpumask_t *cpumask)
+{
+    unsigned int cpu;
+    unsigned int mask = 0;
+    cpumask_t possible_mask;
+
+    cpumask_and(&possible_mask, cpumask, &cpu_possible_map);
+    for_each_cpu(cpu, &possible_mask)
+    {
+        ASSERT(cpu < NR_GIC_CPU_IF);
+        mask |= per_cpu(gic_cpu_id, cpu);
+    }
+
+    return mask;
+}
+
 unsigned int gic_number_lines(void)
 {
     return gic.lines;
@@ -81,6 +107,7 @@ void gic_save_state(struct vcpu *v)
         v->arch.gic_lr[i] = GICH[GICH_LR + i];
     v->arch.lr_mask = this_cpu(lr_mask);
     v->arch.gic_apr = GICH[GICH_APR];
+    v->arch.gic_vmcr = GICH[GICH_VMCR];
     /* Disable until next VCPU scheduled */
     GICH[GICH_HCR] = 0;
     isb();
@@ -97,40 +124,51 @@ void gic_restore_state(struct vcpu *v)
     for ( i=0; i<nr_lrs; i++)
         GICH[GICH_LR + i] = v->arch.gic_lr[i];
     GICH[GICH_APR] = v->arch.gic_apr;
+    GICH[GICH_VMCR] = v->arch.gic_vmcr;
     GICH[GICH_HCR] = GICH_HCR_EN;
     isb();
 
     gic_restore_pending_irqs(v);
 }
 
+static void gic_irq_enable(struct irq_desc *desc)
+{
+    int irq = desc->irq;
+    unsigned long flags;
+
+    spin_lock_irqsave(&desc->lock, flags);
+    spin_lock(&gic.lock);
+    desc->status &= ~IRQ_DISABLED;
+    dsb();
+    /* Enable routing */
+    GICD[GICD_ISENABLER + irq / 32] = (1u << (irq % 32));
+    spin_unlock(&gic.lock);
+    spin_unlock_irqrestore(&desc->lock, flags);
+}
+
+static void gic_irq_disable(struct irq_desc *desc)
+{
+    int irq = desc->irq;
+    unsigned long flags;
+
+    spin_lock_irqsave(&desc->lock, flags);
+    spin_lock(&gic.lock);
+    /* Disable routing */
+    GICD[GICD_ICENABLER + irq / 32] = (1u << (irq % 32));
+    desc->status |= IRQ_DISABLED;
+    spin_unlock(&gic.lock);
+    spin_unlock_irqrestore(&desc->lock, flags);
+}
+
 static unsigned int gic_irq_startup(struct irq_desc *desc)
 {
-    uint32_t enabler;
-    int irq = desc->irq;
-
-    /* Enable routing */
-    enabler = GICD[GICD_ISENABLER + irq / 32];
-    GICD[GICD_ISENABLER + irq / 32] = enabler | (1u << (irq % 32));
-
+    gic_irq_enable(desc);
     return 0;
 }
 
 static void gic_irq_shutdown(struct irq_desc *desc)
 {
-    int irq = desc->irq;
-
-    /* Disable routing */
-    GICD[GICD_ICENABLER + irq / 32] = (1u << (irq % 32));
-}
-
-static void gic_irq_enable(struct irq_desc *desc)
-{
-
-}
-
-static void gic_irq_disable(struct irq_desc *desc)
-{
-
+    gic_irq_disable(desc);
 }
 
 static void gic_irq_ack(struct irq_desc *desc)
@@ -182,12 +220,18 @@ static hw_irq_controller gic_guest_irq_type = {
     .set_affinity = gic_irq_set_affinity,
 };
 
-/* needs to be called with gic.lock held */
+/*
+ * - needs to be called with gic.lock held
+ * - needs to be called with a valid cpu_mask, ie each cpu in the mask has
+ * already called gic_cpu_init
+ */
 static void gic_set_irq_properties(unsigned int irq, bool_t level,
-        unsigned int cpu_mask, unsigned int priority)
+                                   const cpumask_t *cpu_mask,
+                                   unsigned int priority)
 {
     volatile unsigned char *bytereg;
     uint32_t cfg, edgebit;
+    unsigned int mask = gic_cpu_mask(cpu_mask);
 
     /* Set edge / level */
     cfg = GICD[GICD_ICFGR + irq / 16];
@@ -200,7 +244,7 @@ static void gic_set_irq_properties(unsigned int irq, bool_t level,
 
     /* Set target CPU mask (RAZ/WI on uniprocessor) */
     bytereg = (unsigned char *) (GICD + GICD_ITARGETSR);
-    bytereg[irq] = cpu_mask;
+    bytereg[irq] = mask;
 
     /* Set priority */
     bytereg = (unsigned char *) (GICD + GICD_IPRIORITYR);
@@ -210,39 +254,34 @@ static void gic_set_irq_properties(unsigned int irq, bool_t level,
 
 /* Program the GIC to route an interrupt */
 static int gic_route_irq(unsigned int irq, bool_t level,
-                         unsigned int cpu_mask, unsigned int priority)
+                         const cpumask_t *cpu_mask, unsigned int priority)
 {
     struct irq_desc *desc = irq_to_desc(irq);
     unsigned long flags;
 
-    ASSERT(!(cpu_mask & ~0xff));  /* Targets bitmap only supports 8 CPUs */
     ASSERT(priority <= 0xff);     /* Only 8 bits of priority */
     ASSERT(irq < gic.lines);      /* Can't route interrupts that don't exist */
 
-    spin_lock_irqsave(&desc->lock, flags);
-    spin_lock(&gic.lock);
-
     if ( desc->action != NULL )
-    {
-        spin_unlock(&gic.lock);
-        spin_unlock(&desc->lock);
         return -EBUSY;
-    }
-
-    desc->handler = &gic_host_irq_type;
 
     /* Disable interrupt */
     desc->handler->shutdown(desc);
 
-    gic_set_irq_properties(irq, level, cpu_mask, priority);
+    spin_lock_irqsave(&desc->lock, flags);
 
+    desc->handler = &gic_host_irq_type;
+
+    spin_lock(&gic.lock);
+    gic_set_irq_properties(irq, level, cpu_mask, priority);
     spin_unlock(&gic.lock);
+
     spin_unlock_irqrestore(&desc->lock, flags);
     return 0;
 }
 
 /* Program the GIC to route an interrupt with a dt_irq */
-void gic_route_dt_irq(const struct dt_irq *irq, unsigned int cpu_mask,
+void gic_route_dt_irq(const struct dt_irq *irq, const cpumask_t *cpu_mask,
                       unsigned int priority)
 {
     bool_t level;
@@ -255,9 +294,10 @@ void gic_route_dt_irq(const struct dt_irq *irq, unsigned int cpu_mask,
 static void __init gic_dist_init(void)
 {
     uint32_t type;
-    uint32_t cpumask = 1 << smp_processor_id();
+    uint32_t cpumask;
     int i;
 
+    cpumask = GICD[GICD_ITARGETSR] & 0xff;
     cpumask |= cpumask << 8;
     cpumask |= cpumask << 16;
 
@@ -295,6 +335,8 @@ static void __init gic_dist_init(void)
 static void __cpuinit gic_cpu_init(void)
 {
     int i;
+
+    this_cpu(gic_cpu_id) = GICD[GICD_ITARGETSR] & 0xff;
 
     /* The first 32 interrupts (PPI and SGI) are banked per-cpu, so
      * even though they are controlled with GICD registers, they must
@@ -355,34 +397,39 @@ int gic_irq_xlate(const u32 *intspec, unsigned int intsize,
 /* Set up the GIC */
 void __init gic_init(void)
 {
+    static const struct dt_device_match gic_ids[] __initconst =
+    {
+        DT_MATCH_GIC,
+        { /* sentinel */ },
+    };
     struct dt_device_node *node;
     int res;
 
-    node = dt_find_interrupt_controller("arm,cortex-a15-gic");
+    node = dt_find_interrupt_controller(gic_ids);
     if ( !node )
-        panic("Unable to find compatible GIC in the device tree\n");
+        panic("Unable to find compatible GIC in the device tree");
 
     dt_device_set_used_by(node, DOMID_XEN);
 
     res = dt_device_get_address(node, 0, &gic.dbase, NULL);
     if ( res || !gic.dbase || (gic.dbase & ~PAGE_MASK) )
-        panic("GIC: Cannot find a valid address for the distributor\n");
+        panic("GIC: Cannot find a valid address for the distributor");
 
     res = dt_device_get_address(node, 1, &gic.cbase, NULL);
     if ( res || !gic.cbase || (gic.cbase & ~PAGE_MASK) )
-        panic("GIC: Cannot find a valid address for the CPU\n");
+        panic("GIC: Cannot find a valid address for the CPU");
 
     res = dt_device_get_address(node, 2, &gic.hbase, NULL);
     if ( res || !gic.hbase || (gic.hbase & ~PAGE_MASK) )
-        panic("GIC: Cannot find a valid address for the hypervisor\n");
+        panic("GIC: Cannot find a valid address for the hypervisor");
 
     res = dt_device_get_address(node, 3, &gic.vbase, NULL);
     if ( res || !gic.vbase || (gic.vbase & ~PAGE_MASK) )
-        panic("GIC: Cannot find a valid address for the virtual CPU\n");
+        panic("GIC: Cannot find a valid address for the virtual CPU");
 
     res = dt_device_get_irq(node, 0, &gic.maintenance);
     if ( res )
-        panic("GIC: Cannot find the maintenance IRQ\n");
+        panic("GIC: Cannot find the maintenance IRQ");
 
     /* Set the GIC as the primary interrupt controller */
     dt_interrupt_controller = node;
@@ -400,13 +447,16 @@ void __init gic_init(void)
 
     if ( (gic.dbase & ~PAGE_MASK) || (gic.cbase & ~PAGE_MASK) ||
          (gic.hbase & ~PAGE_MASK) || (gic.vbase & ~PAGE_MASK) )
-        panic("GIC interfaces not page aligned.\n");
+        panic("GIC interfaces not page aligned");
 
     set_fixmap(FIXMAP_GICD, gic.dbase >> PAGE_SHIFT, DEV_SHARED);
     BUILD_BUG_ON(FIXMAP_ADDR(FIXMAP_GICC1) !=
                  FIXMAP_ADDR(FIXMAP_GICC2)-PAGE_SIZE);
     set_fixmap(FIXMAP_GICC1, gic.cbase >> PAGE_SHIFT, DEV_SHARED);
-    set_fixmap(FIXMAP_GICC2, (gic.cbase >> PAGE_SHIFT) + 1, DEV_SHARED);
+    if ( platform_has_quirk(PLATFORM_QUIRK_GIC_64K_STRIDE) )
+        set_fixmap(FIXMAP_GICC2, (gic.cbase >> PAGE_SHIFT) + 0x10, DEV_SHARED);
+    else
+        set_fixmap(FIXMAP_GICC2, (gic.cbase >> PAGE_SHIFT) + 0x1, DEV_SHARED);
     set_fixmap(FIXMAP_GICH, gic.hbase >> PAGE_SHIFT, DEV_SHARED);
 
     /* Global settings: interrupt distributor */
@@ -422,13 +472,13 @@ void __init gic_init(void)
 
 void send_SGI_mask(const cpumask_t *cpumask, enum gic_sgi sgi)
 {
-    unsigned long mask = cpumask_bits(cpumask)[0];
+    unsigned int mask = 0;
+    cpumask_t online_mask;
 
     ASSERT(sgi < 16); /* There are only 16 SGIs */
 
-    mask &= cpumask_bits(&cpu_online_map)[0];
-
-    ASSERT(mask < 0x100); /* The target bitmap only supports 8 CPUs */
+    cpumask_and(&online_mask, cpumask, &cpu_online_map);
+    mask = gic_cpu_mask(&online_mask);
 
     dsb();
 
@@ -439,7 +489,7 @@ void send_SGI_mask(const cpumask_t *cpumask, enum gic_sgi sgi)
 
 void send_SGI_one(unsigned int cpu, enum gic_sgi sgi)
 {
-    ASSERT(cpu < 7);  /* Targets bitmap only supports 8 CPUs */
+    ASSERT(cpu < NR_GIC_CPU_IF);  /* Targets bitmap only supports 8 CPUs */
     send_SGI_mask(cpumask_of(cpu), sgi);
 }
 
@@ -491,7 +541,7 @@ void gic_disable_cpu(void)
 void gic_route_ppis(void)
 {
     /* GIC maintenance */
-    gic_route_dt_irq(&gic.maintenance, 1u << smp_processor_id(), 0xa0);
+    gic_route_dt_irq(&gic.maintenance, cpumask_of(smp_processor_id()), 0xa0);
     /* Route timer interrupt */
     route_timer_interrupt();
 }
@@ -506,7 +556,7 @@ void gic_route_spis(void)
         if ( (irq = serial_dt_irq(seridx)) == NULL )
             continue;
 
-        gic_route_dt_irq(irq, 1u << smp_processor_id(), 0xa0);
+        gic_route_dt_irq(irq, cpumask_of(smp_processor_id()), 0xa0);
     }
 }
 
@@ -518,14 +568,12 @@ void __init release_irq(unsigned int irq)
 
     desc = irq_to_desc(irq);
 
+    desc->handler->shutdown(desc);
+
     spin_lock_irqsave(&desc->lock,flags);
     action = desc->action;
     desc->action  = NULL;
-    desc->status |= IRQ_DISABLED;
-
-    spin_lock(&gic.lock);
-    desc->handler->shutdown(desc);
-    spin_unlock(&gic.lock);
+    desc->status &= ~IRQ_GUEST;
 
     spin_unlock_irqrestore(&desc->lock,flags);
 
@@ -543,10 +591,7 @@ static int __setup_irq(struct irq_desc *desc, unsigned int irq,
         return -EBUSY;
 
     desc->action  = new;
-    desc->status &= ~IRQ_DISABLED;
     dsb();
-
-    desc->handler->startup(desc);
 
     return 0;
 }
@@ -560,10 +605,11 @@ int __init setup_dt_irq(const struct dt_irq *irq, struct irqaction *new)
     desc = irq_to_desc(irq->irq);
 
     spin_lock_irqsave(&desc->lock, flags);
-
     rc = __setup_irq(desc, irq->irq, new);
-
     spin_unlock_irqrestore(&desc->lock, flags);
+
+    desc->handler->startup(desc);
+
 
     return rc;
 }
@@ -572,6 +618,7 @@ static inline void gic_set_lr(int lr, unsigned int virtual_irq,
         unsigned int state, unsigned int priority)
 {
     int maintenance_int = GICH_LR_MAINTENANCE_IRQ;
+    struct pending_irq *p = irq_to_pending(current, virtual_irq);
 
     BUG_ON(lr >= nr_lrs);
     BUG_ON(lr < 0);
@@ -581,13 +628,45 @@ static inline void gic_set_lr(int lr, unsigned int virtual_irq,
         maintenance_int |
         ((priority >> 3) << GICH_LR_PRIORITY_SHIFT) |
         ((virtual_irq & GICH_LR_VIRTUAL_MASK) << GICH_LR_VIRTUAL_SHIFT);
+
+    set_bit(GIC_IRQ_GUEST_VISIBLE, &p->status);
+    clear_bit(GIC_IRQ_GUEST_PENDING, &p->status);
+}
+
+static inline void gic_add_to_lr_pending(struct vcpu *v, unsigned int irq,
+        unsigned int priority)
+{
+    struct pending_irq *iter, *n = irq_to_pending(v, irq);
+
+    if ( !list_empty(&n->lr_queue) )
+        return;
+
+    list_for_each_entry ( iter, &v->arch.vgic.lr_pending, lr_queue )
+    {
+        if ( iter->priority > priority )
+        {
+            list_add_tail(&n->lr_queue, &iter->lr_queue);
+            return;
+        }
+    }
+    list_add_tail(&n->lr_queue, &v->arch.vgic.lr_pending);
+}
+
+void gic_remove_from_queues(struct vcpu *v, unsigned int virtual_irq)
+{
+    struct pending_irq *p = irq_to_pending(v, virtual_irq);
+    unsigned long flags;
+
+    spin_lock_irqsave(&gic.lock, flags);
+    if ( !list_empty(&p->lr_queue) )
+        list_del_init(&p->lr_queue);
+    spin_unlock_irqrestore(&gic.lock, flags);
 }
 
 void gic_set_guest_irq(struct vcpu *v, unsigned int virtual_irq,
         unsigned int state, unsigned int priority)
 {
     int i;
-    struct pending_irq *iter, *n;
     unsigned long flags;
 
     spin_lock_irqsave(&gic.lock, flags);
@@ -602,19 +681,7 @@ void gic_set_guest_irq(struct vcpu *v, unsigned int virtual_irq,
         }
     }
 
-    n = irq_to_pending(v, virtual_irq);
-    if ( !list_empty(&n->lr_queue) )
-        goto out;
-
-    list_for_each_entry ( iter, &v->arch.vgic.lr_pending, lr_queue )
-    {
-        if ( iter->priority > priority )
-        {
-            list_add_tail(&n->lr_queue, &iter->lr_queue);
-            goto out;
-        }
-    }
-    list_add_tail(&n->lr_queue, &v->arch.vgic.lr_pending);
+    gic_add_to_lr_pending(v, virtual_irq, priority);
 
 out:
     spin_unlock_irqrestore(&gic.lock, flags);
@@ -678,7 +745,7 @@ int gic_events_need_delivery(void)
 void gic_inject(void)
 {
     if ( vcpu_info(current, evtchn_upcall_pending) )
-        vgic_vcpu_inject_irq(current, VGIC_IRQ_EVTCHN_CALLBACK, 1);
+        vgic_vcpu_inject_irq(current, current->domain->arch.evtchn_irq, 1);
 
     gic_restore_pending_irqs(current);
     if (!gic_events_need_delivery())
@@ -695,6 +762,7 @@ int gic_route_irq_to_guest(struct domain *d, const struct dt_irq *irq,
     unsigned long flags;
     int retval;
     bool_t level;
+    struct pending_irq *p;
 
     action = xmalloc(struct irqaction);
     if (!action)
@@ -712,13 +780,18 @@ int gic_route_irq_to_guest(struct domain *d, const struct dt_irq *irq,
 
     level = dt_irq_is_level_triggered(irq);
 
-    gic_set_irq_properties(irq->irq, level, 1u << smp_processor_id(), 0xa0);
+    gic_set_irq_properties(irq->irq, level, cpumask_of(smp_processor_id()),
+                           0xa0);
 
     retval = __setup_irq(desc, irq->irq, action);
     if (retval) {
         xfree(action);
         goto out;
     }
+
+    /* TODO: do not assume delivery to vcpu0 */
+    p = irq_to_pending(d->vcpu[0], irq->irq);
+    p->desc = desc;
 
 out:
     spin_unlock(&gic.lock);
@@ -743,7 +816,7 @@ static void do_sgi(struct cpu_user_regs *regs, int othercpu, enum gic_sgi sgi)
         smp_call_function_interrupt();
         break;
     default:
-        panic("Unhandled SGI %d on CPU%d\n", sgi, smp_processor_id());
+        panic("Unhandled SGI %d on CPU%d", sgi, smp_processor_id());
         break;
     }
 
@@ -783,21 +856,49 @@ void gic_interrupt(struct cpu_user_regs *regs, int is_fiq)
 
 int gicv_setup(struct domain *d)
 {
-    /* TODO: Retrieve distributor and CPU guest base address from the
-     * guest DTS
-     * For the moment we use dom0 DTS
-     */
-    d->arch.vgic.dbase = gic.dbase;
-    d->arch.vgic.cbase = gic.cbase;
+    int ret;
 
+    /*
+     * Domain 0 gets the hardware address.
+     * Guests get the virtual platform layout.
+     */
+    if ( d->domain_id == 0 )
+    {
+        d->arch.vgic.dbase = gic.dbase;
+        d->arch.vgic.cbase = gic.cbase;
+    }
+    else
+    {
+        d->arch.vgic.dbase = GUEST_GICD_BASE;
+        d->arch.vgic.cbase = GUEST_GICC_BASE;
+    }
 
     d->arch.vgic.nr_lines = 0;
 
-    /* map the gic virtual cpu interface in the gic cpu interface region of
-     * the guest */
-    return map_mmio_regions(d, d->arch.vgic.cbase,
-                            d->arch.vgic.cbase + (2 * PAGE_SIZE) - 1,
-                            gic.vbase);
+    /*
+     * Map the gic virtual cpu interface in the gic cpu interface
+     * region of the guest.
+     *
+     * The second page is always mapped at +4K irrespective of the
+     * GIC_64K_STRIDE quirk. The DTB passed to the guest reflects this.
+     */
+    ret = map_mmio_regions(d, d->arch.vgic.cbase,
+                           d->arch.vgic.cbase + PAGE_SIZE - 1,
+                           gic.vbase);
+    if (ret)
+        return ret;
+
+    if ( !platform_has_quirk(PLATFORM_QUIRK_GIC_64K_STRIDE) )
+        ret = map_mmio_regions(d, d->arch.vgic.cbase + PAGE_SIZE,
+                               d->arch.vgic.cbase + (2 * PAGE_SIZE) - 1,
+                               gic.vbase + PAGE_SIZE);
+    else
+        ret = map_mmio_regions(d, d->arch.vgic.cbase + PAGE_SIZE,
+                               d->arch.vgic.cbase + (2 * PAGE_SIZE) - 1,
+                               gic.vbase + 16*PAGE_SIZE);
+
+    return ret;
+
 }
 
 static void gic_irq_eoi(void *info)
@@ -808,18 +909,19 @@ static void gic_irq_eoi(void *info)
 
 static void maintenance_interrupt(int irq, void *dev_id, struct cpu_user_regs *regs)
 {
-    int i = 0, virq;
+    int i = 0, virq, pirq = -1;
     uint32_t lr;
     struct vcpu *v = current;
     uint64_t eisr = GICH[GICH_EISR0] | (((uint64_t) GICH[GICH_EISR1]) << 32);
 
     while ((i = find_next_bit((const long unsigned int *) &eisr,
                               64, i)) < 64) {
-        struct pending_irq *p;
-        int cpu, eoi;
+        struct pending_irq *p, *p2;
+        int cpu;
+        bool_t inflight;
 
         cpu = -1;
-        eoi = 0;
+        inflight = 0;
 
         spin_lock_irq(&gic.lock);
         lr = GICH[GICH_LR + i];
@@ -827,35 +929,45 @@ static void maintenance_interrupt(int irq, void *dev_id, struct cpu_user_regs *r
         GICH[GICH_LR + i] = 0;
         clear_bit(i, &this_cpu(lr_mask));
 
-        if ( !list_empty(&v->arch.vgic.lr_pending) ) {
-            p = list_entry(v->arch.vgic.lr_pending.next, typeof(*p), lr_queue);
-            gic_set_lr(i, p->irq, GICH_LR_PENDING, p->priority);
-            list_del_init(&p->lr_queue);
-            set_bit(i, &this_cpu(lr_mask));
-        } else {
-            gic_inject_irq_stop();
-        }
-        spin_unlock_irq(&gic.lock);
-
-        spin_lock_irq(&v->arch.vgic.lock);
         p = irq_to_pending(v, virq);
         if ( p->desc != NULL ) {
             p->desc->status &= ~IRQ_INPROGRESS;
             /* Assume only one pcpu needs to EOI the irq */
             cpu = p->desc->arch.eoi_cpu;
-            eoi = 1;
+            pirq = p->desc->irq;
         }
-        list_del_init(&p->inflight);
-        spin_unlock_irq(&v->arch.vgic.lock);
+        if ( test_bit(GIC_IRQ_GUEST_PENDING, &p->status) &&
+             test_bit(GIC_IRQ_GUEST_ENABLED, &p->status))
+        {
+            inflight = 1;
+            gic_add_to_lr_pending(v, virq, p->priority);
+        }
 
-        if ( eoi ) {
+        clear_bit(GIC_IRQ_GUEST_VISIBLE, &p->status);
+
+        if ( !list_empty(&v->arch.vgic.lr_pending) ) {
+            p2 = list_entry(v->arch.vgic.lr_pending.next, typeof(*p2), lr_queue);
+            gic_set_lr(i, p2->irq, GICH_LR_PENDING, p2->priority);
+            list_del_init(&p2->lr_queue);
+            set_bit(i, &this_cpu(lr_mask));
+        }
+        spin_unlock_irq(&gic.lock);
+
+        if ( !inflight )
+        {
+            spin_lock_irq(&v->arch.vgic.lock);
+            list_del_init(&p->inflight);
+            spin_unlock_irq(&v->arch.vgic.lock);
+        }
+
+        if ( p->desc != NULL ) {
             /* this is not racy because we can't receive another irq of the
              * same type until we EOI it.  */
             if ( cpu == smp_processor_id() )
-                gic_irq_eoi((void*)(uintptr_t)virq);
+                gic_irq_eoi((void*)(uintptr_t)pirq);
             else
                 on_selected_cpus(cpumask_of(cpu),
-                                 gic_irq_eoi, (void*)(uintptr_t)virq, 0);
+                                 gic_irq_eoi, (void*)(uintptr_t)pirq, 0);
         }
 
         i++;
@@ -892,7 +1004,7 @@ void gic_dump_info(struct vcpu *v)
 void __cpuinit init_maintenance_interrupt(void)
 {
     request_dt_irq(&gic.maintenance, maintenance_interrupt,
-                   0, "irq-maintenance", NULL);
+                   "irq-maintenance", NULL);
 }
 
 /*

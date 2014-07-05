@@ -26,11 +26,15 @@ int compat_memory_op(unsigned int cmd, XEN_GUEST_HANDLE_PARAM(void) compat)
             XEN_GUEST_HANDLE_PARAM(void) hnd;
             struct xen_memory_reservation *rsrv;
             struct xen_memory_exchange *xchg;
+            struct xen_add_to_physmap *atp;
+            struct xen_add_to_physmap_batch *atpb;
             struct xen_remove_from_physmap *xrfp;
         } nat;
         union {
             struct compat_memory_reservation rsrv;
             struct compat_memory_exchange xchg;
+            struct compat_add_to_physmap atp;
+            struct compat_add_to_physmap_batch atpb;
         } cmp;
 
         set_xen_guest_handle(nat.hnd, COMPAT_ARG_XLAT_VIRT_BASE);
@@ -187,6 +191,73 @@ int compat_memory_op(unsigned int cmd, XEN_GUEST_HANDLE_PARAM(void) compat)
             nat.hnd = compat;
             break;
 
+        case XENMEM_add_to_physmap:
+            BUILD_BUG_ON((typeof(cmp.atp.size))-1 >
+                         (UINT_MAX >> MEMOP_EXTENT_SHIFT));
+
+            if ( copy_from_guest(&cmp.atp, compat, 1) )
+                return -EFAULT;
+
+            XLAT_add_to_physmap(nat.atp, &cmp.atp);
+
+            break;
+
+        case XENMEM_add_to_physmap_batch:
+        {
+            unsigned int limit = (COMPAT_ARG_XLAT_SIZE - sizeof(*nat.atpb))
+                                 / (sizeof(nat.atpb->idxs.p) + sizeof(nat.atpb->gpfns.p));
+            /* Use an intermediate variable to suppress warnings on old gcc: */
+            unsigned int size = cmp.atpb.size;
+            xen_ulong_t *idxs = (void *)(nat.atpb + 1);
+            xen_pfn_t *gpfns = (void *)(idxs + limit);
+
+            if ( copy_from_guest(&cmp.atpb, compat, 1) ||
+                 !compat_handle_okay(cmp.atpb.idxs, size) ||
+                 !compat_handle_okay(cmp.atpb.gpfns, size) ||
+                 !compat_handle_okay(cmp.atpb.errs, size) )
+                return -EFAULT;
+
+            end_extent = start_extent + limit;
+            if ( end_extent > size )
+                end_extent = size;
+
+            idxs -= start_extent;
+            gpfns -= start_extent;
+
+            for ( i = start_extent; i < end_extent; ++i )
+            {
+                compat_ulong_t idx;
+                compat_pfn_t gpfn;
+
+                if ( __copy_from_compat_offset(&idx, cmp.atpb.idxs, i, 1) ||
+                     __copy_from_compat_offset(&gpfn, cmp.atpb.gpfns, i, 1) )
+                    return -EFAULT;
+                idxs[i] = idx;
+                gpfns[i] = gpfn;
+            }
+
+#define XLAT_add_to_physmap_batch_HNDL_idxs(_d_, _s_) \
+            set_xen_guest_handle((_d_)->idxs, idxs)
+#define XLAT_add_to_physmap_batch_HNDL_gpfns(_d_, _s_) \
+            set_xen_guest_handle((_d_)->gpfns, gpfns)
+#define XLAT_add_to_physmap_batch_HNDL_errs(_d_, _s_) \
+            guest_from_compat_handle((_d_)->errs, (_s_)->errs)
+
+            XLAT_add_to_physmap_batch(nat.atpb, &cmp.atpb);
+
+#undef XLAT_add_to_physmap_batch_HNDL_errs
+#undef XLAT_add_to_physmap_batch_HNDL_gpfns
+#undef XLAT_add_to_physmap_batch_HNDL_idxs
+
+            if ( end_extent < cmp.atpb.size )
+            {
+                nat.atpb->size = end_extent;
+                ++split;
+            }
+
+            break;
+        }
+
         case XENMEM_remove_from_physmap:
         {
             struct compat_remove_from_physmap cmp;
@@ -308,10 +379,15 @@ int compat_memory_op(unsigned int cmd, XEN_GUEST_HANDLE_PARAM(void) compat)
             break;
         }
 
+        case XENMEM_add_to_physmap_batch:
+            start_extent = end_extent;
+            break;
+
         case XENMEM_maximum_ram_page:
         case XENMEM_current_reservation:
         case XENMEM_maximum_reservation:
         case XENMEM_maximum_gpfn:
+        case XENMEM_add_to_physmap:
         case XENMEM_remove_from_physmap:
             break;
 

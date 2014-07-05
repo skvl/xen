@@ -82,7 +82,7 @@ int hap_track_dirty_vram(struct domain *d,
         if ( !paging_mode_log_dirty(d) )
         {
             hap_logdirty_init(d);
-            rc = paging_log_dirty_enable(d);
+            rc = paging_log_dirty_enable(d, 0);
             if ( rc )
                 goto out;
         }
@@ -167,17 +167,25 @@ out:
 /*            HAP LOG DIRTY SUPPORT             */
 /************************************************/
 
-/* hap code to call when log_dirty is enable. return 0 if no problem found. */
-static int hap_enable_log_dirty(struct domain *d)
+/*
+ * hap code to call when log_dirty is enable. return 0 if no problem found.
+ *
+ * NB: Domain that having device assigned should not set log_global. Because
+ * there is no way to track the memory updating from device.
+ */
+static int hap_enable_log_dirty(struct domain *d, bool_t log_global)
 {
     /* turn on PG_log_dirty bit in paging mode */
     paging_lock(d);
     d->arch.paging.mode |= PG_log_dirty;
     paging_unlock(d);
 
-    /* set l1e entries of P2M table to be read-only. */
-    p2m_change_entry_type_global(d, p2m_ram_rw, p2m_ram_logdirty);
-    flush_tlb_mask(d->domain_dirty_cpumask);
+    if ( log_global )
+    {
+        /* set l1e entries of P2M table to be read-only. */
+        p2m_change_entry_type_global(d, p2m_ram_rw, p2m_ram_logdirty);
+        flush_tlb_mask(d->domain_dirty_cpumask);
+    }
     return 0;
 }
 
@@ -289,7 +297,6 @@ static void hap_free_p2m_page(struct domain *d, struct page_info *pg)
     d->arch.paging.hap.p2m_pages--;
     d->arch.paging.hap.total_pages++;
     hap_free(d, page_to_mfn(pg));
-    ASSERT(d->arch.paging.hap.p2m_pages >= 0);
 
     paging_unlock(d);
 }

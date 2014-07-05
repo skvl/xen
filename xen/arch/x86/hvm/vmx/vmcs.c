@@ -46,6 +46,9 @@ boolean_param("vpid", opt_vpid_enabled);
 static bool_t __read_mostly opt_unrestricted_guest_enabled = 1;
 boolean_param("unrestricted_guest", opt_unrestricted_guest_enabled);
 
+static bool_t __read_mostly opt_apicv_enabled = 1;
+boolean_param("apicv", opt_apicv_enabled);
+
 /*
  * These two parameters are used to config the controls for Pause-Loop Exiting:
  * ple_gap:    upper bound on the amount of time between two successive
@@ -67,7 +70,6 @@ u32 vmx_secondary_exec_control __read_mostly;
 u32 vmx_vmexit_control __read_mostly;
 u32 vmx_vmentry_control __read_mostly;
 u64 vmx_ept_vpid_cap __read_mostly;
-bool_t cpu_has_vmx_ins_outs_instr_info __read_mostly;
 
 static DEFINE_PER_CPU_READ_MOSTLY(struct vmcs_struct *, vmxon_region);
 static DEFINE_PER_CPU(struct vmcs_struct *, current_vmcs);
@@ -75,6 +77,7 @@ static DEFINE_PER_CPU(struct list_head, active_vmcs_list);
 static DEFINE_PER_CPU(bool_t, vmxon);
 
 static u32 vmcs_revision_id __read_mostly;
+u64 __read_mostly vmx_basic_msr;
 
 static void __init vmx_display_features(void)
 {
@@ -196,11 +199,11 @@ static int vmx_init_vmcs_config(void)
          * "APIC Register Virtualization" and "Virtual Interrupt Delivery"
          * can be set only when "use TPR shadow" is set
          */
-        if ( _vmx_cpu_based_exec_control & CPU_BASED_TPR_SHADOW )
+        if ( (_vmx_cpu_based_exec_control & CPU_BASED_TPR_SHADOW) &&
+             opt_apicv_enabled )
             opt |= SECONDARY_EXEC_APIC_REGISTER_VIRT |
                    SECONDARY_EXEC_VIRTUAL_INTR_DELIVERY |
                    SECONDARY_EXEC_VIRTUALIZE_X2APIC_MODE;
-
 
         _vmx_secondary_exec_control = adjust_vmx_controls(
             "Secondary Exec Control", min, opt,
@@ -290,22 +293,33 @@ static int vmx_init_vmcs_config(void)
     if ( !vmx_pin_based_exec_control )
     {
         /* First time through. */
-        vmcs_revision_id = vmx_basic_msr_low;
+        vmcs_revision_id           = vmx_basic_msr_low & VMX_BASIC_REVISION_MASK;
         vmx_pin_based_exec_control = _vmx_pin_based_exec_control;
         vmx_cpu_based_exec_control = _vmx_cpu_based_exec_control;
         vmx_secondary_exec_control = _vmx_secondary_exec_control;
         vmx_ept_vpid_cap           = _vmx_ept_vpid_cap;
         vmx_vmexit_control         = _vmx_vmexit_control;
         vmx_vmentry_control        = _vmx_vmentry_control;
-        cpu_has_vmx_ins_outs_instr_info = !!(vmx_basic_msr_high & (1U<<22));
+        vmx_basic_msr              = ((u64)vmx_basic_msr_high << 32) |
+                                     vmx_basic_msr_low;
         vmx_display_features();
+
+        /* IA-32 SDM Vol 3B: VMCS size is never greater than 4kB. */
+        if ( (vmx_basic_msr_high & (VMX_BASIC_VMCS_SIZE_MASK >> 32)) >
+             PAGE_SIZE )
+        {
+            printk("VMX: CPU%d VMCS size is too big (%Lu bytes)\n",
+                   smp_processor_id(),
+                   vmx_basic_msr_high & (VMX_BASIC_VMCS_SIZE_MASK >> 32));
+            return -EINVAL;
+        }
     }
     else
     {
         /* Globals are already initialised: re-check them. */
         mismatch |= cap_check(
             "VMCS revision ID",
-            vmcs_revision_id, vmx_basic_msr_low);
+            vmcs_revision_id, vmx_basic_msr_low & VMX_BASIC_REVISION_MASK);
         mismatch |= cap_check(
             "Pin-Based Exec Control",
             vmx_pin_based_exec_control, _vmx_pin_based_exec_control);
@@ -325,11 +339,19 @@ static int vmx_init_vmcs_config(void)
             "EPT and VPID Capability",
             vmx_ept_vpid_cap, _vmx_ept_vpid_cap);
         if ( cpu_has_vmx_ins_outs_instr_info !=
-             !!(vmx_basic_msr_high & (1U<<22)) )
+             !!(vmx_basic_msr_high & (VMX_BASIC_INS_OUT_INFO >> 32)) )
         {
             printk("VMX INS/OUTS Instruction Info: saw %d expected %d\n",
-                   !!(vmx_basic_msr_high & (1U<<22)),
+                   !!(vmx_basic_msr_high & (VMX_BASIC_INS_OUT_INFO >> 32)),
                    cpu_has_vmx_ins_outs_instr_info);
+            mismatch = 1;
+        }
+        if ( (vmx_basic_msr_high & (VMX_BASIC_VMCS_SIZE_MASK >> 32)) !=
+             ((vmx_basic_msr & VMX_BASIC_VMCS_SIZE_MASK) >> 32) )
+        {
+            printk("VMX: CPU%d unexpected VMCS size %Lu\n",
+                   smp_processor_id(),
+                   vmx_basic_msr_high & (VMX_BASIC_VMCS_SIZE_MASK >> 32));
             mismatch = 1;
         }
         if ( mismatch )
@@ -340,16 +362,8 @@ static int vmx_init_vmcs_config(void)
         }
     }
 
-    /* IA-32 SDM Vol 3B: VMCS size is never greater than 4kB. */
-    if ( (vmx_basic_msr_high & 0x1fff) > PAGE_SIZE )
-    {
-        printk("VMX: CPU%d VMCS size is too big (%u bytes)\n",
-               smp_processor_id(), vmx_basic_msr_high & 0x1fff);
-        return -EINVAL;
-    }
-
     /* IA-32 SDM Vol 3B: 64-bit CPUs always have VMX_BASIC_MSR[48]==0. */
-    if ( vmx_basic_msr_high & (1u<<16) )
+    if ( vmx_basic_msr_high & (VMX_BASIC_32BIT_ADDRESSES >> 32) )
     {
         printk("VMX: CPU%d limits VMX structure pointers to 32 bits\n",
                smp_processor_id());
@@ -357,10 +371,12 @@ static int vmx_init_vmcs_config(void)
     }
 
     /* Require Write-Back (WB) memory type for VMCS accesses. */
-    if ( ((vmx_basic_msr_high >> 18) & 15) != 6 )
+    opt = (vmx_basic_msr_high & (VMX_BASIC_MEMORY_TYPE_MASK >> 32)) /
+          ((VMX_BASIC_MEMORY_TYPE_MASK & -VMX_BASIC_MEMORY_TYPE_MASK) >> 32);
+    if ( opt != MTRR_TYPE_WRBACK )
     {
         printk("VMX: CPU%d has unexpected VMCS access type %u\n",
-               smp_processor_id(), (vmx_basic_msr_high >> 18) & 15);
+               smp_processor_id(), opt);
         return -EINVAL;
     }
 
@@ -585,16 +601,16 @@ struct foreign_vmcs {
 };
 static DEFINE_PER_CPU(struct foreign_vmcs, foreign_vmcs);
 
-void vmx_vmcs_enter(struct vcpu *v)
+bool_t vmx_vmcs_try_enter(struct vcpu *v)
 {
     struct foreign_vmcs *fv;
 
     /*
      * NB. We must *always* run an HVM VCPU on its own VMCS, except for
-     * vmx_vmcs_enter/exit critical regions.
+     * vmx_vmcs_enter/exit and scheduling tail critical regions.
      */
     if ( likely(v == current) )
-        return;
+        return v->arch.hvm_vmx.vmcs == this_cpu(current_vmcs);
 
     fv = &this_cpu(foreign_vmcs);
 
@@ -617,6 +633,15 @@ void vmx_vmcs_enter(struct vcpu *v)
     }
 
     fv->count++;
+
+    return 1;
+}
+
+void vmx_vmcs_enter(struct vcpu *v)
+{
+    bool_t okay = vmx_vmcs_try_enter(v);
+
+    ASSERT(okay);
 }
 
 void vmx_vmcs_exit(struct vcpu *v)
@@ -634,7 +659,7 @@ void vmx_vmcs_exit(struct vcpu *v)
     {
         /* Don't confuse vmx_do_resume (for @v or @current!) */
         vmx_clear_vmcs(v);
-        if ( is_hvm_vcpu(current) )
+        if ( has_hvm_container_vcpu(current) )
             vmx_load_vmcs(current);
 
         spin_unlock(&v->arch.hvm_vmx.vmcs_lock);
@@ -812,7 +837,7 @@ u64 virtual_vmcs_vmread(void *vvmcs, u32 vmcs_encoding)
     u64 res;
 
     virtual_vmcs_enter(vvmcs);
-    res = __vmread(vmcs_encoding);
+    __vmread(vmcs_encoding, &res);
     virtual_vmcs_exit(vvmcs);
 
     return res;
@@ -871,7 +896,29 @@ static int construct_vmcs(struct vcpu *v)
     /* Do not enable Monitor Trap Flag unless start single step debug */
     v->arch.hvm_vmx.exec_control &= ~CPU_BASED_MONITOR_TRAP_FLAG;
 
+    if ( is_pvh_domain(d) )
+    {
+        /* Disable virtual apics, TPR */
+        v->arch.hvm_vmx.secondary_exec_control &=
+            ~(SECONDARY_EXEC_VIRTUALIZE_APIC_ACCESSES
+              | SECONDARY_EXEC_APIC_REGISTER_VIRT
+              | SECONDARY_EXEC_VIRTUAL_INTR_DELIVERY);
+        v->arch.hvm_vmx.exec_control &= ~CPU_BASED_TPR_SHADOW;
+
+        /* Unrestricted guest (real mode for EPT) */
+        v->arch.hvm_vmx.secondary_exec_control &=
+            ~SECONDARY_EXEC_UNRESTRICTED_GUEST;
+
+        /* Start in 64-bit mode. PVH 32bitfixme. */
+        vmentry_ctl |= VM_ENTRY_IA32E_MODE;       /* GUEST_EFER.LME/LMA ignored */
+
+        ASSERT(v->arch.hvm_vmx.exec_control & CPU_BASED_ACTIVATE_SECONDARY_CONTROLS);
+        ASSERT(v->arch.hvm_vmx.exec_control & CPU_BASED_ACTIVATE_MSR_BITMAP);
+        ASSERT(!(v->arch.hvm_vmx.exec_control & CPU_BASED_RDTSC_EXITING));
+    }
+
     vmx_update_cpu_exec_control(v);
+
     __vmwrite(VM_EXIT_CONTROLS, vmexit_ctl);
     __vmwrite(VM_ENTRY_CONTROLS, vmentry_ctl);
 
@@ -891,7 +938,10 @@ static int construct_vmcs(struct vcpu *v)
         unsigned long *msr_bitmap = alloc_xenheap_page();
 
         if ( msr_bitmap == NULL )
+        {
+            vmx_vmcs_exit(v);
             return -ENOMEM;
+        }
 
         memset(msr_bitmap, ~0, PAGE_SIZE);
         v->arch.hvm_vmx.msr_bitmap = msr_bitmap;
@@ -899,10 +949,11 @@ static int construct_vmcs(struct vcpu *v)
 
         vmx_disable_intercept_for_msr(v, MSR_FS_BASE, MSR_TYPE_R | MSR_TYPE_W);
         vmx_disable_intercept_for_msr(v, MSR_GS_BASE, MSR_TYPE_R | MSR_TYPE_W);
+        vmx_disable_intercept_for_msr(v, MSR_SHADOW_GS_BASE, MSR_TYPE_R | MSR_TYPE_W);
         vmx_disable_intercept_for_msr(v, MSR_IA32_SYSENTER_CS, MSR_TYPE_R | MSR_TYPE_W);
         vmx_disable_intercept_for_msr(v, MSR_IA32_SYSENTER_ESP, MSR_TYPE_R | MSR_TYPE_W);
         vmx_disable_intercept_for_msr(v, MSR_IA32_SYSENTER_EIP, MSR_TYPE_R | MSR_TYPE_W);
-        if ( cpu_has_vmx_pat && paging_mode_hap(d) )
+        if ( paging_mode_hap(d) && (!iommu_enabled || iommu_snoop) )
             vmx_disable_intercept_for_msr(v, MSR_IA32_CR_PAT, MSR_TYPE_R | MSR_TYPE_W);
     }
 
@@ -912,15 +963,12 @@ static int construct_vmcs(struct vcpu *v)
 
     if ( cpu_has_vmx_virtual_intr_delivery )
     {
+        unsigned int i;
+
         /* EOI-exit bitmap */
-        v->arch.hvm_vmx.eoi_exit_bitmap[0] = (uint64_t)0;
-        __vmwrite(EOI_EXIT_BITMAP0, v->arch.hvm_vmx.eoi_exit_bitmap[0]);
-        v->arch.hvm_vmx.eoi_exit_bitmap[1] = (uint64_t)0;
-        __vmwrite(EOI_EXIT_BITMAP1, v->arch.hvm_vmx.eoi_exit_bitmap[1]);
-        v->arch.hvm_vmx.eoi_exit_bitmap[2] = (uint64_t)0;
-        __vmwrite(EOI_EXIT_BITMAP2, v->arch.hvm_vmx.eoi_exit_bitmap[2]);
-        v->arch.hvm_vmx.eoi_exit_bitmap[3] = (uint64_t)0;
-        __vmwrite(EOI_EXIT_BITMAP3, v->arch.hvm_vmx.eoi_exit_bitmap[3]);
+        bitmap_zero(v->arch.hvm_vmx.eoi_exit_bitmap, NR_VECTORS);
+        for ( i = 0; i < ARRAY_SIZE(v->arch.hvm_vmx.eoi_exit_bitmap); ++i )
+            __vmwrite(EOI_EXIT_BITMAP(i), 0);
 
         /* Initialise Guest Interrupt Status (RVI and SVI) to 0 */
         __vmwrite(GUEST_INTR_STATUS, 0);
@@ -944,8 +992,7 @@ static int construct_vmcs(struct vcpu *v)
     /* Host control registers. */
     v->arch.hvm_vmx.host_cr0 = read_cr0() | X86_CR0_TS;
     __vmwrite(HOST_CR0, v->arch.hvm_vmx.host_cr0);
-    __vmwrite(HOST_CR4,
-              mmu_cr4_features | (xsave_enabled(v) ? X86_CR4_OSXSAVE : 0));
+    __vmwrite(HOST_CR4, mmu_cr4_features);
 
     /* Host CS:RIP. */
     __vmwrite(HOST_CS_SELECTOR, __HYPERVISOR_CS);
@@ -996,7 +1043,11 @@ static int construct_vmcs(struct vcpu *v)
     __vmwrite(GUEST_DS_AR_BYTES, 0xc093);
     __vmwrite(GUEST_FS_AR_BYTES, 0xc093);
     __vmwrite(GUEST_GS_AR_BYTES, 0xc093);
-    __vmwrite(GUEST_CS_AR_BYTES, 0xc09b); /* exec/read, accessed */
+    if ( is_pvh_domain(d) )
+        /* CS.L == 1, exec, read/write, accessed. PVH 32bitfixme. */
+        __vmwrite(GUEST_CS_AR_BYTES, 0xa09b);
+    else
+        __vmwrite(GUEST_CS_AR_BYTES, 0xc09b); /* exec/read, accessed */
 
     /* Guest IDT. */
     __vmwrite(GUEST_IDTR_BASE, 0);
@@ -1026,10 +1077,23 @@ static int construct_vmcs(struct vcpu *v)
               | (1U << TRAP_no_device);
     vmx_update_exception_bitmap(v);
 
+    /*
+     * In HVM domains, this happens on the realmode->paging
+     * transition.  Since PVH never goes through this transition, we
+     * need to do it at start-of-day.
+     */
+    if ( is_pvh_domain(d) )
+        vmx_update_debug_state(v);
+
     v->arch.hvm_vcpu.guest_cr[0] = X86_CR0_PE | X86_CR0_ET;
+
+    /* PVH domains always start in paging mode */
+    if ( is_pvh_domain(d) )
+        v->arch.hvm_vcpu.guest_cr[0] |= X86_CR0_PG;
+
     hvm_update_guest_cr(v, 0);
 
-    v->arch.hvm_vcpu.guest_cr[4] = 0;
+    v->arch.hvm_vcpu.guest_cr[4] = is_pvh_domain(d) ? X86_CR4_PAE : 0;
     hvm_update_guest_cr(v, 4);
 
     if ( cpu_has_vmx_tpr_shadow )
@@ -1048,7 +1112,7 @@ static int construct_vmcs(struct vcpu *v)
         __vmwrite(EPT_POINTER, ept_get_eptp(ept));
     }
 
-    if ( cpu_has_vmx_pat && paging_mode_hap(d) )
+    if ( paging_mode_hap(d) )
     {
         u64 host_pat, guest_pat;
 
@@ -1061,9 +1125,14 @@ static int construct_vmcs(struct vcpu *v)
 
     vmx_vmcs_exit(v);
 
-    paging_update_paging_modes(v); /* will update HOST & GUEST_CR3 as reqd */
+    /* PVH: paging mode is updated by arch_set_info_guest(). */
+    if ( is_hvm_vcpu(v) )
+    {
+        /* will update HOST & GUEST_CR3 as reqd */
+        paging_update_paging_modes(v);
 
-    vmx_vlapic_msr_changed(v);
+        vmx_vlapic_msr_changed(v);
+    }
 
     return 0;
 }
@@ -1168,26 +1237,16 @@ int vmx_add_host_load_msr(u32 msr)
 
 void vmx_set_eoi_exit_bitmap(struct vcpu *v, u8 vector)
 {
-    int index, offset, changed;
-
-    index = vector >> 6; 
-    offset = vector & 63;
-    changed = !test_and_set_bit(offset,
-                  (uint64_t *)&v->arch.hvm_vmx.eoi_exit_bitmap[index]);
-    if (changed)
-        set_bit(index, &v->arch.hvm_vmx.eoi_exitmap_changed);
+    if ( !test_and_set_bit(vector, v->arch.hvm_vmx.eoi_exit_bitmap) )
+        set_bit(vector / BITS_PER_LONG,
+                &v->arch.hvm_vmx.eoi_exitmap_changed);
 }
 
 void vmx_clear_eoi_exit_bitmap(struct vcpu *v, u8 vector)
 {
-    int index, offset, changed;
-
-    index = vector >> 6; 
-    offset = vector & 63;
-    changed = test_and_clear_bit(offset,
-                  (uint64_t *)&v->arch.hvm_vmx.eoi_exit_bitmap[index]);
-    if (changed)
-        set_bit(index, &v->arch.hvm_vmx.eoi_exitmap_changed);
+    if ( test_and_clear_bit(vector, v->arch.hvm_vmx.eoi_exit_bitmap) )
+        set_bit(vector / BITS_PER_LONG,
+                &v->arch.hvm_vmx.eoi_exitmap_changed);
 }
 
 int vmx_create_vmcs(struct vcpu *v)
@@ -1227,14 +1286,18 @@ void vmx_destroy_vmcs(struct vcpu *v)
 
 void vm_launch_fail(void)
 {
-    unsigned long error = __vmread(VM_INSTRUCTION_ERROR);
+    unsigned long error;
+
+    __vmread(VM_INSTRUCTION_ERROR, &error);
     printk("<vm_launch_fail> error code %lx\n", error);
     domain_crash_synchronous();
 }
 
 void vm_resume_fail(void)
 {
-    unsigned long error = __vmread(VM_INSTRUCTION_ERROR);
+    unsigned long error;
+
+    __vmread(VM_INSTRUCTION_ERROR, &error);
     printk("<vm_resume_fail> error code %lx\n", error);
     domain_crash_synchronous();
 }
@@ -1302,12 +1365,11 @@ void vmx_do_resume(struct vcpu *v)
     reset_stack_and_jump(vmx_asm_do_vmentry);
 }
 
-static unsigned long vmr(unsigned long field)
+static inline unsigned long vmr(unsigned long field)
 {
-    int rc;
     unsigned long val;
-    val = __vmread_safe(field, &rc);
-    return rc ? 0 : val;
+
+    return __vmread_safe(field, &val) ? val : 0;
 }
 
 static void vmx_dump_sel(char *name, uint32_t selector)
@@ -1471,7 +1533,7 @@ static void vmcs_dump(unsigned char ch)
 
     for_each_domain ( d )
     {
-        if ( !is_hvm_domain(d) )
+        if ( !has_hvm_container_domain(d) )
             continue;
         printk("\n>>> Domain %d <<<\n", d->domain_id);
         for_each_vcpu ( d, v )
@@ -1492,7 +1554,7 @@ static struct keyhandler vmcs_dump_keyhandler = {
     .desc = "dump Intel's VMCS"
 };
 
-void setup_vmcs_dump(void)
+void __init setup_vmcs_dump(void)
 {
     register_keyhandler('v', &vmcs_dump_keyhandler);
 }

@@ -727,6 +727,12 @@ static int flask_domctl(struct domain *d, int cmd)
     case XEN_DOMCTL_audit_p2m:
         return current_has_perm(d, SECCLASS_HVM, HVM__AUDIT_P2M);
 
+    case XEN_DOMCTL_set_max_evtchn:
+        return current_has_perm(d, SECCLASS_DOMAIN2, DOMAIN2__SET_MAX_EVTCHN);
+
+    case XEN_DOMCTL_cacheflush:
+        return current_has_perm(d, SECCLASS_DOMAIN2, DOMAIN2__CACHEFLUSH);
+
     default:
         printk("flask_domctl: Unknown op %d\n", cmd);
         return -EPERM;
@@ -1583,7 +1589,7 @@ static __init int flask_init(void)
 
     original_ops = xsm_ops;
     if ( register_xsm(&flask_ops) )
-        panic("Flask: Unable to register with XSM.\n");
+        panic("Flask: Unable to register with XSM");
 
     ret = security_load_policy(policy_buffer, policy_size);
 
@@ -1596,3 +1602,13 @@ static __init int flask_init(void)
 }
 
 xsm_initcall(flask_init);
+
+/*
+ * Local variables:
+ * mode: C
+ * c-file-style: "BSD"
+ * c-basic-offset: 4
+ * tab-width: 4
+ * indent-tabs-mode: nil
+ * End:
+ */

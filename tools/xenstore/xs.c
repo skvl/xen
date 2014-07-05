@@ -146,20 +146,20 @@ struct xs_handle {
 
 static int read_message(struct xs_handle *h, int nonblocking);
 
-static void setnonblock(int fd, int nonblock) {
-	int esave = errno;
+static bool setnonblock(int fd, int nonblock) {
 	int flags = fcntl(fd, F_GETFL);
 	if (flags == -1)
-		goto out;
+		return false;
 
 	if (nonblock)
 		flags |= O_NONBLOCK;
 	else
 		flags &= ~O_NONBLOCK;
 
-	fcntl(fd, F_SETFL, flags);
-out:
-	errno = esave;
+	if (fcntl(fd, F_SETFL, flags) == -1)
+		return false;
+
+	return true;
 }
 
 int xs_fileno(struct xs_handle *h)
@@ -196,6 +196,10 @@ static int get_socket(const char *connect_to)
 		goto error;
 
 	addr.sun_family = AF_UNIX;
+	if(strlen(connect_to) >= sizeof(addr.sun_path)) {
+		errno = EINVAL;
+		goto error;
+	}
 	strcpy(addr.sun_path, connect_to);
 
 	if (connect(sock, (struct sockaddr *)&addr, sizeof(addr)) != 0)
@@ -365,8 +369,8 @@ static bool read_all(int fd, void *data, unsigned int len, int nonblocking)
 	if (!len)
 		return true;
 
-	if (nonblocking)
-		setnonblock(fd, 1);
+	if (nonblocking && !setnonblock(fd, 1))
+		return false;
 
 	while (len) {
 		int done;
@@ -386,8 +390,9 @@ static bool read_all(int fd, void *data, unsigned int len, int nonblocking)
 		len -= done;
 
 		if (nonblocking) {
-			setnonblock(fd, 0);
 			nonblocking = 0;
+			if (!setnonblock(fd, 0))
+				goto out_false;
 		}
 	}
 
@@ -719,7 +724,7 @@ bool xs_watch(struct xs_handle *h, const char *path, const char *token)
 	struct iovec iov[2];
 
 #ifdef USE_PTHREAD
-#define READ_THREAD_STACKSIZE (16 * 1024)
+#define READ_THREAD_STACKSIZE PTHREAD_STACK_MIN
 
 	/* We dynamically create a reader thread on demand. */
 	mutex_lock(&h->request_mutex);
@@ -1090,12 +1095,15 @@ int xs_suspend_evtchn_port(int domid)
     portstr = xs_read(xs, XBT_NULL, path, &plen);
     xs_daemon_close(xs);
 
-    if (!portstr || !plen)
-        return -1;
+    if (!portstr || !plen) {
+        port = -1;
+        goto out;
+    }
 
     port = atoi(portstr);
-    free(portstr);
 
+out:
+    free(portstr);
     return port;
 }
 
@@ -1138,6 +1146,12 @@ static int read_message(struct xs_handle *h, int nonblocking)
 	cleanup_push_heap(msg);
 	if (!read_all(h->fd, &msg->hdr, sizeof(msg->hdr), nonblocking)) { /* Cancellation point */
 		saved_errno = errno;
+		goto error_freemsg;
+	}
+
+	/* Sanity check message body length. */
+	if (msg->hdr.len > XENSTORE_PAYLOAD_MAX) {
+		saved_errno = E2BIG;
 		goto error_freemsg;
 	}
 

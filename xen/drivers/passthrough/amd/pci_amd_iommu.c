@@ -147,9 +147,10 @@ static void amd_iommu_setup_domain_device(
 
         amd_iommu_flush_device(iommu, req_id);
 
-        AMD_IOMMU_DEBUG("Setup I/O page table: device id = %#x, "
+        AMD_IOMMU_DEBUG("Setup I/O page table: device id = %#x, type = %#x, "
                         "root table = %#"PRIx64", "
-                        "domain = %d, paging mode = %d\n", req_id,
+                        "domain = %d, paging mode = %d\n",
+                        req_id, pdev->type,
                         page_to_maddr(hd->root_table),
                         hd->domain_id, hd->paging_mode);
     }
@@ -175,6 +176,15 @@ static int __init amd_iommu_setup_dom0_device(u8 devfn, struct pci_dev *pdev)
 
     if ( unlikely(!iommu) )
     {
+        /* Filter the bridge devices */
+        if ( pdev->type == DEV_TYPE_PCI_HOST_BRIDGE )
+        {
+            AMD_IOMMU_DEBUG("Skipping host bridge %04x:%02x:%02x.%u\n",
+                            pdev->seg, PCI_BUS(bdf), PCI_SLOT(bdf),
+                            PCI_FUNC(bdf));
+            return 0;
+        }
+
         AMD_IOMMU_DEBUG("No iommu for device %04x:%02x:%02x.%u\n",
                         pdev->seg, pdev->bus,
                         PCI_SLOT(devfn), PCI_FUNC(devfn));
@@ -207,50 +217,6 @@ int __init amd_iov_detect(void)
 
     init_done = 1;
 
-    /*
-     * AMD IOMMUs don't distinguish between vectors destined for
-     * different cpus when doing interrupt remapping.  This means
-     * that interrupts going through the same intremap table
-     * can't share the same vector.
-     *
-     * If irq_vector_map isn't specified, choose a sensible default:
-     * - If we're using per-device interemap tables, per-device
-     *   vector non-sharing maps
-     * - If we're using a global interemap table, global vector
-     *   non-sharing map
-     */
-    if ( opt_irq_vector_map == OPT_IRQ_VECTOR_MAP_DEFAULT )
-    {
-        if ( amd_iommu_perdev_intremap )
-        {
-            /* Per-device vector map logic is broken for devices with multiple
-             * MSI-X interrupts (and would also be for multiple MSI, if Xen
-             * supported it).
-             *
-             * Until this is fixed, use global vector tables as far as the irq
-             * logic is concerned to avoid the buggy behaviour of per-device
-             * maps in map_domain_pirq(), and use per-device tables as far as
-             * intremap code is concerned to avoid the security issue.
-             */
-            printk(XENLOG_WARNING "AMD-Vi: per-device vector map logic is broken.  "
-                   "Using per-device-global maps instead until a fix is found.\n");
-
-            opt_irq_vector_map = OPT_IRQ_VECTOR_MAP_GLOBAL;
-        }
-        else
-        {
-            printk("AMD-Vi: Enabling global vector map\n");
-            opt_irq_vector_map = OPT_IRQ_VECTOR_MAP_GLOBAL;
-        }
-    }
-    else
-    {
-        printk("AMD-Vi: Not overriding irq_vector_map setting\n");
-
-        if ( opt_irq_vector_map != OPT_IRQ_VECTOR_MAP_GLOBAL )
-            printk(XENLOG_WARNING "AMD-Vi: per-device vector map logic is broken.  "
-                   "Use irq_vector_map=global to work around.\n");
-    }
     if ( !amd_iommu_perdev_intremap )
         printk(XENLOG_WARNING "AMD-Vi: Using global interrupt remap table is not recommended (see XSA-36)!\n");
     return scan_pci_devices();
@@ -439,11 +405,21 @@ static int amd_iommu_assign_device(struct domain *d, u8 devfn,
     return reassign_device(dom0, d, devfn, pdev);
 }
 
-static void deallocate_next_page_table(struct page_info* pg, int level)
+static void deallocate_next_page_table(struct page_info *pg, int level)
+{
+    PFN_ORDER(pg) = level;
+    spin_lock(&iommu_pt_cleanup_lock);
+    page_list_add_tail(pg, &iommu_pt_cleanup_list);
+    spin_unlock(&iommu_pt_cleanup_lock);
+}
+
+static void deallocate_page_table(struct page_info *pg)
 {
     void *table_vaddr, *pde;
     u64 next_table_maddr;
-    int index, next_level;
+    unsigned int index, level = PFN_ORDER(pg), next_level;
+
+    PFN_ORDER(pg) = 0;
 
     if ( level <= 1 )
     {
@@ -633,11 +609,12 @@ const struct iommu_ops amd_iommu_ops = {
     .teardown = amd_iommu_domain_destroy,
     .map_page = amd_iommu_map_page,
     .unmap_page = amd_iommu_unmap_page,
+    .free_page_table = deallocate_page_table,
     .reassign_device = reassign_device,
     .get_device_group_id = amd_iommu_group_id,
     .update_ire_from_apic = amd_iommu_ioapic_update_ire,
     .update_ire_from_msi = amd_iommu_msi_msg_update_ire,
-    .read_apic_from_ire = __io_apic_read,
+    .read_apic_from_ire = amd_iommu_read_ioapic_from_ire,
     .read_msi_from_ire = amd_iommu_read_msi_from_ire,
     .setup_hpet_msi = amd_setup_hpet_msi,
     .suspend = amd_iommu_suspend,

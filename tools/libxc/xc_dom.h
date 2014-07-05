@@ -18,9 +18,6 @@
 
 #define INVALID_P2M_ENTRY   ((xen_pfn_t)-1)
 
-/* Scrach PFN for temporary mappings in HVM */
-#define SCRATCH_PFN_GNTTAB 0xFFFFE
-
 /* --- typedefs and structs ---------------------------------------- */
 
 typedef uint64_t xen_vaddr_t;
@@ -54,9 +51,12 @@ struct xc_dom_image {
     size_t kernel_size;
     void *ramdisk_blob;
     size_t ramdisk_size;
+    void *devicetree_blob;
+    size_t devicetree_size;
 
     size_t max_kernel_size;
     size_t max_ramdisk_size;
+    size_t max_devicetree_size;
 
     /* arguments and parameters */
     char *cmdline;
@@ -130,6 +130,7 @@ struct xc_dom_image {
     domid_t console_domid;
     domid_t xenstore_domid;
     xen_pfn_t shared_info_mfn;
+    int pvh_enabled;
 
     xc_interface *xch;
     domid_t guest_domid;
@@ -197,6 +198,7 @@ struct xc_dom_image *xc_dom_allocate(xc_interface *xch,
                                      const char *cmdline, const char *features);
 void xc_dom_release_phys(struct xc_dom_image *dom);
 void xc_dom_release(struct xc_dom_image *dom);
+int xc_dom_rambase_init(struct xc_dom_image *dom, uint64_t rambase);
 int xc_dom_mem_init(struct xc_dom_image *dom, unsigned int mem_mb);
 
 /* Set this larger if you have enormous ramdisks/kernels. Note that
@@ -216,6 +218,8 @@ int xc_dom_kernel_max_size(struct xc_dom_image *dom, size_t sz);
 int xc_dom_ramdisk_check_size(struct xc_dom_image *dom, size_t sz);
 int xc_dom_ramdisk_max_size(struct xc_dom_image *dom, size_t sz);
 
+int xc_dom_devicetree_max_size(struct xc_dom_image *dom, size_t sz);
+
 size_t xc_dom_check_gzip(xc_interface *xch,
                      void *blob, size_t ziplen);
 int xc_dom_do_gunzip(xc_interface *xch,
@@ -228,6 +232,9 @@ int xc_dom_kernel_mem(struct xc_dom_image *dom, const void *mem,
                       size_t memsize);
 int xc_dom_ramdisk_mem(struct xc_dom_image *dom, const void *mem,
                        size_t memsize);
+int xc_dom_devicetree_file(struct xc_dom_image *dom, const char *filename);
+int xc_dom_devicetree_mem(struct xc_dom_image *dom, const void *mem,
+                          size_t memsize);
 
 int xc_dom_parse_image(struct xc_dom_image *dom);
 struct xc_dom_arch *xc_dom_find_arch_hooks(xc_interface *xch, char *guest_type);
@@ -335,7 +342,7 @@ static inline void *xc_dom_vaddr_to_ptr(struct xc_dom_image *dom,
     if ( ptr == NULL )
         return ptr;
     *safe_region_out = (safe_region_count << XC_DOM_PAGE_SHIFT(dom)) - offset;
-    return ptr;
+    return ptr + offset;
 }
 
 static inline xen_pfn_t xc_dom_p2m_host(struct xc_dom_image *dom, xen_pfn_t pfn)

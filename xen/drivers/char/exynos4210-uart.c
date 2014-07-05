@@ -27,12 +27,14 @@
 #include <asm/early_printk.h>
 #include <asm/device.h>
 #include <asm/exynos4210-uart.h>
+#include <asm/io.h>
 
 static struct exynos4210_uart {
     unsigned int baud, clock_hz, data_bits, parity, stop_bits;
     struct dt_irq irq;
     void *regs;
     struct irqaction irqaction;
+    struct vuart_info vuart;
 } exynos4210_com = {0};
 
 /* These parity settings can be ORed directly into the ULCON. */
@@ -42,8 +44,8 @@ static struct exynos4210_uart {
 #define FORCED_CHECKED_AS_ONE (0x6)
 #define FORCED_CHECKED_AS_ZERO (0x7)
 
-#define exynos4210_read(uart, off)          ioreadl((uart)->regs + off)
-#define exynos4210_write(uart, off, val)    iowritel((uart->regs) + off, val)
+#define exynos4210_read(uart, off)          readl((uart)->regs + off)
+#define exynos4210_write(uart, off, val)    writel(val, (uart->regs) + off)
 
 static void exynos4210_uart_interrupt(int irq, void *data, struct cpu_user_regs *regs)
 {
@@ -220,7 +222,7 @@ static void exynos4210_uart_resume(struct serial_port *port)
     BUG(); // XXX
 }
 
-static unsigned int exynos4210_uart_tx_ready(struct serial_port *port)
+static int exynos4210_uart_tx_ready(struct serial_port *port)
 {
     struct exynos4210_uart *uart = port->uart;
 
@@ -281,6 +283,13 @@ static const struct dt_irq __init *exynos4210_uart_dt_irq(struct serial_port *po
     return &uart->irq;
 }
 
+static const struct vuart_info *exynos4210_vuart_info(struct serial_port *port)
+{
+    struct exynos4210_uart *uart = port->uart;
+
+    return &uart->vuart;
+}
+
 static struct uart_driver __read_mostly exynos4210_uart_driver = {
     .init_preirq  = exynos4210_uart_init_preirq,
     .init_postirq = exynos4210_uart_init_postirq,
@@ -292,6 +301,7 @@ static struct uart_driver __read_mostly exynos4210_uart_driver = {
     .getc         = exynos4210_uart_getc,
     .irq          = exynos4210_uart_irq,
     .dt_irq_get   = exynos4210_uart_dt_irq,
+    .vuart_info   = exynos4210_vuart_info,
 };
 
 /* TODO: Parse UART config from the command line */
@@ -337,6 +347,12 @@ static int __init exynos4210_uart_init(struct dt_device_node *dev,
         return res;
     }
 
+    uart->vuart.base_addr = addr;
+    uart->vuart.size = size;
+    uart->vuart.data_off = UTXH;
+    uart->vuart.status_off = UTRSTAT;
+    uart->vuart.status = UTRSTAT_TXE | UTRSTAT_TXFE;
+
     /* Register with generic serial driver. */
     serial_register_uart(SERHND_DTUART, &exynos4210_uart_driver, uart);
 
@@ -345,7 +361,7 @@ static int __init exynos4210_uart_init(struct dt_device_node *dev,
     return 0;
 }
 
-static const char const *exynos4210_dt_compat[] __initdata =
+static const char * const exynos4210_dt_compat[] __initconst =
 {
     "samsung,exynos4210-uart",
     NULL

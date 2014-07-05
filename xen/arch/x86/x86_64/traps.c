@@ -13,6 +13,7 @@
 #include <xen/shutdown.h>
 #include <xen/nmi.h>
 #include <xen/guest_access.h>
+#include <xen/watchdog.h>
 #include <asm/current.h>
 #include <asm/flushtlb.h>
 #include <asm/traps.h>
@@ -48,7 +49,7 @@ static void _show_registers(
 
     printk("RIP:    %04x:[<%016lx>]", regs->cs, regs->rip);
     if ( context == CTXT_hypervisor )
-        print_symbol(" %s", regs->rip);
+        printk(" %pS", _p(regs->rip));
     printk("\nRFLAGS: %016lx   ", regs->rflags);
     if ( (context == CTXT_pv_guest) && v && v->vcpu_info )
         printk("EM: %d   ", !!vcpu_info(v, evtchn_upcall_mask));
@@ -85,7 +86,7 @@ void show_registers(struct cpu_user_regs *regs)
     enum context context;
     struct vcpu *v = current;
 
-    if ( is_hvm_vcpu(v) && guest_mode(regs) )
+    if ( has_hvm_container_vcpu(v) && guest_mode(regs) )
     {
         struct segment_register sreg;
         context = CTXT_hvm_guest;
@@ -146,8 +147,8 @@ void vcpu_show_registers(const struct vcpu *v)
     const struct cpu_user_regs *regs = &v->arch.user_regs;
     unsigned long crs[8];
 
-    /* No need to handle HVM for now. */
-    if ( is_hvm_vcpu(v) )
+    /* Only handle PV guests for now */
+    if ( !is_pv_vcpu(v) )
         return;
 
     crs[0] = v->arch.pv_vcpu.ctrlreg[0];
@@ -169,6 +170,8 @@ void show_page_walk(unsigned long addr)
     l1_pgentry_t l1e, *l1t;
 
     printk("Pagetable walk from %016lx:\n", addr);
+    if ( !is_canonical_address(addr) )
+        return;
 
     l4t = map_domain_page(mfn);
     l4e = l4t[l4_table_offset(addr)];
@@ -226,8 +229,6 @@ void do_double_fault(struct cpu_user_regs *regs)
     unsigned int cpu;
     unsigned long crs[8];
 
-    watchdog_disable();
-
     console_force_unlock();
 
     asm ( "lsll %1, %0" : "=r" (cpu) : "rm" (PER_CPU_GDT_ENTRY << 3) );
@@ -247,15 +248,22 @@ void do_double_fault(struct cpu_user_regs *regs)
 
     printk("CPU:    %d\n", cpu);
     _show_registers(regs, crs, CTXT_hypervisor, NULL);
-    show_stack_overflow(cpu, regs->rsp);
+    show_stack_overflow(cpu, regs);
 
-    panic("DOUBLE FAULT -- system shutdown\n");
+    panic("DOUBLE FAULT -- system shutdown");
 }
 
 void toggle_guest_mode(struct vcpu *v)
 {
     if ( is_pv_32bit_vcpu(v) )
         return;
+    if ( cpu_has_fsgsbase )
+    {
+        if ( v->arch.flags & TF_kernel_mode )
+            v->arch.pv_vcpu.gs_base_kernel = __rdgsbase();
+        else
+            v->arch.pv_vcpu.gs_base_user = __rdgsbase();
+    }
     v->arch.flags ^= TF_kernel_mode;
     asm volatile ( "swapgs" );
     update_cr3(v);
@@ -265,6 +273,18 @@ void toggle_guest_mode(struct vcpu *v)
 #else
     write_ptbase(v);
 #endif
+
+    if ( !(v->arch.flags & TF_kernel_mode) )
+        return;
+
+    if ( v->arch.pv_vcpu.need_update_runstate_area &&
+         update_runstate_area(v) )
+        v->arch.pv_vcpu.need_update_runstate_area = 0;
+
+    if ( v->arch.pv_vcpu.pending_system_time.version &&
+         update_secondary_system_time(v,
+                                      &v->arch.pv_vcpu.pending_system_time) )
+        v->arch.pv_vcpu.pending_system_time.version = 0;
 }
 
 unsigned long do_iret(void)
@@ -590,6 +610,9 @@ static void hypercall_page_initialise_ring3_kernel(void *hypercall_page)
     /* Fill in all the transfer points with template machine code. */
     for ( i = 0; i < (PAGE_SIZE / 32); i++ )
     {
+        if ( i == __HYPERVISOR_iret )
+            continue;
+
         p = (char *)(hypercall_page + (i * 32));
         *(u8  *)(p+ 0) = 0x51;    /* push %rcx */
         *(u16 *)(p+ 1) = 0x5341;  /* push %r11 */
@@ -602,8 +625,8 @@ static void hypercall_page_initialise_ring3_kernel(void *hypercall_page)
     }
 
     /*
-     * HYPERVISOR_iret is special because it doesn't return and expects a 
-     * special stack frame. Guests jump at this transfer point instead of 
+     * HYPERVISOR_iret is special because it doesn't return and expects a
+     * special stack frame. Guests jump at this transfer point instead of
      * calling it.
      */
     p = (char *)(hypercall_page + (__HYPERVISOR_iret * 32));
@@ -620,7 +643,7 @@ static void hypercall_page_initialise_ring3_kernel(void *hypercall_page)
 void hypercall_page_initialise(struct domain *d, void *hypercall_page)
 {
     memset(hypercall_page, 0xCC, PAGE_SIZE);
-    if ( is_hvm_domain(d) )
+    if ( has_hvm_container_domain(d) )
         hvm_hypercall_page_initialise(d, hypercall_page);
     else if ( !is_pv_32bit_domain(d) )
         hypercall_page_initialise_ring3_kernel(hypercall_page);

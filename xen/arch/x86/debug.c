@@ -63,10 +63,17 @@ dbg_hvm_va2mfn(dbgva_t vaddr, struct domain *dp, int toaddr,
     if ( p2m_is_readonly(gfntype) && toaddr )
     {
         DBGP2("kdb:p2m_is_readonly: gfntype:%x\n", gfntype);
-        return INVALID_MFN;
+        mfn = INVALID_MFN;
+    }
+    else
+        DBGP2("X: vaddr:%lx domid:%d mfn:%lx\n", vaddr, dp->domain_id, mfn);
+
+    if ( mfn == INVALID_MFN )
+    {
+        put_gfn(dp, *gfn);
+        *gfn = INVALID_GFN;
     }
 
-    DBGP2("X: vaddr:%lx domid:%d mfn:%lx\n", vaddr, dp->domain_id, mfn);
     return mfn;
 }
 
@@ -158,7 +165,7 @@ dbg_rw_guest_mem(dbgva_t addr, dbgbyte_t *buf, int len, struct domain *dp,
 
         pagecnt = min_t(long, PAGE_SIZE - (addr & ~PAGE_MASK), len);
 
-        mfn = (dp->is_hvm
+        mfn = (has_hvm_container_domain(dp)
                ? dbg_hvm_va2mfn(addr, dp, toaddr, &gfn)
                : dbg_pv_va2mfn(addr, dp, pgd3));
         if ( mfn == INVALID_MFN ) 
@@ -223,3 +230,11 @@ dbg_rw_mem(dbgva_t addr, dbgbyte_t *buf, int len, domid_t domid, int toaddr,
     return len;
 }
 
+/*
+ * Local variables:
+ * mode: C
+ * c-file-style: "BSD"
+ * c-basic-offset: 4
+ * indent-tabs-mode: nil
+ * End:
+ */

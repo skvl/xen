@@ -114,6 +114,7 @@ struct restore_callbacks {
  * @parm pae non-zero if this HVM domain has PAE support enabled
  * @parm superpages non-zero to allocate guest memory with superpages
  * @parm no_incr_generationid non-zero if generation id is NOT to be incremented
+ * @parm checkpointed_stream non-zero if the far end of the stream is using checkpointing
  * @parm vm_generationid_addr returned with the address of the generation id buffer
  * @parm callbacks non-NULL to receive a callback to restore toolstack
  *       specific data
@@ -124,7 +125,7 @@ int xc_domain_restore(xc_interface *xch, int io_fd, uint32_t dom,
                       domid_t store_domid, unsigned int console_evtchn,
                       unsigned long *console_mfn, domid_t console_domid,
                       unsigned int hvm, unsigned int pae, int superpages,
-                      int no_incr_generationid,
+                      int no_incr_generationid, int checkpointed_stream,
                       unsigned long *vm_generationid_addr,
                       struct restore_callbacks *callbacks);
 /**
@@ -274,6 +275,23 @@ int xc_query_page_offline_status(xc_interface *xch, unsigned long start,
 
 int xc_exchange_page(xc_interface *xch, int domid, xen_pfn_t mfn);
 
+
+/**
+ * Memory related information, such as PFN types, the P2M table,
+ * the guest word width and the guest page table levels.
+ */
+struct xc_domain_meminfo {
+    unsigned int pt_levels;
+    unsigned int guest_width;
+    xen_pfn_t *pfn_type;
+    xen_pfn_t *p2m_table;
+    unsigned long p2m_size;
+};
+
+int xc_map_domain_meminfo(xc_interface *xch, int domid,
+                          struct xc_domain_meminfo *minfo);
+
+int xc_unmap_domain_meminfo(xc_interface *xch, struct xc_domain_meminfo *mem);
 
 /**
  * This function map m2p table

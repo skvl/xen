@@ -33,7 +33,7 @@ static void check_open_fds(const char *what)
 
     for (i = 4; i < 256; i++) {
 #ifdef __linux__
-        size_t len;
+        ssize_t len;
         char path[PATH_MAX];
         char linkpath[PATH_MAX+1];
 #endif
@@ -157,7 +157,7 @@ out:
     return rc ? SIGTERM : 0;
 }
 
-int libxl__wait_for_offspring(libxl__gc *gc,
+int libxl__xenstore_child_wait_deprecated(libxl__gc *gc,
                                  uint32_t domid,
                                  uint32_t timeout, char *what,
                                  char *path, char *state,

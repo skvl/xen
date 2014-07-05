@@ -24,6 +24,7 @@
 #include <public/sysctl.h>
 #include <public/vcpu.h>
 #include <public/mem_event.h>
+#include <public/event_channel.h>
 
 #ifdef CONFIG_COMPAT
 #include <compat/vcpu.h>
@@ -50,9 +51,22 @@ extern struct domain *dom0;
 #else
 #define BITS_PER_EVTCHN_WORD(d) (has_32bit_shinfo(d) ? 32 : BITS_PER_XEN_ULONG)
 #endif
-#define MAX_EVTCHNS(d) (BITS_PER_EVTCHN_WORD(d) * BITS_PER_EVTCHN_WORD(d))
-#define EVTCHNS_PER_BUCKET 128
-#define NR_EVTCHN_BUCKETS  (NR_EVENT_CHANNELS / EVTCHNS_PER_BUCKET)
+
+#define BUCKETS_PER_GROUP  (PAGE_SIZE/sizeof(struct evtchn *))
+/* Round size of struct evtchn up to power of 2 size */
+#define __RDU2(x)   (       (x) | (   (x) >> 1))
+#define __RDU4(x)   ( __RDU2(x) | ( __RDU2(x) >> 2))
+#define __RDU8(x)   ( __RDU4(x) | ( __RDU4(x) >> 4))
+#define __RDU16(x)  ( __RDU8(x) | ( __RDU8(x) >> 8))
+#define __RDU32(x)  (__RDU16(x) | (__RDU16(x) >>16))
+#define next_power_of_2(x)      (__RDU32((x)-1) + 1)
+
+/* Maximum number of event channels for any ABI. */
+#define MAX_NR_EVTCHNS MAX(EVTCHN_2L_NR_CHANNELS, EVTCHN_FIFO_NR_CHANNELS)
+
+#define EVTCHNS_PER_BUCKET (PAGE_SIZE / next_power_of_2(sizeof(struct evtchn)))
+#define EVTCHNS_PER_GROUP  (BUCKETS_PER_GROUP * EVTCHNS_PER_BUCKET)
+#define NR_EVTCHN_GROUPS   DIV_ROUND_UP(MAX_NR_EVTCHNS, EVTCHNS_PER_GROUP)
 
 struct evtchn
 {
@@ -66,6 +80,7 @@ struct evtchn
     u8  state;             /* ECS_* */
     u8  xen_consumer;      /* Consumer in Xen, if any? (0 = send to guest) */
     u16 notify_vcpu_id;    /* VCPU for local delivery notification */
+    u32 port;
     union {
         struct {
             domid_t remote_domid;
@@ -81,6 +96,10 @@ struct evtchn
         } pirq;        /* state == ECS_PIRQ */
         u16 virq;      /* state == ECS_VIRQ */
     } u;
+    u8 priority;
+    u8 pending:1;
+    u16 last_vcpu_id;
+    u8 last_priority;
 #ifdef FLASK_ENABLE
     void *ssid;
 #endif
@@ -195,6 +214,8 @@ struct vcpu
     /* Guest-specified relocation of vcpu_info. */
     unsigned long vcpu_info_mfn;
 
+    struct evtchn_fifo_vcpu *evtchn_fifo;
+
     struct arch_vcpu arch;
 };
 
@@ -238,6 +259,16 @@ struct mem_event_per_domain
     struct mem_event_domain access;
 };
 
+struct evtchn_port_ops;
+
+/*
+ * PVH is a PV guest running in an HVM container.  is_hvm_* checks
+ * will be false, but has_hvm_container_* checks will be true.
+ */
+enum guest_type {
+    guest_type_pv, guest_type_pvh, guest_type_hvm
+};
+
 struct domain
 {
     domid_t          domain_id;
@@ -269,8 +300,13 @@ struct domain
     spinlock_t       rangesets_lock;
 
     /* Event channel information. */
-    struct evtchn   *evtchn[NR_EVTCHN_BUCKETS];
+    struct evtchn   *evtchn;                         /* first bucket only */
+    struct evtchn  **evtchn_group[NR_EVTCHN_GROUPS]; /* all other buckets */
+    unsigned int     max_evtchns;
+    unsigned int     max_evtchn_port;
     spinlock_t       event_lock;
+    const struct evtchn_port_ops *evtchn_port_ops;
+    struct evtchn_fifo_domain *evtchn_fifo;
 
     struct grant_table *grant_table;
 
@@ -285,11 +321,11 @@ struct domain
     struct rangeset *iomem_caps;
     struct rangeset *irq_caps;
 
-    /* Is this an HVM guest? */
-    bool_t           is_hvm;
+    enum guest_type guest_type;
+
 #ifdef HAS_PASSTHROUGH
-    /* Does this guest need iommu mappings? */
-    bool_t           need_iommu;
+    /* Does this guest need iommu mappings (-1 meaning "being set up")? */
+    s8               need_iommu;
 #endif
     /* is node-affinity automatically computed? */
     bool_t           auto_node_affinity;
@@ -341,6 +377,12 @@ struct domain
     /* Control-plane tools handle for this domain. */
     xen_domain_handle_t handle;
 
+    /* hvm_print_line() and guest_console_write() logging. */
+#define DOMAIN_PBUF_SIZE 80
+    char       *pbuf;
+    unsigned    pbuf_idx;
+    spinlock_t  pbuf_lock;
+
     /* OProfile support. */
     struct xenoprof *xenoprof;
     int32_t time_offset_seconds;
@@ -360,7 +402,7 @@ struct domain
     spinlock_t hypercall_deadlock_mutex;
 
     /* transcendent memory, auto-allocated on first tmem op by each domain */
-    void *tmem;
+    struct client *tmem_client;
 
     struct lock_profile_qhead profile_head;
 
@@ -464,6 +506,9 @@ struct domain *domain_create(
  /* DOMCRF_oos_off: dont use out-of-sync optimization for shadow page tables */
 #define _DOMCRF_oos_off         4
 #define DOMCRF_oos_off          (1U<<_DOMCRF_oos_off)
+ /* DOMCRF_pvh: Create PV domain in HVM container. */
+#define _DOMCRF_pvh             5
+#define DOMCRF_pvh              (1U<<_DOMCRF_pvh)
 
 /*
  * rcu_lock_domain_by_id() is more efficient than get_domain_by_id().
@@ -541,6 +586,13 @@ void __domain_crash_synchronous(void) __attribute__((noreturn));
     __domain_crash_synchronous();                                         \
 } while (0)
 
+/*
+ * Called from assembly code, with an optional address to help indicate why
+ * the crash occured.  If addr is 0, look up address from last extable
+ * redirection.
+ */
+void asm_domain_crash_synchronous(unsigned long addr) __attribute__((noreturn));
+
 #define set_current_state(_s) do { current->state = (_s); } while (0)
 void scheduler_init(void);
 int  sched_init_vcpu(struct vcpu *v, unsigned int processor);
@@ -554,9 +606,9 @@ void sched_set_node_affinity(struct domain *, nodemask_t *);
 int  sched_id(void);
 void sched_tick_suspend(void);
 void sched_tick_resume(void);
-void vcpu_wake(struct vcpu *d);
-void vcpu_sleep_nosync(struct vcpu *d);
-void vcpu_sleep_sync(struct vcpu *d);
+void vcpu_wake(struct vcpu *v);
+void vcpu_sleep_nosync(struct vcpu *v);
+void vcpu_sleep_sync(struct vcpu *v);
 
 /*
  * Force synchronisation of given VCPU's state. If it is currently descheduled,
@@ -687,6 +739,7 @@ void vcpu_unblock(struct vcpu *v);
 void vcpu_pause(struct vcpu *v);
 void vcpu_pause_nosync(struct vcpu *v);
 void domain_pause(struct domain *d);
+void domain_pause_nosync(struct domain *d);
 void vcpu_unpause(struct vcpu *v);
 void domain_unpause(struct domain *d);
 void domain_pause_by_systemcontroller(struct domain *d);
@@ -732,8 +785,14 @@ void watchdog_domain_destroy(struct domain *d);
 
 #define VM_ASSIST(_d,_t) (test_bit((_t), &(_d)->vm_assist))
 
-#define is_hvm_domain(d) ((d)->is_hvm)
+#define is_pv_domain(d) ((d)->guest_type == guest_type_pv)
+#define is_pv_vcpu(v)   (is_pv_domain((v)->domain))
+#define is_pvh_domain(d) ((d)->guest_type == guest_type_pvh)
+#define is_pvh_vcpu(v)   (is_pvh_domain((v)->domain))
+#define is_hvm_domain(d) ((d)->guest_type == guest_type_hvm)
 #define is_hvm_vcpu(v)   (is_hvm_domain(v->domain))
+#define has_hvm_container_domain(d) ((d)->guest_type != guest_type_pv)
+#define has_hvm_container_vcpu(v)   (has_hvm_container_domain((v)->domain))
 #define is_pinned_vcpu(v) ((v)->domain->is_pinned || \
                            cpumask_weight((v)->cpu_affinity) == 1)
 #ifdef HAS_PASSTHROUGH

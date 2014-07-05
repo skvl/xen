@@ -35,6 +35,7 @@
  * EFLAGS bits
  */
 #define X86_EFLAGS_CF	0x00000001 /* Carry Flag */
+#define X86_EFLAGS_MBS	0x00000002 /* Resvd bit */
 #define X86_EFLAGS_PF	0x00000004 /* Parity Flag */
 #define X86_EFLAGS_AF	0x00000010 /* Auxillary carry Flag */
 #define X86_EFLAGS_ZF	0x00000040 /* Zero Flag */
@@ -87,6 +88,7 @@
 #define X86_CR4_PCIDE		0x20000 /* enable PCID */
 #define X86_CR4_OSXSAVE	0x40000 /* enable XSAVE/XRSTOR */
 #define X86_CR4_SMEP		0x100000/* enable SMEP */
+#define X86_CR4_SMAP		0x200000/* enable SMAP */
 
 /*
  * Trap/fault mnemonics.
@@ -507,7 +509,7 @@ extern always_inline void prefetchw(const void *x)
 #endif
 
 void show_stack(struct cpu_user_regs *regs);
-void show_stack_overflow(unsigned int cpu, unsigned long esp);
+void show_stack_overflow(unsigned int cpu, const struct cpu_user_regs *regs);
 void show_registers(struct cpu_user_regs *regs);
 void show_execution_state(struct cpu_user_regs *regs);
 #define dump_execution_state() run_in_exception_handler(show_execution_state)
@@ -565,6 +567,8 @@ int wrmsr_hypervisor_regs(uint32_t idx, uint64_t val);
 void microcode_set_module(unsigned int);
 int microcode_update(XEN_GUEST_HANDLE_PARAM(const_void), unsigned long len);
 int microcode_resume_cpu(int cpu);
+
+void pv_cpuid(struct cpu_user_regs *regs);
 
 #endif /* !__ASSEMBLY__ */
 

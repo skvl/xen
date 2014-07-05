@@ -189,7 +189,7 @@ static struct xc_interface_core *xc_interface_open_common(xentoollog_logger *log
 err_put_iface:
     xc_osdep_put(&xch->osdep);
  err:
-    if (xch) xtl_logger_destroy(xch->error_handler_tofree);
+    xtl_logger_destroy(xch->error_handler_tofree);
     if (xch != &xch_buf) free(xch);
     return NULL;
 }
@@ -197,6 +197,9 @@ err_put_iface:
 static int xc_interface_close_common(xc_interface *xch)
 {
     int rc = 0;
+
+    if (!xch)
+	return 0;
 
     xc__hypercall_buffer_cache_release(xch);
 
@@ -609,11 +612,9 @@ int xc_get_pfn_list(xc_interface *xch,
 
 long xc_get_tot_pages(xc_interface *xch, uint32_t domid)
 {
-    DECLARE_DOMCTL;
-    domctl.cmd = XEN_DOMCTL_getdomaininfo;
-    domctl.domain = (domid_t)domid;
-    return (do_domctl(xch, &domctl) < 0) ?
-        -1 : domctl.u.getdomaininfo.tot_pages;
+    xc_dominfo_t info;
+    return (xc_domain_getinfo(xch, domid, 1, &info) != 1) ?
+        -1 : info.nr_pages;
 }
 
 int xc_copy_to_domain_page(xc_interface *xch,
@@ -627,6 +628,7 @@ int xc_copy_to_domain_page(xc_interface *xch,
         return -1;
     memcpy(vaddr, src_page, PAGE_SIZE);
     munmap(vaddr, PAGE_SIZE);
+    xc_domain_cacheflush(xch, domid, dst_pfn, 1);
     return 0;
 }
 
@@ -640,6 +642,7 @@ int xc_clear_domain_page(xc_interface *xch,
         return -1;
     memset(vaddr, 0, PAGE_SIZE);
     munmap(vaddr, PAGE_SIZE);
+    xc_domain_cacheflush(xch, domid, dst_pfn, 1);
     return 0;
 }
 

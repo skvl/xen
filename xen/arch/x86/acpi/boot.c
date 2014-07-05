@@ -97,7 +97,20 @@ acpi_parse_x2apic(struct acpi_subtable_header *header, const unsigned long end)
 
 	acpi_table_print_madt_entry(header);
 
-	/* Record local apic id only when enabled */
+	/* Record local apic id only when enabled and fitting. */
+	if (processor->local_apic_id >= MAX_APICS ||
+	    processor->uid >= MAX_MADT_ENTRIES) {
+		printk("%sAPIC ID %#x and/or ACPI ID %#x beyond limit"
+		       " - processor ignored\n",
+		       processor->lapic_flags & ACPI_MADT_ENABLED ?
+				KERN_WARNING "WARNING: " : KERN_INFO,
+		       processor->local_apic_id, processor->uid);
+		/*
+		 * Must not return an error here, to prevent
+		 * acpi_table_parse_entries() from terminating early.
+		 */
+		return 0 /* -ENOSPC */;
+	}
 	if (processor->lapic_flags & ACPI_MADT_ENABLED) {
 		x86_acpiid_to_apicid[processor->uid] =
 			processor->local_apic_id;
@@ -273,6 +286,22 @@ static int __init acpi_parse_hpet(struct acpi_table_header *table)
 	if (hpet_tbl->address.space_id != ACPI_ADR_SPACE_SYSTEM_MEMORY) {
 		printk(KERN_WARNING PREFIX "HPET timers must be located in "
 		       "memory.\n");
+		return -1;
+	}
+
+	/*
+	 * Some BIOSes provide multiple HPET tables.  Sometimes this is a BIOS
+	 * bug; the intended way of supporting more than 1 HPET is to use AML
+	 * entries.
+	 *
+	 * If someone finds a real system with two genuine HPET tables, perhaps
+	 * they will be kind and implement support.  Until then however, warn
+	 * that we will ignore subsequent tables.
+	 */
+	if (hpet_address)
+	{
+		printk(KERN_WARNING PREFIX
+		       "Found multiple HPET tables. Only using first\n");
 		return -1;
 	}
 

@@ -25,6 +25,7 @@
 #define CONFIG_X86_PM_TIMER 1
 #define CONFIG_HPET_TIMER 1
 #define CONFIG_X86_MCE_THERMAL 1
+#define CONFIG_HAVE_EFFICIENT_UNALIGNED_ACCESS 1
 #define CONFIG_NUMA 1
 #define CONFIG_DISCONTIGMEM 1
 #define CONFIG_NUMA_EMU 1
@@ -49,6 +50,7 @@
 
 #define CONFIG_XENOPROF 1
 #define CONFIG_KEXEC 1
+#define CONFIG_WATCHDOG 1
 
 #define HZ 100
 
@@ -78,6 +80,9 @@
 #define ENTRY(name)                             \
   .globl name;                                  \
   ALIGN;                                        \
+  name:
+#define GLOBAL(name)                            \
+  .globl name;                                  \
   name:
 #endif
 
@@ -124,7 +129,6 @@ extern unsigned char boot_edid_info[128];
 #define PML4_ADDR(_slot)                              \
     (((_AC(_slot, UL) >> 8) * _AC(0xffff000000000000,UL)) | \
      (_AC(_slot, UL) << PML4_ENTRY_BITS))
-#define GB(_gb) (_AC(_gb, UL) << 30)
 
 /*
  * Memory layout:
@@ -146,17 +150,15 @@ extern unsigned char boot_edid_info[128];
  *    Per-domain mappings (e.g., GDT, LDT).
  *  0xffff828000000000 - 0xffff82bfffffffff [256GB, 2^38 bytes, PML4:261]
  *    Machine-to-phys translation table.
- *  0xffff82c000000000 - 0xffff82c3ffffffff [16GB,  2^34 bytes, PML4:261]
+ *  0xffff82c000000000 - 0xffff82cfffffffff [64GB,  2^36 bytes, PML4:261]
  *    vmap()/ioremap()/fixmap area.
- *  0xffff82c400000000 - 0xffff82c43fffffff [1GB,   2^30 bytes, PML4:261]
- *    Global domain page map area.
- *  0xffff82c440000000 - 0xffff82c47fffffff [1GB,   2^30 bytes, PML4:261]
+ *  0xffff82d000000000 - 0xffff82d03fffffff [1GB,   2^30 bytes, PML4:261]
  *    Compatibility machine-to-phys translation table.
- *  0xffff82c480000000 - 0xffff82c4bfffffff [1GB,   2^30 bytes, PML4:261]
+ *  0xffff82d040000000 - 0xffff82d07fffffff [1GB,   2^30 bytes, PML4:261]
  *    High read-only compatibility machine-to-phys translation table.
- *  0xffff82c4c0000000 - 0xffff82c4ffffffff [1GB,   2^30 bytes, PML4:261]
+ *  0xffff82d080000000 - 0xffff82d0bfffffff [1GB,   2^30 bytes, PML4:261]
  *    Xen text, static data, bss.
- *  0xffff82c500000000 - 0xffff82dffbffffff [108GB - 64MB,      PML4:261]
+ *  0xffff82d0c0000000 - 0xffff82dffbffffff [61GB - 64MB,       PML4:261]
  *    Reserved for future use.
  *  0xffff82dffc000000 - 0xffff82dfffffffff [64MB,  2^26 bytes, PML4:261]
  *    Super-page information array.
@@ -220,15 +222,11 @@ extern unsigned char boot_edid_info[128];
 /* Slot 261: machine-to-phys conversion table (256GB). */
 #define RDWR_MPT_VIRT_START     (PML4_ADDR(261))
 #define RDWR_MPT_VIRT_END       (RDWR_MPT_VIRT_START + MPT_VIRT_SIZE)
-/* Slot 261: vmap()/ioremap()/fixmap area (16GB). */
+/* Slot 261: vmap()/ioremap()/fixmap area (64GB). */
 #define VMAP_VIRT_START         RDWR_MPT_VIRT_END
-#define VMAP_VIRT_END           (VMAP_VIRT_START + GB(16))
-/* Slot 261: global domain page map area (1GB). */
-#define GLOBALMAP_GBYTES        1
-#define GLOBALMAP_VIRT_START    VMAP_VIRT_END
-#define GLOBALMAP_VIRT_END      (GLOBALMAP_VIRT_START + (GLOBALMAP_GBYTES<<30))
+#define VMAP_VIRT_END           (VMAP_VIRT_START + GB(64))
 /* Slot 261: compatibility machine-to-phys conversion table (1GB). */
-#define RDWR_COMPAT_MPT_VIRT_START GLOBALMAP_VIRT_END
+#define RDWR_COMPAT_MPT_VIRT_START VMAP_VIRT_END
 #define RDWR_COMPAT_MPT_VIRT_END (RDWR_COMPAT_MPT_VIRT_START + GB(1))
 /* Slot 261: high read-only compat machine-to-phys conversion table (1GB). */
 #define HIRO_COMPAT_MPT_VIRT_START RDWR_COMPAT_MPT_VIRT_END
@@ -270,6 +268,8 @@ extern unsigned char boot_edid_info[128];
     (COMPAT_L2_PAGETABLE_LAST_XEN_SLOT - COMPAT_L2_PAGETABLE_FIRST_XEN_SLOT(d) + 1)
 
 #define COMPAT_LEGACY_MAX_VCPUS XEN_LEGACY_MAX_VCPUS
+#define COMPAT_HAVE_PV_GUEST_ENTRY XEN_HAVE_PV_GUEST_ENTRY
+#define COMPAT_HAVE_PV_UPCALL_MASK XEN_HAVE_PV_UPCALL_MASK
 
 #endif
 

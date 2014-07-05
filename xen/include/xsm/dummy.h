@@ -222,16 +222,16 @@ static XSM_INLINE int xsm_console_io(XSM_DEFAULT_ARG struct domain *d, int cmd)
 {
     XSM_ASSERT_ACTION(XSM_OTHER);
 #ifdef VERBOSE
-    return xsm_default_action(XSM_HOOK, current->domain, NULL);
-#else
-    return xsm_default_action(XSM_PRIV, current->domain, NULL);
+    if ( cmd == CONSOLEIO_write )
+        return xsm_default_action(XSM_HOOK, d, NULL);
 #endif
+    return xsm_default_action(XSM_PRIV, d, NULL);
 }
 
 static XSM_INLINE int xsm_profile(XSM_DEFAULT_ARG struct domain *d, int op)
 {
     XSM_ASSERT_ACTION(XSM_HOOK);
-    return xsm_default_action(action, current->domain, NULL);
+    return xsm_default_action(action, d, NULL);
 }
 
 static XSM_INLINE int xsm_kexec(XSM_DEFAULT_VOID)
@@ -281,7 +281,7 @@ static XSM_INLINE void xsm_evtchn_close_post(struct evtchn *chn)
 static XSM_INLINE int xsm_evtchn_send(XSM_DEFAULT_ARG struct domain *d, struct evtchn *chn)
 {
     XSM_ASSERT_ACTION(XSM_HOOK);
-    return xsm_default_action(action, current->domain, NULL);
+    return xsm_default_action(action, d, NULL);
 }
 
 static XSM_INLINE int xsm_evtchn_status(XSM_DEFAULT_ARG struct domain *d, struct evtchn *chn)
@@ -567,9 +567,10 @@ static XSM_INLINE int xsm_domain_memory_map(XSM_DEFAULT_ARG struct domain *d)
 static XSM_INLINE int xsm_mmu_update(XSM_DEFAULT_ARG struct domain *d, struct domain *t,
                                      struct domain *f, uint32_t flags)
 {
-    int rc;
+    int rc = 0;
     XSM_ASSERT_ACTION(XSM_TARGET);
-    rc = xsm_default_action(action, d, f);
+    if ( f != dom_io )
+        rc = xsm_default_action(action, d, f);
     if ( t && !rc )
         rc = xsm_default_action(action, d, t);
     return rc;

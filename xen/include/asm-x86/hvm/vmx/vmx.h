@@ -282,68 +282,111 @@ extern uint8_t posted_intr_vector;
 
 static inline void __vmptrld(u64 addr)
 {
-    asm volatile ( VMPTRLD_OPCODE
-                   MODRM_EAX_06
+    asm volatile (
+#ifdef HAVE_GAS_VMX
+                   "vmptrld %0\n"
+#else
+                   VMPTRLD_OPCODE MODRM_EAX_06
+#endif
                    /* CF==1 or ZF==1 --> crash (ud2) */
-                   "ja 1f ; ud2 ; 1:\n"
+                   UNLIKELY_START(be, vmptrld)
+                   "\tud2\n"
+                   UNLIKELY_END_SECTION
                    :
+#ifdef HAVE_GAS_VMX
+                   : "m" (addr)
+#else
                    : "a" (&addr)
+#endif
                    : "memory");
 }
 
 static inline void __vmpclear(u64 addr)
 {
-    asm volatile ( VMCLEAR_OPCODE
-                   MODRM_EAX_06
+    asm volatile (
+#ifdef HAVE_GAS_VMX
+                   "vmclear %0\n"
+#else
+                   VMCLEAR_OPCODE MODRM_EAX_06
+#endif
                    /* CF==1 or ZF==1 --> crash (ud2) */
-                   "ja 1f ; ud2 ; 1:\n"
+                   UNLIKELY_START(be, vmclear)
+                   "\tud2\n"
+                   UNLIKELY_END_SECTION
                    :
+#ifdef HAVE_GAS_VMX
+                   : "m" (addr)
+#else
                    : "a" (&addr)
+#endif
                    : "memory");
 }
 
-static inline unsigned long __vmread(unsigned long field)
+static inline void __vmread(unsigned long field, unsigned long *value)
 {
-    unsigned long ecx;
-
-    asm volatile ( VMREAD_OPCODE
-                   MODRM_EAX_ECX
+    asm volatile (
+#ifdef HAVE_GAS_VMX
+                   "vmread %1, %0\n\t"
+#else
+                   VMREAD_OPCODE MODRM_EAX_ECX
+#endif
                    /* CF==1 or ZF==1 --> crash (ud2) */
-                   "ja 1f ; ud2 ; 1:\n"
-                   : "=c" (ecx)
-                   : "a" (field)
-                   : "memory");
-
-    return ecx;
+                   UNLIKELY_START(be, vmread)
+                   "\tud2\n"
+                   UNLIKELY_END_SECTION
+#ifdef HAVE_GAS_VMX
+                   : "=rm" (*value)
+                   : "r" (field));
+#else
+                   : "=c" (*value)
+                   : "a" (field));
+#endif
 }
 
 static inline void __vmwrite(unsigned long field, unsigned long value)
 {
-    asm volatile ( VMWRITE_OPCODE
-                   MODRM_EAX_ECX
+    asm volatile (
+#ifdef HAVE_GAS_VMX
+                   "vmwrite %1, %0\n"
+#else
+                   VMWRITE_OPCODE MODRM_EAX_ECX
+#endif
                    /* CF==1 or ZF==1 --> crash (ud2) */
-                   "ja 1f ; ud2 ; 1:\n"
+                   UNLIKELY_START(be, vmwrite)
+                   "\tud2\n"
+                   UNLIKELY_END_SECTION
                    : 
-                   : "a" (field) , "c" (value)
-                   : "memory");
+#ifdef HAVE_GAS_VMX
+                   : "r" (field) , "rm" (value));
+#else
+                   : "a" (field) , "c" (value));
+#endif
 }
 
-static inline unsigned long __vmread_safe(unsigned long field, int *error)
+static inline bool_t __vmread_safe(unsigned long field, unsigned long *value)
 {
-    unsigned long ecx;
+    bool_t okay;
 
-    asm volatile ( VMREAD_OPCODE
-                   MODRM_EAX_ECX
-                   /* CF==1 or ZF==1 --> rc = -1 */
-                   "setna %b0 ; neg %0"
-                   : "=q" (*error), "=c" (ecx)
-                   : "0" (0), "a" (field)
-                   : "memory");
+    asm volatile (
+#ifdef HAVE_GAS_VMX
+                   "vmread %2, %1\n\t"
+#else
+                   VMREAD_OPCODE MODRM_EAX_ECX
+#endif
+                   /* CF==1 or ZF==1 --> rc = 0 */
+                   "setnbe %0"
+#ifdef HAVE_GAS_VMX
+                   : "=qm" (okay), "=rm" (*value)
+                   : "r" (field));
+#else
+                   : "=qm" (okay), "=c" (*value)
+                   : "a" (field));
+#endif
 
-    return ecx;
+    return okay;
 }
 
-static inline void __invept(int type, u64 eptp, u64 gpa)
+static inline void __invept(unsigned long type, u64 eptp, u64 gpa)
 {
     struct {
         u64 eptp, gpa;
@@ -357,16 +400,26 @@ static inline void __invept(int type, u64 eptp, u64 gpa)
          !cpu_has_vmx_ept_invept_single_context )
         type = INVEPT_ALL_CONTEXT;
 
-    asm volatile ( INVEPT_OPCODE
-                   MODRM_EAX_08
+    asm volatile (
+#ifdef HAVE_GAS_EPT
+                   "invept %0, %1\n"
+#else
+                   INVEPT_OPCODE MODRM_EAX_08
+#endif
                    /* CF==1 or ZF==1 --> crash (ud2) */
-                   "ja 1f ; ud2 ; 1:\n"
+                   UNLIKELY_START(be, invept)
+                   "\tud2\n"
+                   UNLIKELY_END_SECTION
                    :
+#ifdef HAVE_GAS_EPT
+                   : "m" (operand), "r" (type)
+#else
                    : "a" (&operand), "c" (type)
+#endif
                    : "memory" );
 }
 
-static inline void __invvpid(int type, u16 vpid, u64 gva)
+static inline void __invvpid(unsigned long type, u16 vpid, u64 gva)
 {
     struct {
         u64 vpid:16;
@@ -375,12 +428,24 @@ static inline void __invvpid(int type, u16 vpid, u64 gva)
     } __attribute__ ((packed)) operand = {vpid, 0, gva};
 
     /* Fix up #UD exceptions which occur when TLBs are flushed before VMXON. */
-    asm volatile ( "1: " INVVPID_OPCODE MODRM_EAX_08
+    asm volatile ( "1: "
+#ifdef HAVE_GAS_EPT
+                   "invvpid %0, %1\n"
+#else
+                   INVVPID_OPCODE MODRM_EAX_08
+#endif
                    /* CF==1 or ZF==1 --> crash (ud2) */
-                   "ja 2f ; ud2 ; 2:\n"
+                   UNLIKELY_START(be, invvpid)
+                   "\tud2\n"
+                   UNLIKELY_END_SECTION "\n"
+                   "2:"
                    _ASM_EXTABLE(1b, 2b)
                    :
+#ifdef HAVE_GAS_EPT
+                   : "m" (operand), "r" (type)
+#else
                    : "a" (&operand), "c" (type)
+#endif
                    : "memory" );
 }
 
@@ -448,7 +513,7 @@ static inline int __vmxon(u64 addr)
 
 void vmx_get_segment_register(struct vcpu *, enum x86_segment,
                               struct segment_register *);
-void vmx_inject_extint(int trap);
+void vmx_inject_extint(int trap, uint8_t source);
 void vmx_inject_nmi(void);
 
 int ept_p2m_init(struct p2m_domain *p2m);

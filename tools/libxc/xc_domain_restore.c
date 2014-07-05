@@ -87,7 +87,7 @@ static ssize_t rdexact(xc_interface *xch, struct restore_ctx *ctx,
             if ( len == -1 && errno == EINTR )
                 continue;
             if ( !FD_ISSET(fd, &rfds) ) {
-                ERROR("read_exact_timed failed (select returned %zd)", len);
+                ERROR("%s failed (select returned %zd)", __func__, len);
                 errno = ETIMEDOUT;
                 return -1;
             }
@@ -101,7 +101,7 @@ static ssize_t rdexact(xc_interface *xch, struct restore_ctx *ctx,
             errno = 0;
         }
         if ( len <= 0 ) {
-            ERROR("read_exact_timed failed (read rc: %d, errno: %d)", len, errno);
+            ERROR("%s failed (read rc: %d, errno: %d)", __func__, len, errno);
             return -1;
         }
         offset += len;
@@ -327,7 +327,11 @@ static xen_pfn_t *load_p2m_frame_list(
             else if ( !strncmp(chunk_sig, "xcnt", 4) )
             {
                 *vcpuextstate = 1;
-                RDEXACT(io_fd, vcpuextstate_size, sizeof(*vcpuextstate_size));
+                if ( RDEXACT(io_fd, vcpuextstate_size, sizeof(*vcpuextstate_size)) )
+                {
+                    PERROR("read extended vcpu state size failed");
+                    return NULL;
+                }
                 tot_bytes -= chunk_bytes;
                 chunk_bytes = 0;
             }
@@ -368,6 +372,7 @@ static xen_pfn_t *load_p2m_frame_list(
                  (P2M_FL_ENTRIES - 1) * sizeof(xen_pfn_t)) )
     {
         PERROR("read p2m_frame_list failed");
+        free(p2m_frame_list);
         return NULL;
     }
     
@@ -927,14 +932,22 @@ static int pagebuf_get_one(xc_interface *xch, struct restore_ctx *ctx,
 
     case XC_SAVE_ID_TOOLSTACK:
         {
-            RDEXACT(fd, &buf->tdata.len, sizeof(buf->tdata.len));
+            if ( RDEXACT(fd, &buf->tdata.len, sizeof(buf->tdata.len)) )
+            {
+                PERROR("error read toolstack id size");
+                return -1;
+            }
             buf->tdata.data = (uint8_t*) realloc(buf->tdata.data, buf->tdata.len);
             if ( buf->tdata.data == NULL )
             {
                 PERROR("error memory allocation");
                 return -1;
             }
-            RDEXACT(fd, buf->tdata.data, buf->tdata.len);
+            if ( RDEXACT(fd, buf->tdata.data, buf->tdata.len) )
+            {
+                PERROR("error read toolstack id");
+                return -1;
+            }
             return pagebuf_get_one(xch, ctx, buf, fd, dom);
         }
 
@@ -1401,11 +1414,12 @@ int xc_domain_restore(xc_interface *xch, int io_fd, uint32_t dom,
                       domid_t store_domid, unsigned int console_evtchn,
                       unsigned long *console_mfn, domid_t console_domid,
                       unsigned int hvm, unsigned int pae, int superpages,
-                      int no_incr_generationid,
+                      int no_incr_generationid, int checkpointed_stream,
                       unsigned long *vm_generationid_addr,
                       struct restore_callbacks *callbacks)
 {
     DECLARE_DOMCTL;
+    xc_dominfo_t info;
     int rc = 1, frc, i, j, n, m, pae_extended_cr3 = 0, ext_vcpucontext = 0;
     int vcpuextstate = 0;
     uint32_t vcpuextstate_size = 0;
@@ -1472,6 +1486,7 @@ int xc_domain_restore(xc_interface *xch, int io_fd, uint32_t dom,
 
     ctx->superpages = superpages;
     ctx->hvm = hvm;
+    ctx->last_checkpoint = !checkpointed_stream;
 
     ctxt = xc_hypercall_buffer_alloc(xch, ctxt, sizeof(*ctxt));
 
@@ -1562,14 +1577,12 @@ int xc_domain_restore(xc_interface *xch, int io_fd, uint32_t dom,
            ROUNDUP(MAX_BATCH_SIZE * sizeof(xen_pfn_t), PAGE_SHIFT)); 
 
     /* Get the domain's shared-info frame. */
-    domctl.cmd = XEN_DOMCTL_getdomaininfo;
-    domctl.domain = (domid_t)dom;
-    if ( xc_domctl(xch, &domctl) < 0 )
+    if ( xc_domain_getinfo(xch, (domid_t)dom, 1, &info) != 1 )
     {
         PERROR("Could not get information on new domain");
         goto out;
     }
-    shared_info_frame = domctl.u.getdomaininfo.shared_info_frame;
+    shared_info_frame = info.shared_info_frame;
 
     /* Mark all PFNs as invalid; we allocate on demand */
     for ( pfn = 0; pfn < dinfo->p2m_size; pfn++ )
@@ -1765,14 +1778,14 @@ int xc_domain_restore(xc_interface *xch, int io_fd, uint32_t dom,
 
     if ( pagebuf_get(xch, ctx, &pagebuf, io_fd, dom) ) {
         PERROR("error when buffering batch, finishing");
-        goto finish;
+        goto out;
     }
     memset(&tmptail, 0, sizeof(tmptail));
     tmptail.ishvm = hvm;
     if ( buffer_tail(xch, ctx, &tmptail, io_fd, max_vcpu_id, vcpumap,
                      ext_vcpucontext, vcpuextstate, vcpuextstate_size) < 0 ) {
         ERROR ("error buffering image tail, finishing");
-        goto finish;
+        goto out;
     }
     tailbuf_free(&tailbuf);
     memcpy(&tailbuf, &tmptail, sizeof(tailbuf));
@@ -2113,11 +2126,7 @@ int xc_domain_restore(xc_interface *xch, int io_fd, uint32_t dom,
             }
             ctxt->x64.ctrlreg[1] = FOLD_CR3(ctx->p2m[pfn]);
         }
-        domctl.cmd = XEN_DOMCTL_setvcpucontext;
-        domctl.domain = (domid_t)dom;
-        domctl.u.vcpucontext.vcpu = i;
-        set_xen_guest_handle(domctl.u.vcpucontext.ctxt, ctxt);
-        frc = xc_domctl(xch, &domctl);
+        frc = xc_vcpu_setcontext(xch, dom, i, ctxt);
         if ( frc != 0 )
         {
             PERROR("Couldn't build vcpu%d", i);
@@ -2231,9 +2240,9 @@ int xc_domain_restore(xc_interface *xch, int io_fd, uint32_t dom,
         memcpy(ctx->live_p2m, ctx->p2m, dinfo->p2m_size * sizeof(xen_pfn_t));
     munmap(ctx->live_p2m, P2M_FL_ENTRIES * PAGE_SIZE);
 
-    rc = xc_dom_gnttab_seed(xch, dom, *console_mfn, *store_mfn,
-                            console_domid, store_domid);
-    if (rc != 0)
+    frc = xc_dom_gnttab_seed(xch, dom, *console_mfn, *store_mfn,
+                             console_domid, store_domid);
+    if (frc != 0)
     {
         ERROR("error seeding grant table");
         goto out;
@@ -2248,10 +2257,10 @@ int xc_domain_restore(xc_interface *xch, int io_fd, uint32_t dom,
     {
         if ( callbacks != NULL && callbacks->toolstack_restore != NULL )
         {
-            rc = callbacks->toolstack_restore(dom, tdata.data, tdata.len,
-                        callbacks->data);
+            frc = callbacks->toolstack_restore(dom, tdata.data, tdata.len,
+                                               callbacks->data);
             free(tdata.data);
-            if ( rc < 0 )
+            if ( frc < 0 )
             {
                 PERROR("error calling toolstack_restore");
                 goto out;
@@ -2317,9 +2326,9 @@ int xc_domain_restore(xc_interface *xch, int io_fd, uint32_t dom,
         goto out;
     }
 
-    rc = xc_dom_gnttab_hvm_seed(xch, dom, *console_mfn, *store_mfn,
-                                console_domid, store_domid);
-    if (rc != 0)
+    frc = xc_dom_gnttab_hvm_seed(xch, dom, *console_mfn, *store_mfn,
+                                 console_domid, store_domid);
+    if (frc != 0)
     {
         ERROR("error seeding grant table");
         goto out;

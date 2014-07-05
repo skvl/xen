@@ -18,13 +18,6 @@
 
 #define select_idle_routine(x) ((void)0)
 
-#ifdef CONFIG_X86_INTEL_USERCOPY
-/*
- * Alignment at which movsl is preferred for bulk memory copies.
- */
-struct movsl_mask movsl_mask __read_mostly;
-#endif
-
 static unsigned int probe_intel_cpuid_faulting(void)
 {
 	uint64_t x;
@@ -205,17 +198,13 @@ static void __devinit init_intel(struct cpuinfo_x86 *c)
 			set_bit(X86_FEATURE_ARCH_PERFMON, c->x86_capability);
 	}
 
-	/* SEP CPUID bug: Pentium Pro reports SEP but doesn't have it until model 3 mask 3 */
-	if ((c->x86<<8 | c->x86_model<<4 | c->x86_mask) < 0x633)
-		clear_bit(X86_FEATURE_SEP, c->x86_capability);
-
 	if ( !cpu_has(c, X86_FEATURE_XTOPOLOGY) )
 	{
 		c->x86_max_cores = num_cpu_cores(c);
 		detect_ht(c);
 	}
 
-	if (smp_processor_id() == 0) {
+	if (c == &boot_cpu_data && c->x86 == 6) {
 		if (probe_intel_cpuid_faulting())
 			set_bit(X86_FEATURE_CPUID_FAULTING, c->x86_capability);
 	} else if (boot_cpu_has(X86_FEATURE_CPUID_FAULTING)) {
@@ -229,20 +218,6 @@ static void __devinit init_intel(struct cpuinfo_x86 *c)
 	/* Work around errata */
 	Intel_errata_workarounds(c);
 
-#ifdef CONFIG_X86_INTEL_USERCOPY
-	/*
-	 * Set up the preferred alignment for movsl bulk memory moves
-	 */
-	switch (c->x86) {
-	case 6:		/* PII/PIII only like movsl with 8-byte alignment */
-		movsl_mask.mask = 7;
-		break;
-	case 15:	/* P4 is OK down to 8-byte alignment */
-		movsl_mask.mask = 7;
-		break;
-	}
-#endif
-
 	if ((c->x86 == 0xf && c->x86_model >= 0x03) ||
 		(c->x86 == 0x6 && c->x86_model >= 0x0e))
 		set_bit(X86_FEATURE_CONSTANT_TSC, c->x86_capability);
@@ -251,8 +226,9 @@ static void __devinit init_intel(struct cpuinfo_x86 *c)
 		set_bit(X86_FEATURE_NONSTOP_TSC, c->x86_capability);
 		set_bit(X86_FEATURE_TSC_RELIABLE, c->x86_capability);
 	}
-	if ((c->cpuid_level >= 0x00000006) &&
-	    (cpuid_eax(0x00000006) & (1u<<2)))
+	if ( opt_arat &&
+	     ( c->cpuid_level >= 0x00000006 ) &&
+	     ( cpuid_eax(0x00000006) & (1u<<2) ) )
 		set_bit(X86_FEATURE_ARAT, c->x86_capability);
 }
 

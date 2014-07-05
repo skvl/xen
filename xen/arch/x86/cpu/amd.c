@@ -465,7 +465,7 @@ static void __devinit init_amd(struct cpuinfo_x86 *c)
 	if (!cpu_has_amd_erratum(c, AMD_ERRATUM_121))
 		opt_allow_unsafe = 1;
 	else if (opt_allow_unsafe < 0)
-		panic("Xen will not boot on this CPU for security reasons.\n"
+		panic("Xen will not boot on this CPU for security reasons"
 		      "Pass \"allow_unsafe\" if you're trusting all your"
 		      " (PV) guest kernels.\n");
 	else if (!opt_allow_unsafe && c == &boot_cpu_data)
@@ -475,6 +475,39 @@ static void __devinit init_amd(struct cpuinfo_x86 *c)
 		       KERN_WARNING
 		       "*** Pass \"allow_unsafe\" if you're trusting"
 		       " all your (PV) guest kernels. ***\n");
+
+	if (c->x86 == 0x16 && c->x86_model <= 0xf) {
+		if (c == &boot_cpu_data) {
+			l = pci_conf_read32(0, 0, 0x18, 0x3, 0x58);
+			h = pci_conf_read32(0, 0, 0x18, 0x3, 0x5c);
+			if ((l & 0x1f) | (h & 0x1))
+				printk(KERN_WARNING
+				       "Applying workaround for erratum 792: %s%s%s\n",
+				       (l & 0x1f) ? "clearing D18F3x58[4:0]" : "",
+				       ((l & 0x1f) && (h & 0x1)) ? " and " : "",
+				       (h & 0x1) ? "clearing D18F3x5C[0]" : "");
+
+			if (l & 0x1f)
+				pci_conf_write32(0, 0, 0x18, 0x3, 0x58,
+						 l & ~0x1f);
+
+			if (h & 0x1)
+				pci_conf_write32(0, 0, 0x18, 0x3, 0x5c,
+						 h & ~0x1);
+		}
+
+		rdmsrl(MSR_AMD64_LS_CFG, value);
+		if (!(value & (1 << 15))) {
+			static bool_t warned;
+
+			if (c == &boot_cpu_data || opt_cpu_info ||
+			    !test_and_set_bool(warned))
+				printk(KERN_WARNING
+				       "CPU%u: Applying workaround for erratum 793\n",
+				       smp_processor_id());
+			wrmsrl(MSR_AMD64_LS_CFG, value | (1 << 15));
+		}
+	}
 
 	/* AMD CPUs do not support SYSENTER outside of legacy mode. */
 	clear_bit(X86_FEATURE_SEP, c->x86_capability);
@@ -502,7 +535,7 @@ static void __devinit init_amd(struct cpuinfo_x86 *c)
 	 * Family 0x12 and above processors have APIC timer
 	 * running in deep C states.
 	 */
-	if (c->x86 > 0x11)
+	if ( opt_arat && c->x86 > 0x11 )
 		set_bit(X86_FEATURE_ARAT, c->x86_capability);
 
 	/*

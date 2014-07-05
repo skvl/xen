@@ -399,7 +399,7 @@ static inline int get_page_and_type(struct page_info *page,
 int check_descriptor(const struct domain *, struct desc_struct *d);
 
 extern bool_t opt_allow_superpage;
-extern bool_t mem_hotplug;
+extern paddr_t mem_hotplug;
 
 /******************************************************************************
  * With shadow pagetables, the different kinds of address start 
@@ -555,7 +555,7 @@ int new_guest_cr3(unsigned long pfn);
 void make_cr3(struct vcpu *v, unsigned long mfn);
 void update_cr3(struct vcpu *v);
 int vcpu_destroy_pagetables(struct vcpu *);
-void propagate_page_fault(unsigned long addr, u16 error_code);
+struct trap_bounce *propagate_page_fault(unsigned long addr, u16 error_code);
 void *do_page_walk(struct vcpu *v, unsigned long addr);
 
 int __sync_local_execstate(void);

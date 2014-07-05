@@ -116,12 +116,9 @@ static int get_pty_fd(struct xs_handle *xs, char *path, int seconds)
 			 * disambiguate: just read the pty path */
 			pty_path = xs_read(xs, XBT_NULL, path, &len);
 			if (pty_path != NULL) {
-				if (access(pty_path, R_OK|W_OK) != 0)
-					continue;
 				pty_fd = open(pty_path, O_RDWR | O_NOCTTY);
-				if (pty_fd == -1) 
-					err(errno, "Could not open tty `%s'", 
-					    pty_path);
+				if (pty_fd == -1)
+					err(errno, "Could not open tty `%s'", pty_path);
 				free(pty_path);
 			}
 		}
@@ -339,7 +336,11 @@ int main(int argc, char **argv)
 		xc_interface *xc_handle = xc_interface_open(0,0,0);
 		if (xc_handle == NULL)
 			err(errno, "Could not open xc interface");
-		xc_domain_getinfo(xc_handle, domid, 1, &xcinfo);
+		if ( (xc_domain_getinfo(xc_handle, domid, 1, &xcinfo) != 1) ||
+		     (xcinfo.domid != domid) ) {
+			xc_interface_close(xc_handle);
+			err(errno, "Failed to get domain information");
+		}
 		/* default to pv console for pv guests and serial for hvm guests */
 		if (xcinfo.hvm)
 			type = CONSOLE_SERIAL;

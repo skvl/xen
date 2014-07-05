@@ -41,7 +41,11 @@ ALL_OBJS-y               += $(BASEDIR)/xsm/built_in.o
 ALL_OBJS-y               += $(BASEDIR)/arch/$(TARGET_ARCH)/built_in.o
 ALL_OBJS-$(x86)          += $(BASEDIR)/crypto/built_in.o
 
-CFLAGS-y                += -g -D__XEN__ -include $(BASEDIR)/include/xen/config.h
+CFLAGS += -fno-builtin -fno-common
+CFLAGS += -Werror -Wredundant-decls -Wno-pointer-arith
+CFLAGS += -pipe -g -D__XEN__ -include $(BASEDIR)/include/xen/config.h
+CFLAGS += -nostdinc
+
 CFLAGS-$(XSM_ENABLE)    += -DXSM_ENABLE
 CFLAGS-$(FLASK_ENABLE)  += -DFLASK_ENABLE -DXSM_MAGIC=0xf97cff8c
 CFLAGS-$(FLASK_ENABLE)  += -DFLASK_DEVELOP -DFLASK_BOOTPARAM -DFLASK_AVC_STATS
@@ -53,6 +57,9 @@ CFLAGS-$(lock_profile)  += -DLOCK_PROFILE
 CFLAGS-$(HAS_ACPI)      += -DHAS_ACPI
 CFLAGS-$(HAS_GDBSX)     += -DHAS_GDBSX
 CFLAGS-$(HAS_PASSTHROUGH) += -DHAS_PASSTHROUGH
+CFLAGS-$(HAS_DEVICE_TREE) += -DHAS_DEVICE_TREE
+CFLAGS-$(HAS_PCI)       += -DHAS_PCI
+CFLAGS-$(HAS_IOPORTS)   += -DHAS_IOPORTS
 CFLAGS-$(frame_pointer) += -fno-omit-frame-pointer -DCONFIG_FRAME_POINTER
 
 ifneq ($(max_phys_cpus),)
@@ -101,7 +108,7 @@ obj-y    := $(patsubst %/,%/built-in.o,$(obj-y))
 
 subdir-all := $(subdir-y) $(subdir-n)
 
-$(filter %.init.o,$(obj-y) $(obj-bin-y)): CFLAGS += -DINIT_SECTIONS_ONLY
+$(filter %.init.o,$(obj-y) $(obj-bin-y) $(extra-y)): CFLAGS += -DINIT_SECTIONS_ONLY
 
 $(obj-$(coverage)): CFLAGS += -fprofile-arcs -ftest-coverage -DTEST_COVERAGE
 
@@ -176,6 +183,9 @@ $(filter %.init.o,$(obj-y) $(obj-bin-y) $(extra-y)): %.init.o: %.o Makefile
 
 %.i: %.c Makefile
 	$(CPP) $(CFLAGS) $< -o $@
+
+%.s: %.c Makefile
+	$(CC) $(CFLAGS) -S $< -o $@
 
 # -std=gnu{89,99} gets confused by # as an end-of-line comment marker
 %.s: %.S Makefile

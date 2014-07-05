@@ -515,9 +515,10 @@ runq_tickle(const struct scheduler *ops, unsigned int cpu, struct csched_vcpu *n
     cpumask_andnot(&mask, &rqd->idle, &rqd->tickled);
     
     /* If it's not empty, choose one */
-    if ( !cpumask_empty(&mask) )
+    i = cpumask_cycle(cpu, &mask);
+    if ( i < nr_cpu_ids )
     {
-        ipid = cpumask_first(&mask);
+        ipid = i;
         goto tickle;
     }
 
@@ -881,15 +882,17 @@ csched_vcpu_insert(const struct scheduler *ops, struct vcpu *vc)
      */
     if ( ! is_idle_vcpu(vc) )
     {
+        spinlock_t *lock;
+
         /* FIXME: Do we need the private lock here? */
         list_add_tail(&svc->sdom_elem, &svc->sdom->vcpu);
 
         /* Add vcpu to runqueue of initial processor */
-        vcpu_schedule_lock_irq(vc);
+        lock = vcpu_schedule_lock_irq(vc);
 
         runq_assign(ops, vc);
 
-        vcpu_schedule_unlock_irq(vc);
+        vcpu_schedule_unlock_irq(lock, vc);
 
         sdom->nr_vcpus++;
     }
@@ -916,14 +919,16 @@ csched_vcpu_remove(const struct scheduler *ops, struct vcpu *vc)
 
     if ( ! is_idle_vcpu(vc) )
     {
+        spinlock_t *lock;
+
         SCHED_STAT_CRANK(vcpu_destroy);
 
         /* Remove from runqueue */
-        vcpu_schedule_lock_irq(vc);
+        lock = vcpu_schedule_lock_irq(vc);
 
         runq_deassign(ops, vc);
 
-        vcpu_schedule_unlock_irq(vc);
+        vcpu_schedule_unlock_irq(lock, vc);
 
         /* Remove from sdom list.  Don't need a lock for this, as it's called
          * syncronously when nothing else can happen. */
@@ -1010,8 +1015,7 @@ csched_context_saved(const struct scheduler *ops, struct vcpu *vc)
 {
     struct csched_vcpu * const svc = CSCHED_VCPU(vc);
     s_time_t now = NOW();
-
-    vcpu_schedule_lock_irq(vc);
+    spinlock_t *lock = vcpu_schedule_lock_irq(vc);
 
     BUG_ON( !is_idle_vcpu(vc) && svc->rqd != RQD(ops, vc->processor));
 
@@ -1037,7 +1041,7 @@ csched_context_saved(const struct scheduler *ops, struct vcpu *vc)
     else if ( !is_idle_vcpu(vc) )
         update_load(ops, svc->rqd, svc, -1, now);
 
-    vcpu_schedule_unlock_irq(vc);
+    vcpu_schedule_unlock_irq(lock, vc);
 }
 
 #define MAX_LOAD (1ULL<<60);
@@ -1091,7 +1095,7 @@ choose_cpu(const struct scheduler *ops, struct vcpu *vc)
         else
         {
             d2printk("d%dv%d +\n", svc->vcpu->domain->domain_id, svc->vcpu->vcpu_id);
-            new_cpu = cpumask_first(&svc->migrate_rqd->active);
+            new_cpu = cpumask_cycle(vc->processor, &svc->migrate_rqd->active);
             goto out_up;
         }
     }
@@ -1138,8 +1142,8 @@ choose_cpu(const struct scheduler *ops, struct vcpu *vc)
         new_cpu = vc->processor;
     else
     {
-        BUG_ON(cpumask_empty(&prv->rqd[min_rqi].active));
-        new_cpu = cpumask_first(&prv->rqd[min_rqi].active);
+        new_cpu = cpumask_cycle(vc->processor, &prv->rqd[min_rqi].active);
+        BUG_ON(new_cpu >= nr_cpu_ids);
     }
 
 out_up:
@@ -1219,7 +1223,7 @@ void migrate(const struct scheduler *ops,
             on_runq=1;
         }
         __runq_deassign(svc);
-        svc->vcpu->processor = cpumask_first(&trqd->active);
+        svc->vcpu->processor = cpumask_any(&trqd->active);
         __runq_assign(svc, trqd);
         if ( on_runq )
         {
@@ -1299,8 +1303,9 @@ retry:
             load_max = st.orqd->b_avgload;
 
         cpus_max = cpumask_weight(&st.lrqd->active);
-        if ( cpumask_weight(&st.orqd->active) > cpus_max )
-            cpus_max = cpumask_weight(&st.orqd->active);
+        i = cpumask_weight(&st.orqd->active);
+        if ( i > cpus_max )
+            cpus_max = i;
 
         /* If we're under 100% capacaty, only shift if load difference
          * is > 1.  otherwise, shift if under 12.5% */
@@ -1454,14 +1459,14 @@ csched_dom_cntl(
                  * must never lock csched_priv.lock if we're holding a runqueue lock.
                  * Also, calling vcpu_schedule_lock() is enough, since IRQs have already
                  * been disabled. */
-                vcpu_schedule_lock(svc->vcpu);
+                spinlock_t *lock = vcpu_schedule_lock(svc->vcpu);
 
                 BUG_ON(svc->rqd != RQD(ops, svc->vcpu->processor));
 
                 svc->weight = sdom->weight;
                 update_max_weight(svc->rqd, svc->weight, old_weight);
 
-                vcpu_schedule_unlock(svc->vcpu);
+                vcpu_schedule_unlock(lock, svc->vcpu);
             }
         }
     }
@@ -1475,7 +1480,7 @@ static void *
 csched_alloc_domdata(const struct scheduler *ops, struct domain *dom)
 {
     struct csched_dom *sdom;
-    int flags;
+    unsigned long flags;
 
     sdom = xzalloc(struct csched_dom);
     if ( sdom == NULL )
@@ -1519,7 +1524,7 @@ csched_dom_init(const struct scheduler *ops, struct domain *dom)
 static void
 csched_free_domdata(const struct scheduler *ops, void *data)
 {
-    int flags;
+    unsigned long flags;
     struct csched_dom *sdom = data;
 
     spin_lock_irqsave(&CSCHED_PRIV(ops)->lock, flags);
@@ -1939,7 +1944,8 @@ static void deactivate_runqueue(struct csched_private *prv, int rqi)
 
 static void init_pcpu(const struct scheduler *ops, int cpu)
 {
-    int rqi, flags;
+    int rqi;
+    unsigned long flags;
     struct csched_private *prv = CSCHED_PRIV(ops);
     struct csched_runqueue_data *rqd;
     spinlock_t *old_lock;
@@ -1991,6 +1997,7 @@ static void init_pcpu(const struct scheduler *ops, int cpu)
     cpumask_set_cpu(cpu, &rqd->idle);
     cpumask_set_cpu(cpu, &rqd->active);
 
+    /* _Not_ pcpu_schedule_unlock(): per_cpu().schedule_lock changed! */
     spin_unlock(old_lock);
 
     cpumask_set_cpu(cpu, &prv->initialized);

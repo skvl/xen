@@ -296,15 +296,28 @@ static void csched_set_node_affinity(
  * vcpu-affinity balancing is always necessary and must never be skipped.
  * OTOH, if a domain's node-affinity is said to be automatically computed
  * (or if it just spans all the nodes), we can safely avoid dealing with
- * node-affinity entirely. Ah, node-affinity is also deemed meaningless
- * in case it has empty intersection with the vcpu's vcpu-affinity, as it
- * would mean trying to schedule it on _no_ pcpu!
+ * node-affinity entirely.
+ *
+ * Node-affinity is also deemed meaningless in case it has empty
+ * intersection with mask, to cover the cases where using the node-affinity
+ * mask seems legit, but would instead led to trying to schedule the vcpu
+ * on _no_ pcpu! Typical use cases are for mask to be equal to the vcpu's
+ * vcpu-affinity, or to the && of vcpu-affinity and the set of online cpus
+ * in the domain's cpupool.
  */
-#define __vcpu_has_node_affinity(vc)                                          \
-    ( !(cpumask_full(CSCHED_DOM(vc->domain)->node_affinity_cpumask)           \
-        || !cpumask_intersects(vc->cpu_affinity,                              \
-                               CSCHED_DOM(vc->domain)->node_affinity_cpumask) \
-        || vc->domain->auto_node_affinity == 1) )
+static inline int __vcpu_has_node_affinity(const struct vcpu *vc,
+                                           const cpumask_t *mask)
+{
+    const struct domain *d = vc->domain;
+    const struct csched_dom *sdom = CSCHED_DOM(d);
+
+    if ( d->auto_node_affinity
+         || cpumask_full(sdom->node_affinity_cpumask)
+         || !cpumask_intersects(sdom->node_affinity_cpumask, mask) )
+        return 0;
+
+    return 1;
+}
 
 /*
  * Each csched-balance step uses its own cpumask. This function determines
@@ -393,7 +406,8 @@ __runq_tickle(unsigned int cpu, struct csched_vcpu *new)
             int new_idlers_empty;
 
             if ( balance_step == CSCHED_BALANCE_NODE_AFFINITY
-                 && !__vcpu_has_node_affinity(new->vcpu) )
+                 && !__vcpu_has_node_affinity(new->vcpu,
+                                              new->vcpu->cpu_affinity) )
                 continue;
 
             /* Are there idlers suitable for new (for this balance step)? */
@@ -626,11 +640,32 @@ _csched_cpu_pick(const struct scheduler *ops, struct vcpu *vc, bool_t commit)
     int cpu = vc->processor;
     int balance_step;
 
+    /* Store in cpus the mask of online cpus on which the domain can run */
     online = cpupool_scheduler_cpumask(vc->domain->cpupool);
+    cpumask_and(&cpus, vc->cpu_affinity, online);
+
     for_each_csched_balance_step( balance_step )
     {
+        /*
+         * We want to pick up a pcpu among the ones that are online and
+         * can accommodate vc, which is basically what we computed above
+         * and stored in cpus. As far as vcpu-affinity is concerned,
+         * there always will be at least one of these pcpus, hence cpus
+         * is never empty and the calls to cpumask_cycle() and
+         * cpumask_test_cpu() below are ok.
+         *
+         * On the other hand, when considering node-affinity too, it
+         * is possible for the mask to become empty (for instance, if the
+         * domain has been put in a cpupool that does not contain any of the
+         * nodes in its node-affinity), which would result in the ASSERT()-s
+         * inside cpumask_*() operations triggering (in debug builds).
+         *
+         * Therefore, in this case, we filter the node-affinity mask against
+         * cpus and, if the result is empty, we just skip the node-affinity
+         * balancing step all together.
+         */
         if ( balance_step == CSCHED_BALANCE_NODE_AFFINITY
-             && !__vcpu_has_node_affinity(vc) )
+             && !__vcpu_has_node_affinity(vc, &cpus) )
             continue;
 
         /* Pick an online CPU from the proper affinity mask */
@@ -641,7 +676,7 @@ _csched_cpu_pick(const struct scheduler *ops, struct vcpu *vc, bool_t commit)
         cpu = cpumask_test_cpu(vc->processor, &cpus)
                 ? vc->processor
                 : cpumask_cycle(vc->processor, &cpus);
-        ASSERT( !cpumask_empty(&cpus) && cpumask_test_cpu(cpu, &cpus) );
+        ASSERT(cpumask_test_cpu(cpu, &cpus));
 
         /*
          * Try to find an idle processor within the above constraints.
@@ -858,8 +893,6 @@ csched_alloc_vdata(const struct scheduler *ops, struct vcpu *vc, void *dd)
     INIT_LIST_HEAD(&svc->active_vcpu_elem);
     svc->sdom = dd;
     svc->vcpu = vc;
-    atomic_set(&svc->credit, 0);
-    svc->flags = 0U;
     svc->pri = is_idle_domain(vc->domain) ?
         CSCHED_PRI_IDLE : CSCHED_PRI_TS_UNDER;
     SCHED_VCPU_STATS_RESET(svc);
@@ -895,6 +928,12 @@ csched_vcpu_remove(const struct scheduler *ops, struct vcpu *vc)
     unsigned long flags;
 
     SCHED_STAT_CRANK(vcpu_destroy);
+
+    if ( test_and_clear_bit(CSCHED_FLAG_VCPU_PARKED, &svc->flags) )
+    {
+        SCHED_STAT_CRANK(vcpu_unpark);
+        vcpu_unpause(svc->vcpu);
+    }
 
     if ( __vcpu_on_runq(svc) )
         __runq_remove(svc);
@@ -1032,6 +1071,17 @@ csched_dom_cntl(
     return 0;
 }
 
+static inline void
+__csched_set_tslice(struct csched_private *prv, unsigned timeslice)
+{
+    prv->tslice_ms = timeslice;
+    prv->ticks_per_tslice = CSCHED_TICKS_PER_TSLICE;
+    if ( prv->tslice_ms < prv->ticks_per_tslice )
+        prv->ticks_per_tslice = 1;
+    prv->tick_period_us = prv->tslice_ms * 1000 / prv->ticks_per_tslice;
+    prv->credits_per_tslice = CSCHED_CREDITS_PER_MSEC * prv->tslice_ms;
+}
+
 static int
 csched_sys_cntl(const struct scheduler *ops,
                         struct xen_sysctl_scheduler_op *sc)
@@ -1050,7 +1100,7 @@ csched_sys_cntl(const struct scheduler *ops,
                     || params->ratelimit_us < XEN_SYSCTL_SCHED_RATELIMIT_MIN))
             || MICROSECS(params->ratelimit_us) > MILLISECS(params->tslice_ms) )
                 goto out;
-        prv->tslice_ms = params->tslice_ms;
+        __csched_set_tslice(prv, params->tslice_ms);
         prv->ratelimit_us = params->ratelimit_us;
         /* FALLTHRU */
     case XEN_SYSCTL_SCHEDOP_getinfo:
@@ -1081,11 +1131,9 @@ csched_alloc_domdata(const struct scheduler *ops, struct domain *dom)
 
     /* Initialize credit and weight */
     INIT_LIST_HEAD(&sdom->active_vcpu);
-    sdom->active_vcpu_count = 0;
     INIT_LIST_HEAD(&sdom->active_sdom_elem);
     sdom->dom = dom;
     sdom->weight = CSCHED_DEFAULT_WEIGHT;
-    sdom->cap = 0U;
 
     return (void *)sdom;
 }
@@ -1135,6 +1183,7 @@ csched_runq_sort(struct csched_private *prv, unsigned int cpu)
     struct csched_pcpu * const spc = CSCHED_PCPU(cpu);
     struct list_head *runq, *elem, *next, *last_under;
     struct csched_vcpu *svc_elem;
+    spinlock_t *lock;
     unsigned long flags;
     int sort_epoch;
 
@@ -1144,7 +1193,7 @@ csched_runq_sort(struct csched_private *prv, unsigned int cpu)
 
     spc->runq_sort_last = sort_epoch;
 
-    pcpu_schedule_lock_irqsave(cpu, flags);
+    lock = pcpu_schedule_lock_irqsave(cpu, &flags);
 
     runq = &spc->runq;
     elem = runq->next;
@@ -1169,7 +1218,7 @@ csched_runq_sort(struct csched_private *prv, unsigned int cpu)
         elem = next;
     }
 
-    pcpu_schedule_unlock_irqrestore(cpu, flags);
+    pcpu_schedule_unlock_irqrestore(lock, flags, cpu);
 }
 
 static void
@@ -1449,7 +1498,7 @@ csched_runq_steal(int peer_cpu, int cpu, int pri, int balance_step)
              * or counter.
              */
             if ( balance_step == CSCHED_BALANCE_NODE_AFFINITY
-                 && !__vcpu_has_node_affinity(vc) )
+                 && !__vcpu_has_node_affinity(vc, vc->cpu_affinity) )
                 continue;
 
             csched_balance_cpumask(vc, balance_step, csched_balance_mask);
@@ -1520,10 +1569,9 @@ csched_load_balance(struct csched_private *prv, int cpu,
             cpumask_and(&workers, &workers, &node_to_cpumask(peer_node));
             cpumask_clear_cpu(cpu, &workers);
 
-            if ( cpumask_empty(&workers) )
-                goto next_node;
-
             peer_cpu = cpumask_first(&workers);
+            if ( peer_cpu >= nr_cpu_ids )
+                goto next_node;
             do
             {
                 /*
@@ -1533,7 +1581,9 @@ csched_load_balance(struct csched_private *prv, int cpu,
                  * could cause a deadlock if the peer CPU is also load
                  * balancing and trying to lock this CPU.
                  */
-                if ( !pcpu_schedule_trylock(peer_cpu) )
+                spinlock_t *lock = pcpu_schedule_trylock(peer_cpu);
+
+                if ( !lock )
                 {
                     SCHED_STAT_CRANK(steal_trylock_failed);
                     peer_cpu = cpumask_cycle(peer_cpu, &workers);
@@ -1543,7 +1593,7 @@ csched_load_balance(struct csched_private *prv, int cpu,
                 /* Any work over there to steal? */
                 speer = cpumask_test_cpu(peer_cpu, online) ?
                     csched_runq_steal(peer_cpu, cpu, snext->pri, bstep) : NULL;
-                pcpu_schedule_unlock(peer_cpu);
+                pcpu_schedule_unlock(lock, peer_cpu);
 
                 /* As soon as one vcpu is found, balancing ends */
                 if ( speer != NULL )
@@ -1711,7 +1761,8 @@ csched_dump_vcpu(struct csched_vcpu *svc)
 
     if ( sdom )
     {
-        printk(" credit=%i [w=%u]", atomic_read(&svc->credit), sdom->weight);
+        printk(" credit=%i [w=%u,cap=%u]", atomic_read(&svc->credit),
+                sdom->weight, sdom->cap);
 #ifdef CSCHED_STATS
         printk(" (%d+%u) {a/i=%u/%u m=%u+%u (k=%u)}",
                 svc->stats.credit_last,
@@ -1859,12 +1910,7 @@ csched_init(struct scheduler *ops)
         sched_credit_tslice_ms = CSCHED_DEFAULT_TSLICE_MS;
     }
 
-    prv->tslice_ms = sched_credit_tslice_ms;
-    prv->ticks_per_tslice = CSCHED_TICKS_PER_TSLICE;
-    if ( prv->tslice_ms < prv->ticks_per_tslice )
-        prv->ticks_per_tslice = 1;
-    prv->tick_period_us = prv->tslice_ms * 1000 / prv->ticks_per_tslice;
-    prv->credits_per_tslice = CSCHED_CREDITS_PER_MSEC * prv->tslice_ms;
+    __csched_set_tslice(prv, sched_credit_tslice_ms);
 
     if ( MICROSECS(sched_ratelimit_us) > MILLISECS(sched_credit_tslice_ms) )
     {

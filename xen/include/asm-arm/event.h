@@ -7,9 +7,16 @@
 void vcpu_kick(struct vcpu *v);
 void vcpu_mark_events_pending(struct vcpu *v);
 
+static inline int vcpu_event_delivery_is_enabled(struct vcpu *v)
+{
+    struct cpu_user_regs *regs = &v->arch.cpu_info->guest_cpu_user_regs;
+    return !(regs->cpsr & PSR_IRQ_MASK);
+}
+
 static inline int local_events_need_delivery_nomask(void)
 {
-    struct pending_irq *p = irq_to_pending(current, VGIC_IRQ_EVTCHN_CALLBACK);
+    struct pending_irq *p = irq_to_pending(current,
+                                           current->domain->arch.evtchn_irq);
 
     /* XXX: if the first interrupt has already been delivered, we should
      * check whether any other interrupts with priority higher than the
@@ -31,15 +38,10 @@ static inline int local_events_need_delivery_nomask(void)
 
 static inline int local_events_need_delivery(void)
 {
-    struct cpu_user_regs *regs = guest_cpu_user_regs();
-
-    /* guest IRQs are masked */
-    if ( (regs->cpsr & PSR_IRQ_MASK) )
+    if ( !vcpu_event_delivery_is_enabled(current) )
         return 0;
     return local_events_need_delivery_nomask();
 }
-
-int local_event_delivery_is_enabled(void);
 
 static inline void local_event_delivery_enable(void)
 {

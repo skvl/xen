@@ -74,7 +74,7 @@ xc_cpupoolinfo_t *xc_cpupool_getinfo(xc_interface *xch,
     DECLARE_HYPERCALL_BUFFER(uint8_t, local);
 
     local_size = xc_get_cpumap_size(xch);
-    if (!local_size)
+    if (local_size <= 0)
     {
         PERROR("Could not get number of cpus");
         return NULL;
@@ -104,6 +104,7 @@ xc_cpupoolinfo_t *xc_cpupool_getinfo(xc_interface *xch,
     info->cpumap = xc_cpumap_alloc(xch);
     if (!info->cpumap) {
         free(info);
+        info = NULL;
         goto out;
     }
     info->cpupool_id = sysctl.u.cpupool_op.cpupool_id;
@@ -172,7 +173,7 @@ xc_cpumap_t xc_cpupool_freeinfo(xc_interface *xch)
     DECLARE_HYPERCALL_BUFFER(uint8_t, local);
 
     mapsize = xc_get_cpumap_size(xch);
-    if (mapsize == 0)
+    if (mapsize <= 0)
         return NULL;
 
     local = xc_hypercall_buffer_alloc(xch, local, mapsize);

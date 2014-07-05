@@ -64,6 +64,10 @@
 #define PMU_FIXED_WIDTH_BITS     8  /* 8 bits 5..12 */
 #define PMU_FIXED_WIDTH_MASK     (((1 << PMU_FIXED_WIDTH_BITS) -1) << PMU_FIXED_WIDTH_SHIFT)
 
+/* Alias registers (0x4c1) for full-width writes to PMCs */
+#define MSR_PMC_ALIAS_MASK       (~(MSR_IA32_PERFCTR0 ^ MSR_IA32_A_PERFCTR0))
+static bool_t __read_mostly full_width_write;
+
 /*
  * QUIRK to workaround an issue on various family 6 cpus.
  * The issue leads to endless PMC interrupt loops on the processor.
@@ -195,6 +199,7 @@ static int core2_get_bitwidth_fix_count(void)
 static int is_core2_vpmu_msr(u32 msr_index, int *type, int *index)
 {
     int i;
+    u32 msr_index_pmc;
 
     for ( i = 0; i < core2_fix_counters.num; i++ )
     {
@@ -224,11 +229,12 @@ static int is_core2_vpmu_msr(u32 msr_index, int *type, int *index)
         return 1;
     }
 
-    if ( (msr_index >= MSR_IA32_PERFCTR0) &&
-         (msr_index < (MSR_IA32_PERFCTR0 + core2_get_pmc_count())) )
+    msr_index_pmc = msr_index & MSR_PMC_ALIAS_MASK;
+    if ( (msr_index_pmc >= MSR_IA32_PERFCTR0) &&
+         (msr_index_pmc < (MSR_IA32_PERFCTR0 + core2_get_pmc_count())) )
     {
         *type = MSR_TYPE_ARCH_COUNTER;
-        *index = msr_index - MSR_IA32_PERFCTR0;
+        *index = msr_index_pmc - MSR_IA32_PERFCTR0;
         return 1;
     }
 
@@ -259,6 +265,13 @@ static void core2_vpmu_set_msr_bitmap(unsigned long *msr_bitmap)
         clear_bit(msraddr_to_bitpos(MSR_IA32_PERFCTR0+i), msr_bitmap);
         clear_bit(msraddr_to_bitpos(MSR_IA32_PERFCTR0+i),
                   msr_bitmap + 0x800/BYTES_PER_LONG);
+
+        if ( full_width_write )
+        {
+            clear_bit(msraddr_to_bitpos(MSR_IA32_A_PERFCTR0 + i), msr_bitmap);
+            clear_bit(msraddr_to_bitpos(MSR_IA32_A_PERFCTR0 + i),
+                      msr_bitmap + 0x800/BYTES_PER_LONG);
+        }
     }
 
     /* Allow Read PMU Non-global Controls Directly. */
@@ -283,7 +296,15 @@ static void core2_vpmu_unset_msr_bitmap(unsigned long *msr_bitmap)
         set_bit(msraddr_to_bitpos(MSR_IA32_PERFCTR0+i), msr_bitmap);
         set_bit(msraddr_to_bitpos(MSR_IA32_PERFCTR0+i),
                 msr_bitmap + 0x800/BYTES_PER_LONG);
+
+        if ( full_width_write )
+        {
+            set_bit(msraddr_to_bitpos(MSR_IA32_A_PERFCTR0 + i), msr_bitmap);
+            set_bit(msraddr_to_bitpos(MSR_IA32_A_PERFCTR0 + i),
+                      msr_bitmap + 0x800/BYTES_PER_LONG);
+        }
     }
+
     for ( i = 0; i < core2_ctrls.num; i++ )
         set_bit(msraddr_to_bitpos(core2_ctrls.msr[i]), msr_bitmap);
     for ( i = 0; i < core2_get_pmc_count(); i++ )
@@ -322,13 +343,18 @@ static int core2_vpmu_save(struct vcpu *v)
 
 static inline void __core2_vpmu_load(struct vcpu *v)
 {
-    int i;
+    unsigned int i, pmc_start;
     struct core2_vpmu_context *core2_vpmu_cxt = vcpu_vpmu(v)->context;
 
     for ( i = 0; i < core2_fix_counters.num; i++ )
         wrmsrl(core2_fix_counters.msr[i], core2_vpmu_cxt->fix_counters[i]);
+
+    if ( full_width_write )
+        pmc_start = MSR_IA32_A_PERFCTR0;
+    else
+        pmc_start = MSR_IA32_PERFCTR0;
     for ( i = 0; i < core2_get_pmc_count(); i++ )
-        wrmsrl(MSR_IA32_PERFCTR0+i, core2_vpmu_cxt->arch_msr_pair[i].counter);
+        wrmsrl(pmc_start + i, core2_vpmu_cxt->arch_msr_pair[i].counter);
 
     for ( i = 0; i < core2_ctrls.num; i++ )
         wrmsrl(core2_ctrls.msr[i], core2_vpmu_cxt->ctrls[i]);
@@ -652,11 +678,11 @@ static void core2_vpmu_do_cpuid(unsigned int input,
 }
 
 /* Dump vpmu info on console, called in the context of keyhandler 'q'. */
-static void core2_vpmu_dump(struct vcpu *v)
+static void core2_vpmu_dump(const struct vcpu *v)
 {
-    struct vpmu_struct *vpmu = vcpu_vpmu(v);
+    const struct vpmu_struct *vpmu = vcpu_vpmu(v);
     int i, num;
-    struct core2_vpmu_context *core2_vpmu_cxt = NULL;
+    const struct core2_vpmu_context *core2_vpmu_cxt = NULL;
     u64 val;
 
     if ( !vpmu_is_set(vpmu, VPMU_CONTEXT_ALLOCATED) )
@@ -664,7 +690,7 @@ static void core2_vpmu_dump(struct vcpu *v)
 
     if ( !vpmu_is_set(vpmu, VPMU_RUNNING) )
     {
-        if ( vpmu_set(vpmu, VPMU_CONTEXT_LOADED) )
+        if ( vpmu_is_set(vpmu, VPMU_CONTEXT_LOADED) )
             printk("    vPMU loaded\n");
         else
             printk("    vPMU allocated\n");
@@ -677,10 +703,11 @@ static void core2_vpmu_dump(struct vcpu *v)
     /* Print the contents of the counter and its configuration msr. */
     for ( i = 0; i < num; i++ )
     {
-        struct arch_msr_pair* msr_pair = core2_vpmu_cxt->arch_msr_pair;
+        const struct arch_msr_pair *msr_pair = core2_vpmu_cxt->arch_msr_pair;
+
         if ( core2_vpmu_cxt->pmu_enable->arch_pmc_enable[i] )
             printk("      general_%d: 0x%016lx ctrl: 0x%016lx\n",
-                             i, msr_pair[i].counter, msr_pair[i].control);
+                   i, msr_pair[i].counter, msr_pair[i].control);
     }
     /*
      * The configuration of the fixed counter is 4 bits each in the
@@ -690,9 +717,9 @@ static void core2_vpmu_dump(struct vcpu *v)
     for ( i = 0; i < core2_fix_counters.num; i++ )
     {
         if ( core2_vpmu_cxt->pmu_enable->fixed_ctr_enable[i] )
-            printk("      fixed_%d:   0x%016lx ctrl: 0x%lx\n",
-                             i, core2_vpmu_cxt->fix_counters[i],
-                             val & FIXED_CTR_CTRL_MASK);
+            printk("      fixed_%d:   0x%016lx ctrl: %#lx\n",
+                   i, core2_vpmu_cxt->fix_counters[i],
+                   val & FIXED_CTR_CTRL_MASK);
         val >>= FIXED_CTR_CTRL_BITS;
     }
 }
@@ -716,7 +743,7 @@ static int core2_vpmu_do_interrupt(struct cpu_user_regs *regs)
     else
     {
         /* No PMC overflow but perhaps a Trace Message interrupt. */
-        msr_content = __vmread(GUEST_IA32_DEBUGCTL);
+        __vmread(GUEST_IA32_DEBUGCTL, &msr_content);
         if ( !(msr_content & IA32_DEBUGCTLMSR_TR) )
             return 0;
     }
@@ -855,6 +882,11 @@ int vmx_vpmu_initialise(struct vcpu *v, unsigned int vpmu_flags)
 
     if ( family == 6 )
     {
+        u64 caps;
+
+        rdmsrl(MSR_IA32_PERF_CAPABILITIES, caps);
+        full_width_write = (caps >> 13) & 1;
+
         switch ( cpu_model )
         {
         /* Core2: */
@@ -878,7 +910,12 @@ int vmx_vpmu_initialise(struct vcpu *v, unsigned int vpmu_flags)
 
         case 0x3a: /* IvyBridge */
         case 0x3e: /* IvyBridge EP */
-        case 0x3c: /* Haswell */
+
+        /* Haswell: */
+        case 0x3c:
+        case 0x3f:
+        case 0x45:
+        case 0x46:
             ret = core2_vpmu_initialise(v, vpmu_flags);
             if ( !ret )
                 vpmu->arch_vpmu_ops = &core2_vpmu_ops;

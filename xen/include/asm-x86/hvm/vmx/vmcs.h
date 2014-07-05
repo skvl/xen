@@ -118,8 +118,8 @@ struct arch_vmx_struct {
     unsigned int         host_msr_count;
     struct vmx_msr_entry *host_msr_area;
 
-    uint32_t             eoi_exitmap_changed;
-    uint64_t             eoi_exit_bitmap[4];
+    unsigned long        eoi_exitmap_changed;
+    DECLARE_BITMAP(eoi_exit_bitmap, NR_VECTORS);
     struct pi_desc       pi_desc;
 
     unsigned long        host_cr0;
@@ -144,6 +144,7 @@ struct arch_vmx_struct {
 int vmx_create_vmcs(struct vcpu *v);
 void vmx_destroy_vmcs(struct vcpu *v);
 void vmx_vmcs_enter(struct vcpu *v);
+bool_t __must_check vmx_vmcs_try_enter(struct vcpu *v);
 void vmx_vmcs_exit(struct vcpu *v);
 
 #define CPU_BASED_VIRTUAL_INTR_PENDING        0x00000004
@@ -209,8 +210,6 @@ extern u32 vmx_vmentry_control;
 #define SECONDARY_EXEC_ENABLE_INVPCID           0x00001000
 #define SECONDARY_EXEC_ENABLE_VMCS_SHADOWING    0x00004000
 extern u32 vmx_secondary_exec_control;
-
-extern bool_t cpu_has_vmx_ins_outs_instr_info;
 
 #define VMX_EPT_EXEC_ONLY_SUPPORTED             0x00000001
 #define VMX_EPT_WALK_LENGTH_4_SUPPORTED         0x00000040
@@ -278,11 +277,21 @@ extern bool_t cpu_has_vmx_ins_outs_instr_info;
 #define VMX_INTR_SHADOW_SMI             0x00000004
 #define VMX_INTR_SHADOW_NMI             0x00000008
 
+#define VMX_BASIC_REVISION_MASK         0x7fffffff
+#define VMX_BASIC_VMCS_SIZE_MASK        (0x1fffULL << 32)
+#define VMX_BASIC_32BIT_ADDRESSES       (1ULL << 48)
+#define VMX_BASIC_DUAL_MONITOR          (1ULL << 49)
+#define VMX_BASIC_MEMORY_TYPE_MASK      (0xfULL << 50)
+#define VMX_BASIC_INS_OUT_INFO          (1ULL << 54)
 /* 
  * bit 55 of IA32_VMX_BASIC MSR, indicating whether any VMX controls that
  * default to 1 may be cleared to 0.
  */
 #define VMX_BASIC_DEFAULT1_ZERO		(1ULL << 55)
+
+extern u64 vmx_basic_msr;
+#define cpu_has_vmx_ins_outs_instr_info \
+    (!!(vmx_basic_msr & VMX_BASIC_INS_OUT_INFO))
 
 /* Guest interrupt status */
 #define VMX_GUEST_INTR_STATUS_SUBFIELD_BITMASK  0x0FF
@@ -331,13 +340,7 @@ enum vmcs_field {
     EPT_POINTER                     = 0x0000201a,
     EPT_POINTER_HIGH                = 0x0000201b,
     EOI_EXIT_BITMAP0                = 0x0000201c,
-    EOI_EXIT_BITMAP0_HIGH           = 0x0000201d,
-    EOI_EXIT_BITMAP1                = 0x0000201e,
-    EOI_EXIT_BITMAP1_HIGH           = 0x0000201f,
-    EOI_EXIT_BITMAP2                = 0x00002020,
-    EOI_EXIT_BITMAP2_HIGH           = 0x00002021,
-    EOI_EXIT_BITMAP3                = 0x00002022,
-    EOI_EXIT_BITMAP3_HIGH           = 0x00002023,
+#define EOI_EXIT_BITMAP(n) (EOI_EXIT_BITMAP0 + (n) * 2) /* n = 0...3 */
     VMREAD_BITMAP                   = 0x00002026,
     VMREAD_BITMAP_HIGH              = 0x00002027,
     VMWRITE_BITMAP                  = 0x00002028,
