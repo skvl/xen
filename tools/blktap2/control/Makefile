@@ -1,10 +1,7 @@
 XEN_ROOT := $(CURDIR)/../../../
 include $(XEN_ROOT)/tools/Rules.mk
 
-MAJOR              = 1.0
-MINOR              = 0
 LIBNAME            = libblktapctl
-LIBSONAME          = $(LIBNAME).so.$(MAJOR)
 
 IBIN               = tap-ctl
 
@@ -38,11 +35,11 @@ OBJS = $(CTL_OBJS) tap-ctl.o
 PICS = $(CTL_PICS)
 
 LIB_STATIC = $(LIBNAME).a
-LIB_SHARED = $(LIBSONAME).$(MINOR)
+LIB_SHARED = $(LIBNAME).so
 IBIN = tap-ctl
 
 PKG_CONFIG := xenblktapctl.pc
-PKG_CONFIG_VERSION := $(MAJOR).$(MINOR)
+PKG_CONFIG_VERSION := $(PACKAGE_VERSION)
 
 ifneq ($(CONFIG_LIBXC_MINIOS),y)
 PKG_CONFIG_INST := $(PKG_CONFIG)
@@ -62,43 +59,34 @@ all: build
 
 build: $(IBIN) $(LIB_STATIC) $(LIB_SHARED) $(PKG_CONFIG_INST) $(PKG_CONFIG_LOCAL)
 
-$(LIBNAME).so: $(LIBSONAME)
-	ln -sf $< $@
-
-$(LIBSONAME): $(LIB_SHARED)
-	ln -sf $< $@
-
 tap-ctl: tap-ctl.o $(LIBNAME).so
-	$(CC) $(LDFLAGS) -o $@ $^ $(APPEND_LDFLAGS)
+	$(CC) $(LDFLAGS) $(call LDFLAGS_RPATH,../lib) -o $@ $^ $(APPEND_LDFLAGS)
 
 $(LIB_STATIC): $(CTL_OBJS)
 	$(AR) r $@ $^
 
 $(LIB_SHARED): $(CTL_PICS)
-	$(CC) $(LDFLAGS) -fPIC  -Wl,$(SONAME_LDFLAG) -Wl,$(LIBSONAME) $(SHLIB_LDFLAGS) -rdynamic $^ -o $@  $(APPEND_LDFLAGS)
+	$(CC) $(LDFLAGS) -fPIC  $(SHLIB_LDFLAGS) -rdynamic $^ -o $@  $(APPEND_LDFLAGS)
 
 install: build
-	$(INSTALL_DIR) -p $(DESTDIR)$(sbindir)
-	$(INSTALL_PROG) $(IBIN) $(DESTDIR)$(sbindir)
+	$(INSTALL_DIR) -p $(DESTDIR)$(libdir)
+	$(INSTALL_DIR) -p $(DESTDIR)$(LIBEXEC_BIN)
+	$(INSTALL_DIR) -p $(DESTDIR)$(LIBEXEC_LIB)
+	$(INSTALL_PROG) $(IBIN) $(DESTDIR)$(LIBEXEC_BIN)
 	$(INSTALL_DATA) $(LIB_STATIC) $(DESTDIR)$(libdir)
-	$(INSTALL_PROG) $(LIB_SHARED) $(DESTDIR)$(libdir)
-	ln -sf $(LIBSONAME) $(DESTDIR)$(libdir)/$(LIBNAME).so
-	ln -sf $(LIB_SHARED) $(DESTDIR)$(libdir)/$(LIBSONAME)
+	$(INSTALL_PROG) $(LIB_SHARED) $(DESTDIR)$(LIBEXEC_LIB)
 	$(INSTALL_DATA) xenblktapctl.pc $(DESTDIR)$(PKG_INSTALLDIR)
 
 clean:
 	rm -f $(OBJS) $(PICS) $(DEPS_RM) $(IBIN) $(LIB_STATIC) $(LIB_SHARED)
-	rm -f $(LIBNAME).so $(LIBSONAME)
 	rm -f *~
 	rm -f xenblktapctl.pc
 
 uninstall:
 	rm -f $(DESTDIR)$(PKG_INSTALLDIR)/xenblktapctl.pc
-	rm -f $(DESTDIR)$(libdir)/$(LIBSONAME)
-	rm -f $(DESTDIR)$(libdir)/$(LIBNAME).so
-	rm -f $(addprefix $(DESTDIR)$(libdir)/, $(LIB_SHARED))
+	rm -f $(addprefix $(DESTDIR)$(LIBEXEC_LIB)/, $(LIB_SHARED))
 	rm -f $(addprefix $(DESTDIR)$(libdir)/, $(LIB_STATIC))
-	rm -f $(addprefix $(DESTDIR)$(sbindir)/, $(IBIN))
+	rm -f $(addprefix $(DESTDIR)$(LIBEXEC_BIN)/, $(IBIN))
 
 distclean: clean
 
