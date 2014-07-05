@@ -19,7 +19,9 @@ all install xentop:
 else
 
 CFLAGS += -DGCC_PRINTF -Wall -Werror $(CFLAGS_libxenstat)
+LDFLAGS += $(call LDFLAGS_RPATH,../lib)
 LDLIBS += $(LDLIBS_libxenstat) $(CURSES_LIBS) $(SOCKET_LIBS)
+LDLIBS += $(LDLIBS_libxenctrl) $(LDLIBS_libxenstore)
 CFLAGS += -DHOST_$(XEN_OS)
 
 # Include configure output (config.h) to headers search path
