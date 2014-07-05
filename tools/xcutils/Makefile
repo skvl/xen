@@ -19,6 +19,8 @@ CFLAGS += -Werror
 CFLAGS_readnotes.o  := $(CFLAGS_libxenevtchn) $(CFLAGS_libxenctrl) $(CFLAGS_libxenguest) -I$(XEN_ROOT)/tools/libxc $(CFLAGS_libxencall)
 CFLAGS_lsevtchn.o   := $(CFLAGS_libxenevtchn) $(CFLAGS_libxenctrl)
 
+APPEND_LDFLAGS += $(call LDFLAGS_RPATH,../lib)
+
 .PHONY: all
 all: build
 
