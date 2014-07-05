@@ -8,6 +8,7 @@ CFLAGS += $(CFLAGS_libxenctrl)
 LDLIBS += $(LDLIBS_libxenevtchn)
 LDLIBS += $(LDLIBS_libxenctrl)
 LDLIBS += $(ARGP_LDFLAGS)
+LDFLAGS += $(call LDFLAGS_RPATH,../lib)
 
 BIN-$(CONFIG_X86) = xenalyze
 BIN      = $(BIN-y)
@@ -23,15 +24,9 @@ build: $(BIN) $(SBIN) $(LIBBIN)
 
 .PHONY: install
 install: build
-	$(INSTALL_DIR) $(DESTDIR)$(bindir)
-	$(INSTALL_DIR) $(DESTDIR)$(sbindir)
-	[ -z "$(LIBBIN)" ] || $(INSTALL_DIR) $(DESTDIR)$(LIBEXEC_BIN)
-ifneq ($(BIN),)
-	$(INSTALL_PROG) $(BIN) $(DESTDIR)$(bindir)
-endif
-	$(INSTALL_PROG) $(SBIN) $(DESTDIR)$(sbindir)
-	$(INSTALL_PYTHON_PROG) $(SCRIPTS) $(DESTDIR)$(bindir)
-	[ -z "$(LIBBIN)" ] || $(INSTALL_PROG) $(LIBBIN) $(DESTDIR)$(LIBEXEC_BIN)
+	$(INSTALL_DIR) $(DESTDIR)$(LIBEXEC_BIN)
+	$(INSTALL_PROG) $(BIN) $(SBIN) $(LIBBIN) $(DESTDIR)$(LIBEXEC_BIN)
+	$(INSTALL_PYTHON_PROG) $(SCRIPTS) $(DESTDIR)$(LIBEXEC_BIN)
 
 .PHONY: clean
 clean:
