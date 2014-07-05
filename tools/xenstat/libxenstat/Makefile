@@ -53,7 +53,7 @@ $(SHLIB): $(OBJECTS-y)
 install: all
 	$(INSTALL_DATA) src/xenstat.h $(DESTDIR)$(INCLUDEDIR)
 	$(INSTALL_DATA) $(LIB) $(DESTDIR)$(LIBDIR)/libxenstat.a
-	$(INSTALL_PROG) src/libxenstat.so $(DESTDIR)$(LIBDIR)
+	$(INSTALL_PROG) src/libxenstat.so $(DESTDIR)$(PRIVATE_LIBDIR)
 
 PYLIB=bindings/swig/python/_xenstat.so
 PYMOD=bindings/swig/python/xenstat.py
