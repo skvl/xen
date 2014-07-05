@@ -51,6 +51,7 @@ $(SHLIB): $(OBJECTS-y)
 
 .PHONY: install
 install: all
+	$(INSTALL_DIR) $(DESTDIR)$(LIBDIR) $(DESTDIR)$(PRIVATE_LIBDIR)
 	$(INSTALL_DATA) src/xenstat.h $(DESTDIR)$(INCLUDEDIR)
 	$(INSTALL_DATA) $(LIB) $(DESTDIR)$(LIBDIR)/libxenstat.a
 	$(INSTALL_PROG) src/libxenstat.so $(DESTDIR)$(PRIVATE_LIBDIR)
