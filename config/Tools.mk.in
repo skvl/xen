@@ -24,6 +24,9 @@ BCC                 := @BCC@
 IASL                := @IASL@
 FETCHER             := @FETCHER@
 
+CFLAGS              += @CFLAGS@
+CPPFLAGS            += @CPPFLAGS@
+
 # Extra folder for libs/includes
 PREPEND_INCLUDES    := @PREPEND_INCLUDES@
 PREPEND_LIB         := @PREPEND_LIB@

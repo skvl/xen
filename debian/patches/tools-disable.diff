@@ -1,0 +1,55 @@
+--- a/tools/Makefile
++++ b/tools/Makefile
+@@ -1,10 +1,6 @@
+ XEN_ROOT = $(CURDIR)/..
+ include $(XEN_ROOT)/tools/Rules.mk
+ 
+-ifneq ($(CONFIG_SYSTEM_LIBAIO),y)
+-SUBDIRS-libaio := libaio
+-endif
+-
+ SUBDIRS-y :=
+ SUBDIRS-y += include
+ SUBDIRS-y += libxc
+@@ -19,14 +15,7 @@
+ SUBDIRS-y += console
+ SUBDIRS-y += xenmon
+ SUBDIRS-y += xenstat
+-SUBDIRS-$(CONFIG_Linux) += $(SUBDIRS-libaio)
+ SUBDIRS-$(CONFIG_Linux) += memshr 
+-ifeq ($(CONFIG_X86),y)
+-SUBDIRS-$(CONFIG_Linux) += blktap
+-endif
+-SUBDIRS-$(CONFIG_Linux) += blktap2
+-SUBDIRS-$(CONFIG_NetBSD) += $(SUBDIRS-libaio)
+-SUBDIRS-$(CONFIG_NetBSD) += blktap2
+ SUBDIRS-$(CONFIG_NetBSD) += xenbackendd
+ SUBDIRS-y += libfsimage
+ SUBDIRS-$(LIBXENAPI_BINDINGS) += libxen
+@@ -34,9 +23,12 @@
+ 
+ # do not recurse in to a dir we are about to delete
+ ifneq "$(MAKECMDGOALS)" "distclean"
++CONFIG_QEMU = $(CURDIR)/../qemu
++ifneq ($(wildcard $(CONFIG_QEMU)),)
+ SUBDIRS-$(CONFIG_IOEMU) += qemu-xen-traditional-dir
+ SUBDIRS-$(CONFIG_IOEMU) += qemu-xen-dir
+ endif
++endif
+ 
+ SUBDIRS-y += xenpmd
+ SUBDIRS-y += libxl
+--- a/tools/Rules.mk
++++ b/tools/Rules.mk
+@@ -41,11 +41,7 @@
+ LDLIBS_libxenvchan = $(SHLIB_libxenctrl) $(SHLIB_libxenstore) -L$(XEN_LIBVCHAN) -lxenvchan
+ SHLIB_libxenvchan  = -Wl,-rpath-link=$(XEN_LIBVCHAN)
+ 
+-ifeq ($(CONFIG_Linux),y)
+-LIBXL_BLKTAP ?= y
+-else
+ LIBXL_BLKTAP ?= n
+-endif
+ 
+ ifeq ($(LIBXL_BLKTAP),y)
+ CFLAGS_libblktapctl = -I$(XEN_BLKTAP2)/control -I$(XEN_BLKTAP2)/include $(CFLAGS_xeninclude)

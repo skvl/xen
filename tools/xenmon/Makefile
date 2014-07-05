@@ -13,9 +13,14 @@
 XEN_ROOT=$(CURDIR)/../..
 include $(XEN_ROOT)/tools/Rules.mk
 
+DEFAULT_PYTHON_PATH := $(shell $(XEN_ROOT)/tools/python/get-path)
+PYTHON_PATH ?= $(DEFAULT_PYTHON_PATH)
+INSTALL_PYTHON_PROG = $(XEN_ROOT)/tools/python/install-wrap "$(PYTHON_PATH)" $(INSTALL_PROG)
+
 CFLAGS  += -Werror
 CFLAGS  += $(CFLAGS_libxenctrl)
 LDLIBS  += $(LDLIBS_libxenctrl)
+LDFLAGS += $(call LDFLAGS_RPATH,../lib)
 
 SCRIPTS = xenmon.py
 
@@ -27,10 +32,10 @@ build: xentrace_setmask xenbaked
 
 .PHONY: install
 install: build
-	$(INSTALL_DIR) $(DESTDIR)$(SBINDIR)
-	$(INSTALL_PROG) xenbaked $(DESTDIR)$(SBINDIR)/xenbaked
-	$(INSTALL_PROG) xentrace_setmask  $(DESTDIR)$(SBINDIR)/xentrace_setmask
-	$(INSTALL_PROG) xenmon.py  $(DESTDIR)$(SBINDIR)/xenmon.py
+	$(INSTALL_DIR) $(DESTDIR)$(PRIVATE_BINDIR)
+	$(INSTALL_PROG) xenbaked $(DESTDIR)$(PRIVATE_BINDIR)/xenbaked
+	$(INSTALL_PROG) xentrace_setmask  $(DESTDIR)$(PRIVATE_BINDIR)/xentrace_setmask
+	$(INSTALL_PYTHON_PROG) xenmon.py  $(DESTDIR)$(PRIVATE_BINDIR)/xenmon
 	$(INSTALL_DIR) $(DESTDIR)$(DOCDIR)
 	$(INSTALL_DATA) README $(DESTDIR)$(DOCDIR)/README.xenmon
 

@@ -1,8 +1,9 @@
 #define XEN_COMPILE_DATE	"@@date@@"
 #define XEN_COMPILE_TIME	"@@time@@"
-#define XEN_COMPILE_BY		"@@whoami@@"
-#define XEN_COMPILE_DOMAIN	"@@domain@@"
-#define XEN_COMPILE_HOST	"@@hostname@@"
+#define XEN_COMPILE_SYSTEM_DISTRIBUTION		"@@system_distribution@@"
+#define XEN_COMPILE_SYSTEM_MAINTAINER_DOMAIN	"@@system_maintainer_domain@@"
+#define XEN_COMPILE_SYSTEM_MAINTAINER_LOCAL	"@@system_maintainer_local@@"
+#define XEN_COMPILE_SYSTEM_VERSION		"@@system_version@@"
 #define XEN_COMPILER		"@@compiler@@"
 
 #define XEN_VERSION		@@version@@
@@ -10,4 +11,3 @@
 #define XEN_EXTRAVERSION	"@@extraversion@@"
 
 #define XEN_CHANGESET		"@@changeset@@"
-#define XEN_BANNER		\

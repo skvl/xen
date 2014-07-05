@@ -9,6 +9,8 @@ include $(XEN_ROOT)/Config.mk
 export _INSTALL := $(INSTALL)
 INSTALL = $(XEN_ROOT)/tools/cross-install
 
+LDFLAGS_RPATH = -Wl,-rpath,'$${ORIGIN}$(if $(1),/$(1))'
+
 XEN_INCLUDE        = $(XEN_ROOT)/tools/include
 XEN_LIBXC          = $(XEN_ROOT)/tools/libxc
 XEN_XENLIGHT       = $(XEN_ROOT)/tools/libxl
@@ -21,10 +23,12 @@ CFLAGS_xeninclude = -I$(XEN_INCLUDE)
 
 CFLAGS_libxenctrl = -I$(XEN_LIBXC) $(CFLAGS_xeninclude)
 LDLIBS_libxenctrl = $(XEN_LIBXC)/libxenctrl.so
+LDLIBS_libxenctrl_SYSTEM = -lxenctrl-$(XEN_VERSION)
 SHLIB_libxenctrl  = -Wl,-rpath-link=$(XEN_LIBXC)
 
 CFLAGS_libxenguest = -I$(XEN_LIBXC) $(CFLAGS_xeninclude)
 LDLIBS_libxenguest = $(XEN_LIBXC)/libxenguest.so
+LDLIBS_libxenguest_SYSTEM = -lxenguest-$(XEN_VERSION)
 SHLIB_libxenguest  = -Wl,-rpath-link=L$(XEN_LIBXC)
 
 CFLAGS_libxenstore = -I$(XEN_XENSTORE) $(CFLAGS_xeninclude)
@@ -39,11 +43,7 @@ CFLAGS_libxenvchan = -I$(XEN_LIBVCHAN)
 LDLIBS_libxenvchan = $(SHLIB_libxenctrl) $(SHLIB_libxenstore) -L$(XEN_LIBVCHAN) -lxenvchan
 SHLIB_libxenvchan  = -Wl,-rpath-link=$(XEN_LIBVCHAN)
 
-ifeq ($(CONFIG_Linux),y)
-LIBXL_BLKTAP ?= y
-else
 LIBXL_BLKTAP ?= n
-endif
 
 ifeq ($(LIBXL_BLKTAP),y)
 CFLAGS_libblktapctl = -I$(XEN_BLKTAP2)/control -I$(XEN_BLKTAP2)/include $(CFLAGS_xeninclude)

@@ -1,0 +1,82 @@
+From: Debian Xen Team <pkg-xen-devel@lists.alioth.debian.org>
+Date: Tue, 29 Nov 2011 11:45:27 +0000
+Subject: tools-ocaml-fix-build.diff
+
+Fix the build of the ocaml libraries
+
+Signed-off-by: Jon Ludlam <jonathan.ludlam@eu.citrix.com>
+---
+ tools/Rules.mk                     |    2 ++
+ tools/ocaml/Makefile.rules         |   10 ++--------
+ tools/ocaml/libs/eventchn/Makefile |    1 +
+ tools/ocaml/libs/xc/Makefile       |    3 ++-
+ tools/ocaml/xenstored/Makefile     |    4 +++-
+ 5 files changed, 10 insertions(+), 10 deletions(-)
+
+--- a/tools/Rules.mk
++++ b/tools/Rules.mk
+@@ -23,10 +23,12 @@
+ 
+ CFLAGS_libxenctrl = -I$(XEN_LIBXC) $(CFLAGS_xeninclude)
+ LDLIBS_libxenctrl = $(XEN_LIBXC)/libxenctrl.so
++LDLIBS_libxenctrl_SYSTEM = -lxenctrl-$(XEN_VERSION)
+ SHLIB_libxenctrl  = -Wl,-rpath-link=$(XEN_LIBXC)
+ 
+ CFLAGS_libxenguest = -I$(XEN_LIBXC) $(CFLAGS_xeninclude)
+ LDLIBS_libxenguest = $(XEN_LIBXC)/libxenguest.so
++LDLIBS_libxenguest_SYSTEM = -lxenguest-$(XEN_VERSION)
+ SHLIB_libxenguest  = -Wl,-rpath-link=L$(XEN_LIBXC)
+ 
+ CFLAGS_libxenstore = -I$(XEN_XENSTORE) $(CFLAGS_xeninclude)
+--- a/tools/ocaml/Makefile.rules
++++ b/tools/ocaml/Makefile.rules
+@@ -58,14 +58,8 @@
+ 
+ # define a library target <name>.cmxa and <name>.cma
+ define OCAML_LIBRARY_template
+- $(1).cmxa: lib$(1)_stubs.a $(foreach obj,$($(1)_OBJS),$(obj).cmx)
+-	$(call mk-caml-lib-native,$$@, -cclib -l$(1)_stubs $(foreach lib,$(LIBS_$(1)),-cclib $(lib)), $(foreach obj,$($(1)_OBJS),$(obj).cmx))
+- $(1).cma: $(foreach obj,$($(1)_OBJS),$(obj).cmo)
+-	$(call mk-caml-lib-bytecode,$$@, -dllib dll$(1)_stubs.so -cclib -l$(1)_stubs, $$+)
+- $(1)_stubs.a: $(foreach obj,$$($(1)_C_OBJS),$(obj).o)
+-	$(call mk-caml-stubs,$$@, $$+)
+- lib$(1)_stubs.a: $(foreach obj,$($(1)_C_OBJS),$(obj).o)
+-	$(call mk-caml-lib-stubs,$$@, $$+)
++ $(1).cma: $(foreach obj,$($(1)_OBJS),$(obj).cmx $(obj).cmo) $(foreach obj,$($(1)_C_OBJS),$(obj).o)
++	$(OCAMLMKLIB) -o $1 -oc $(1)_stubs $(foreach obj,$($(1)_OBJS),$(obj).cmx $(obj).cmo) $(foreach obj,$($(1)_C_OBJS),$(obj).o) $(foreach lib, $(LIBS_$(1)_SYSTEM), -cclib $(lib)) $(foreach arg,$(LIBS_$(1)),-ldopt $(arg))
+ endef
+ 
+ define OCAML_NOC_LIBRARY_template
+--- a/tools/ocaml/libs/eventchn/Makefile
++++ b/tools/ocaml/libs/eventchn/Makefile
+@@ -9,6 +9,7 @@
+ LIBS = xeneventchn.cma xeneventchn.cmxa
+ 
+ LIBS_xeneventchn = $(LDLIBS_libxenctrl)
++LIBS_xeneventchn_SYSTEM = $(LDLIBS_libxenctrl_SYSTEM)
+ 
+ all: $(INTF) $(LIBS) $(PROGRAMS)
+ 
+--- a/tools/ocaml/libs/xc/Makefile
++++ b/tools/ocaml/libs/xc/Makefile
+@@ -10,6 +10,7 @@
+ LIBS = xenctrl.cma xenctrl.cmxa
+ 
+ LIBS_xenctrl = $(LDLIBS_libxenctrl) $(LDLIBS_libxenguest)
++LIBS_xenctrl_SYSTEM = $(LDLIBS_libxenctrl_SYSTEM) $(LDLIBS_libxenguest_SYSTEM)
+ 
+ xenctrl_OBJS = $(OBJS)
+ xenctrl_C_OBJS = xenctrl_stubs
+--- a/tools/ocaml/xenstored/Makefile
++++ b/tools/ocaml/xenstored/Makefile
+@@ -43,7 +43,9 @@
+ 	-ccopt -L -ccopt $(OCAML_TOPLEVEL)/libs/eventchn $(OCAML_TOPLEVEL)/libs/eventchn/xeneventchn.cmxa \
+ 	-ccopt -L -ccopt $(OCAML_TOPLEVEL)/libs/xc $(OCAML_TOPLEVEL)/libs/xc/xenctrl.cmxa \
+ 	-ccopt -L -ccopt $(OCAML_TOPLEVEL)/libs/xb $(OCAML_TOPLEVEL)/libs/xb/xenbus.cmxa \
+-	-ccopt -L -ccopt $(XEN_ROOT)/tools/libxc
++	-ccopt -L -ccopt $(XEN_ROOT)/tools/libxc \
++	$(foreach obj, $(LDLIBS_libxenctrl), -ccopt $(obj)) \
++	$(foreach obj, $(LDLIBS_libxenguest), -ccopt $(obj))
+ 
+ PROGRAMS = oxenstored
+ 

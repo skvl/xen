@@ -1,0 +1,16 @@
+Description: Export flags from configure
+Author: Bastian Blank <waldi@debian.org>
+Origin: vendor
+Forwarded: not-needed
+--- a/config/Tools.mk.in
++++ b/config/Tools.mk.in
+@@ -24,6 +24,9 @@
+ IASL                := @IASL@
+ FETCHER             := @FETCHER@
+ 
++CFLAGS              += @CFLAGS@
++CPPFLAGS            += @CPPFLAGS@
++
+ # Extra folder for libs/includes
+ PREPEND_INCLUDES    := @PREPEND_INCLUDES@
+ PREPEND_LIB         := @PREPEND_LIB@

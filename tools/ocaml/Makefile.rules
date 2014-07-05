@@ -58,14 +58,8 @@ mk-caml-lib-stubs = \
 
 # define a library target <name>.cmxa and <name>.cma
 define OCAML_LIBRARY_template
- $(1).cmxa: lib$(1)_stubs.a $(foreach obj,$($(1)_OBJS),$(obj).cmx)
-	$(call mk-caml-lib-native,$$@, -cclib -l$(1)_stubs $(foreach lib,$(LIBS_$(1)),-cclib $(lib)), $(foreach obj,$($(1)_OBJS),$(obj).cmx))
- $(1).cma: $(foreach obj,$($(1)_OBJS),$(obj).cmo)
-	$(call mk-caml-lib-bytecode,$$@, -dllib dll$(1)_stubs.so -cclib -l$(1)_stubs, $$+)
- $(1)_stubs.a: $(foreach obj,$$($(1)_C_OBJS),$(obj).o)
-	$(call mk-caml-stubs,$$@, $$+)
- lib$(1)_stubs.a: $(foreach obj,$($(1)_C_OBJS),$(obj).o)
-	$(call mk-caml-lib-stubs,$$@, $$+)
+ $(1).cma: $(foreach obj,$($(1)_OBJS),$(obj).cmx $(obj).cmo) $(foreach obj,$($(1)_C_OBJS),$(obj).o)
+	$(OCAMLMKLIB) -o $1 -oc $(1)_stubs $(foreach obj,$($(1)_OBJS),$(obj).cmx $(obj).cmo) $(foreach obj,$($(1)_C_OBJS),$(obj).o) $(foreach lib, $(LIBS_$(1)_SYSTEM), -cclib $(lib)) $(foreach arg,$(LIBS_$(1)),-ldopt $(arg))
 endef
 
 define OCAML_NOC_LIBRARY_template

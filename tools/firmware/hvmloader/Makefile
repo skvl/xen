@@ -39,7 +39,7 @@ CIRRUSVGA_DEBUG ?= n
 
 OVMF_DIR := ../ovmf
 ROMBIOS_DIR := ../rombios
-SEABIOS_DIR := ../seabios-dir
+SEABIOS_DIR := /usr/share/seabios
 
 ifeq ($(CONFIG_ROMBIOS),y)
 STDVGA_ROM    := ../vgabios/VGABIOS-lgpl-latest.bin
@@ -48,7 +48,7 @@ CIRRUSVGA_ROM := ../vgabios/VGABIOS-lgpl-latest.cirrus.debug.bin
 else
 CIRRUSVGA_ROM := ../vgabios/VGABIOS-lgpl-latest.cirrus.bin
 endif
-ETHERBOOT_ROMS := $(addprefix ../etherboot/ipxe/src/bin/, $(addsuffix .rom, $(ETHERBOOT_NICS)))
+ETHERBOOT_ROMS := $(addprefix /usr/lib/ipxe/, $(addsuffix .rom, $(ETHERBOOT_NICS)))
 endif
 
 ROMS := 
@@ -70,7 +70,7 @@ endif
 ifeq ($(CONFIG_SEABIOS),y)
 OBJS += seabios.o
 CFLAGS += -DENABLE_SEABIOS
-SEABIOS_ROM := $(SEABIOS_DIR)/out/bios.bin
+SEABIOS_ROM := $(SEABIOS_DIR)/bios.bin
 ROMS += $(SEABIOS_ROM)
 endif
 

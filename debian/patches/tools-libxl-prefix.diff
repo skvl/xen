@@ -1,0 +1,55 @@
+--- a/tools/libxl/Makefile
++++ b/tools/libxl/Makefile
+@@ -12,6 +12,8 @@
+ ifeq ($(CONFIG_Linux),y)
+ LIBUUID_LIBS += -luuid
+ endif
++LDFLAGS_XL = $(call LDFLAGS_RPATH,../lib)
++LDFLAGS_LIBXL = $(call LDFLAGS_RPATH)
+ 
+ LIBXL_LIBS =
+ LIBXL_LIBS = $(LDLIBS_libxenctrl) $(LDLIBS_libxenguest) $(LDLIBS_libxenstore) $(LDLIBS_libblktapctl) $(PTYFUNCS_LIBS) $(LIBUUID_LIBS)
+@@ -162,7 +164,7 @@
+ 	ln -sf $< $@
+ 
+ libxenlight-$(XEN_VERSION).so: $(LIBXL_OBJS)
+-	$(CC) $(LDFLAGS) -Wl,$(SONAME_LDFLAG),$@ $(SHLIB_LDFLAGS) -o $@ $^ $(LIBXL_LIBS) $(APPEND_LDFLAGS)
++	$(CC) $(LDFLAGS) -Wl,$(SONAME_LDFLAG),$@ $(LDFLAGS_LIBXL) $(SHLIB_LDFLAGS) -o $@ $^ $(LIBXL_LIBS) $(APPEND_LDFLAGS)
+ 
+ libxenlight.a: $(LIBXL_OBJS)
+ 	$(AR) rcs libxenlight.a $^
+@@ -177,7 +179,7 @@
+ 	$(AR) rcs libxlutil.a $^
+ 
+ xl: $(XL_OBJS) libxlutil.so libxenlight.so
+-	$(CC) $(LDFLAGS) -o $@ $(XL_OBJS) libxlutil.so $(LDLIBS_libxenlight) $(LDLIBS_libxenctrl) -lyajl $(APPEND_LDFLAGS)
++	$(CC) $(LDFLAGS) $(LDFLAGS_XL) -o $@ $(XL_OBJS) libxlutil.so $(LDLIBS_libxenlight) $(LDLIBS_libxenctrl) -lyajl $(APPEND_LDFLAGS)
+ 
+ libxl-save-helper: $(SAVE_HELPER_OBJS) libxenlight.so
+ 	$(CC) $(LDFLAGS) -o $@ $(SAVE_HELPER_OBJS) $(LDLIBS_libxenctrl) $(LDLIBS_libxenguest) $(APPEND_LDFLAGS)
+@@ -187,13 +189,12 @@
+ 
+ .PHONY: install
+ install: all
+-	$(INSTALL_DIR) $(DESTDIR)$(SBINDIR)
+ 	$(INSTALL_DIR) $(DESTDIR)$(LIBDIR)
+ 	$(INSTALL_DIR) $(DESTDIR)$(INCLUDEDIR)
+ 	$(INSTALL_DIR) $(DESTDIR)$(BASH_COMPLETION_DIR)
+ 	$(INSTALL_DIR) $(DESTDIR)$(XEN_RUN_DIR)
+ 	$(INSTALL_DIR) $(DESTDIR)$(PRIVATE_BINDIR)
+-	$(INSTALL_PROG) xl $(DESTDIR)$(SBINDIR)
++	$(INSTALL_PROG) xl $(DESTDIR)$(PRIVATE_BINDIR)
+ 	$(INSTALL_PROG) libxl-save-helper $(DESTDIR)$(PRIVATE_BINDIR)
+ 	$(INSTALL_PROG) libxenlight-$(XEN_VERSION).so $(DESTDIR)$(LIBDIR)
+ 	ln -sf libxenlight-$(XEN_VERSION).so $(DESTDIR)$(LIBDIR)/libxenlight.so
+--- a/tools/xenstat/libxenstat/Makefile
++++ b/tools/xenstat/libxenstat/Makefile
+@@ -53,7 +53,7 @@
+ install: all
+ 	$(INSTALL_DATA) src/xenstat.h $(DESTDIR)$(INCLUDEDIR)
+ 	$(INSTALL_DATA) $(LIB) $(DESTDIR)$(LIBDIR)/libxenstat.a
+-	$(INSTALL_PROG) src/libxenstat.so $(DESTDIR)$(LIBDIR)
++	$(INSTALL_PROG) src/libxenstat.so $(DESTDIR)$(PRIVATE_LIBDIR)
+ 
+ PYLIB=bindings/swig/python/_xenstat.so
+ PYMOD=bindings/swig/python/xenstat.py

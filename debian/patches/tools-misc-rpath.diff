@@ -1,0 +1,11 @@
+--- a/tools/misc/Makefile
++++ b/tools/misc/Makefile
+@@ -34,6 +34,8 @@
+ # Include configure output (config.h) to headers search path
+ CFLAGS += -I$(XEN_ROOT)/tools
+ 
++APPEND_LDFLAGS += $(call LDFLAGS_RPATH,../lib)
++
+ .PHONY: all
+ all: build
+ 

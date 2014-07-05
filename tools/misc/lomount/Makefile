@@ -11,7 +11,7 @@ build: lomount
 
 .PHONY: install
 install install-recurse: build
-	$(INSTALL_PROG) lomount $(SCRIPTS) $(DESTDIR)$(BINDIR)
+	$(INSTALL_PROG) lomount $(SCRIPTS) $(DESTDIR)$(PRIVATE_BINDIR)
 
 .PHONY: clean
 clean:
