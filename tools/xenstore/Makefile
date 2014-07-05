@@ -18,6 +18,8 @@ CFLAGS += -DXEN_RUN_STORED="\"$(XEN_RUN_STORED)\""
 CFLAGS  += $(CFLAGS-y)
 LDFLAGS += $(LDFLAGS-y)
 
+LDFLAGS_libxenctrl += $(call LDFLAGS_RPATH,../lib)
+
 CLIENTS := xenstore-exists xenstore-list xenstore-read xenstore-rm xenstore-chmod
 CLIENTS += xenstore-write xenstore-ls xenstore-watch
 
@@ -79,7 +81,7 @@ endif
 $(XENSTORED_OBJS): CFLAGS += $(CFLAGS_libxengnttab)
 
 xenstored: $(XENSTORED_OBJS)
-	$(CC) $^ $(LDFLAGS) $(LDLIBS_libxenevtchn) $(LDLIBS_libxengnttab) $(LDLIBS_libxenctrl) $(LDLIBS_xenstored) $(SOCKET_LIBS) -o $@ $(APPEND_LDFLAGS)
+	$(CC) $^ $(LDFLAGS) $(LDLIBS_libxenevtchn) $(LDLIBS_libxengnttab) $(LDLIBS_libxenctrl) $(LDLIBS_xenstored) $(SOCKET_LIBS) $(call LDFLAGS_RPATH,../lib) -o $@ $(APPEND_LDFLAGS)
 
 xenstored.a: $(XENSTORED_OBJS)
 	$(AR) cr $@ $^
@@ -158,13 +160,13 @@ tarball: clean
 install: all
 	$(INSTALL_DIR) $(DESTDIR)$(bindir)
 	$(INSTALL_DIR) $(DESTDIR)$(includedir)
+	$(INSTALL_DIR) $(DESTDIR)$(LIBEXEC_BIN)
 	$(INSTALL_DIR) $(DESTDIR)$(includedir)/xenstore-compat
 ifeq ($(XENSTORE_XENSTORED),y)
-	$(INSTALL_DIR) $(DESTDIR)$(sbindir)
 	$(INSTALL_DIR) $(DESTDIR)$(XEN_LIB_STORED)
-	$(INSTALL_PROG) xenstored $(DESTDIR)$(sbindir)
+	$(INSTALL_PROG) xenstored $(DESTDIR)$(LIBEXEC_BIN)
 endif
-	$(INSTALL_PROG) xenstore-control $(DESTDIR)$(bindir)
+	$(INSTALL_PROG) xenstore-control $(DESTDIR)$(LIBEXEC_BIN)
 	$(INSTALL_PROG) xenstore $(DESTDIR)$(bindir)
 	set -e ; for c in $(CLIENTS) ; do \
 		ln -f $(DESTDIR)$(bindir)/xenstore $(DESTDIR)$(bindir)/$${c} ; \
@@ -197,9 +199,9 @@ uninstall:
 	rm -f $(DESTDIR)$(libdir)/libxenstore.so.$(MAJOR).$(MINOR)
 	rm -f $(addprefix $(DESTDIR)$(bindir)/, $(CLIENTS))
 	rm -f $(DESTDIR)$(bindir)/xenstore
-	rm -f $(DESTDIR)$(bindir)/xenstore-control
+	rm -f $(DESTDIR)$(LIBEXEC_BIN)/xenstore-control
 ifeq ($(XENSTORE_XENSTORED),y)
-	rm -f $(DESTDIR)$(sbindir)/xenstored
+	rm -f $(DESTDIR)$(LIBEXEC_BIN)/xenstored
 	if [ -d $(DESTDIR)$(XEN_LIB_STORED) ]; then \
 		rmdir --ignore-fail-on-non-empty $(DESTDIR)$(XEN_LIB_STORED); \
 	fi
