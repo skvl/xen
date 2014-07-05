@@ -695,45 +695,39 @@ def configure_image(vals):
         return None
     config_image = [ vals.builder ]
     if vals.kernel:
+        t = auxbin.path_boot(vals.kernel)
         if vals.bootloader:
             # If bootloader is specified, vals.kernel will be used
             # by bootloader when boots DomU. So it is needless to
             # check the path is existent or not.
-            config_image.append([ 'kernel', vals.kernel ])
-        elif os.path.dirname(vals.kernel) != "" and os.path.exists(vals.kernel):
             config_image.append([ 'kernel', vals.kernel ])
         elif vals.kernel == 'hvmloader':
             # Keep hvmloader w/o a path and let xend find it.
             # This allows guest migration to a Dom0 having different
             # xen install pathes.
             config_image.append([ 'kernel', vals.kernel ])
-        elif os.path.exists(os.path.abspath(vals.kernel)):
-            # Keep old behaviour, if path is valid.
-            config_image.append([ 'kernel', os.path.abspath(vals.kernel) ])
+        elif t:
+            config_image.append([ 'kernel', t ])
         else:
             raise ValueError('Cannot find kernel "%s"' % vals.kernel)
     if vals.ramdisk:
+        t = auxbin.path_boot(vals.ramdisk)
         if vals.bootloader:
             # Same with 'kernel' above
             config_image.append([ 'ramdisk', vals.ramdisk ])
-        elif os.path.dirname(vals.ramdisk) != "" and os.path.exists(vals.ramdisk):
-            config_image.append([ 'ramdisk', vals.ramdisk ])
-        elif os.path.exists(os.path.abspath(vals.ramdisk)):
-            # Keep old behaviour, if path is valid.
-            config_image.append([ 'ramdisk', os.path.abspath(vals.ramdisk) ])
+        elif t:
+            config_image.append([ 'ramdisk', t ])
         else:
             raise ValueError('Cannot find ramdisk "%s"' % vals.ramdisk)
     if vals.loader:
-        if os.path.dirname(vals.loader) != "" and os.path.exists(vals.loader):
-            config_image.append([ 'loader', vals.loader ])
-        elif vals.loader == 'hvmloader':
+        t = auxbin.path_boot(vals.loader)
+        if vals.loader == 'hvmloader':
             # Keep hvmloader w/o a path and let xend find it.
             # This allows guest migration to a Dom0 having different
             # xen install pathes.
             config_image.append([ 'loader', vals.loader ])
-        elif os.path.exists(os.path.abspath(vals.loader)):
-            # Keep old behaviour, if path is valid.
-            config_image.append([ 'loader', os.path.abspath(vals.loader) ])
+        elif t:
+            config_image.append([ 'loader', t ])
         else:
             raise ValueError('Cannot find loader "%s"' % vals.loader)
     if vals.cmdline_ip:
@@ -1032,7 +1026,7 @@ def configure_hvm(config_image, vals):
     args = [ 'acpi', 'apic',
              'boot',
              'cpuid', 'cpuid_check',
-             'device_model', 'display',
+             'display',
              'fda', 'fdb',
              'gfx_passthru', 'guest_os_type',
              'hap', 'hpet',
@@ -1054,6 +1048,8 @@ def configure_hvm(config_image, vals):
     for a in args:
         if a in vals.__dict__ and vals.__dict__[a] is not None:
             config_image.append([a, vals.__dict__[a]])
+    if vals.device_model:
+        config_image.append(['device_model', auxbin.path_bin(vals.device_model)])
     if vals.vncpasswd is not None:
         config_image.append(['vncpasswd', vals.vncpasswd])
 
@@ -1120,10 +1116,9 @@ def make_config(vals):
 
     config_image = configure_image(vals)
     if vals.bootloader:
-        if vals.bootloader == "pygrub":
-            vals.bootloader = auxbin.pathTo(vals.bootloader)
+        t = auxbin.path_boot(vals.bootloader)
 
-        config.append(['bootloader', vals.bootloader])
+        config.append(['bootloader', t])
         if vals.bootargs:
             config.append(['bootloader_args', vals.bootargs])
         else:
