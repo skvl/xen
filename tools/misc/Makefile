@@ -32,6 +32,8 @@ INSTALL_PRIVBIN := $(INSTALL_PRIVBIN-y)
 # Include configure output (config.h) to headers search path
 CFLAGS += -I$(XEN_ROOT)/tools
 
+APPEND_LDFLAGS += $(call LDFLAGS_RPATH,../lib)
+
 .PHONY: all
 all: build
 
