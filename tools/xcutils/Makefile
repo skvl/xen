@@ -20,6 +20,8 @@ CFLAGS_xc_save.o    := $(CFLAGS_libxenctrl) $(CFLAGS_libxenguest) $(CFLAGS_libxe
 CFLAGS_readnotes.o  := $(CFLAGS_libxenctrl) $(CFLAGS_libxenguest)
 CFLAGS_lsevtchn.o   := $(CFLAGS_libxenctrl)
 
+APPEND_LDFLAGS += $(call LDFLAGS_RPATH,../lib)
+
 .PHONY: all
 all: build
 
