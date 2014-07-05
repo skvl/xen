@@ -1,9 +1,6 @@
 XEN_ROOT = $(CURDIR)/../..
 include $(XEN_ROOT)/tools/Rules.mk
 
-MAJOR    = 4.6
-MINOR    = 0
-
 ifeq ($(CONFIG_LIBXC_MINIOS),y)
 # Save/restore of a domain is currently incompatible with a stubdom environment
 override CONFIG_MIGRATE := n
@@ -128,12 +125,12 @@ $(CTRL_PIC_OBJS) $(GUEST_PIC_OBJS) $(OSDEP_PIC_OBJS) : CFLAGS += -include $(XEN_
 
 LIB := libxenctrl.a
 ifneq ($(nosharedlibs),y)
-LIB += libxenctrl.so libxenctrl.so.$(MAJOR) libxenctrl.so.$(MAJOR).$(MINOR)
+LIB += libxenctrl.so libxenctrl-$(PACKAGE_VERSION).so
 endif
 
 LIB += libxenguest.a
 ifneq ($(nosharedlibs),y)
-LIB += libxenguest.so libxenguest.so.$(MAJOR) libxenguest.so.$(MAJOR).$(MINOR)
+LIB += libxenguest.so libxenguest-$(PACKAGE_VERSION).so
 endif
 
 ifneq ($(nosharedlibs),y)
@@ -162,15 +159,13 @@ libs: $(LIB)
 install: build
 	$(INSTALL_DIR) $(DESTDIR)$(libdir)
 	$(INSTALL_DIR) $(DESTDIR)$(includedir)
-	$(INSTALL_SHLIB) libxenctrl.so.$(MAJOR).$(MINOR) $(DESTDIR)$(libdir)
+	$(INSTALL_SHLIB) libxenctrl-$(PACKAGE_VERSION).so $(DESTDIR)$(libdir)
+	$(SYMLINK_SHLIB) libxenctrl-$(PACKAGE_VERSION).so $(DESTDIR)$(libdir)/libxenctrl.so
 	$(INSTALL_DATA) libxenctrl.a $(DESTDIR)$(libdir)
-	$(SYMLINK_SHLIB) libxenctrl.so.$(MAJOR).$(MINOR) $(DESTDIR)$(libdir)/libxenctrl.so.$(MAJOR)
-	$(SYMLINK_SHLIB) libxenctrl.so.$(MAJOR) $(DESTDIR)$(libdir)/libxenctrl.so
 	$(INSTALL_DATA) include/xenctrl.h include/xenctrlosdep.h include/xentoollog.h $(DESTDIR)$(includedir)
-	$(INSTALL_SHLIB) libxenguest.so.$(MAJOR).$(MINOR) $(DESTDIR)$(libdir)
+	$(INSTALL_SHLIB) libxenguest-$(PACKAGE_VERSION).so $(DESTDIR)$(libdir)
+	$(SYMLINK_SHLIB) libxenguest-$(PACKAGE_VERSION).so $(DESTDIR)$(libdir)/libxenguest.so
 	$(INSTALL_DATA) libxenguest.a $(DESTDIR)$(libdir)
-	$(SYMLINK_SHLIB) libxenguest.so.$(MAJOR).$(MINOR) $(DESTDIR)$(libdir)/libxenguest.so.$(MAJOR)
-	$(SYMLINK_SHLIB) libxenguest.so.$(MAJOR) $(DESTDIR)$(libdir)/libxenguest.so
 	$(INSTALL_DATA) include/xenguest.h $(DESTDIR)$(includedir)
 
 .PHONY: TAGS
@@ -203,22 +198,18 @@ rpm: build
 libxenctrl.a: $(CTRL_LIB_OBJS)
 	$(AR) rc $@ $^
 
-libxenctrl.so: libxenctrl.so.$(MAJOR)
-	$(SYMLINK_SHLIB) $< $@
-libxenctrl.so.$(MAJOR): libxenctrl.so.$(MAJOR).$(MINOR)
+libxenctrl.so: libxenctrl-$(PACKAGE_VERSION).so
 	$(SYMLINK_SHLIB) $< $@
 
-libxenctrl.so.$(MAJOR).$(MINOR): $(CTRL_PIC_OBJS)
-	$(CC) $(LDFLAGS) $(PTHREAD_LDFLAGS) -Wl,$(SONAME_LDFLAG) -Wl,libxenctrl.so.$(MAJOR) $(SHLIB_LDFLAGS) -o $@ $^ $(DLOPEN_LIBS) $(PTHREAD_LIBS) $(APPEND_LDFLAGS)
+libxenctrl-$(PACKAGE_VERSION).so: $(CTRL_PIC_OBJS)
+	$(CC) $(LDFLAGS) $(PTHREAD_LDFLAGS) -Wl,$(SONAME_LDFLAG),$@ $(SHLIB_LDFLAGS) -o $@ $^ $(DLOPEN_LIBS) $(PTHREAD_LIBS) $(APPEND_LDFLAGS)
 
 # libxenguest
 
 libxenguest.a: $(GUEST_LIB_OBJS)
 	$(AR) rc $@ $^
 
-libxenguest.so: libxenguest.so.$(MAJOR)
-	$(SYMLINK_SHLIB) $< $@
-libxenguest.so.$(MAJOR): libxenguest.so.$(MAJOR).$(MINOR)
+libxenguest.so: libxenguest-$(PACKAGE_VERSION).so
 	$(SYMLINK_SHLIB) $< $@
 
 ifeq ($(CONFIG_MiniOS),y)
@@ -230,9 +221,9 @@ endif
 xc_dom_bzimageloader.o: CFLAGS += $(call zlib-options,D)
 xc_dom_bzimageloader.opic: CFLAGS += $(call zlib-options,D)
 
-libxenguest.so.$(MAJOR).$(MINOR): COMPRESSION_LIBS = $(call zlib-options,l)
-libxenguest.so.$(MAJOR).$(MINOR): $(GUEST_PIC_OBJS) libxenctrl.so
-	$(CC) $(LDFLAGS) -Wl,$(SONAME_LDFLAG) -Wl,libxenguest.so.$(MAJOR) $(SHLIB_LDFLAGS) -o $@ $(GUEST_PIC_OBJS) $(COMPRESSION_LIBS) -lz $(LDLIBS_libxenctrl) $(PTHREAD_LIBS) $(APPEND_LDFLAGS)
+libxenguest-$(PACKAGE_VERSION).so: COMPRESSION_LIBS = $(call zlib-options,l)
+libxenguest-$(PACKAGE_VERSION).so: $(GUEST_PIC_OBJS) libxenctrl-$(PACKAGE_VERSION).so
+	$(CC) $(LDFLAGS) -Wl,$(SONAME_LDFLAG),$@ $(SHLIB_LDFLAGS) -o $@ $(GUEST_PIC_OBJS) $(COMPRESSION_LIBS) -lz $(LDLIBS_libxenctrl) $(PTHREAD_LIBS) $(APPEND_LDFLAGS)
 
 xenctrl_osdep_ENOSYS.so: $(OSDEP_PIC_OBJS) libxenctrl.so
 	$(CC) $(LDFLAGS) $(SHLIB_LDFLAGS) -o $@ $(OSDEP_PIC_OBJS) $(LDLIBS_libxenctrl) $(APPEND_LDFLAGS)
