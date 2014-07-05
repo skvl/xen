@@ -33,6 +33,8 @@ import signal
 import time
 import commands
 
+sys.path.insert(1, sys.path[0] + '/../lib/python')
+
 from xen.xend.server import SrvDaemon
 
 class CheckError(ValueError):

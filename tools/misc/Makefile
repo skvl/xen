@@ -32,6 +32,8 @@ INSTALL_PRIVBIN := $(INSTALL_PRIVBIN-y)
 # Include configure output (config.h) to headers search path
 CFLAGS += -I$(XEN_ROOT)/tools
 
+APPEND_LDFLAGS += $(call LDFLAGS_RPATH,../lib)
+
 .PHONY: all
 all: build
 
@@ -41,12 +43,8 @@ build: $(TARGETS)
 
 .PHONY: install
 install: build
-	$(INSTALL_DIR) $(DESTDIR)$(BINDIR)
-	$(INSTALL_DIR) $(DESTDIR)$(SBINDIR)
 	$(INSTALL_DIR) $(DESTDIR)$(PRIVATE_BINDIR)
-	$(INSTALL_PYTHON_PROG) $(INSTALL_BIN) $(DESTDIR)$(BINDIR)
-	$(INSTALL_PYTHON_PROG) $(INSTALL_SBIN) $(DESTDIR)$(SBINDIR)
-	$(INSTALL_PYTHON_PROG) $(INSTALL_PRIVBIN) $(DESTDIR)$(PRIVATE_BINDIR)
+	$(INSTALL_PYTHON_PROG) $(INSTALL_BIN) $(INSTALL_SBIN) $(INSTALL_PRIVBIN) $(DESTDIR)$(PRIVATE_BINDIR)
 	set -e; for d in $(SUBDIRS); do $(MAKE) -C $$d install-recurse; done
 
 .PHONY: clean
