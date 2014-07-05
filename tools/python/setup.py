@@ -5,6 +5,7 @@ import os, sys
 XEN_ROOT = "../.."
 
 extra_compile_args  = [ "-fno-strict-aliasing", "-Werror" ]
+extra_link_args = [ "-Wl,-rpath,${ORIGIN}/../../.." ]
 
 PATH_XEN      = XEN_ROOT + "/tools/include"
 PATH_LIBXENTOOLLOG = XEN_ROOT + "/tools/libs/toollog"
@@ -23,11 +24,12 @@ xc = Extension("xc",
                library_dirs       = [ PATH_LIBXC ],
                libraries          = [ "xenctrl", "xenguest" ],
                depends            = [ PATH_LIBXC + "/libxenctrl.so", PATH_LIBXC + "/libxenguest.so" ],
-               extra_link_args    = [ "-Wl,-rpath-link="+PATH_LIBXENTOOLLOG ],
+               extra_link_args    = extra_link_args + [ "-Wl,-rpath-link="+PATH_LIBXENTOOLLOG ],
                sources            = [ "xen/lowlevel/xc/xc.c" ])
 
 xs = Extension("xs",
                extra_compile_args = extra_compile_args,
+               extra_link_args    = extra_link_args,
                include_dirs       = [ PATH_XEN, PATH_XENSTORE + "/include", "xen/lowlevel/xs" ],
                library_dirs       = [ PATH_XENSTORE ],
                libraries          = [ "xenstore" ],
