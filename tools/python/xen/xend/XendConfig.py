@@ -493,11 +493,11 @@ class XendConfig(dict):
 
         if self.is_hvm() or self.has_rfb():
             if 'device_model' not in self['platform']:
-                self['platform']['device_model'] = auxbin.pathTo("qemu-dm")
+                self['platform']['device_model'] = auxbin.path_bin("qemu-dm")
             # device_model may be set to 'qemu-dm' or 'stubdom-dm' w/o a path
             if os.path.dirname(self['platform']['device_model']) == "":
                 self['platform']['device_model'] = \
-                    auxbin.pathTo(self['platform']['device_model'])
+                    auxbin.path_bin(self['platform']['device_model'])
             # If the device_model is not set the os.path.exists() would raise
             # an exception so we return our error message instead if applicable
             if not self['platform']['device_model']:
@@ -528,14 +528,14 @@ class XendConfig(dict):
                 # Old configs may have hvmloader set as PV_kernel param
                 if self.has_key('PV_kernel') and self['PV_kernel'] != '':
                     if self['PV_kernel'] == 'hvmloader':
-                        self['PV_kernel'] = auxbin.pathTo("hvmloader")
+                        self['PV_kernel'] = auxbin.path_boot("hvmloader")
                     self['platform']['loader'] = self['PV_kernel']
                     self['PV_kernel'] = ''
                 else:
-                    self['platform']['loader'] = auxbin.pathTo("hvmloader")
+                    self['platform']['loader'] = auxbin.path_boot("hvmloader")
                 log.debug("Loader is %s" % str(self['platform']['loader']))
             elif self['platform']['loader'] == 'hvmloader':
-                self['platform']['loader'] = auxbin.pathTo("hvmloader")
+                self['platform']['loader'] = auxbin.path_boot("hvmloader")
             if not os.path.exists(self['platform']['loader']):
                 raise VmError("kernel '%s' not found" % str(self['platform']['loader']))
 
@@ -1653,7 +1653,7 @@ class XendConfig(dict):
                     # is invoked for pvfb services
                     if 'device_model' not in target['platform']:
                         target['platform']['device_model'] = \
-                            auxbin.pathTo("qemu-dm")
+                            auxbin.path_bin("qemu-dm")
 
                     # Finally, if we are a pvfb, we need to make a vkbd
                     # as well that is not really exposed to Xen API

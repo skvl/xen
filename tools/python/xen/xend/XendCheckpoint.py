@@ -118,7 +118,7 @@ def save(fd, dominfo, network, live, dst, checkpoint=False, node=-1,sock=None):
         # enabled. Passing "0" simply uses the defaults compiled into
         # libxenguest; see the comments and/or code in xc_linux_save() for
         # more information.
-        cmd = [xen.util.auxbin.pathTo(XC_SAVE), str(fd),
+        cmd = [xen.util.auxbin.path_bin(XC_SAVE), str(fd),
                str(dominfo.getDomid()), "0", "0", 
                str(int(live) | (int(hvm) << 2)) ]
         log.debug("[xc_save]: %s", string.join(cmd))
@@ -299,7 +299,7 @@ def restore(xd, fd, dominfo = None, paused = False, relocating = False):
 
         superpages = restore_image.superpages
 
-        cmd = map(str, [xen.util.auxbin.pathTo(XC_RESTORE),
+        cmd = map(str, [xen.util.auxbin.path_bin(XC_RESTORE),
                         fd, dominfo.getDomid(),
                         store_port, console_port, int(is_hvm), pae, apic, superpages, 1])
         log.debug("[xc_restore]: %s", string.join(cmd))
