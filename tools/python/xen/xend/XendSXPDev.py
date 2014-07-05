@@ -1,5 +1,3 @@
-#!/usr/bin/env python
-#
 # Helper functions for dealing with the sxp representation of devices
 
 import types

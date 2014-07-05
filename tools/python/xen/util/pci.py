@@ -1,5 +1,3 @@
-#!/usr/bin/env python
-#
 # PCI Device Information Class
 # - Helps obtain information about which I/O resources a PCI device needs
 #
