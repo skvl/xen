@@ -12,6 +12,8 @@ CFLAGS += -I. -fPIC
 ifeq ($(CONFIG_Linux),y)
 LIBUUID_LIBS += -luuid
 endif
+LDFLAGS_XL = $(call LDFLAGS_RPATH,../lib)
+LDFLAGS_LIBXL = $(call LDFLAGS_RPATH)
 
 LIBXL_LIBS =
 LIBXL_LIBS = $(LDLIBS_libxentoollog) $(LDLIBS_libxenevtchn) $(LDLIBS_libxenctrl) $(LDLIBS_libxenguest) $(LDLIBS_libxenstore) $(LDLIBS_libblktapctl) $(PTYFUNCS_LIBS) $(LIBUUID_LIBS)
@@ -255,7 +257,7 @@ libxenlight.so: libxenlight-$(PACKAGE_VERSION).so
 	$(SYMLINK_SHLIB) $< $@
 
 libxenlight-$(PACKAGE_VERSION).so: $(LIBXL_OBJS)
-	$(CC) $(LDFLAGS) -Wl,$(SONAME_LDFLAG),$@ $(SHLIB_LDFLAGS) -o $@ $^ $(LIBXL_LIBS) $(APPEND_LDFLAGS)
+	$(CC) $(LDFLAGS) -Wl,$(SONAME_LDFLAG),$@ $(LDFLAGS_LIBXL) $(SHLIB_LDFLAGS) -o $@ $^ $(LIBXL_LIBS) $(APPEND_LDFLAGS)
 
 libxenlight_test.so: $(LIBXL_OBJS) $(LIBXL_TEST_OBJS)
 	$(CC) $(LDFLAGS) -Wl,$(SONAME_LDFLAG),$@ $(SHLIB_LDFLAGS) -o $@ $^ $(LIBXL_LIBS) $(APPEND_LDFLAGS)
@@ -273,7 +275,7 @@ libxlutil.a: $(LIBXLU_OBJS)
 	$(AR) rcs libxlutil.a $^
 
 xl: $(XL_OBJS) libxlutil.so libxenlight.so
-	$(CC) $(LDFLAGS) -o $@ $(XL_OBJS) libxlutil.so $(LDLIBS_libxenlight) $(LDLIBS_libxentoollog) -lyajl $(APPEND_LDFLAGS)
+	$(CC) $(LDFLAGS) $(LDFLAGS_XL) -o $@ $(XL_OBJS) libxlutil.so $(LDLIBS_libxenlight) $(LDLIBS_libxentoollog) -lyajl $(APPEND_LDFLAGS)
 
 test_%: test_%.o test_common.o libxlutil.so libxenlight_test.so
 	$(CC) $(LDFLAGS) -o $@ $^ $(filter-out %libxenlight.so, $(LDLIBS_libxenlight)) $(LDLIBS_libxentoollog) -lyajl $(APPEND_LDFLAGS)
@@ -290,13 +292,12 @@ $(PKG_CONFIG): % : %.in Makefile
 
 .PHONY: install
 install: all
-	$(INSTALL_DIR) $(DESTDIR)$(sbindir)
 	$(INSTALL_DIR) $(DESTDIR)$(libdir)
 	$(INSTALL_DIR) $(DESTDIR)$(includedir)
 	$(INSTALL_DIR) $(DESTDIR)$(BASH_COMPLETION_DIR)
 	$(INSTALL_DIR) $(DESTDIR)$(LIBEXEC_BIN)
 	$(INSTALL_DIR) $(DESTDIR)$(SHAREDIR)/pkgconfig
-	$(INSTALL_PROG) xl $(DESTDIR)$(sbindir)
+	$(INSTALL_PROG) xl $(DESTDIR)$(LIBEXEC_BIN)
 	$(INSTALL_PROG) libxl-save-helper $(DESTDIR)$(LIBEXEC_BIN)
 	$(INSTALL_SHLIB) libxenlight-$(PACKAGE_VERSION).so $(DESTDIR)$(libdir)
 	$(SYMLINK_SHLIB) libxenlight-$(PACKAGE_VERSION).so $(DESTDIR)$(libdir)/libxenlight.so
