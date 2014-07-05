@@ -18,7 +18,6 @@ XEN_LIB_X86_INCLUDES = $(filter-out %autogen.h, $(XEN_ROOT)/xen/include/xen/lib/
 xen/.dir: $(XEN_PUBLIC_INCLUDES) $(XEN_LIB_X86_INCLUDES)
 	@rm -rf xen
 	mkdir -p xen/libelf
-	ln -sf $(XEN_ROOT)/xen/include/public/COPYING xen
 	ln -sf $(XEN_PUBLIC_INCLUDES) xen
 	ln -sf $(addprefix $(XEN_ROOT)/xen/include/public/,arch-x86 arch-arm hvm io xsm) xen
 	ln -sf ../xen-sys/$(XEN_OS) xen/sys
@@ -57,7 +56,6 @@ install: all
 	$(INSTALL_DIR) $(DESTDIR)$(includedir)/xen/io
 	$(INSTALL_DIR) $(DESTDIR)$(includedir)/xen/sys
 	$(INSTALL_DIR) $(DESTDIR)$(includedir)/xen/xsm
-	$(INSTALL_DATA) xen/COPYING $(DESTDIR)$(includedir)/xen
 	$(INSTALL_DATA) xen/*.h $(DESTDIR)$(includedir)/xen
 	$(INSTALL_DATA) xen/arch-x86/*.h $(DESTDIR)$(includedir)/xen/arch-x86
 	$(INSTALL_DATA) xen/arch-x86/hvm/*.h $(DESTDIR)$(includedir)/xen/arch-x86/hvm
