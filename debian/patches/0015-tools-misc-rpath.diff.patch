@@ -1,0 +1,22 @@
+From ed1f1b139946341997956927e771274a12a0f75d Mon Sep 17 00:00:00 2001
+From: Bastian Blank <waldi@debian.org>
+Date: Sat, 5 Jul 2014 11:47:00 +0200
+Subject: tools-misc-rpath.diff
+
+---
+ tools/misc/Makefile | 2 ++
+ 1 file changed, 2 insertions(+)
+
+diff --git a/tools/misc/Makefile b/tools/misc/Makefile
+index fbc20cf..56d4b82 100644
+--- a/tools/misc/Makefile
++++ b/tools/misc/Makefile
+@@ -32,6 +32,8 @@ INSTALL_PRIVBIN := $(INSTALL_PRIVBIN-y)
+ # Include configure output (config.h) to headers search path
+ CFLAGS += -I$(XEN_ROOT)/tools
+ 
++APPEND_LDFLAGS += $(call LDFLAGS_RPATH,../lib)
++
+ .PHONY: all
+ all: build
+ 

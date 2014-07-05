@@ -426,7 +426,7 @@ static int _set_status_v2(domid_t  domid,
 
     /* Make sure guest sees status update before checking if flags are
        still valid */
-    mb();
+    smp_mb();
 
     scombo.word = *(u32 *)shah;
     barrier();
@@ -721,7 +721,7 @@ __gnttab_map_grant_ref(
 
     double_gt_lock(lgt, rgt);
 
-    if ( !is_hvm_domain(ld) && need_iommu(ld) )
+    if ( is_pv_domain(ld) && need_iommu(ld) )
     {
         unsigned int wrc, rdc;
         int err = 0;
@@ -783,7 +783,6 @@ __gnttab_map_grant_ref(
     spin_lock(&rgt->lock);
 
     act = &active_entry(rgt, op->ref);
-    shah = shared_entry_header(rgt, op->ref);
 
     if ( op->flags & GNTMAP_device_map )
         act->pin -= (op->flags & GNTMAP_readonly) ?
@@ -932,7 +931,7 @@ __gnttab_unmap_common(
             act->pin -= GNTPIN_hstw_inc;
     }
 
-    if ( !is_hvm_domain(ld) && need_iommu(ld) )
+    if ( is_pv_domain(ld) && need_iommu(ld) )
     {
         unsigned int wrc, rdc;
         int err = 0;
@@ -1518,6 +1517,8 @@ gnttab_transfer(
 
     for ( i = 0; i < count; i++ )
     {
+        bool_t okay;
+
         if (i && hypercall_preempt_check())
             return i;
 
@@ -1626,16 +1627,18 @@ gnttab_transfer(
          * pages when it is dying.
          */
         if ( unlikely(e->is_dying) ||
-             unlikely(e->tot_pages >= e->max_pages) ||
-             unlikely(!gnttab_prepare_for_transfer(e, d, gop.ref)) )
+             unlikely(e->tot_pages >= e->max_pages) )
         {
-            if ( !e->is_dying )
-                gdprintk(XENLOG_INFO, "gnttab_transfer: "
-                        "Transferee has no reservation "
-                        "headroom (%d,%d) or provided a bad grant ref (%08x) "
-                        "or is dying (%d)\n",
-                        e->tot_pages, e->max_pages, gop.ref, e->is_dying);
             spin_unlock(&e->page_alloc_lock);
+
+            if ( e->is_dying )
+                gdprintk(XENLOG_INFO, "gnttab_transfer: "
+                         "Transferee (d%d) is dying\n", e->domain_id);
+            else
+                gdprintk(XENLOG_INFO, "gnttab_transfer: "
+                         "Transferee (d%d) has no headroom (tot %u, max %u)\n",
+                         e->domain_id, e->tot_pages, e->max_pages);
+
             rcu_unlock_domain(e);
             put_gfn(d, gop.mfn);
             page->count_info &= ~(PGC_count_mask|PGC_allocated);
@@ -1647,6 +1650,38 @@ gnttab_transfer(
         /* Okay, add the page to 'e'. */
         if ( unlikely(domain_adjust_tot_pages(e, 1) == 1) )
             get_knownalive_domain(e);
+
+        /*
+         * We must drop the lock to avoid a possible deadlock in
+         * gnttab_prepare_for_transfer.  We have reserved a page in e so can
+         * safely drop the lock and re-aquire it later to add page to the
+         * pagelist.
+         */
+        spin_unlock(&e->page_alloc_lock);
+        okay = gnttab_prepare_for_transfer(e, d, gop.ref);
+        spin_lock(&e->page_alloc_lock);
+
+        if ( unlikely(!okay) || unlikely(e->is_dying) )
+        {
+            bool_t drop_dom_ref = !domain_adjust_tot_pages(e, -1);
+
+            spin_unlock(&e->page_alloc_lock);
+
+            if ( okay /* i.e. e->is_dying due to the surrounding if() */ )
+                gdprintk(XENLOG_INFO, "gnttab_transfer: "
+                         "Transferee (d%d) is now dying\n", e->domain_id);
+
+            if ( drop_dom_ref )
+                put_domain(e);
+            rcu_unlock_domain(e);
+
+            put_gfn(d, gop.mfn);
+            page->count_info &= ~(PGC_count_mask|PGC_allocated);
+            free_domheap_page(page);
+            gop.status = GNTST_general_error;
+            goto copyback;
+        }
+
         page_list_add_tail(page, &e->page_list);
         page_set_owner(page, e);
 
@@ -1670,7 +1705,7 @@ gnttab_transfer(
             guest_physmap_add_page(e, sha->full_page.frame, mfn, 0);
             sha->full_page.frame = mfn;
         }
-        wmb();
+        smp_wmb();
         shared_entry_header(e->grant_table, gop.ref)->flags |=
             GTF_transfer_completed;
 

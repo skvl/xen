@@ -16,7 +16,7 @@
 #define is_pv_32on64_domain(d) (is_pv_32bit_domain(d))
 #define is_pv_32on64_vcpu(v)   (is_pv_32on64_domain((v)->domain))
 
-#define is_hvm_pv_evtchn_domain(d) (is_hvm_domain(d) && \
+#define is_hvm_pv_evtchn_domain(d) (has_hvm_container_domain(d) && \
         d->arch.hvm_domain.irq.callback_via_type == HVMIRQ_callback_vector)
 #define is_hvm_pv_evtchn_vcpu(v) (is_hvm_pv_evtchn_domain(v->domain))
 
@@ -169,7 +169,7 @@ struct log_dirty_domain {
     unsigned int   dirty_count;
 
     /* functions which are paging mode specific */
-    int            (*enable_log_dirty   )(struct domain *d);
+    int            (*enable_log_dirty   )(struct domain *d, bool_t log_global);
     int            (*disable_log_dirty  )(struct domain *d);
     void           (*clean_dirty_bitmap )(struct domain *d);
 };
@@ -234,11 +234,6 @@ struct pv_domain
 
     /* map_domain_page() mapping cache. */
     struct mapcache_domain mapcache;
-
-    /* Pseudophysical e820 map (XENMEM_memory_map).  */
-    spinlock_t e820_lock;
-    struct e820entry *e820;
-    unsigned int nr_e820;
 };
 
 struct arch_domain
@@ -313,10 +308,14 @@ struct arch_domain
                                 (possibly other cases in the future */
     uint64_t vtsc_kerncount; /* for hvm, counts all vtsc */
     uint64_t vtsc_usercount; /* not used for hvm */
+
+    /* Pseudophysical e820 map (XENMEM_memory_map).  */
+    spinlock_t e820_lock;
+    struct e820entry *e820;
+    unsigned int nr_e820;
 } __cacheline_aligned;
 
 #define has_arch_pdevs(d)    (!list_empty(&(d)->arch.pdev_list))
-#define has_arch_mmios(d)    (!rangeset_is_empty((d)->iomem_caps))
 
 #define gdt_ldt_pt_idx(v) \
       ((v)->vcpu_id >> (PAGETABLE_ORDER - GDT_LDT_VCPU_SHIFT))
@@ -374,6 +373,10 @@ struct pv_vcpu
     /* Current LDT details. */
     unsigned long shadow_ldt_mapcnt;
     spinlock_t shadow_ldt_lock;
+
+    /* Deferred VA-based update state. */
+    bool_t need_update_runstate_area;
+    struct vcpu_time_info pending_system_time;
 };
 
 struct arch_vcpu
@@ -446,6 +449,10 @@ struct arch_vcpu
 #define hvm_vmx         hvm_vcpu.u.vmx
 #define hvm_svm         hvm_vcpu.u.svm
 
+bool_t update_runstate_area(const struct vcpu *);
+bool_t update_secondary_system_time(const struct vcpu *,
+                                    struct vcpu_time_info *);
+
 void vcpu_show_execution_state(struct vcpu *);
 void vcpu_show_registers(const struct vcpu *);
 
@@ -456,13 +463,13 @@ unsigned long pv_guest_cr4_fixup(const struct vcpu *, unsigned long guest_cr4);
 #define pv_guest_cr4_to_real_cr4(v)                         \
     (((v)->arch.pv_vcpu.ctrlreg[4]                          \
       | (mmu_cr4_features                                   \
-         & (X86_CR4_PGE | X86_CR4_PSE | X86_CR4_SMEP))      \
-      | ((v)->domain->arch.vtsc ? X86_CR4_TSD : 0)          \
-      | ((xsave_enabled(v))? X86_CR4_OSXSAVE : 0))          \
+         & (X86_CR4_PGE | X86_CR4_PSE | X86_CR4_SMEP |      \
+            X86_CR4_OSXSAVE | X86_CR4_FSGSBASE))            \
+      | ((v)->domain->arch.vtsc ? X86_CR4_TSD : 0))         \
      & ~X86_CR4_DE)
 #define real_cr4_to_pv_guest_cr4(c)                         \
-    ((c) & ~(X86_CR4_PGE | X86_CR4_PSE | X86_CR4_TSD        \
-             | X86_CR4_OSXSAVE | X86_CR4_SMEP))
+    ((c) & ~(X86_CR4_PGE | X86_CR4_PSE | X86_CR4_TSD |      \
+             X86_CR4_OSXSAVE | X86_CR4_SMEP | X86_CR4_FSGSBASE))
 
 void domain_cpuid(struct domain *d,
                   unsigned int  input,

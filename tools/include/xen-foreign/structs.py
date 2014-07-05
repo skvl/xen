@@ -19,6 +19,8 @@ defines = [ "__arm__",
             "__i386__",
             "__x86_64__",
 
+            "XEN_HAVE_PV_GUEST_ENTRY",
+
             # arm
             # None
 
@@ -56,3 +58,8 @@ defines = [ "__arm__",
             "XEN_LEGACY_MAX_VCPUS",
             "MAX_GUEST_CMDLINE" ];
 
+# Architectures which must be compatible, i.e. identical
+compat_arches = {
+    'arm32': 'arm64',
+    'arm64': 'arm32',
+}

@@ -18,6 +18,9 @@
 static bool_t __cpuinitdata use_xsave = 1;
 boolean_param("xsave", use_xsave);
 
+bool_t __devinitdata opt_arat = 1;
+boolean_param("arat", opt_arat);
+
 unsigned int __devinitdata opt_cpuid_mask_ecx = ~0u;
 integer_param("cpuid_mask_ecx", opt_cpuid_mask_ecx);
 unsigned int __devinitdata opt_cpuid_mask_edx = ~0u;
@@ -63,7 +66,7 @@ static struct cpu_dev default_cpu = {
 };
 static struct cpu_dev * this_cpu = &default_cpu;
 
-bool_t __cpuinitdata opt_cpu_info;
+bool_t opt_cpu_info;
 boolean_param("cpuinfo", opt_cpu_info);
 
 int __cpuinit get_model_name(struct cpuinfo_x86 *c)
@@ -304,7 +307,7 @@ void __cpuinit identify_cpu(struct cpuinfo_x86 *c)
 		clear_bit(X86_FEATURE_XSAVE, boot_cpu_data.x86_capability);
 
 	if ( cpu_has_xsave )
-		xstate_init();
+		xstate_init(c == &boot_cpu_data);
 
 	/*
 	 * The vendor-specific functions might have changed features.  Now

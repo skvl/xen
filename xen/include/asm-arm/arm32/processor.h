@@ -1,6 +1,8 @@
 #ifndef __ASM_ARM_ARM32_PROCESSOR_H
 #define __ASM_ARM_ARM32_PROCESSOR_H
 
+#define ACTLR_V7_SMP    (1<<6)
+
 #ifndef __ASSEMBLY__
 /* On stack VCPU state */
 struct cpu_user_regs
@@ -108,6 +110,10 @@ struct cpu_user_regs
 
 #define READ_SYSREG(R...)       READ_SYSREG32(R)
 #define WRITE_SYSREG(V, R...)   WRITE_SYSREG32(V, R)
+
+/* Erratum 766422: only Cortex A15 r0p4 is affected */
+#define cpu_has_erratum_766422()                             \
+    (unlikely(current_cpu_data.midr.bits == 0x410fc0f4))
 
 #endif /* __ASSEMBLY__ */
 

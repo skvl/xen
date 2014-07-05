@@ -6,14 +6,6 @@
 #include <asm/page.h>
 #include <public/xen.h>
 
-#if defined(CONFIG_ARM_32)
-# include <asm/arm32/io.h>
-#elif defined(CONFIG_ARM_64)
-# include <asm/arm64/io.h>
-#else
-# error "unknown ARM variant"
-#endif
-
 /* Align Xen to a 2 MiB boundary. */
 #define XEN_PADDR_ALIGN (1 << 21)
 
@@ -118,12 +110,21 @@ struct page_info
 extern unsigned long xenheap_mfn_start, xenheap_mfn_end;
 extern unsigned long xenheap_virt_end;
 
+#ifdef CONFIG_ARM_32
 #define is_xen_heap_page(page) is_xen_heap_mfn(page_to_mfn(page))
 #define is_xen_heap_mfn(mfn) ({                                 \
     unsigned long _mfn = (mfn);                                 \
     (_mfn >= xenheap_mfn_start && _mfn < xenheap_mfn_end);      \
 })
-#define is_xen_fixed_mfn(mfn) is_xen_heap_mfn(mfn)
+#else
+#define is_xen_heap_page(page) ((page)->count_info & PGC_xen_heap)
+#define is_xen_heap_mfn(mfn) \
+    (mfn_valid(mfn) && is_xen_heap_page(__mfn_to_page(mfn)))
+#endif
+
+#define is_xen_fixed_mfn(mfn)                                   \
+    ((pfn_to_paddr(mfn) >= virt_to_maddr(&_start)) &&       \
+     (pfn_to_paddr(mfn) <= virt_to_maddr(&_end)))
 
 #define page_get_owner(_p)    (_p)->v.inuse.domain
 #define page_set_owner(_p,_d) ((_p)->v.inuse.domain = (_d))
@@ -146,7 +147,10 @@ extern unsigned long total_pages;
 
 /* Boot-time pagetable setup */
 extern void setup_pagetables(unsigned long boot_phys_offset, paddr_t xen_paddr);
-/* Allocate and initialise pagetables for a secondary CPU */
+/* Remove early mappings */
+extern void remove_early_mappings(void);
+/* Allocate and initialise pagetables for a secondary CPU. Sets init_ttbr to the
+ * new page table */
 extern int __cpuinit init_secondary_pagetables(int cpu);
 /* Switch secondary CPUS to its own pagetables and finalise MMU setup */
 extern void __cpuinit mmu_init_secondary_cpu(void);
@@ -181,7 +185,7 @@ static inline void __iomem *ioremap_wc(paddr_t start, size_t len)
 
 #define mfn_valid(mfn)        ({                                              \
     unsigned long __m_f_n = (mfn);                                            \
-    likely(__m_f_n < max_page);                                               \
+    likely(__m_f_n >= frametable_base_mfn && __m_f_n < max_page);             \
 })
 
 #define max_pdx                 max_page
@@ -206,18 +210,28 @@ static inline void __iomem *ioremap_wc(paddr_t start, size_t len)
 #define paddr_to_pdx(pa)    pfn_to_pdx(paddr_to_pfn(pa))
 
 
-static inline paddr_t virt_to_maddr(const void *va)
+static inline paddr_t __virt_to_maddr(vaddr_t va)
 {
-    uint64_t par = va_to_par((vaddr_t)va);
-    return (par & PADDR_MASK & PAGE_MASK) | ((vaddr_t) va & ~PAGE_MASK);
+    uint64_t par = va_to_par(va);
+    return (par & PADDR_MASK & PAGE_MASK) | (va & ~PAGE_MASK);
 }
+#define virt_to_maddr(va)   __virt_to_maddr((vaddr_t)(va))
 
+#ifdef CONFIG_ARM_32
 static inline void *maddr_to_virt(paddr_t ma)
 {
     ASSERT(is_xen_heap_mfn(ma >> PAGE_SHIFT));
     ma -= pfn_to_paddr(xenheap_mfn_start);
     return (void *)(unsigned long) ma + XENHEAP_VIRT_START;
 }
+#else
+static inline void *maddr_to_virt(paddr_t ma)
+{
+    ASSERT((ma >> PAGE_SHIFT) < (DIRECTMAP_SIZE >> PAGE_SHIFT));
+    ma -= pfn_to_paddr(xenheap_mfn_start);
+    return (void *)(unsigned long) ma + DIRECTMAP_VIRT_START;
+}
+#endif
 
 static inline int gvirt_to_maddr(vaddr_t va, paddr_t *pa)
 {

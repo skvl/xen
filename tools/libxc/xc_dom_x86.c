@@ -54,24 +54,17 @@ const char *xc_domain_get_native_protocol(xc_interface *xch,
     int ret;
     uint32_t guest_width;
     const char *protocol;
-    DECLARE_DOMCTL;
 
-    memset(&domctl, 0, sizeof(domctl));
-    domctl.domain = domid;
-    domctl.cmd = XEN_DOMCTL_get_address_size;
-
-    ret = do_domctl(xch, &domctl);
+    ret = xc_domain_get_guest_width(xch, domid, &guest_width);
 
     if ( ret )
         return NULL;
 
-    guest_width = domctl.u.address_size.size;
-
     switch (guest_width) {
-    case 32: /* 32 bit guest */
+    case 4: /* 32 bit guest */
         protocol = XEN_IO_PROTO_ABI_X86_32;
         break;
-    case 64: /* 64 bit guest */
+    case 8: /* 64 bit guest */
         protocol = XEN_IO_PROTO_ABI_X86_64;
         break;
     default:
@@ -227,7 +220,7 @@ static xen_pfn_t move_l3_below_4G(struct xc_dom_image *dom,
     {
         DOMPRINTF("%s: xc_dom_pfn_to_ptr(dom, l3pfn, 1) => NULL",
                   __FUNCTION__);
-        return l3mfn; /* our one call site will call xc_dom_panic and fail */
+        goto out; /* our one call site will call xc_dom_panic and fail */
     }
     memset(l3tab, 0, XC_DOM_PAGE_SIZE(dom));
 
@@ -251,7 +244,7 @@ static int setup_pgtables_x86_32_pae(struct xc_dom_image *dom)
     l3_pgentry_64_t *l3tab;
     l2_pgentry_64_t *l2tab = NULL;
     l1_pgentry_64_t *l1tab = NULL;
-    unsigned long l3off, l2off, l1off;
+    unsigned long l3off, l2off = 0, l1off;
     xen_vaddr_t addr;
     xen_pfn_t pgpfn;
     xen_pfn_t l3mfn = xc_dom_p2m_guest(dom, l3pfn);
@@ -299,8 +292,6 @@ static int setup_pgtables_x86_32_pae(struct xc_dom_image *dom)
             l2off = l2_table_offset_pae(addr);
             l2tab[l2off] =
                 pfn_to_paddr(xc_dom_p2m_guest(dom, l1pfn)) | L2_PROT;
-            if ( l2off == (L2_PAGETABLE_ENTRIES_PAE - 1) )
-                l2tab = NULL;
             l1pfn++;
         }
 
@@ -312,8 +303,13 @@ static int setup_pgtables_x86_32_pae(struct xc_dom_image *dom)
         if ( (addr >= dom->pgtables_seg.vstart) &&
              (addr < dom->pgtables_seg.vend) )
             l1tab[l1off] &= ~_PAGE_RW; /* page tables are r/o */
+
         if ( l1off == (L1_PAGETABLE_ENTRIES_PAE - 1) )
+        {
             l1tab = NULL;
+            if ( l2off == (L2_PAGETABLE_ENTRIES_PAE - 1) )
+                l2tab = NULL;
+        }
     }
 
     if ( dom->virt_pgtab_end <= 0xc0000000 )
@@ -360,7 +356,7 @@ static int setup_pgtables_x86_64(struct xc_dom_image *dom)
     l3_pgentry_64_t *l3tab = NULL;
     l2_pgentry_64_t *l2tab = NULL;
     l1_pgentry_64_t *l1tab = NULL;
-    uint64_t l4off, l3off, l2off, l1off;
+    uint64_t l4off, l3off = 0, l2off = 0, l1off;
     uint64_t addr;
     xen_pfn_t pgpfn;
 
@@ -391,8 +387,6 @@ static int setup_pgtables_x86_64(struct xc_dom_image *dom)
             l3off = l3_table_offset_x86_64(addr);
             l3tab[l3off] =
                 pfn_to_paddr(xc_dom_p2m_guest(dom, l2pfn)) | L3_PROT;
-            if ( l3off == (L3_PAGETABLE_ENTRIES_X86_64 - 1) )
-                l3tab = NULL;
             l2pfn++;
         }
 
@@ -405,8 +399,6 @@ static int setup_pgtables_x86_64(struct xc_dom_image *dom)
             l2off = l2_table_offset_x86_64(addr);
             l2tab[l2off] =
                 pfn_to_paddr(xc_dom_p2m_guest(dom, l1pfn)) | L2_PROT;
-            if ( l2off == (L2_PAGETABLE_ENTRIES_X86_64 - 1) )
-                l2tab = NULL;
             l1pfn++;
         }
 
@@ -415,11 +407,21 @@ static int setup_pgtables_x86_64(struct xc_dom_image *dom)
         pgpfn = (addr - dom->parms.virt_base) >> PAGE_SHIFT_X86;
         l1tab[l1off] =
             pfn_to_paddr(xc_dom_p2m_guest(dom, pgpfn)) | L1_PROT;
-        if ( (addr >= dom->pgtables_seg.vstart) && 
+        if ( (!dom->pvh_enabled)                &&
+             (addr >= dom->pgtables_seg.vstart) &&
              (addr < dom->pgtables_seg.vend) )
             l1tab[l1off] &= ~_PAGE_RW; /* page tables are r/o */
+
         if ( l1off == (L1_PAGETABLE_ENTRIES_X86_64 - 1) )
+        {
             l1tab = NULL;
+            if ( l2off == (L2_PAGETABLE_ENTRIES_X86_64 - 1) )
+            {
+                l2tab = NULL;
+                if ( l3off == (L3_PAGETABLE_ENTRIES_X86_64 - 1) )
+                    l3tab = NULL;
+            }
+        }
     }
     return 0;
 
@@ -587,6 +589,13 @@ static int vcpu_x86_32(struct xc_dom_image *dom, void *ptr)
 
     DOMPRINTF_CALLED(dom->xch);
 
+    if ( dom->pvh_enabled )
+    {
+        xc_dom_panic(dom->xch, XC_INTERNAL_ERROR,
+                     "%s: PVH not supported for 32bit guests.", __FUNCTION__);
+        return -1;
+    }
+
     /* clear everything */
     memset(ctxt, 0, sizeof(*ctxt));
 
@@ -629,12 +638,6 @@ static int vcpu_x86_64(struct xc_dom_image *dom, void *ptr)
     /* clear everything */
     memset(ctxt, 0, sizeof(*ctxt));
 
-    ctxt->user_regs.ds = FLAT_KERNEL_DS_X86_64;
-    ctxt->user_regs.es = FLAT_KERNEL_DS_X86_64;
-    ctxt->user_regs.fs = FLAT_KERNEL_DS_X86_64;
-    ctxt->user_regs.gs = FLAT_KERNEL_DS_X86_64;
-    ctxt->user_regs.ss = FLAT_KERNEL_SS_X86_64;
-    ctxt->user_regs.cs = FLAT_KERNEL_CS_X86_64;
     ctxt->user_regs.rip = dom->parms.virt_entry;
     ctxt->user_regs.rsp =
         dom->parms.virt_base + (dom->bootstack_pfn + 1) * PAGE_SIZE_X86;
@@ -642,14 +645,24 @@ static int vcpu_x86_64(struct xc_dom_image *dom, void *ptr)
         dom->parms.virt_base + (dom->start_info_pfn) * PAGE_SIZE_X86;
     ctxt->user_regs.rflags = 1 << 9; /* Interrupt Enable */
 
-    ctxt->kernel_ss = ctxt->user_regs.ss;
-    ctxt->kernel_sp = ctxt->user_regs.esp;
-
     ctxt->flags = VGCF_in_kernel_X86_64 | VGCF_online_X86_64;
     cr3_pfn = xc_dom_p2m_guest(dom, dom->pgtables_seg.pfn);
     ctxt->ctrlreg[3] = xen_pfn_to_cr3_x86_64(cr3_pfn);
     DOMPRINTF("%s: cr3: pfn 0x%" PRIpfn " mfn 0x%" PRIpfn "",
               __FUNCTION__, dom->pgtables_seg.pfn, cr3_pfn);
+
+    if ( dom->pvh_enabled )
+        return 0;
+
+    ctxt->user_regs.ds = FLAT_KERNEL_DS_X86_64;
+    ctxt->user_regs.es = FLAT_KERNEL_DS_X86_64;
+    ctxt->user_regs.fs = FLAT_KERNEL_DS_X86_64;
+    ctxt->user_regs.gs = FLAT_KERNEL_DS_X86_64;
+    ctxt->user_regs.ss = FLAT_KERNEL_SS_X86_64;
+    ctxt->user_regs.cs = FLAT_KERNEL_CS_X86_64;
+
+    ctxt->kernel_ss = ctxt->user_regs.ss;
+    ctxt->kernel_sp = ctxt->user_regs.esp;
 
     return 0;
 }
@@ -751,7 +764,7 @@ int arch_setup_meminit(struct xc_dom_image *dom)
     rc = x86_compat(dom->xch, dom->guest_domid, dom->guest_type);
     if ( rc )
         return rc;
-    if ( xc_dom_feature_translated(dom) )
+    if ( xc_dom_feature_translated(dom) && !dom->pvh_enabled )
     {
         dom->shadow_enabled = 1;
         rc = x86_shadow(dom->xch, dom->guest_domid);
@@ -827,6 +840,38 @@ int arch_setup_bootearly(struct xc_dom_image *dom)
     return 0;
 }
 
+/*
+ * Map grant table frames into guest physmap. PVH manages grant during boot
+ * via HVM mechanisms.
+ */
+static int map_grant_table_frames(struct xc_dom_image *dom)
+{
+    int i, rc;
+
+    if ( dom->pvh_enabled )
+        return 0;
+
+    for ( i = 0; ; i++ )
+    {
+        rc = xc_domain_add_to_physmap(dom->xch, dom->guest_domid,
+                                      XENMAPSPACE_grant_table,
+                                      i, dom->total_pages + i);
+        if ( rc != 0 )
+        {
+            if ( (i > 0) && (errno == EINVAL) )
+            {
+                DOMPRINTF("%s: %d grant tables mapped", __FUNCTION__, i);
+                break;
+            }
+            xc_dom_panic(dom->xch, XC_INTERNAL_ERROR,
+                         "%s: mapping grant tables failed " "(pfn=0x%" PRIpfn
+                         ", rc=%d)", __FUNCTION__, dom->total_pages + i, rc);
+            return rc;
+        }
+    }
+    return 0;
+}
+
 int arch_setup_bootlate(struct xc_dom_image *dom)
 {
     static const struct {
@@ -865,7 +910,6 @@ int arch_setup_bootlate(struct xc_dom_image *dom)
     else
     {
         /* paravirtualized guest with auto-translation */
-        int i;
 
         /* Map shared info frame into guest physmap. */
         rc = xc_domain_add_to_physmap(dom->xch, dom->guest_domid,
@@ -879,25 +923,10 @@ int arch_setup_bootlate(struct xc_dom_image *dom)
             return rc;
         }
 
-        /* Map grant table frames into guest physmap. */
-        for ( i = 0; ; i++ )
-        {
-            rc = xc_domain_add_to_physmap(dom->xch, dom->guest_domid,
-                                          XENMAPSPACE_grant_table,
-                                          i, dom->total_pages + i);
-            if ( rc != 0 )
-            {
-                if ( (i > 0) && (errno == EINVAL) )
-                {
-                    DOMPRINTF("%s: %d grant tables mapped", __FUNCTION__, i);
-                    break;
-                }
-                xc_dom_panic(dom->xch, XC_INTERNAL_ERROR,
-                             "%s: mapping grant tables failed " "(pfn=0x%"
-                             PRIpfn ", rc=%d)", __FUNCTION__, dom->total_pages + i, rc);
-                return rc;
-            }
-        }
+        rc = map_grant_table_frames(dom);
+        if ( rc != 0 )
+            return rc;
+
         shinfo = dom->shared_info_pfn;
     }
 

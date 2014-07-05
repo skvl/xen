@@ -148,7 +148,7 @@ int msi_free_irq(struct msi_desc *entry);
 #define multi_msi_capable(control) \
 	(1 << ((control & PCI_MSI_FLAGS_QMASK) >> 1))
 #define multi_msi_enable(control, num) \
-	control |= (((num >> 1) << 4) & PCI_MSI_FLAGS_QSIZE);
+	control |= (((fls(num) - 1) << 4) & PCI_MSI_FLAGS_QSIZE);
 #define is_64bit_address(control)	(!!(control & PCI_MSI_FLAGS_64BIT))
 #define is_mask_bit_support(control)	(!!(control & PCI_MSI_FLAGS_MASKBIT))
 #define msi_enable(control, num) multi_msi_enable(control, num); \
@@ -214,8 +214,25 @@ struct msg_address {
 	__u32 	hi_address;
 } __attribute__ ((packed));
 
+#define MAX_MSIX_TABLE_ENTRIES  (PCI_MSIX_FLAGS_QSIZE + 1)
+#define MAX_MSIX_TABLE_PAGES    PFN_UP(MAX_MSIX_TABLE_ENTRIES * \
+                                       PCI_MSIX_ENTRY_SIZE + \
+                                       (~PCI_MSIX_BIRMASK & (PAGE_SIZE - 1)))
+
+struct arch_msix {
+    unsigned int nr_entries, used_entries;
+    struct {
+        unsigned long first, last;
+    } table, pba;
+    int table_refcnt[MAX_MSIX_TABLE_PAGES];
+    int table_idx[MAX_MSIX_TABLE_PAGES];
+    spinlock_t table_lock;
+    domid_t warned;
+};
+
 void early_msi_init(void);
-void msi_compose_msg(struct irq_desc *, struct msi_msg *);
+void msi_compose_msg(unsigned vector, const cpumask_t *mask,
+                     struct msi_msg *msg);
 void __msi_set_enable(u16 seg, u8 bus, u8 slot, u8 func, int pos, int enable);
 void mask_msi_irq(struct irq_desc *);
 void unmask_msi_irq(struct irq_desc *);

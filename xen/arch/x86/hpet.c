@@ -1,6 +1,6 @@
 /******************************************************************************
  * arch/x86/hpet.c
- * 
+ *
  * HPET management.
  */
 
@@ -50,7 +50,7 @@ static unsigned int __read_mostly num_hpets_used;
 
 DEFINE_PER_CPU(struct hpet_event_channel *, cpu_bc_channel);
 
-unsigned long __read_mostly hpet_address;
+unsigned long __initdata hpet_address;
 u8 __initdata hpet_blockid;
 
 /*
@@ -331,7 +331,7 @@ static int __hpet_setup_msi_irq(struct irq_desc *desc)
 {
     struct msi_msg msg;
 
-    msi_compose_msg(desc, &msg);
+    msi_compose_msg(desc->arch.vector, desc->arch.cpu_mask, &msg);
     return hpet_msi_write(desc->action->dev_id, &msg);
 }
 
@@ -355,7 +355,7 @@ static int __init hpet_setup_msi_irq(struct hpet_event_channel *ch)
     hpet_write32(cfg, HPET_Tn_CFG(ch->idx));
 
     desc->handler = &hpet_msi_type;
-    ret = request_irq(ch->msi.irq, hpet_interrupt_handler, 0, "HPET", ch);
+    ret = request_irq(ch->msi.irq, hpet_interrupt_handler, "HPET", ch);
     if ( ret >= 0 )
         ret = __hpet_setup_msi_irq(desc);
     if ( ret < 0 )
@@ -430,8 +430,8 @@ static void __init hpet_fsb_cap_lookup(void)
             num_hpets_used++;
     }
 
-    printk(XENLOG_INFO "HPET: %u timers (%u will be used for broadcast)\n",
-           num_chs, num_hpets_used);
+    printk(XENLOG_INFO "HPET: %u timers usable for broadcast (%u total)\n",
+           num_hpets_used, num_chs);
 }
 
 static struct hpet_event_channel *hpet_get_channel(unsigned int cpu)
@@ -540,7 +540,7 @@ static void handle_rtc_once(uint8_t index, uint8_t value)
 {
     if ( index != RTC_REG_B )
         return;
-    
+
     /* RTC Reg B, contain PIE/AIE/UIE */
     if ( value & (RTC_PIE | RTC_AIE | RTC_UIE ) )
     {

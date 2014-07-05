@@ -329,6 +329,26 @@ long arch_do_domctl(
             break;
         }
 
+        /*
+         * XSA-74: This sub-hypercall is broken in several ways:
+         * - lock order inversion (p2m locks inside page_alloc_lock)
+         * - no preemption on huge max_pfns input
+         * - not (re-)checking d->is_dying with page_alloc_lock held
+         * - not honoring start_pfn input (which libxc also doesn't set)
+         * Additionally it is rather useless, as the result is stale by the
+         * time the caller gets to look at it.
+         * As it only has a single, non-production consumer (xen-mceinj),
+         * rather than trying to fix it we restrict it for the time being.
+         */
+        if ( /* No nested locks inside copy_to_guest_offset(). */
+             paging_mode_external(current->domain) ||
+             /* Arbitrary limit capping processing time. */
+             max_pfns > GB(4) / PAGE_SIZE )
+        {
+            ret = -EOPNOTSUPP;
+            break;
+        }
+
         spin_lock(&d->page_alloc_lock);
 
         ret = i = 0;
@@ -795,12 +815,18 @@ long arch_do_domctl(
         ret = -ESRCH;
         if ( (evc->vcpu >= d->max_vcpus) ||
              ((v = d->vcpu[evc->vcpu]) == NULL) )
-            goto ext_vcpucontext_out;
+            break;
 
         if ( domctl->cmd == XEN_DOMCTL_get_ext_vcpucontext )
         {
+            if ( v == current ) /* no vcpu_pause() */
+                break;
+
             evc->size = sizeof(*evc);
-            if ( !is_hvm_domain(d) )
+
+            vcpu_pause(v);
+
+            if ( is_pv_domain(d) )
             {
                 evc->sysenter_callback_cs      =
                     v->arch.pv_vcpu.sysenter_callback_cs;
@@ -827,17 +853,24 @@ long arch_do_domctl(
             evc->vmce.caps = v->arch.vmce.mcg_cap;
             evc->vmce.mci_ctl2_bank0 = v->arch.vmce.bank[0].mci_ctl2;
             evc->vmce.mci_ctl2_bank1 = v->arch.vmce.bank[1].mci_ctl2;
+
+            ret = 0;
+            vcpu_unpause(v);
+            copyback = 1;
         }
         else
         {
+            if ( d == current->domain ) /* no domain_pause() */
+                break;
             ret = -EINVAL;
             if ( evc->size < offsetof(typeof(*evc), vmce) )
-                goto ext_vcpucontext_out;
-            if ( !is_hvm_domain(d) )
+                break;
+            if ( is_pv_domain(d) )
             {
                 if ( !is_canonical_address(evc->sysenter_callback_eip) ||
                      !is_canonical_address(evc->syscall32_callback_eip) )
-                    goto ext_vcpucontext_out;
+                    break;
+                domain_pause(d);
                 fixup_guest_code_selector(d, evc->sysenter_callback_cs);
                 v->arch.pv_vcpu.sysenter_callback_cs      =
                     evc->sysenter_callback_cs;
@@ -853,13 +886,13 @@ long arch_do_domctl(
                 v->arch.pv_vcpu.syscall32_disables_events =
                     evc->syscall32_disables_events;
             }
+            else if ( (evc->sysenter_callback_cs & ~3) ||
+                      evc->sysenter_callback_eip ||
+                      (evc->syscall32_callback_cs & ~3) ||
+                      evc->syscall32_callback_eip )
+                break;
             else
-            /* We do not support syscall/syscall32/sysenter on 32-bit Xen. */
-            if ( (evc->sysenter_callback_cs & ~3) ||
-                 evc->sysenter_callback_eip ||
-                 (evc->syscall32_callback_cs & ~3) ||
-                 evc->syscall32_callback_eip )
-                goto ext_vcpucontext_out;
+                domain_pause(d);
 
             BUILD_BUG_ON(offsetof(struct xen_domctl_ext_vcpucontext,
                                   mcg_cap) !=
@@ -876,13 +909,11 @@ long arch_do_domctl(
 
                 ret = vmce_restore_vcpu(v, &vmce);
             }
+            else
+                ret = 0;
+
+            domain_unpause(d);
         }
-
-        ret = 0;
-
-    ext_vcpucontext_out:
-        if ( domctl->cmd == XEN_DOMCTL_get_ext_vcpucontext )
-            copyback = 1;
     }
     break;
 
@@ -1047,11 +1078,8 @@ long arch_do_domctl(
         struct xen_domctl_vcpuextstate *evc;
         struct vcpu *v;
         uint32_t offset = 0;
-        uint64_t _xfeature_mask = 0;
-        uint64_t _xcr0, _xcr0_accum;
-        void *receive_buf = NULL, *_xsave_area;
 
-#define PV_XSAVE_SIZE (2 * sizeof(uint64_t) + xsave_cntxt_size)
+#define PV_XSAVE_SIZE(xcr0) (2 * sizeof(uint64_t) + xstate_ctxt_size(xcr0))
 
         evc = &domctl->u.vcpuextstate;
 
@@ -1062,15 +1090,16 @@ long arch_do_domctl(
 
         if ( domctl->cmd == XEN_DOMCTL_getvcpuextstate )
         {
+            unsigned int size = PV_XSAVE_SIZE(v->arch.xcr0_accum);
+
             if ( !evc->size && !evc->xfeature_mask )
             {
                 evc->xfeature_mask = xfeature_mask;
-                evc->size = PV_XSAVE_SIZE;
+                evc->size = size;
                 ret = 0;
                 goto vcpuextstate_out;
             }
-            if ( evc->size != PV_XSAVE_SIZE ||
-                 evc->xfeature_mask != xfeature_mask )
+            if ( evc->size != size || evc->xfeature_mask != xfeature_mask )
             {
                 ret = -EINVAL;
                 goto vcpuextstate_out;
@@ -1093,7 +1122,7 @@ long arch_do_domctl(
             offset += sizeof(v->arch.xcr0_accum);
             if ( copy_to_guest_offset(domctl->u.vcpuextstate.buffer,
                                       offset, (void *)v->arch.xsave_area,
-                                      xsave_cntxt_size) )
+                                      size - 2 * sizeof(uint64_t)) )
             {
                 ret = -EFAULT;
                 goto vcpuextstate_out;
@@ -1101,13 +1130,14 @@ long arch_do_domctl(
         }
         else
         {
-            ret = -EINVAL;
+            void *receive_buf;
+            uint64_t _xcr0, _xcr0_accum;
+            const struct xsave_struct *_xsave_area;
 
-            _xfeature_mask = evc->xfeature_mask;
-            /* xsave context must be restored on compatible target CPUs */
-            if ( (_xfeature_mask & xfeature_mask) != _xfeature_mask )
-                goto vcpuextstate_out;
-            if ( evc->size > PV_XSAVE_SIZE || evc->size < 2 * sizeof(uint64_t) )
+            ret = -EINVAL;
+            if ( evc->size < 2 * sizeof(uint64_t) ||
+                 evc->size > 2 * sizeof(uint64_t) +
+                             xstate_ctxt_size(xfeature_mask) )
                 goto vcpuextstate_out;
 
             receive_buf = xmalloc_bytes(evc->size);
@@ -1128,20 +1158,32 @@ long arch_do_domctl(
             _xcr0_accum = *(uint64_t *)(receive_buf + sizeof(uint64_t));
             _xsave_area = receive_buf + 2 * sizeof(uint64_t);
 
-            if ( !(_xcr0 & XSTATE_FP) || _xcr0 & ~xfeature_mask )
+            if ( _xcr0_accum )
             {
-                xfree(receive_buf);
-                goto vcpuextstate_out;
+                if ( evc->size >= 2 * sizeof(uint64_t) + XSTATE_AREA_MIN_SIZE )
+                    ret = validate_xstate(_xcr0, _xcr0_accum,
+                                          _xsave_area->xsave_hdr.xstate_bv,
+                                          evc->xfeature_mask);
             }
-            if ( (_xcr0 & _xcr0_accum) != _xcr0 )
+            else if ( !_xcr0 )
+                ret = 0;
+            if ( ret )
             {
                 xfree(receive_buf);
                 goto vcpuextstate_out;
             }
 
-            v->arch.xcr0 = _xcr0;
-            v->arch.xcr0_accum = _xcr0_accum;
-            memcpy(v->arch.xsave_area, _xsave_area, evc->size - 2 * sizeof(uint64_t) );
+            if ( evc->size <= PV_XSAVE_SIZE(_xcr0_accum) )
+            {
+                v->arch.xcr0 = _xcr0;
+                v->arch.xcr0_accum = _xcr0_accum;
+                if ( _xcr0_accum & XSTATE_NONLAZY )
+                    v->arch.nonlazy_xstate_used = 1;
+                memcpy(v->arch.xsave_area, _xsave_area,
+                       evc->size - 2 * sizeof(uint64_t));
+            }
+            else
+                ret = -EINVAL;
 
             xfree(receive_buf);
         }
@@ -1237,7 +1279,7 @@ void arch_get_info_guest(struct vcpu *v, vcpu_guest_context_u c)
     bool_t compat = is_pv_32on64_domain(v->domain);
 #define c(fld) (!compat ? (c.nat->fld) : (c.cmp->fld))
 
-    if ( is_hvm_vcpu(v) )
+    if ( !is_pv_vcpu(v) )
         memset(c.nat, 0, sizeof(*c.nat));
     memcpy(&c.nat->fpu_ctxt, v->arch.fpu_ctxt, sizeof(c.nat->fpu_ctxt));
     c(flags = v->arch.vgc_flags & ~(VGCF_i387_valid|VGCF_in_kernel));
@@ -1248,7 +1290,7 @@ void arch_get_info_guest(struct vcpu *v, vcpu_guest_context_u c)
     if ( !compat )
     {
         memcpy(&c.nat->user_regs, &v->arch.user_regs, sizeof(c.nat->user_regs));
-        if ( !is_hvm_vcpu(v) )
+        if ( is_pv_vcpu(v) )
             memcpy(c.nat->trap_ctxt, v->arch.pv_vcpu.trap_ctxt,
                    sizeof(c.nat->trap_ctxt));
     }
@@ -1263,7 +1305,7 @@ void arch_get_info_guest(struct vcpu *v, vcpu_guest_context_u c)
     for ( i = 0; i < ARRAY_SIZE(v->arch.debugreg); ++i )
         c(debugreg[i] = v->arch.debugreg[i]);
 
-    if ( is_hvm_vcpu(v) )
+    if ( has_hvm_container_vcpu(v) )
     {
         struct segment_register sreg;
 

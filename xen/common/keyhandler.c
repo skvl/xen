@@ -16,7 +16,7 @@
 #include <xen/ctype.h>
 #include <xen/perfc.h>
 #include <xen/mm.h>
-#include <xen/nmi.h>
+#include <xen/watchdog.h>
 #include <xen/init.h>
 #include <asm/debugger.h>
 #include <asm/div64.h>
@@ -293,7 +293,7 @@ static void dump_domains(unsigned char key)
                    v->vcpu_id, v->processor,
                    v->is_running ? 'T':'F', v->poll_evtchn,
                    vcpu_info(v, evtchn_upcall_pending),
-                   vcpu_info(v, evtchn_upcall_mask));
+                   !vcpu_event_delivery_is_enabled(v));
             cpuset_print(tmpstr, sizeof(tmpstr), v->vcpu_dirty_cpumask);
             printk("dirty_cpus=%s ", tmpstr);
             cpuset_print(tmpstr, sizeof(tmpstr), v->cpu_affinity);
@@ -310,16 +310,9 @@ static void dump_domains(unsigned char key)
     {
         for_each_vcpu ( d, v )
         {
-            printk("Notifying guest %d:%d (virq %d, port %d, stat %d/%d/%d)\n",
+            printk("Notifying guest %d:%d (virq %d, port %d)\n",
                    d->domain_id, v->vcpu_id,
-                   VIRQ_DEBUG, v->virq_to_evtchn[VIRQ_DEBUG],
-                   test_bit(v->virq_to_evtchn[VIRQ_DEBUG], 
-                            &shared_info(d, evtchn_pending)),
-                   test_bit(v->virq_to_evtchn[VIRQ_DEBUG], 
-                            &shared_info(d, evtchn_mask)),
-                   test_bit(v->virq_to_evtchn[VIRQ_DEBUG] /
-                            BITS_PER_EVTCHN_WORD(d),
-                            &vcpu_info(v, evtchn_pending_sel)));
+                   VIRQ_DEBUG, v->virq_to_evtchn[VIRQ_DEBUG]);
             send_guest_vcpu_virq(v, VIRQ_DEBUG);
         }
     }

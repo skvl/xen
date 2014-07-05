@@ -26,6 +26,9 @@
 #include <asm/msr.h>
 #include <asm/processor.h>
 
+/* Using SetVirtualAddressMap() is incompatible with kexec: */
+#undef USE_SET_VIRTUAL_ADDRESS_MAP
+
 #define SHIM_LOCK_PROTOCOL_GUID \
   { 0x605dab50, 0xe046, 0x4300, {0xab, 0xb6, 0x3d, 0xd8, 0x10, 0xdd, 0x8b, 0x23} }
 
@@ -58,8 +61,8 @@ struct file {
 static EFI_BOOT_SERVICES *__initdata efi_bs;
 static EFI_HANDLE __initdata efi_ih;
 
-static SIMPLE_TEXT_OUTPUT_INTERFACE __initdata *StdOut;
-static SIMPLE_TEXT_OUTPUT_INTERFACE __initdata *StdErr;
+static SIMPLE_TEXT_OUTPUT_INTERFACE *__initdata StdOut;
+static SIMPLE_TEXT_OUTPUT_INTERFACE *__initdata StdErr;
 
 static UINT32 __initdata mdesc_ver;
 
@@ -456,7 +459,8 @@ static bool_t __init read_file(EFI_FILE_HANDLE dir_handle, CHAR16 *name,
         what = what ?: L"Seek";
     else
     {
-        file->addr = (EFI_PHYSICAL_ADDRESS)1 << (32 + PAGE_SHIFT);
+        file->addr = min(1UL << (32 + PAGE_SHIFT),
+                         HYPERVISOR_VIRT_END - DIRECTMAP_VIRT_START);
         ret = efi_bs->AllocatePages(AllocateMaxAddress, EfiLoaderData,
                                     PFN_UP(size), &file->addr);
     }
@@ -732,7 +736,7 @@ static void __init relocate_image(unsigned long delta)
                 }
                 break;
             default:
-                blexit(L"Unsupported relocation type\r\n");
+                blexit(L"Unsupported relocation type");
             }
         }
         base_relocs = (const void *)(base_relocs->entries + i + (i & 1));
@@ -741,6 +745,22 @@ static void __init relocate_image(unsigned long delta)
 
 extern const s32 __trampoline_rel_start[], __trampoline_rel_stop[];
 extern const s32 __trampoline_seg_start[], __trampoline_seg_stop[];
+
+static void __init relocate_trampoline(unsigned long phys)
+{
+    const s32 *trampoline_ptr;
+
+    trampoline_phys = phys;
+    /* Apply relocations to trampoline. */
+    for ( trampoline_ptr = __trampoline_rel_start;
+          trampoline_ptr < __trampoline_rel_stop;
+          ++trampoline_ptr )
+        *(u32 *)(*trampoline_ptr + (long)trampoline_ptr) += phys;
+    for ( trampoline_ptr = __trampoline_seg_start;
+          trampoline_ptr < __trampoline_seg_stop;
+          ++trampoline_ptr )
+        *(u16 *)(*trampoline_ptr + (long)trampoline_ptr) = phys >> 4;
+}
 
 void EFIAPI __init __attribute__((__noreturn__))
 efi_start(EFI_HANDLE ImageHandle, EFI_SYSTEM_TABLE *SystemTable)
@@ -761,7 +781,6 @@ efi_start(EFI_HANDLE ImageHandle, EFI_SYSTEM_TABLE *SystemTable)
     EFI_GRAPHICS_OUTPUT_MODE_INFORMATION *mode_info;
     EFI_FILE_HANDLE dir_handle;
     union string section = { NULL }, name;
-    const s32 *trampoline_ptr;
     struct e820entry *e;
     u64 efer;
     bool_t base_video = 0;
@@ -785,9 +804,9 @@ efi_start(EFI_HANDLE ImageHandle, EFI_SYSTEM_TABLE *SystemTable)
 
     xen_phys_start = (UINTN)loaded_image->ImageBase;
     if ( (xen_phys_start + loaded_image->ImageSize - 1) >> 32 )
-        blexit(L"Xen must be loaded below 4Gb.\r\n");
+        blexit(L"Xen must be loaded below 4Gb.");
     if ( xen_phys_start & ((1 << L2_PAGETABLE_SHIFT) - 1) )
-        blexit(L"Xen must be loaded at a 2Mb boundary.\r\n");
+        blexit(L"Xen must be loaded at a 2Mb boundary.");
     trampoline_xen_phys_start = xen_phys_start;
 
     /* Get the file system interface. */
@@ -906,13 +925,13 @@ efi_start(EFI_HANDLE ImageHandle, EFI_SYSTEM_TABLE *SystemTable)
             *tail = 0;
         }
         if ( !tail )
-            blexit(L"No configuration file found\r\n");
+            blexit(L"No configuration file found.");
         PrintStr(L"Using configuration file '");
         PrintStr(file_name);
         PrintStr(L"'\r\n");
     }
     else if ( !read_file(dir_handle, cfg_file_name, &cfg) )
-        blexit(L"Configuration file not found\r\n");
+        blexit(L"Configuration file not found.");
     pre_parse(&cfg);
 
     if ( section.w )
@@ -935,13 +954,13 @@ efi_start(EFI_HANDLE ImageHandle, EFI_SYSTEM_TABLE *SystemTable)
             PrintStr(L"Chained configuration file '");
             PrintStr(name.w);
             efi_bs->FreePool(name.w);
-            blexit(L"'not found\r\n");
+            blexit(L"'not found.");
         }
         pre_parse(&cfg);
         efi_bs->FreePool(name.w);
     }
     if ( !name.s )
-        blexit(L"No Dom0 kernel image specified\r\n");
+        blexit(L"No Dom0 kernel image specified.");
     split_value(name.s);
     read_file(dir_handle, s2w(&name), &kernel);
     efi_bs->FreePool(name.w);
@@ -949,7 +968,7 @@ efi_start(EFI_HANDLE ImageHandle, EFI_SYSTEM_TABLE *SystemTable)
     if ( !EFI_ERROR(efi_bs->LocateProtocol(&shim_lock_guid, NULL,
                     (void **)&shim_lock)) &&
          shim_lock->Verify(kernel.ptr, kernel.size) != EFI_SUCCESS )
-        blexit(L"Dom0 kernel image could not be verified\r\n");
+        blexit(L"Dom0 kernel image could not be verified.");
 
     name.s = get_value(&cfg, section.s, "ramdisk");
     if ( name.s )
@@ -1264,23 +1283,13 @@ efi_start(EFI_HANDLE ImageHandle, EFI_SYSTEM_TABLE *SystemTable)
     cfg.size = trampoline_end - trampoline_start;
     status = efi_bs->AllocatePages(AllocateMaxAddress, EfiLoaderData,
                                    PFN_UP(cfg.size), &cfg.addr);
-    if ( EFI_ERROR(status) )
+    if ( status == EFI_SUCCESS )
+        relocate_trampoline(cfg.addr);
+    else
     {
         cfg.addr = 0;
-        blexit(L"No memory for trampoline\r\n");
+        PrintStr(L"Trampoline space cannot be allocated; will try fallback.\r\n");
     }
-    trampoline_phys = cfg.addr;
-    /* Apply relocations to trampoline. */
-    for ( trampoline_ptr = __trampoline_rel_start;
-          trampoline_ptr < __trampoline_rel_stop;
-          ++trampoline_ptr )
-        *(u32 *)(*trampoline_ptr + (long)trampoline_ptr) +=
-            trampoline_phys;
-    for ( trampoline_ptr = __trampoline_seg_start;
-          trampoline_ptr < __trampoline_seg_stop;
-          ++trampoline_ptr )
-        *(u16 *)(*trampoline_ptr + (long)trampoline_ptr) =
-            trampoline_phys >> 4;
 
     /* Initialise L2 identity-map and boot-map page table entries (16MB). */
     for ( i = 0; i < 8; ++i )
@@ -1375,12 +1384,12 @@ efi_start(EFI_HANDLE ImageHandle, EFI_SYSTEM_TABLE *SystemTable)
     mbi.mem_upper -= efi_memmap_size;
     mbi.mem_upper &= -__alignof__(EFI_MEMORY_DESCRIPTOR);
     if ( mbi.mem_upper < xen_phys_start )
-        blexit(L"Out of static memory\r\n");
+        blexit(L"Out of static memory");
     efi_memmap = (void *)(long)mbi.mem_upper;
     status = efi_bs->GetMemoryMap(&efi_memmap_size, efi_memmap, &map_key,
                                   &efi_mdesc_size, &mdesc_ver);
     if ( EFI_ERROR(status) )
-        blexit(L"Cannot obtain memory map\r\n");
+        blexit(L"Cannot obtain memory map");
 
     /* Populate E820 table and check trampoline area availability. */
     e = e820map - 1;
@@ -1396,10 +1405,14 @@ efi_start(EFI_HANDLE ImageHandle, EFI_SYSTEM_TABLE *SystemTable)
             type = E820_RESERVED;
             break;
         case EfiConventionalMemory:
-        case EfiLoaderCode:
-        case EfiLoaderData:
         case EfiBootServicesCode:
         case EfiBootServicesData:
+            if ( !trampoline_phys && desc->PhysicalStart + len <= 0x100000 &&
+                 len >= cfg.size && desc->PhysicalStart + len > cfg.addr )
+                cfg.addr = (desc->PhysicalStart + len - cfg.size) & PAGE_MASK;
+            /* fall through */
+        case EfiLoaderCode:
+        case EfiLoaderData:
             if ( desc->Attribute & EFI_MEMORY_WB )
                 type = E820_RAM;
             else
@@ -1427,6 +1440,12 @@ efi_start(EFI_HANDLE ImageHandle, EFI_SYSTEM_TABLE *SystemTable)
             ++e820nr;
         }
     }
+    if ( !trampoline_phys )
+    {
+        if ( !cfg.addr )
+            blexit(L"No memory for trampoline");
+        relocate_trampoline(cfg.addr);
+    }
 
     status = efi_bs->ExitBootServices(ImageHandle, map_key);
     if ( EFI_ERROR(status) )
@@ -1434,7 +1453,7 @@ efi_start(EFI_HANDLE ImageHandle, EFI_SYSTEM_TABLE *SystemTable)
 
     /* Adjust pointers into EFI. */
     efi_ct = (void *)efi_ct + DIRECTMAP_VIRT_START;
-#if 0 /* Only needed when using virtual mode (see efi_init_memory()). */
+#ifdef USE_SET_VIRTUAL_ADDRESS_MAP
     efi_rs = (void *)efi_rs + DIRECTMAP_VIRT_START;
 #endif
     efi_memmap = (void *)efi_memmap + DIRECTMAP_VIRT_START;
@@ -1477,6 +1496,7 @@ efi_start(EFI_HANDLE ImageHandle, EFI_SYSTEM_TABLE *SystemTable)
     for( ; ; ); /* not reached */
 }
 
+#ifndef USE_SET_VIRTUAL_ADDRESS_MAP
 static __init void copy_mapping(unsigned long mfn, unsigned long end,
                                 bool_t (*is_valid)(unsigned long smfn,
                                                    unsigned long emfn))
@@ -1520,6 +1540,7 @@ static bool_t __init rt_range_valid(unsigned long smfn, unsigned long emfn)
 {
     return 1;
 }
+#endif
 
 #define INVALID_VIRTUAL_ADDRESS (0xBAAADUL << \
                                  (EFI_PAGE_SHIFT + BITS_PER_LONG - 32))
@@ -1527,6 +1548,13 @@ static bool_t __init rt_range_valid(unsigned long smfn, unsigned long emfn)
 void __init efi_init_memory(void)
 {
     unsigned int i;
+#ifndef USE_SET_VIRTUAL_ADDRESS_MAP
+    struct rt_extra {
+        struct rt_extra *next;
+        unsigned long smfn, emfn;
+        unsigned int prot;
+    } *extra, *extra_head = NULL;
+#endif
 
     printk(XENLOG_INFO "EFI memory map:\n");
     for ( i = 0; i < efi_memmap_size; i += efi_mdesc_size )
@@ -1573,6 +1601,8 @@ void __init efi_init_memory(void)
              !(smfn & pfn_hole_mask) &&
              !((smfn ^ (emfn - 1)) & ~pfn_pdx_bottom_mask) )
         {
+            if ( (unsigned long)mfn_to_virt(emfn - 1) >= HYPERVISOR_VIRT_END )
+                prot &= ~_PAGE_GLOBAL;
             if ( map_pages_to_xen((unsigned long)mfn_to_virt(smfn),
                                   smfn, emfn - smfn, prot) == 0 )
                 desc->VirtualStart =
@@ -1581,15 +1611,29 @@ void __init efi_init_memory(void)
                 printk(XENLOG_ERR "Could not map MFNs %#lx-%#lx\n",
                        smfn, emfn - 1);
         }
+#ifndef USE_SET_VIRTUAL_ADDRESS_MAP
+        else if ( !((desc->PhysicalStart + len - 1) >> (VADDR_BITS - 1)) &&
+                  (extra = xmalloc(struct rt_extra)) != NULL )
+        {
+            extra->smfn = smfn;
+            extra->emfn = emfn;
+            extra->prot = prot & ~_PAGE_GLOBAL;
+            extra->next = extra_head;
+            extra_head = extra;
+            desc->VirtualStart = desc->PhysicalStart;
+        }
+#endif
         else
         {
+#ifdef USE_SET_VIRTUAL_ADDRESS_MAP
             /* XXX allocate e.g. down from FIXADDR_START */
+#endif
             printk(XENLOG_ERR "No mapping for MFNs %#lx-%#lx\n",
                    smfn, emfn - 1);
         }
     }
 
-#if 0 /* Incompatible with kexec. */
+#ifdef USE_SET_VIRTUAL_ADDRESS_MAP
     efi_rs->SetVirtualAddressMap(efi_memmap_size, efi_mdesc_size,
                                  mdesc_ver, efi_memmap);
 #else
@@ -1600,20 +1644,74 @@ void __init efi_init_memory(void)
 
     copy_mapping(0, max_page, ram_range_valid);
 
-    /* Insert non-RAM runtime mappings. */
+    /* Insert non-RAM runtime mappings inside the direct map. */
     for ( i = 0; i < efi_memmap_size; i += efi_mdesc_size )
     {
         const EFI_MEMORY_DESCRIPTOR *desc = efi_memmap + i;
 
-        if ( desc->Attribute & EFI_MEMORY_RUNTIME )
+        if ( (desc->Attribute & EFI_MEMORY_RUNTIME) &&
+             desc->VirtualStart != INVALID_VIRTUAL_ADDRESS &&
+             desc->VirtualStart != desc->PhysicalStart )
+            copy_mapping(PFN_DOWN(desc->PhysicalStart),
+                         PFN_UP(desc->PhysicalStart +
+                                (desc->NumberOfPages << EFI_PAGE_SHIFT)),
+                         rt_range_valid);
+    }
+
+    /* Insert non-RAM runtime mappings outside of the direct map. */
+    while ( (extra = extra_head) != NULL )
+    {
+        unsigned long addr = extra->smfn << PAGE_SHIFT;
+        l4_pgentry_t l4e = efi_l4_pgtable[l4_table_offset(addr)];
+        l3_pgentry_t *pl3e;
+        l2_pgentry_t *pl2e;
+        l1_pgentry_t *l1t;
+
+        if ( !(l4e_get_flags(l4e) & _PAGE_PRESENT) )
         {
-            if ( desc->VirtualStart != INVALID_VIRTUAL_ADDRESS )
-                copy_mapping(PFN_DOWN(desc->PhysicalStart),
-                             PFN_UP(desc->PhysicalStart +
-                                    (desc->NumberOfPages << EFI_PAGE_SHIFT)),
-                             rt_range_valid);
-            else
-                /* XXX */;
+            pl3e = alloc_xen_pagetable();
+            BUG_ON(!pl3e);
+            clear_page(pl3e);
+            efi_l4_pgtable[l4_table_offset(addr)] =
+                l4e_from_paddr(virt_to_maddr(pl3e), __PAGE_HYPERVISOR);
+        }
+        else
+            pl3e = l4e_to_l3e(l4e);
+        pl3e += l3_table_offset(addr);
+        if ( !(l3e_get_flags(*pl3e) & _PAGE_PRESENT) )
+        {
+            pl2e = alloc_xen_pagetable();
+            BUG_ON(!pl2e);
+            clear_page(pl2e);
+            *pl3e = l3e_from_paddr(virt_to_maddr(pl2e), __PAGE_HYPERVISOR);
+        }
+        else
+        {
+            BUG_ON(l3e_get_flags(*pl3e) & _PAGE_PSE);
+            pl2e = l3e_to_l2e(*pl3e);
+        }
+        pl2e += l2_table_offset(addr);
+        if ( !(l2e_get_flags(*pl2e) & _PAGE_PRESENT) )
+        {
+            l1t = alloc_xen_pagetable();
+            BUG_ON(!l1t);
+            clear_page(l1t);
+            *pl2e = l2e_from_paddr(virt_to_maddr(l1t), __PAGE_HYPERVISOR);
+        }
+        else
+        {
+            BUG_ON(l2e_get_flags(*pl2e) & _PAGE_PSE);
+            l1t = l2e_to_l1e(*pl2e);
+        }
+        for ( i = l1_table_offset(addr);
+              i < L1_PAGETABLE_ENTRIES && extra->smfn < extra->emfn;
+              ++i, ++extra->smfn )
+            l1t[i] = l1e_from_pfn(extra->smfn, extra->prot);
+
+        if ( extra->smfn == extra->emfn )
+        {
+            extra_head = extra->next;
+            xfree(extra);
         }
     }
 

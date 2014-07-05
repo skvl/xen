@@ -16,15 +16,15 @@ static inline void write_pte(lpae_t *p, lpae_t pte)
         /* Safely write the entry (STRD is atomic on CPUs that support LPAE) */
         "strd %0, %H0, [%1];"
         "dsb;"
-        /* Push this cacheline to the PoC so the rest of the system sees it. */
-        STORE_CP32(1, DCCMVAC)
-        /* Ensure that the data flush is completed before proceeding */
-        "dsb;"
         : : "r" (pte.bits), "r" (p) : "memory");
 }
 
 /* Inline ASM to flush dcache on register R (may be an inline asm operand) */
-#define __flush_xen_dcache_one(R) STORE_CP32(R, DCCMVAC)
+#define __clean_xen_dcache_one(R) STORE_CP32(R, DCCMVAC)
+
+/* Inline ASM to clean and invalidate dcache on register R (may be an
+ * inline asm operand) */
+#define __clean_and_invalidate_xen_dcache_one(R) STORE_CP32(R, DCCIMVAC)
 
 /*
  * Flush all hypervisor mappings from the TLB and branch predictor.

@@ -165,7 +165,7 @@ static void nmi_timer_fn(void *unused)
     set_timer(&this_cpu(nmi_timer), NOW() + MILLISECS(1000));
 }
 
-static void disable_lapic_nmi_watchdog(void)
+void disable_lapic_nmi_watchdog(void)
 {
     if (nmi_active <= 0)
         return;
@@ -410,7 +410,12 @@ void watchdog_enable(void)
     atomic_dec(&watchdog_disable_count);
 }
 
-void __init watchdog_setup(void)
+bool_t watchdog_enabled(void)
+{
+    return !atomic_read(&watchdog_disable_count);
+}
+
+int __init watchdog_setup(void)
 {
     unsigned int cpu;
 
@@ -423,14 +428,14 @@ void __init watchdog_setup(void)
     register_cpu_notifier(&cpu_nmi_nfb);
 
     watchdog_enable();
+    return 0;
 }
 
 void nmi_watchdog_tick(struct cpu_user_regs * regs)
 {
     unsigned int sum = this_cpu(nmi_timer_ticks);
 
-    if ( (this_cpu(last_irq_sums) == sum) &&
-         !atomic_read(&watchdog_disable_count) )
+    if ( (this_cpu(last_irq_sums) == sum) && watchdog_enabled() )
     {
         /*
          * Ayiee, looks like this CPU is stuck ... wait for the timeout

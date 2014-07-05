@@ -646,7 +646,7 @@ static void dma_pte_clear_one(struct domain *domain, u64 addr)
     iommu_flush_cache_entry(pte, sizeof(struct dma_pte));
 
     if ( !this_cpu(iommu_dont_flush_iotlb) )
-        __intel_iommu_iotlb_flush(domain, addr >> PAGE_SHIFT_4K , 0, 1);
+        __intel_iommu_iotlb_flush(domain, addr >> PAGE_SHIFT_4K, 1, 1);
 
     unmap_vtd_domain_page(page);
 
@@ -668,13 +668,24 @@ static void dma_pte_clear_one(struct domain *domain, u64 addr)
 
 static void iommu_free_pagetable(u64 pt_maddr, int level)
 {
-    int i;
-    struct dma_pte *pt_vaddr, *pte;
-    int next_level = level - 1;
+    struct page_info *pg = maddr_to_page(pt_maddr);
 
     if ( pt_maddr == 0 )
         return;
 
+    PFN_ORDER(pg) = level;
+    spin_lock(&iommu_pt_cleanup_lock);
+    page_list_add_tail(pg, &iommu_pt_cleanup_list);
+    spin_unlock(&iommu_pt_cleanup_lock);
+}
+
+static void iommu_free_page_table(struct page_info *pg)
+{
+    unsigned int i, next_level = PFN_ORDER(pg) - 1;
+    u64 pt_maddr = page_to_maddr(pg);
+    struct dma_pte *pt_vaddr, *pte;
+
+    PFN_ORDER(pg) = 0;
     pt_vaddr = (struct dma_pte *)map_vtd_domain_page(pt_maddr);
 
     for ( i = 0; i < PTE_NUM; i++ )
@@ -696,25 +707,9 @@ static void iommu_free_pagetable(u64 pt_maddr, int level)
 
 static int iommu_set_root_entry(struct iommu *iommu)
 {
-    struct acpi_drhd_unit *drhd;
     u32 sts;
     unsigned long flags;
 
-    spin_lock(&iommu->lock);
-
-    if ( iommu->root_maddr == 0 )
-    {
-        drhd = iommu_to_drhd(iommu);
-        iommu->root_maddr = alloc_pgtable_maddr(drhd, 1);
-    }
-
-    if ( iommu->root_maddr == 0 )
-    {
-        spin_unlock(&iommu->lock);
-        return -ENOMEM;
-    }
-
-    spin_unlock(&iommu->lock);
     spin_lock_irqsave(&iommu->register_lock, flags);
     dmar_writeq(iommu->reg, DMAR_RTADDR_REG, iommu->root_maddr);
 
@@ -738,7 +733,7 @@ static void iommu_enable_translation(struct acpi_drhd_unit *drhd)
     if ( is_igd_drhd(drhd) && !is_igd_vt_enabled_quirk() ) 
     {
         if ( force_iommu )
-            panic("BIOS did not enable IGD for VT properly, crash Xen for security purpose!\n");
+            panic("BIOS did not enable IGD for VT properly, crash Xen for security purpose");
         else
         {
             dprintk(XENLOG_WARNING VTDPREFIX,
@@ -1055,7 +1050,7 @@ static void dma_msi_set_affinity(struct irq_desc *desc, const cpumask_t *mask)
         return;
     }
 
-    msi_compose_msg(desc, &msg);
+    msi_compose_msg(desc->arch.vector, desc->arch.cpu_mask, &msg);
     /* Are these overrides really needed? */
     if (x2apic_enabled)
         msg.address_hi = dest & 0xFFFFFF00;
@@ -1098,7 +1093,7 @@ static int __init iommu_set_interrupt(struct acpi_drhd_unit *drhd)
 
     desc = irq_to_desc(irq);
     desc->handler = &dma_msi_type;
-    ret = request_irq(irq, iommu_page_fault, 0, "dmar", iommu);
+    ret = request_irq(irq, iommu_page_fault, "dmar", iommu);
     if ( ret )
     {
         desc->handler = &no_irq_type;
@@ -1142,14 +1137,18 @@ int __init iommu_alloc(struct acpi_drhd_unit *drhd)
         return -ENOMEM;
     }
     iommu->intel->drhd = drhd;
+    drhd->iommu = iommu;
 
-    iommu->reg = map_to_nocache_virt(nr_iommus, drhd->address);
+    if ( !(iommu->root_maddr = alloc_pgtable_maddr(drhd, 1)) )
+        return -ENOMEM;
+
+    iommu->reg = ioremap(drhd->address, PAGE_SIZE);
+    if ( !iommu->reg )
+        return -ENOMEM;
     iommu->index = nr_iommus++;
 
     iommu->cap = dmar_readq(iommu->reg, DMAR_CAP_REG);
     iommu->ecap = dmar_readq(iommu->reg, DMAR_ECAP_REG);
-
-    drhd->iommu = iommu;
 
     if ( iommu_verbose )
     {
@@ -1159,6 +1158,9 @@ int __init iommu_alloc(struct acpi_drhd_unit *drhd)
         dprintk(VTDPREFIX,
                 "cap = %"PRIx64" ecap = %"PRIx64"\n", iommu->cap, iommu->ecap);
     }
+    if ( !(iommu->cap + 1) || !(iommu->ecap + 1) )
+        return -ENODEV;
+
     if ( cap_fault_reg_offset(iommu->cap) +
          cap_num_fault_regs(iommu->cap) * PRIMARY_FAULT_REG_LEN >= PAGE_SIZE ||
          ecap_iotlb_offset(iommu->ecap) >= PAGE_SIZE )
@@ -1429,6 +1431,15 @@ static int domain_context_mapping(
 
     switch ( pdev->type )
     {
+    case DEV_TYPE_PCI_HOST_BRIDGE:
+        if ( iommu_verbose )
+            dprintk(VTDPREFIX, "d%d:Hostbridge: skip %04x:%02x:%02x.%u map\n",
+                    domain->domain_id, seg, bus,
+                    PCI_SLOT(devfn), PCI_FUNC(devfn));
+        if ( !is_hardware_domain(domain) )
+            return -EPERM;
+        break;
+
     case DEV_TYPE_PCIe_BRIDGE:
     case DEV_TYPE_PCIe2PCI_BRIDGE:
     case DEV_TYPE_LEGACY_PCI_BRIDGE:
@@ -1559,6 +1570,15 @@ static int domain_context_unmap(
 
     switch ( pdev->type )
     {
+    case DEV_TYPE_PCI_HOST_BRIDGE:
+        if ( iommu_verbose )
+            dprintk(VTDPREFIX, "d%d:Hostbridge: skip %04x:%02x:%02x.%u unmap\n",
+                    domain->domain_id, seg, bus,
+                    PCI_SLOT(devfn), PCI_FUNC(devfn));
+        if ( !is_hardware_domain(domain) )
+            return -EPERM;
+        goto out;
+
     case DEV_TYPE_PCIe_BRIDGE:
     case DEV_TYPE_PCIe2PCI_BRIDGE:
     case DEV_TYPE_LEGACY_PCI_BRIDGE:
@@ -2335,7 +2355,7 @@ static void vtd_resume(void)
         return;
 
     if ( init_vtd_hw() != 0  && force_iommu )
-         panic("IOMMU setup failed, crash Xen for security purpose!\n");
+         panic("IOMMU setup failed, crash Xen for security purpose");
 
     for_each_drhd_unit ( drhd )
     {
@@ -2421,6 +2441,7 @@ const struct iommu_ops intel_iommu_ops = {
     .teardown = iommu_domain_teardown,
     .map_page = intel_iommu_map_page,
     .unmap_page = intel_iommu_unmap_page,
+    .free_page_table = iommu_free_page_table,
     .reassign_device = reassign_device_ownership,
     .get_device_group_id = intel_iommu_group_id,
     .update_ire_from_apic = io_apic_write_remap_rte,

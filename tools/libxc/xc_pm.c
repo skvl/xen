@@ -51,7 +51,7 @@ int xc_pm_get_pxstat(xc_interface *xch, int cpuid, struct xc_px_stat *pxpt)
 
     int max_px, ret;
 
-    if ( !pxpt || !(pxpt->trans_pt) || !(pxpt->pt) )
+    if ( !pxpt->trans_pt || !pxpt->pt )
         return -EINVAL;
 
     if ( (ret = xc_pm_get_max_px(xch, cpuid, &max_px)) != 0)
@@ -128,7 +128,7 @@ int xc_pm_get_cxstat(xc_interface *xch, int cpuid, struct xc_cx_stat *cxpt)
     DECLARE_NAMED_HYPERCALL_BOUNCE(residencies, cxpt->residencies, 0, XC_HYPERCALL_BUFFER_BOUNCE_BOTH);
     int max_cx, ret;
 
-    if( !cxpt || !(cxpt->triggers) || !(cxpt->residencies) )
+    if( !cxpt->triggers || !cxpt->residencies )
         return -EINVAL;
 
     if ( (ret = xc_pm_get_max_cx(xch, cpuid, &max_cx)) )
@@ -285,7 +285,7 @@ int xc_set_cpufreq_gov(xc_interface *xch, int cpuid, char *govname)
     DECLARE_SYSCTL;
     char *scaling_governor = sysctl.u.pm_op.u.set_gov.scaling_governor;
 
-    if ( (xch < 0) || (!govname) )
+    if ( !xch || !govname )
         return -EINVAL;
 
     sysctl.cmd = XEN_SYSCTL_pm_op;
@@ -302,7 +302,7 @@ int xc_set_cpufreq_para(xc_interface *xch, int cpuid,
 {
     DECLARE_SYSCTL;
 
-    if ( xch < 0 )
+    if ( !xch )
         return -EINVAL;
 
     sysctl.cmd = XEN_SYSCTL_pm_op;
@@ -319,7 +319,7 @@ int xc_get_cpufreq_avgfreq(xc_interface *xch, int cpuid, int *avg_freq)
     int ret = 0;
     DECLARE_SYSCTL;
 
-    if ( (xch < 0) || (!avg_freq) )
+    if ( !xch || !avg_freq )
         return -EINVAL;
 
     sysctl.cmd = XEN_SYSCTL_pm_op;
@@ -384,7 +384,7 @@ int xc_get_cpuidle_max_cstate(xc_interface *xch, uint32_t *value)
     int rc;
     DECLARE_SYSCTL;
 
-    if ( xch < 0 || !value )
+    if ( !xch || !value )
         return -EINVAL;
 
     sysctl.cmd = XEN_SYSCTL_pm_op;
@@ -401,7 +401,7 @@ int xc_set_cpuidle_max_cstate(xc_interface *xch, uint32_t value)
 {
     DECLARE_SYSCTL;
 
-    if ( xch < 0 )
+    if ( !xch )
         return -EINVAL;
 
     sysctl.cmd = XEN_SYSCTL_pm_op;
@@ -416,7 +416,7 @@ int xc_enable_turbo(xc_interface *xch, int cpuid)
 {
     DECLARE_SYSCTL;
 
-    if ( xch < 0 )
+    if ( !xch )
         return -EINVAL;
 
     sysctl.cmd = XEN_SYSCTL_pm_op;
@@ -429,7 +429,7 @@ int xc_disable_turbo(xc_interface *xch, int cpuid)
 {
     DECLARE_SYSCTL;
 
-    if ( xch < 0 )
+    if ( !xch )
         return -EINVAL;
 
     sysctl.cmd = XEN_SYSCTL_pm_op;

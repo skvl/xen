@@ -26,7 +26,7 @@ lr      .req    x30             // link register
         .macro  entry_guest, compat
 
         add     x21, sp, #UREGS_SPSR_el1
-        mrs     x23, SPSR_EL1
+        mrs     x23, SPSR_el1
         str     x23, [x21]
 
         .if \compat == 0 /* Aarch64 mode */
@@ -35,32 +35,64 @@ lr      .req    x30             // link register
         mrs     x22, SP_el0
         str     x22, [x21]
 
-        add     x21, sp, #UREGS_ELR_el1
+        add     x21, sp, #UREGS_SP_el1
         mrs     x22, SP_el1
         mrs     x23, ELR_el1
         stp     x22, x23, [x21]
 
-        .else             /* Aarch32 mode */
+        .else            /* Aarch32 mode */
 
         add     x21, sp, #UREGS_SPSR_fiq
-        mrs     x22, spsr_fiq
-        mrs     x23, spsr_irq
+        mrs     x22, SPSR_fiq
+        mrs     x23, SPSR_irq
         stp     w22, w23, [x21]
 
         add     x21, sp, #UREGS_SPSR_und
-        mrs     x22, spsr_und
-        mrs     x23, spsr_abt
+        mrs     x22, SPSR_und
+        mrs     x23, SPSR_abt
         stp     w22, w23, [x21]
 
         .endif
 
         .endm
 
+        .macro  exit_guest, compat
+
+        add     x21, sp, #UREGS_SPSR_el1
+        ldr     x23, [x21]
+        msr     SPSR_el1, x23
+
+        .if \compat == 0 /* Aarch64 mode */
+
+        add     x21, sp, #UREGS_SP_el0
+        ldr     x22, [x21]
+        msr     SP_el0, x22
+
+        add     x21, sp, #UREGS_SP_el1
+        ldp     x22, x23, [x21]
+        msr     SP_el1, x22
+        msr     ELR_el1, x23
+
+        .else            /* Aarch32 mode */
+
+        add     x21, sp, #UREGS_SPSR_fiq
+        ldp     w22, w23, [x21]
+        msr     SPSR_fiq, x22
+        msr     SPSR_irq, x23
+
+        add     x21, sp, #UREGS_SPSR_und
+        ldp     w22, w23, [x21]
+        msr     SPSR_und, x22
+        msr     SPSR_abt, x23
+
+        .endif
+
+        .endm
 /*
- * Save state on entry to hypervisor
+ * Save state on entry to hypervisor, restore on exit
  */
         .macro  entry, hyp, compat
-        sub     sp, sp, #(UREGS_SPSR_el1 - UREGS_SP)
+        sub     sp, sp, #(UREGS_SPSR_el1 - UREGS_LR) /* CPSR, PC, SP, LR */
         push    x28, x29
         push    x26, x27
         push    x24, x25
@@ -79,7 +111,7 @@ lr      .req    x30             // link register
 
         .if \hyp == 1        /* Hypervisor mode */
 
-        add     x21, sp, #(UREGS_X0 - UREGS_SP)
+        add     x21, sp, #UREGS_kernel_sizeof
 
         .else                /* Guest mode */
 
@@ -93,6 +125,20 @@ lr      .req    x30             // link register
         mrs     x22, elr_el2
         mrs     x23, spsr_el2
         stp     x22, x23, [sp, #UREGS_PC]
+
+        .endm
+
+        .macro  exit, hyp, compat
+
+        .if \hyp == 0         /* Guest mode */
+
+        bl      leave_hypervisor_tail /* Disables interrupts on return */
+
+        exit_guest \compat
+
+        .endif
+
+        b       return_from_trap
 
         .endm
 
@@ -133,21 +179,26 @@ hyp_sync:
         msr     daifclr, #2
         mov     x0, sp
         bl      do_trap_hypervisor
-        b       return_to_hypervisor
+        exit    hyp=1
 
 hyp_irq:
         entry   hyp=1
         mov     x0, sp
         bl      do_trap_irq
-        b       return_to_hypervisor
+        exit    hyp=1
 
 guest_sync:
         entry   hyp=0, compat=0
-        invalid BAD_SYNC /* No AArch64 guest support yet */
+        msr     daifclr, #2
+        mov     x0, sp
+        bl      do_trap_hypervisor
+        exit    hyp=0, compat=0
 
 guest_irq:
         entry   hyp=0, compat=0
-        invalid BAD_IRQ /* No AArch64 guest support yet */
+        mov     x0, sp
+        bl      do_trap_irq
+        exit    hyp=0, compat=0
 
 guest_fiq_invalid:
         entry   hyp=0, compat=0
@@ -162,13 +213,13 @@ guest_sync_compat:
         msr     daifclr, #2
         mov     x0, sp
         bl      do_trap_hypervisor
-        b       return_to_guest
+        exit    hyp=0, compat=1
 
 guest_irq_compat:
         entry   hyp=0, compat=1
         mov     x0, sp
         bl      do_trap_irq
-        b       return_to_guest
+        exit    hyp=0, compat=1
 
 guest_fiq_invalid_compat:
         entry   hyp=0, compat=1
@@ -178,18 +229,12 @@ guest_error_invalid_compat:
         entry   hyp=0, compat=1
         invalid BAD_ERROR
 
-ENTRY(return_to_new_vcpu)
-        ldr     x21, [sp, #UREGS_CPSR]
-        and     x21, x21, #PSR_MODE_MASK
-        /* Returning to EL2? */
-        cmp     x21, #PSR_MODE_EL2t
-        ccmp    x21, #PSR_MODE_EL2h, #0x4, ne
-        b.eq    return_to_hypervisor /* Yes */
-        /* Fall thru */
-ENTRY(return_to_guest)
-        bl      leave_hypervisor_tail /* Disables interrupts on return */
-        /* Fall thru */
-ENTRY(return_to_hypervisor)
+ENTRY(return_to_new_vcpu32)
+        exit    hyp=0, compat=1
+ENTRY(return_to_new_vcpu64)
+        exit    hyp=0, compat=0
+
+return_from_trap:
         msr     daifset, #2 /* Mask interrupts */
 
         ldp     x21, x22, [sp, #UREGS_PC]       // load ELR, SPSR
@@ -214,7 +259,8 @@ ENTRY(return_to_hypervisor)
         pop     x26, x27
         pop     x28, x29
 
-        ldr     lr, [sp], #(UREGS_SPSR_el1 - UREGS_SP)
+        ldr     lr, [sp], #(UREGS_SPSR_el1 - UREGS_LR) /* CPSR, PC, SP, LR */
+
         eret
 
 /*

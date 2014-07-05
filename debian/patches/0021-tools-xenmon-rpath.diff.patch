@@ -1,0 +1,21 @@
+From ecc88cfb5d9a9a98a66fe48def455e10510956a2 Mon Sep 17 00:00:00 2001
+From: Bastian Blank <waldi@debian.org>
+Date: Sat, 5 Jul 2014 11:47:07 +0200
+Subject: tools-xenmon-rpath.diff
+
+---
+ tools/xenmon/Makefile | 1 +
+ 1 file changed, 1 insertion(+)
+
+diff --git a/tools/xenmon/Makefile b/tools/xenmon/Makefile
+index 76383e0..dab5415 100644
+--- a/tools/xenmon/Makefile
++++ b/tools/xenmon/Makefile
+@@ -16,6 +16,7 @@ include $(XEN_ROOT)/tools/Rules.mk
+ CFLAGS  += -Werror
+ CFLAGS  += $(CFLAGS_libxenctrl)
+ LDLIBS  += $(LDLIBS_libxenctrl)
++LDFLAGS += $(call LDFLAGS_RPATH,../lib)
+ 
+ SCRIPTS = xenmon.py
+ 

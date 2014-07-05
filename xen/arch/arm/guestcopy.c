@@ -5,34 +5,50 @@
 #include <asm/mm.h>
 #include <asm/guest_access.h>
 
-unsigned long raw_copy_to_guest(void *to, const void *from, unsigned len)
+static unsigned long raw_copy_to_guest_helper(void *to, const void *from,
+                                              unsigned len, int flush_dcache)
 {
     /* XXX needs to handle faults */
     unsigned offset = (vaddr_t)to & ~PAGE_MASK;
 
     while ( len )
     {
-        int rc;
         paddr_t g;
         void *p;
         unsigned size = min(len, (unsigned)PAGE_SIZE - offset);
 
-        rc = gvirt_to_maddr((vaddr_t) to, &g);
-        if ( rc )
-            return rc;
+        if ( gvirt_to_maddr((vaddr_t) to, &g) )
+            return len;
 
         p = map_domain_page(g>>PAGE_SHIFT);
         p += offset;
         memcpy(p, from, size);
+        if ( flush_dcache )
+            clean_xen_dcache_va_range(p, size);
 
         unmap_domain_page(p - offset);
         len -= size;
         from += size;
         to += size;
+        /*
+         * After the first iteration, guest virtual address is correctly
+         * aligned to PAGE_SIZE.
+         */
         offset = 0;
     }
 
     return 0;
+}
+
+unsigned long raw_copy_to_guest(void *to, const void *from, unsigned len)
+{
+    return raw_copy_to_guest_helper(to, from, len, 0);
+}
+
+unsigned long raw_copy_to_guest_flush_dcache(void *to, const void *from,
+                                             unsigned len)
+{
+    return raw_copy_to_guest_helper(to, from, len, 1);
 }
 
 unsigned long raw_clear_guest(void *to, unsigned len)
@@ -42,14 +58,12 @@ unsigned long raw_clear_guest(void *to, unsigned len)
 
     while ( len )
     {
-        int rc;
         paddr_t g;
         void *p;
         unsigned size = min(len, (unsigned)PAGE_SIZE - offset);
 
-        rc = gvirt_to_maddr((vaddr_t) to, &g);
-        if ( rc )
-            return rc;
+        if ( gvirt_to_maddr((vaddr_t) to, &g) )
+            return len;
 
         p = map_domain_page(g>>PAGE_SHIFT);
         p += offset;
@@ -58,6 +72,10 @@ unsigned long raw_clear_guest(void *to, unsigned len)
         unmap_domain_page(p - offset);
         len -= size;
         to += size;
+        /*
+         * After the first iteration, guest virtual address is correctly
+         * aligned to PAGE_SIZE.
+         */
         offset = 0;
     }
 
@@ -70,14 +88,12 @@ unsigned long raw_copy_from_guest(void *to, const void __user *from, unsigned le
 
     while ( len )
     {
-        int rc;
         paddr_t g;
         void *p;
         unsigned size = min(len, (unsigned)(PAGE_SIZE - offset));
 
-        rc = gvirt_to_maddr((vaddr_t) from & PAGE_MASK, &g);
-        if ( rc )
-            return rc;
+        if ( gvirt_to_maddr((vaddr_t) from & PAGE_MASK, &g) )
+            return len;
 
         p = map_domain_page(g>>PAGE_SHIFT);
         p += ((vaddr_t)from & (~PAGE_MASK));
@@ -88,6 +104,11 @@ unsigned long raw_copy_from_guest(void *to, const void __user *from, unsigned le
         len -= size;
         from += size;
         to += size;
+        /*
+         * After the first iteration, guest virtual address is correctly
+         * aligned to PAGE_SIZE.
+         */
+        offset = 0;
     }
     return 0;
 }

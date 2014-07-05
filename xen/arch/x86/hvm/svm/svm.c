@@ -40,6 +40,7 @@
 #include <asm/debugreg.h>
 #include <asm/msr.h>
 #include <asm/i387.h>
+#include <asm/iocap.h>
 #include <asm/spinlock.h>
 #include <asm/hvm/emulate.h>
 #include <asm/hvm/hvm.h>
@@ -759,6 +760,9 @@ static void svm_init_hypercall_page(struct domain *d, void *hypercall_page)
 
     for ( i = 0; i < (PAGE_SIZE / 32); i++ )
     {
+        if ( i == __HYPERVISOR_iret )
+            continue;
+
         p = (char *)(hypercall_page + (i * 32));
         *(u8  *)(p + 0) = 0xb8; /* mov imm32, %eax */
         *(u32 *)(p + 1) = i;
@@ -803,13 +807,13 @@ static inline void svm_lwp_load(struct vcpu *v)
 /* Update LWP_CFG MSR (0xc0000105). Return -1 if error; otherwise returns 0. */
 static int svm_update_lwp_cfg(struct vcpu *v, uint64_t msr_content)
 {
-    unsigned int eax, ebx, ecx, edx;
+    unsigned int edx;
     uint32_t msr_low;
     static uint8_t lwp_intr_vector;
 
     if ( xsave_enabled(v) && cpu_has_lwp )
     {
-        hvm_cpuid(0x8000001c, &eax, &ebx, &ecx, &edx);
+        hvm_cpuid(0x8000001c, NULL, NULL, NULL, &edx);
         msr_low = (uint32_t)msr_content;
         
         /* generate #GP if guest tries to turn on unsupported features. */
@@ -1160,10 +1164,10 @@ static void svm_init_erratum_383(struct cpuinfo_x86 *c)
 
 static int svm_handle_osvw(struct vcpu *v, uint32_t msr, uint64_t *val, bool_t read)
 {
-    uint eax, ebx, ecx, edx;
+    unsigned int ecx;
 
     /* Guest OSVW support */
-    hvm_cpuid(0x80000001, &eax, &ebx, &ecx, &edx);
+    hvm_cpuid(0x80000001, NULL, NULL, &ecx, NULL);
     if ( !test_bit((X86_FEATURE_OSVW & 31), &ecx) )
         return -1;
 
@@ -1776,20 +1780,48 @@ static void
 svm_vmexit_do_vmrun(struct cpu_user_regs *regs,
                     struct vcpu *v, uint64_t vmcbaddr)
 {
-    if (!nestedhvm_enabled(v->domain)) {
+    if ( !nsvm_efer_svm_enabled(v) )
+    {
         gdprintk(XENLOG_ERR, "VMRUN: nestedhvm disabled, injecting #UD\n");
         hvm_inject_hw_exception(TRAP_invalid_op, HVM_DELIVER_NO_ERROR_CODE);
         return;
     }
 
-    if (!nestedsvm_vmcb_map(v, vmcbaddr)) {
-        gdprintk(XENLOG_ERR, "VMRUN: mapping vmcb failed, injecting #UD\n");
-        hvm_inject_hw_exception(TRAP_invalid_op, HVM_DELIVER_NO_ERROR_CODE);
+    if ( !nestedsvm_vmcb_map(v, vmcbaddr) )
+    {
+        gdprintk(XENLOG_ERR, "VMRUN: mapping vmcb failed, injecting #GP\n");
+        hvm_inject_hw_exception(TRAP_gp_fault, HVM_DELIVER_NO_ERROR_CODE);
         return;
     }
 
     vcpu_nestedhvm(v).nv_vmentry_pending = 1;
     return;
+}
+
+static struct page_info *
+nsvm_get_nvmcb_page(struct vcpu *v, uint64_t vmcbaddr)
+{
+    p2m_type_t p2mt;
+    struct page_info *page;
+    struct nestedvcpu *nv = &vcpu_nestedhvm(v);
+
+    if ( !nestedsvm_vmcb_map(v, vmcbaddr) )
+        return NULL;
+
+    /* Need to translate L1-GPA to MPA */
+    page = get_page_from_gfn(v->domain, 
+                            nv->nv_vvmcxaddr >> PAGE_SHIFT, 
+                            &p2mt, P2M_ALLOC | P2M_UNSHARE);
+    if ( !page )
+        return NULL;
+
+    if ( !p2m_is_ram(p2mt) || p2m_is_readonly(p2mt) )
+    {
+        put_page(page);
+        return NULL; 
+    }
+
+    return  page;
 }
 
 static void
@@ -1799,24 +1831,30 @@ svm_vmexit_do_vmload(struct vmcb_struct *vmcb,
 {
     int ret;
     unsigned int inst_len;
-    struct nestedvcpu *nv = &vcpu_nestedhvm(v);
+    struct page_info *page;
 
     if ( (inst_len = __get_instruction_length(v, INSTR_VMLOAD)) == 0 )
         return;
 
-    if (!nestedhvm_enabled(v->domain)) {
+    if ( !nsvm_efer_svm_enabled(v) ) 
+    {
         gdprintk(XENLOG_ERR, "VMLOAD: nestedhvm disabled, injecting #UD\n");
         ret = TRAP_invalid_op;
         goto inject;
     }
 
-    if (!nestedsvm_vmcb_map(v, vmcbaddr)) {
-        gdprintk(XENLOG_ERR, "VMLOAD: mapping vmcb failed, injecting #UD\n");
-        ret = TRAP_invalid_op;
+    page = nsvm_get_nvmcb_page(v, vmcbaddr);
+    if ( !page )
+    {
+        gdprintk(XENLOG_ERR,
+            "VMLOAD: mapping failed, injecting #GP\n");
+        ret = TRAP_gp_fault;
         goto inject;
     }
 
-    svm_vmload(nv->nv_vvmcx);
+    svm_vmload_pa(page_to_maddr(page));
+    put_page(page);
+
     /* State in L1 VMCB is stale now */
     v->arch.hvm_svm.vmcb_in_sync = 0;
 
@@ -1835,25 +1873,29 @@ svm_vmexit_do_vmsave(struct vmcb_struct *vmcb,
 {
     int ret;
     unsigned int inst_len;
-    struct nestedvcpu *nv = &vcpu_nestedhvm(v);
+    struct page_info *page;
 
     if ( (inst_len = __get_instruction_length(v, INSTR_VMSAVE)) == 0 )
         return;
 
-    if (!nestedhvm_enabled(v->domain)) {
+    if ( !nsvm_efer_svm_enabled(v) ) 
+    {
         gdprintk(XENLOG_ERR, "VMSAVE: nestedhvm disabled, injecting #UD\n");
         ret = TRAP_invalid_op;
         goto inject;
     }
 
-    if (!nestedsvm_vmcb_map(v, vmcbaddr)) {
-        gdprintk(XENLOG_ERR, "VMSAVE: mapping vmcb failed, injecting #UD\n");
-        ret = TRAP_invalid_op;
+    page = nsvm_get_nvmcb_page(v, vmcbaddr);
+    if ( !page )
+    {
+        gdprintk(XENLOG_ERR,
+            "VMSAVE: mapping vmcb failed, injecting #GP\n");
+        ret = TRAP_gp_fault;
         goto inject;
     }
 
-    svm_vmsave(nv->nv_vvmcx);
-
+    svm_vmsave_pa(page_to_maddr(page));
+    put_page(page);
     __update_guest_eip(regs, inst_len);
     return;
 
@@ -1932,7 +1974,7 @@ static void wbinvd_ipi(void *info)
 
 static void svm_wbinvd_intercept(void)
 {
-    if ( has_arch_mmios(current->domain) )
+    if ( cache_flush_permitted(current->domain) )
         on_each_cpu(wbinvd_ipi, NULL, 1);
 }
 
@@ -2027,6 +2069,8 @@ void svm_vmexit_handler(struct cpu_user_regs *regs)
     int inst_len, rc;
     vintr_t intr;
     bool_t vcpu_guestmode = 0;
+
+    hvm_invalidate_regs_fields(regs);
 
     if ( paging_mode_hap(v->domain) )
         v->arch.hvm_vcpu.guest_cr[3] = v->arch.hvm_vcpu.hw_cr[3] =

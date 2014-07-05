@@ -176,13 +176,25 @@ void *xc_dom_malloc_filemap(struct xc_dom_image *dom,
 {
     struct xc_dom_mem *block = NULL;
     int fd = -1;
+    off_t offset;
 
     fd = open(filename, O_RDONLY);
-    if ( fd == -1 )
+    if ( fd == -1 ) {
+        xc_dom_panic(dom->xch, XC_INTERNAL_ERROR,
+                     "failed to open file: %s",
+                     strerror(errno));
         goto err;
+    }
 
-    lseek(fd, 0, SEEK_SET);
-    *size = lseek(fd, 0, SEEK_END);
+    if ( (lseek(fd, 0, SEEK_SET) == -1) ||
+         ((offset = lseek(fd, 0, SEEK_END)) == -1) ) {
+        xc_dom_panic(dom->xch, XC_INTERNAL_ERROR,
+                     "failed to seek on file: %s",
+                     strerror(errno));
+        goto err;
+    }
+
+    *size = offset;
 
     if ( max_size && *size > max_size )
     {
@@ -192,14 +204,24 @@ void *xc_dom_malloc_filemap(struct xc_dom_image *dom,
     }
 
     block = malloc(sizeof(*block));
-    if ( block == NULL )
+    if ( block == NULL ) {
+        xc_dom_panic(dom->xch, XC_OUT_OF_MEMORY,
+                     "failed to allocate block (%zu bytes)",
+                     sizeof(*block));
         goto err;
+    }
+
     memset(block, 0, sizeof(*block));
     block->mmap_len = *size;
     block->mmap_ptr = mmap(NULL, block->mmap_len, PROT_READ,
                            MAP_SHARED, fd, 0);
-    if ( block->mmap_ptr == MAP_FAILED )
+    if ( block->mmap_ptr == MAP_FAILED ) {
+        xc_dom_panic(dom->xch, XC_INTERNAL_ERROR,
+                     "failed to mmap file: %s",
+                     strerror(errno));
         goto err;
+    }
+
     block->next = dom->memblocks;
     dom->memblocks = block;
     dom->alloc_malloc += sizeof(*block);
@@ -212,8 +234,7 @@ void *xc_dom_malloc_filemap(struct xc_dom_image *dom,
  err:
     if ( fd != -1 )
         close(fd);
-    if ( block != NULL )
-        free(block);
+    free(block);
     DOMPRINTF("%s: failed (on file `%s')", __FUNCTION__, filename);
     return NULL;
 }
@@ -294,8 +315,8 @@ size_t xc_dom_check_gzip(xc_interface *xch, void *blob, size_t ziplen)
         return 0;
 
     gzlen = blob + ziplen - 4;
-    unziplen = gzlen[3] << 24 | gzlen[2] << 16 | gzlen[1] << 8 | gzlen[0];
-    if ( (unziplen < 0) || (unziplen > XC_DOM_DECOMPRESS_MAX) )
+    unziplen = (size_t)gzlen[3] << 24 | gzlen[2] << 16 | gzlen[1] << 8 | gzlen[0];
+    if ( unziplen > XC_DOM_DECOMPRESS_MAX )
     {
         xc_dom_printf
             (xch,
@@ -582,6 +603,8 @@ void xc_dom_unmap_one(struct xc_dom_image *dom, xen_pfn_t pfn)
         prev->next = phys->next;
     else
         dom->phys_pages = phys->next;
+
+    xc_domain_cacheflush(dom->xch, dom->guest_domid, phys->first, phys->count);
 }
 
 void xc_dom_unmap_all(struct xc_dom_image *dom)
@@ -671,6 +694,7 @@ struct xc_dom_image *xc_dom_allocate(xc_interface *xch,
 
     dom->max_kernel_size = XC_DOM_DECOMPRESS_MAX;
     dom->max_ramdisk_size = XC_DOM_DECOMPRESS_MAX;
+    dom->max_devicetree_size = XC_DOM_DECOMPRESS_MAX;
 
     if ( cmdline )
         dom->cmdline = xc_dom_strdup(dom, cmdline);
@@ -706,6 +730,13 @@ int xc_dom_ramdisk_max_size(struct xc_dom_image *dom, size_t sz)
     return 0;
 }
 
+int xc_dom_devicetree_max_size(struct xc_dom_image *dom, size_t sz)
+{
+    DOMPRINTF("%s: devicetree_max_size=%zx", __FUNCTION__, sz);
+    dom->max_devicetree_size = sz;
+    return 0;
+}
+
 int xc_dom_kernel_file(struct xc_dom_image *dom, const char *filename)
 {
     DOMPRINTF("%s: filename=\"%s\"", __FUNCTION__, filename);
@@ -729,6 +760,23 @@ int xc_dom_ramdisk_file(struct xc_dom_image *dom, const char *filename)
     return 0;
 }
 
+int xc_dom_devicetree_file(struct xc_dom_image *dom, const char *filename)
+{
+#if defined (__arm__) || defined(__aarch64__)
+    DOMPRINTF("%s: filename=\"%s\"", __FUNCTION__, filename);
+    dom->devicetree_blob =
+        xc_dom_malloc_filemap(dom, filename, &dom->devicetree_size,
+                              dom->max_devicetree_size);
+
+    if ( dom->devicetree_blob == NULL )
+        return -1;
+    return 0;
+#else
+    errno = -EINVAL;
+    return -1;
+#endif
+}
+
 int xc_dom_kernel_mem(struct xc_dom_image *dom, const void *mem, size_t memsize)
 {
     DOMPRINTF_CALLED(dom->xch);
@@ -744,6 +792,15 @@ int xc_dom_ramdisk_mem(struct xc_dom_image *dom, const void *mem,
     dom->ramdisk_blob = (void *)mem;
     dom->ramdisk_size = memsize;
 //    return xc_dom_try_gunzip(dom, &dom->ramdisk_blob, &dom->ramdisk_size);
+    return 0;
+}
+
+int xc_dom_devicetree_mem(struct xc_dom_image *dom, const void *mem,
+                          size_t memsize)
+{
+    DOMPRINTF_CALLED(dom->xch);
+    dom->devicetree_blob = (void *)mem;
+    dom->devicetree_size = memsize;
     return 0;
 }
 
@@ -766,6 +823,15 @@ int xc_dom_parse_image(struct xc_dom_image *dom)
         goto err;
     }
 
+    if ( dom->pvh_enabled )
+    {
+        const char *pvh_features = "writable_descriptor_tables|"
+                                   "auto_translated_physmap|"
+                                   "supervisor_mode_kernel|"
+                                   "hvm_callback_vector";
+        elf_xen_parse_features(pvh_features, dom->f_requested, NULL);
+    }
+
     /* check features */
     for ( i = 0; i < XENFEAT_NR_SUBMAPS; i++ )
     {
@@ -783,6 +849,14 @@ int xc_dom_parse_image(struct xc_dom_image *dom)
 
  err:
     return -1;
+}
+
+int xc_dom_rambase_init(struct xc_dom_image *dom, uint64_t rambase)
+{
+    dom->rambase_pfn = rambase >> XC_PAGE_SHIFT;
+    DOMPRINTF("%s: RAM starts at %"PRI_xen_pfn,
+              __FUNCTION__, dom->rambase_pfn);
+    return 0;
 }
 
 int xc_dom_mem_init(struct xc_dom_image *dom, unsigned int mem_mb)
@@ -906,6 +980,25 @@ int xc_dom_build_image(struct xc_dom_image *dom)
         }
         else
             memcpy(ramdiskmap, dom->ramdisk_blob, dom->ramdisk_size);
+    }
+
+    /* load devicetree */
+    if ( dom->devicetree_blob )
+    {
+        void *devicetreemap;
+
+        if ( xc_dom_alloc_segment(dom, &dom->devicetree_seg, "devicetree",
+                                  dom->devicetree_seg.vstart,
+                                  dom->devicetree_size) != 0 )
+            goto err;
+        devicetreemap = xc_dom_seg_to_ptr(dom, &dom->devicetree_seg);
+        if ( devicetreemap == NULL )
+        {
+            DOMPRINTF("%s: xc_dom_seg_to_ptr(dom, &dom->devicetree_seg) => NULL",
+                      __FUNCTION__);
+            goto err;
+        }
+        memcpy(devicetreemap, dom->devicetree_blob, dom->devicetree_size);
     }
 
     /* allocate other pages */

@@ -20,6 +20,7 @@
 #include <asm/platform.h>
 #include <xen/device_tree.h>
 #include <xen/init.h>
+#include <asm/psci.h>
 
 extern const struct platform_desc _splatform[], _eplatform[];
 
@@ -54,7 +55,7 @@ static void dump_platform_table(void)
         printk("    - %s\n", p->name);
 }
 
-int __init platform_init(void)
+void __init platform_init(void)
 {
     int res = 0;
 
@@ -82,7 +83,8 @@ int __init platform_init(void)
     if ( platform && platform->init )
         res = platform->init();
 
-    return res;
+    if ( res )
+        panic("Unable to initialize the platform");
 }
 
 int __init platform_init_time(void)
@@ -105,6 +107,27 @@ int __init platform_specific_mapping(struct domain *d)
     return res;
 }
 
+#ifdef CONFIG_ARM_32
+int __init platform_cpu_up(int cpu)
+{
+    if ( psci_available )
+        return call_psci_cpu_on(cpu);
+
+    if ( platform && platform->cpu_up )
+        return platform->cpu_up(cpu);
+
+    return -ENODEV;
+}
+
+int __init platform_smp_init(void)
+{
+    if ( platform && platform->smp_init )
+        return platform->smp_init();
+
+    return 0;
+}
+#endif
+
 void platform_reset(void)
 {
     if ( platform && platform->reset )
@@ -125,6 +148,37 @@ bool_t platform_has_quirk(uint32_t quirk)
         quirks = platform->quirks();
 
     return !!(quirks & quirk);
+}
+
+bool_t platform_device_is_blacklisted(const struct dt_device_node *node)
+{
+    const struct dt_device_match *blacklist = NULL;
+
+    if ( platform && platform->blacklist_dev )
+        blacklist = platform->blacklist_dev;
+
+    return dt_match_node(blacklist, node);
+}
+
+unsigned int platform_dom0_evtchn_ppi(void)
+{
+    if ( platform && platform->dom0_evtchn_ppi )
+        return platform->dom0_evtchn_ppi;
+    return GUEST_EVTCHN_PPI;
+}
+
+void platform_dom0_gnttab(paddr_t *start, paddr_t *size)
+{
+    if ( platform && platform->dom0_gnttab_size )
+    {
+        *start = platform->dom0_gnttab_start;
+        *size = platform->dom0_gnttab_size;
+    }
+    else
+    {
+        *start = 0xb0000000;
+        *size = 0x20000;
+    }
 }
 
 /*

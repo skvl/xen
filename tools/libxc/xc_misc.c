@@ -30,9 +30,22 @@ int xc_get_max_cpus(xc_interface *xch)
         return max_cpus;
 
     if ( !xc_physinfo(xch, &physinfo) )
+    {
         max_cpus = physinfo.max_cpu_id + 1;
+        return max_cpus;
+    }
 
-    return max_cpus;
+    return -1;
+}
+
+int xc_get_online_cpus(xc_interface *xch)
+{
+    xc_physinfo_t physinfo;
+
+    if ( !xc_physinfo(xch, &physinfo) )
+        return physinfo.nr_cpus;
+
+    return -1;
 }
 
 int xc_get_max_nodes(xc_interface *xch)
@@ -44,19 +57,30 @@ int xc_get_max_nodes(xc_interface *xch)
         return max_nodes;
 
     if ( !xc_physinfo(xch, &physinfo) )
+    {
         max_nodes = physinfo.max_node_id + 1;
+        return max_nodes;
+    }
 
-    return max_nodes;
+    return -1;
 }
 
 int xc_get_cpumap_size(xc_interface *xch)
 {
-    return (xc_get_max_cpus(xch) + 7) / 8;
+    int max_cpus = xc_get_max_cpus(xch);
+
+    if ( max_cpus < 0 )
+        return -1;
+    return (max_cpus + 7) / 8;
 }
 
 int xc_get_nodemap_size(xc_interface *xch)
 {
-    return (xc_get_max_nodes(xch) + 7) / 8;
+    int max_nodes = xc_get_max_nodes(xch);
+
+    if ( max_nodes < 0 )
+        return -1;
+    return (max_nodes + 7) / 8;
 }
 
 xc_cpumap_t xc_cpumap_alloc(xc_interface *xch)
@@ -64,7 +88,7 @@ xc_cpumap_t xc_cpumap_alloc(xc_interface *xch)
     int sz;
 
     sz = xc_get_cpumap_size(xch);
-    if (sz == 0)
+    if (sz <= 0)
         return NULL;
     return calloc(1, sz);
 }
@@ -74,7 +98,7 @@ xc_nodemap_t xc_nodemap_alloc(xc_interface *xch)
     int sz;
 
     sz = xc_get_nodemap_size(xch);
-    if (sz == 0)
+    if (sz <= 0)
         return NULL;
     return calloc(1, sz);
 }

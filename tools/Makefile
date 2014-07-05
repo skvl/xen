@@ -4,7 +4,7 @@ include $(XEN_ROOT)/tools/Rules.mk
 SUBDIRS-y :=
 SUBDIRS-y += include
 SUBDIRS-y += libxc
-SUBDIRS-y += flask
+SUBDIRS-$(FLASK_ENABLE) += flask
 SUBDIRS-y += xenstore
 SUBDIRS-y += misc
 SUBDIRS-y += examples
@@ -66,7 +66,6 @@ install: subdirs-install
 .PHONY: uninstall
 uninstall: D=$(DESTDIR)
 uninstall:
-	rm -rf $(D)$(LIBDIR)/xen* $(D)$(BINDIR)/lomount
 	rm -rf $(D)$(BINDIR)/cpuperf-perfcntr $(D)$(BINDIR)/cpuperf-xen
 	rm -rf $(D)$(BINDIR)/xc_shadow
 	rm -rf $(D)$(BINDIR)/pygrub
@@ -172,6 +171,12 @@ qemu-xen-dir-force-update:
 		$(GIT) reset --hard $(QEMU_UPSTREAM_REVISION); \
 	fi
 
+ifeq ($(debug),y)
+QEMU_XEN_ENABLE_DEBUG := --enable-debug --enable-trace-backend=stderr
+else
+QEMU_XEN_ENABLE_DEBUG :=
+endif
+
 subdir-all-qemu-xen-dir: qemu-xen-dir-find
 	if test -d $(QEMU_UPSTREAM_URL) ; then \
 		source=$(QEMU_UPSTREAM_URL); \
@@ -180,6 +185,7 @@ subdir-all-qemu-xen-dir: qemu-xen-dir-find
 	fi; \
 	cd qemu-xen-dir; \
 	$$source/configure --enable-xen --target-list=i386-softmmu \
+		$(QEMU_XEN_ENABLE_DEBUG) \
 		--prefix=$(PREFIX) \
 		--source-path=$$source \
 		--extra-cflags="-I$(XEN_ROOT)/tools/include \
@@ -191,8 +197,10 @@ subdir-all-qemu-xen-dir: qemu-xen-dir-find
 		-L$(XEN_ROOT)/tools/xenstore" \
 		--bindir=$(LIBEXEC) \
 		--datadir=$(SHAREDIR)/qemu-xen \
+		--localstatedir=/var \
 		--disable-kvm \
 		--disable-docs \
+		--disable-guest-agent \
 		--python=$(PYTHON) \
 		$(IOEMU_CONFIGURE_CROSS); \
 	$(MAKE) all

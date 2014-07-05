@@ -18,6 +18,7 @@
 #include <asm/hvm/iommu.h>
 #include <xen/paging.h>
 #include <xen/guest_access.h>
+#include <xen/event.h>
 #include <xen/softirq.h>
 #include <xen/keyhandler.h>
 #include <xsm/xsm.h>
@@ -56,6 +57,10 @@ bool_t __read_mostly iommu_debug;
 bool_t __read_mostly amd_iommu_perdev_intremap = 1;
 
 DEFINE_PER_CPU(bool_t, iommu_dont_flush_iotlb);
+
+DEFINE_SPINLOCK(iommu_pt_cleanup_lock);
+PAGE_LIST_HEAD(iommu_pt_cleanup_list);
+static struct tasklet iommu_pt_cleanup_tasklet;
 
 static struct keyhandler iommu_p2m_table = {
     .diagnostic = 0,
@@ -125,9 +130,23 @@ int iommu_domain_init(struct domain *d)
     return hd->platform_ops->init(d);
 }
 
+static __init void check_dom0_pvh_reqs(struct domain *d)
+{
+    if ( !iommu_enabled )
+        panic("Presently, iommu must be enabled for pvh dom0\n");
+
+    if ( iommu_passthrough )
+        panic("For pvh dom0, dom0-passthrough must not be enabled\n");
+
+    iommu_dom0_strict = 1;
+}
+
 void __init iommu_dom0_init(struct domain *d)
 {
     struct hvm_iommu *hd = domain_hvm_iommu(d);
+
+    if ( is_pvh_domain(d) )
+        check_dom0_pvh_reqs(d);
 
     if ( !iommu_enabled )
         return;
@@ -141,12 +160,14 @@ void __init iommu_dom0_init(struct domain *d)
         page_list_for_each ( page, &d->page_list )
         {
             unsigned long mfn = page_to_mfn(page);
+            unsigned long gfn = mfn_to_gmfn(d, mfn);
             unsigned int mapping = IOMMUF_readable;
+
             if ( ((page->u.inuse.type_info & PGT_count_mask) == 0) ||
                  ((page->u.inuse.type_info & PGT_type_mask)
                   == PGT_writable_page) )
                 mapping |= IOMMUF_writable;
-            hd->platform_ops->map_page(d, mfn, mfn, mapping);
+            hd->platform_ops->map_page(d, gfn, mfn, mapping);
             if ( !(i++ & 0xfffff) )
                 process_pending_softirqs();
         }
@@ -234,6 +255,15 @@ int iommu_remove_device(struct pci_dev *pdev)
     return hd->platform_ops->remove_device(pdev->devfn, pdev);
 }
 
+static void iommu_teardown(struct domain *d)
+{
+    const struct hvm_iommu *hd = domain_hvm_iommu(d);
+
+    d->need_iommu = 0;
+    hd->platform_ops->teardown(d);
+    tasklet_schedule(&iommu_pt_cleanup_tasklet);
+}
+
 /*
  * If the device isn't owned by dom0, it means it already
  * has been assigned to other domain, or it doesn't exist.
@@ -265,7 +295,23 @@ static int assign_device(struct domain *d, u16 seg, u8 bus, u8 devfn)
              d->mem_event->paging.ring_page)) )
         return -EXDEV;
 
-    spin_lock(&pcidevs_lock);
+    if ( !spin_trylock(&pcidevs_lock) )
+        return -ERESTART;
+
+    if ( need_iommu(d) <= 0 )
+    {
+        if ( !iommu_use_hap_pt(d) )
+        {
+            rc = iommu_populate_page_table(d);
+            if ( rc )
+            {
+                spin_unlock(&pcidevs_lock);
+                return rc;
+            }
+        }
+        d->need_iommu = 1;
+    }
+
     pdev = pci_get_pdev_by_domain(dom0, seg, bus, devfn);
     if ( !pdev )
     {
@@ -290,15 +336,11 @@ static int assign_device(struct domain *d, u16 seg, u8 bus, u8 devfn)
                    rc);
     }
 
-    if ( has_arch_pdevs(d) && !need_iommu(d) )
-    {
-        d->need_iommu = 1;
-        if ( !iommu_use_hap_pt(d) )
-            rc = iommu_populate_page_table(d);
-        goto done;
-    }
-done:
+ done:
+    if ( !has_arch_pdevs(d) && need_iommu(d) )
+        iommu_teardown(d);
     spin_unlock(&pcidevs_lock);
+
     return rc;
 }
 
@@ -306,12 +348,17 @@ static int iommu_populate_page_table(struct domain *d)
 {
     struct hvm_iommu *hd = domain_hvm_iommu(d);
     struct page_info *page;
-    int rc;
+    int rc = 0, n = 0;
 
-    spin_lock(&d->page_alloc_lock);
+    d->need_iommu = -1;
 
     this_cpu(iommu_dont_flush_iotlb) = 1;
-    page_list_for_each ( page, &d->page_list )
+    spin_lock(&d->page_alloc_lock);
+
+    if ( unlikely(d->is_dying) )
+        rc = -ESRCH;
+
+    while ( !rc && (page = page_list_remove_head(&d->page_list)) )
     {
         if ( is_hvm_domain(d) ||
             (page->u.inuse.type_info & PGT_type_mask) == PGT_writable_page )
@@ -320,18 +367,45 @@ static int iommu_populate_page_table(struct domain *d)
             rc = hd->platform_ops->map_page(
                 d, mfn_to_gmfn(d, page_to_mfn(page)), page_to_mfn(page),
                 IOMMUF_readable|IOMMUF_writable);
-            if (rc)
+            if ( rc )
             {
-                spin_unlock(&d->page_alloc_lock);
-                hd->platform_ops->teardown(d);
-                return rc;
+                page_list_add(page, &d->page_list);
+                break;
             }
         }
+        page_list_add_tail(page, &d->arch.relmem_list);
+        if ( !(++n & 0xff) && !page_list_empty(&d->page_list) &&
+             hypercall_preempt_check() )
+            rc = -ERESTART;
     }
-    this_cpu(iommu_dont_flush_iotlb) = 0;
-    iommu_iotlb_flush_all(d);
+
+    if ( !rc )
+    {
+        /*
+         * The expectation here is that generally there are many normal pages
+         * on relmem_list (the ones we put there) and only few being in an
+         * offline/broken state. The latter ones are always at the head of the
+         * list. Hence we first move the whole list, and then move back the
+         * first few entries.
+         */
+        page_list_move(&d->page_list, &d->arch.relmem_list);
+        while ( (page = page_list_first(&d->page_list)) != NULL &&
+                (page->count_info & (PGC_state|PGC_broken)) )
+        {
+            page_list_del(page, &d->page_list);
+            page_list_add_tail(page, &d->arch.relmem_list);
+        }
+    }
+
     spin_unlock(&d->page_alloc_lock);
-    return 0;
+    this_cpu(iommu_dont_flush_iotlb) = 0;
+
+    if ( !rc )
+        iommu_iotlb_flush_all(d);
+    else if ( rc != -ERESTART )
+        iommu_teardown(d);
+
+    return rc;
 }
 
 
@@ -346,10 +420,7 @@ void iommu_domain_destroy(struct domain *d)
         return;
 
     if ( need_iommu(d) )
-    {
-        d->need_iommu = 0;
-        hd->platform_ops->teardown(d);
-    }
+        iommu_teardown(d);
 
     list_for_each_safe ( ioport_list, tmp, &hd->g2m_ioport_list )
     {
@@ -385,6 +456,23 @@ int iommu_unmap_page(struct domain *d, unsigned long gfn)
         return 0;
 
     return hd->platform_ops->unmap_page(d, gfn);
+}
+
+static void iommu_free_pagetables(unsigned long unused)
+{
+    do {
+        struct page_info *pg;
+
+        spin_lock(&iommu_pt_cleanup_lock);
+        pg = page_list_remove_head(&iommu_pt_cleanup_list);
+        spin_unlock(&iommu_pt_cleanup_lock);
+        if ( !pg )
+            return;
+        iommu_get_ops()->free_page_table(pg);
+    } while ( !softirq_pending(smp_processor_id()) );
+
+    tasklet_schedule_on_cpu(&iommu_pt_cleanup_tasklet,
+                            cpumask_cycle(smp_processor_id(), &cpu_online_map));
 }
 
 void iommu_iotlb_flush(struct domain *d, unsigned long gfn, unsigned int page_count)
@@ -449,10 +537,7 @@ int deassign_device(struct domain *d, u16 seg, u8 bus, u8 devfn)
     pdev->fault.count = 0;
 
     if ( !has_arch_pdevs(d) && need_iommu(d) )
-    {
-        d->need_iommu = 0;
-        hd->platform_ops->teardown(d);
-    }
+        iommu_teardown(d);
 
     return ret;
 }
@@ -475,7 +560,7 @@ int __init iommu_setup(void)
 
     if ( (force_iommu && !iommu_enabled) ||
          (force_intremap && !iommu_intremap) )
-        panic("Couldn't enable %s and iommu=required/force\n",
+        panic("Couldn't enable %s and iommu=required/force",
               !iommu_enabled ? "IOMMU" : "Interrupt Remapping");
 
     if ( !iommu_enabled )
@@ -491,6 +576,7 @@ int __init iommu_setup(void)
                iommu_passthrough ? "Passthrough" :
                iommu_dom0_strict ? "Strict" : "Relaxed");
         printk("Interrupt remapping %sabled\n", iommu_intremap ? "en" : "dis");
+        tasklet_init(&iommu_pt_cleanup_tasklet, iommu_free_pagetables, 0);
     }
 
     return rc;
@@ -686,7 +772,10 @@ int iommu_do_domctl(
 
         ret = device_assigned(seg, bus, devfn) ?:
               assign_device(d, seg, bus, devfn);
-        if ( ret )
+        if ( ret == -ERESTART )
+            ret = hypercall_create_continuation(__HYPERVISOR_domctl,
+                                                "h", u_domctl);
+        else if ( ret )
             printk(XENLOG_G_ERR "XEN_DOMCTL_assign_device: "
                    "assign %04x:%02x:%02x.%u to dom%d failed (%d)\n",
                    seg, bus, PCI_SLOT(devfn), PCI_FUNC(devfn),

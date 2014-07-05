@@ -37,7 +37,7 @@ endif
 
 CIRRUSVGA_DEBUG ?= n
 
-OVMF_DIR := ../ovmf
+OVMF_DIR := ../ovmf-dir
 ROMBIOS_DIR := ../rombios
 SEABIOS_DIR := /usr/share/seabios
 
@@ -56,7 +56,11 @@ ROMS :=
 ifeq ($(CONFIG_OVMF),y)
 OBJS += ovmf.o
 CFLAGS += -DENABLE_OVMF
-OVMF_ROM := $(OVMF_DIR)/ovmf.bin
+ifeq ($(OVMF_PATH),)
+	OVMF_ROM := $(OVMF_DIR)/ovmf.bin
+else
+	OVMF_ROM := $(OVMF_PATH)
+endif
 ROMS += $(OVMF_ROM)
 endif
 

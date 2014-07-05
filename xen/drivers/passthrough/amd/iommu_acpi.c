@@ -72,12 +72,15 @@ static void __init add_ivrs_mapping_entry(
          /* allocate per-device interrupt remapping table */
          if ( amd_iommu_perdev_intremap )
              ivrs_mappings[alias_id].intremap_table =
-                amd_iommu_alloc_intremap_table();
+                amd_iommu_alloc_intremap_table(
+                    &ivrs_mappings[alias_id].intremap_inuse);
          else
          {
              if ( shared_intremap_table == NULL  )
-                 shared_intremap_table = amd_iommu_alloc_intremap_table();
+                 shared_intremap_table = amd_iommu_alloc_intremap_table(
+                     &shared_intremap_inuse);
              ivrs_mappings[alias_id].intremap_table = shared_intremap_table;
+             ivrs_mappings[alias_id].intremap_inuse = shared_intremap_inuse;
          }
     }
     /* assgin iommu hardware */
@@ -156,7 +159,7 @@ static int __init register_exclusion_range_for_all_devices(
     int seg = 0; /* XXX */
     unsigned long range_top, iommu_top, length;
     struct amd_iommu *iommu;
-    u16 bdf;
+    unsigned int bdf;
 
     /* is part of exclusion range inside of IOMMU virtual address space? */
     /* note: 'limit' parameter is assumed to be page-aligned */
@@ -234,7 +237,8 @@ static int __init register_exclusion_range_for_iommu_devices(
     unsigned long base, unsigned long limit, u8 iw, u8 ir)
 {
     unsigned long range_top, iommu_top, length;
-    u16 bdf, req;
+    unsigned int bdf;
+    u16 req;
 
     /* is part of exclusion range inside of IOMMU virtual address space? */
     /* note: 'limit' parameter is assumed to be page-aligned */
@@ -289,7 +293,7 @@ static int __init parse_ivmd_device_range(
     const struct acpi_ivrs_memory *ivmd_block,
     unsigned long base, unsigned long limit, u8 iw, u8 ir)
 {
-    u16 first_bdf, last_bdf, bdf;
+    unsigned int first_bdf, last_bdf, bdf;
     int error;
 
     first_bdf = ivmd_block->header.device_id;
@@ -427,7 +431,7 @@ static u16 __init parse_ivhd_device_range(
     const struct acpi_ivhd_device_range *range,
     u16 header_length, u16 block_length, struct amd_iommu *iommu)
 {
-    u16 dev_length, first_bdf, last_bdf, bdf;
+    unsigned int dev_length, first_bdf, last_bdf, bdf;
 
     dev_length = sizeof(*range);
     if ( header_length < (block_length + dev_length) )
@@ -508,7 +512,7 @@ static u16 __init parse_ivhd_device_alias_range(
     u16 header_length, u16 block_length, struct amd_iommu *iommu)
 {
 
-    u16 dev_length, first_bdf, last_bdf, alias_id, bdf;
+    unsigned int dev_length, first_bdf, last_bdf, alias_id, bdf;
 
     dev_length = sizeof(*range);
     if ( header_length < (block_length + dev_length) )
@@ -587,7 +591,7 @@ static u16 __init parse_ivhd_device_extended_range(
     const struct acpi_ivhd_device_extended_range *range,
     u16 header_length, u16 block_length, struct amd_iommu *iommu)
 {
-    u16 dev_length, first_bdf, last_bdf, bdf;
+    unsigned int dev_length, first_bdf, last_bdf, bdf;
 
     dev_length = sizeof(*range);
     if ( header_length < (block_length + dev_length) )
@@ -630,6 +634,51 @@ static u16 __init parse_ivhd_device_extended_range(
     return dev_length;
 }
 
+static DECLARE_BITMAP(ioapic_cmdline, ARRAY_SIZE(ioapic_sbdf)) __initdata;
+
+static void __init parse_ivrs_ioapic(char *str)
+{
+    const char *s = str;
+    unsigned long id;
+    unsigned int seg, bus, dev, func;
+
+    ASSERT(*s == '[');
+    id = simple_strtoul(s + 1, &s, 0);
+    if ( id >= ARRAY_SIZE(ioapic_sbdf) || *s != ']' || *++s != '=' )
+        return;
+
+    s = parse_pci(s + 1, &seg, &bus, &dev, &func);
+    if ( !s || *s )
+        return;
+
+    ioapic_sbdf[id].bdf = PCI_BDF(bus, dev, func);
+    ioapic_sbdf[id].seg = seg;
+    __set_bit(id, ioapic_cmdline);
+}
+custom_param("ivrs_ioapic[", parse_ivrs_ioapic);
+
+static void __init parse_ivrs_hpet(char *str)
+{
+    const char *s = str;
+    unsigned long id;
+    unsigned int seg, bus, dev, func;
+
+    ASSERT(*s == '[');
+    id = simple_strtoul(s + 1, &s, 0);
+    if ( id != (typeof(hpet_sbdf.id))id || *s != ']' || *++s != '=' )
+        return;
+
+    s = parse_pci(s + 1, &seg, &bus, &dev, &func);
+    if ( !s || *s )
+        return;
+
+    hpet_sbdf.id = id;
+    hpet_sbdf.bdf = PCI_BDF(bus, dev, func);
+    hpet_sbdf.seg = seg;
+    hpet_sbdf.init = HPET_CMDL;
+}
+custom_param("ivrs_hpet[", parse_ivrs_hpet);
+
 static u16 __init parse_ivhd_device_special(
     const struct acpi_ivrs_device8c *special, u16 seg,
     u16 header_length, u16 block_length, struct amd_iommu *iommu)
@@ -666,12 +715,40 @@ static u16 __init parse_ivhd_device_special(
          * consistency here --- whether entry's IOAPIC ID is valid and
          * whether there are conflicting/duplicated entries.
          */
+        apic = find_first_bit(ioapic_cmdline, ARRAY_SIZE(ioapic_sbdf));
+        while ( apic < ARRAY_SIZE(ioapic_sbdf) )
+        {
+            if ( ioapic_sbdf[apic].bdf == bdf &&
+                 ioapic_sbdf[apic].seg == seg )
+                break;
+            apic = find_next_bit(ioapic_cmdline, ARRAY_SIZE(ioapic_sbdf),
+                                 apic + 1);
+        }
+        if ( apic < ARRAY_SIZE(ioapic_sbdf) )
+        {
+            AMD_IOMMU_DEBUG("IVHD: Command line override present for IO-APIC %#x"
+                            "(IVRS: %#x devID %04x:%02x:%02x.%u)\n",
+                            apic, special->handle, seg, PCI_BUS(bdf),
+                            PCI_SLOT(bdf), PCI_FUNC(bdf));
+            break;
+        }
+
         for ( apic = 0; apic < nr_ioapics; apic++ )
         {
             if ( IO_APIC_ID(apic) != special->handle )
                 continue;
 
-            if ( ioapic_sbdf[special->handle].pin_setup )
+            if ( special->handle >= ARRAY_SIZE(ioapic_sbdf) )
+            {
+                printk(XENLOG_ERR "IVHD Error: IO-APIC %#x entry beyond bounds\n",
+                       special->handle);
+                return 0;
+            }
+
+            if ( test_bit(special->handle, ioapic_cmdline) )
+                AMD_IOMMU_DEBUG("IVHD: Command line override present for IO-APIC %#x\n",
+                                special->handle);
+            else if ( ioapic_sbdf[special->handle].pin_2_idx )
             {
                 if ( ioapic_sbdf[special->handle].bdf == bdf &&
                      ioapic_sbdf[special->handle].seg == seg )
@@ -691,14 +768,17 @@ static u16 __init parse_ivhd_device_special(
                 ioapic_sbdf[special->handle].bdf = bdf;
                 ioapic_sbdf[special->handle].seg = seg;
 
-                ioapic_sbdf[special->handle].pin_setup = xzalloc_array(
-                    unsigned long, BITS_TO_LONGS(nr_ioapic_entries[apic]));
+                ioapic_sbdf[special->handle].pin_2_idx = xmalloc_array(
+                    u16, nr_ioapic_entries[apic]);
                 if ( nr_ioapic_entries[apic] &&
-                     !ioapic_sbdf[IO_APIC_ID(apic)].pin_setup )
+                     !ioapic_sbdf[IO_APIC_ID(apic)].pin_2_idx )
                 {
                     printk(XENLOG_ERR "IVHD Error: Out of memory\n");
                     return 0;
                 }
+                memset(ioapic_sbdf[IO_APIC_ID(apic)].pin_2_idx, -1,
+                       nr_ioapic_entries[apic] *
+                       sizeof(*ioapic_sbdf->pin_2_idx));
             }
             break;
         }
@@ -710,16 +790,28 @@ static u16 __init parse_ivhd_device_special(
         }
         break;
     case ACPI_IVHD_HPET:
-        /* set device id of hpet */
-        if ( hpet_sbdf.iommu )
+        switch (hpet_sbdf.init)
         {
-            printk(XENLOG_WARNING "Only one IVHD HPET entry is supported\n");
+        case HPET_IVHD:
+            printk(XENLOG_WARNING "Only one IVHD HPET entry is supported.\n");
+            break;
+        case HPET_CMDL:
+            AMD_IOMMU_DEBUG("IVHD: Command line override present for HPET %#x "
+                            "(IVRS: %#x devID %04x:%02x:%02x.%u)\n",
+                            hpet_sbdf.id, special->handle, seg, PCI_BUS(bdf),
+                            PCI_SLOT(bdf), PCI_FUNC(bdf));
+            break;
+        case HPET_NONE:
+            /* set device id of hpet */
+            hpet_sbdf.id = special->handle;
+            hpet_sbdf.bdf = bdf;
+            hpet_sbdf.seg = seg;
+            hpet_sbdf.init = HPET_IVHD;
+            break;
+        default:
+            ASSERT(0);
             break;
         }
-        hpet_sbdf.id = special->handle;
-        hpet_sbdf.bdf = bdf;
-        hpet_sbdf.seg = seg;
-        hpet_sbdf.iommu = iommu;
         break;
     default:
         printk(XENLOG_ERR "Unrecognized IVHD special variety %#x\n",
@@ -892,6 +984,7 @@ static int __init parse_ivrs_table(struct acpi_table_header *table)
     const struct acpi_ivrs_header *ivrs_block;
     unsigned long length;
     unsigned int apic;
+    bool_t sb_ioapic = !iommu_intremap;
     int error = 0;
 
     BUG_ON(!table);
@@ -925,24 +1018,43 @@ static int __init parse_ivrs_table(struct acpi_table_header *table)
     /* Each IO-APIC must have been mentioned in the table. */
     for ( apic = 0; !error && iommu_intremap && apic < nr_ioapics; ++apic )
     {
-        if ( !nr_ioapic_entries[apic] ||
-             ioapic_sbdf[IO_APIC_ID(apic)].pin_setup )
+        if ( !nr_ioapic_entries[apic] )
             continue;
 
-        printk(XENLOG_ERR "IVHD Error: no information for IO-APIC %#x\n",
-               IO_APIC_ID(apic));
-        if ( amd_iommu_perdev_intremap )
-            error = -ENXIO;
+        if ( !ioapic_sbdf[IO_APIC_ID(apic)].seg &&
+             /* SB IO-APIC is always on this device in AMD systems. */
+             ioapic_sbdf[IO_APIC_ID(apic)].bdf == PCI_BDF(0, 0x14, 0) )
+            sb_ioapic = 1;
+
+        if ( ioapic_sbdf[IO_APIC_ID(apic)].pin_2_idx )
+            continue;
+
+        if ( !test_bit(IO_APIC_ID(apic), ioapic_cmdline) )
+        {
+            printk(XENLOG_ERR "IVHD Error: no information for IO-APIC %#x\n",
+                   IO_APIC_ID(apic));
+            if ( amd_iommu_perdev_intremap )
+                return -ENXIO;
+        }
+
+        ioapic_sbdf[IO_APIC_ID(apic)].pin_2_idx = xmalloc_array(
+            u16, nr_ioapic_entries[apic]);
+        if ( ioapic_sbdf[IO_APIC_ID(apic)].pin_2_idx )
+            memset(ioapic_sbdf[IO_APIC_ID(apic)].pin_2_idx, -1,
+                   nr_ioapic_entries[apic] * sizeof(*ioapic_sbdf->pin_2_idx));
         else
         {
-            ioapic_sbdf[IO_APIC_ID(apic)].pin_setup = xzalloc_array(
-                unsigned long, BITS_TO_LONGS(nr_ioapic_entries[apic]));
-            if ( !ioapic_sbdf[IO_APIC_ID(apic)].pin_setup )
-            {
-                printk(XENLOG_ERR "IVHD Error: Out of memory\n");
-                error = -ENOMEM;
-            }
+            printk(XENLOG_ERR "IVHD Error: Out of memory\n");
+            error = -ENOMEM;
         }
+    }
+
+    if ( !error && !sb_ioapic )
+    {
+        if ( amd_iommu_perdev_intremap )
+            error = -ENXIO;
+        printk("%sNo southbridge IO-APIC found in IVRS table\n",
+               amd_iommu_perdev_intremap ? XENLOG_ERR : XENLOG_WARNING);
     }
 
     return error;

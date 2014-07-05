@@ -37,14 +37,12 @@
 #include <asm/hvm/io.h>
 #include <asm/hvm/support.h>
 #include <asm/hvm/vmx/vmx.h>
+#include <asm/hvm/nestedhvm.h>
 #include <public/hvm/ioreq.h>
 #include <public/hvm/params.h>
 
 #define VLAPIC_VERSION                  0x00050014
 #define VLAPIC_LVT_NUM                  6
-
-/* vlapic's frequence is 100 MHz */
-#define APIC_BUS_CYCLE_NS               10
 
 #define LVT_MASK \
     APIC_LVT_MASKED | APIC_SEND_PENDING | APIC_VECTOR_MASK
@@ -90,10 +88,10 @@ static const unsigned int vlapic_lvt_mask[VLAPIC_LVT_NUM] =
     ((vlapic_get_reg(vlapic, APIC_LVTT) & APIC_TIMER_MODE_MASK) \
      == APIC_TIMER_MODE_TSC_DEADLINE)
 
-static int vlapic_find_highest_vector(void *bitmap)
+static int vlapic_find_highest_vector(const void *bitmap)
 {
-    uint32_t *word = bitmap;
-    int word_offset = MAX_VECTOR / 32;
+    const uint32_t *word = bitmap;
+    unsigned int word_offset = NR_VECTORS / 32;
 
     /* Work backwards through the bitmap (first 32-bit word in every four). */
     while ( (word_offset != 0) && (word[(--word_offset)*4] == 0) )
@@ -165,6 +163,14 @@ static uint32_t vlapic_get_ppr(struct vlapic *vlapic)
                 vlapic, ppr, isr, isrv);
 
     return ppr;
+}
+
+uint32_t vlapic_set_ppr(struct vlapic *vlapic)
+{
+   uint32_t ppr = vlapic_get_ppr(vlapic);
+
+   vlapic_set_reg(vlapic, APIC_PROCPRI, ppr);
+   return ppr;
 }
 
 static int vlapic_match_logical_addr(struct vlapic *vlapic, uint8_t mda)
@@ -385,6 +391,9 @@ void vlapic_EOI_set(struct vlapic *vlapic)
         return;
 
     vlapic_clear_vector(vector, &vlapic->regs->data[APIC_ISR]);
+
+    if ( hvm_funcs.handle_eoi )
+        hvm_funcs.handle_eoi(vector);
 
     if ( vlapic_test_and_clear_vector(vector, &vlapic->regs->data[APIC_TMR]) )
         vioapic_update_EOI(vlapic_domain(vlapic), vector);
@@ -856,6 +865,7 @@ int hvm_x2apic_msr_write(struct vcpu *v, unsigned int msr, uint64_t msr_content)
         rc = vlapic_reg_write(v, APIC_ICR2, (uint32_t)(msr_content >> 32));
         if ( rc )
             return rc;
+        break;
 
     case APIC_ICR2:
         return X86EMUL_UNHANDLEABLE;
@@ -1034,7 +1044,8 @@ int vlapic_has_pending_irq(struct vcpu *v)
     if ( irr == -1 )
         return -1;
 
-    if ( vlapic_virtual_intr_delivery_enabled() )
+    if ( vlapic_virtual_intr_delivery_enabled() &&
+         !nestedhvm_vcpu_in_guestmode(v) )
         return irr;
 
     isr = vlapic_find_highest_isr(vlapic);
@@ -1045,15 +1056,15 @@ int vlapic_has_pending_irq(struct vcpu *v)
     return irr;
 }
 
-int vlapic_ack_pending_irq(struct vcpu *v, int vector)
+int vlapic_ack_pending_irq(struct vcpu *v, int vector, bool_t force_ack)
 {
     struct vlapic *vlapic = vcpu_vlapic(v);
 
-    if ( vlapic_virtual_intr_delivery_enabled() )
-        return 1;
-
-    vlapic_set_vector(vector, &vlapic->regs->data[APIC_ISR]);
-    vlapic_clear_irr(vector, vlapic);
+    if ( force_ack || !vlapic_virtual_intr_delivery_enabled() )
+    {
+        vlapic_set_vector(vector, &vlapic->regs->data[APIC_ISR]);
+        vlapic_clear_irr(vector, vlapic);
+    }
 
     return 1;
 }

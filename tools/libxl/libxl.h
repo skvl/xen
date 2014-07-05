@@ -82,6 +82,19 @@
 #define LIBXL_HAVE_DOMAIN_NODEAFFINITY 1
 
 /*
+ * LIBXL_HAVE_BUILDINFO_HVM_VENDOR_DEVICE indicates that the
+ * libxl_vendor_device field is present in the hvm sections of
+ * libxl_domain_build_info. This field tells libxl which
+ * flavour of xen-pvdevice to enable in QEMU.
+ */
+#define LIBXL_HAVE_BUILDINFO_HVM_VENDOR_DEVICE 1
+
+/*
+ * The libxl_domain_build_info has the event_channels field.
+ */
+#define LIBXL_HAVE_BUILDINFO_EVENT_CHANNELS 1
+
+/*
  * libxl ABI compatibility
  *
  * The only guarantee which libxl makes regarding ABI compatibility
@@ -275,7 +288,8 @@
 
 /* API compatibility. */
 #ifdef LIBXL_API_VERSION
-#if LIBXL_API_VERSION != 0x040200 && LIBXL_API_VERSION != 0x040300
+#if LIBXL_API_VERSION != 0x040200 && LIBXL_API_VERSION != 0x040300 && \
+    LIBXL_API_VERSION != 0x040400
 #error Unknown LIBXL_API_VERSION
 #endif
 #endif
@@ -295,6 +309,20 @@
  * that this means only one device can be added at domain build time.
  */
 #define LIBXL_HAVE_BUILDINFO_USBDEVICE_LIST 1
+
+/*
+ * LIBXL_HAVE_BUILDINFO_USBVERSION
+ *
+ * If this is defined, then the libxl_domain_build_info structure will
+ * contain hvm.usbversion, a integer type that contains a USB
+ * controller version to specify on the qemu upstream command-line.
+ *
+ * If it is set, callers may use hvm.usbversion to specify if the usb
+ * controller is usb1, usb2 or usb3.
+ *
+ * If this is not defined, the hvm.usbversion field does not exist.
+ */
+#define LIBXL_HAVE_BUILDINFO_USBVERSION 1
 
 /*
  * LIBXL_HAVE_DEVICE_BACKEND_DOMNAME
@@ -335,6 +363,87 @@
  * memory for a specific domain.
  */
 #define LIBXL_HAVE_DOMINFO_OUTSTANDING_MEMKB 1
+
+/*
+ * LIBXL_HAVE_SPICE_VDAGENT
+ *
+ * If defined, then the libxl_spice_info structure will contain a boolean type:
+ * vdagent and clipboard_sharing. These values define if Spice vdagent and
+ * clipboard sharing are enabled.
+ *
+ * If this is not defined, the Spice vdagent support is ignored.
+ */
+#define LIBXL_HAVE_SPICE_VDAGENT 1
+
+/*
+ * LIBXL_HAVE_SPICE_USBREDIRECTION
+ *
+ * If defined, then the libxl_spice_info structure will contain an integer type
+ * field: usbredirection. This value defines if Spice usbredirection is enabled
+ * and with how much channels.
+ *
+ * If this is not defined, the Spice usbredirection support is ignored.
+ */
+#define LIBXL_HAVE_SPICE_USBREDIREDIRECTION 1
+
+/*
+ * LIBXL_HAVE_DOMAIN_CREATE_RESTORE_PARAMS 1
+ *
+ * If this is defined, libxl_domain_create_restore()'s API has changed to
+ * include a params structure.
+ */
+#define LIBXL_HAVE_DOMAIN_CREATE_RESTORE_PARAMS 1
+
+/*
+ * LIBXL_HAVE_CREATEINFO_PVH
+ * If this is defined, then libxl supports creation of a PVH guest.
+ */
+#define LIBXL_HAVE_CREATEINFO_PVH 1
+
+/*
+ * LIBXL_HAVE_DRIVER_DOMAIN_CREATION 1
+ *
+ * If this is defined, libxl_domain_create_info contains a driver_domain
+ * field that can be used to tell libxl that the domain that is going
+ * to be created is a driver domain, so the necessary actions are taken.
+ */
+#define LIBXL_HAVE_DRIVER_DOMAIN_CREATION 1
+
+/*
+ * LIBXL_HAVE_SIGCHLD_SELECTIVE_REAP
+ *
+ * If this is defined:
+ *
+ * Firstly, the enum libxl_sigchld_owner (in libxl_event.h) has the
+ * value libxl_sigchld_owner_libxl_always_selective_reap which may be
+ * passed to libxl_childproc_setmode in hooks->chldmode.
+ *
+ * Secondly, the function libxl_childproc_sigchld_occurred exists.
+ */
+#define LIBXL_HAVE_SIGCHLD_OWNER_SELECTIVE_REAP 1
+
+/*
+ * LIBXL_HAVE_SIGCHLD_SHARING
+ *
+ * If this is defined, it is permissible for multiple libxl ctxs
+ * to simultaneously "own" SIGCHLD.  See "Subprocess handling"
+ * in libxl_event.h.
+ */
+#define LIBXL_HAVE_SIGCHLD_SHARING 1
+
+/*
+ * LIBXL_HAVE_NO_SUSPEND_RESUME
+ *
+ * Is this is defined then the platform has no support for saving,
+ * restoring or migrating a domain. In this case the related functions
+ * should be expected to return failure. That is:
+ *  - libxl_domain_suspend
+ *  - libxl_domain_resume
+ *  - libxl_domain_remus_start
+ */
+#if defined(__arm__) || defined(__aarch64__)
+#define LIBXL_HAVE_NO_SUSPEND_RESUME 1
+#endif
 
 /* Functions annotated with LIBXL_EXTERNAL_CALLERS_ONLY may not be
  * called from within libxl itself. Callers outside libxl, who
@@ -425,24 +534,6 @@ typedef struct libxl__ctx libxl_ctx;
 #include "_libxl_types.h"
 
 const libxl_version_info* libxl_get_version_info(libxl_ctx *ctx);
-
-enum {
-    ERROR_NONSPECIFIC = -1,
-    ERROR_VERSION = -2,
-    ERROR_FAIL = -3,
-    ERROR_NI = -4,
-    ERROR_NOMEM = -5,
-    ERROR_INVAL = -6,
-    ERROR_BADFAIL = -7,
-    ERROR_GUEST_TIMEDOUT = -8,
-    ERROR_TIMEDOUT = -9,
-    ERROR_NOPARAVIRT = -10,
-    ERROR_NOT_READY = -11,
-    ERROR_OSEVENT_REG_FAIL = -12,
-    ERROR_BUFFERFULL = -13,
-    ERROR_UNKNOWN_CHILD = -14,
-};
-
 
 /*
  * Some libxl operations can take a long time.  These functions take a
@@ -559,9 +650,31 @@ int libxl_domain_create_new(libxl_ctx *ctx, libxl_domain_config *d_config,
                             LIBXL_EXTERNAL_CALLERS_ONLY;
 int libxl_domain_create_restore(libxl_ctx *ctx, libxl_domain_config *d_config,
                                 uint32_t *domid, int restore_fd,
+                                const libxl_domain_restore_params *params,
                                 const libxl_asyncop_how *ao_how,
                                 const libxl_asyncprogress_how *aop_console_how)
                                 LIBXL_EXTERNAL_CALLERS_ONLY;
+
+#if defined(LIBXL_API_VERSION) && LIBXL_API_VERSION < 0x040400
+
+int static inline libxl_domain_create_restore_0x040200(
+    libxl_ctx *ctx, libxl_domain_config *d_config,
+    uint32_t *domid, int restore_fd,
+    const libxl_asyncop_how *ao_how,
+    const libxl_asyncprogress_how *aop_console_how)
+    LIBXL_EXTERNAL_CALLERS_ONLY
+{
+    libxl_domain_restore_params params;
+    params.checkpointed_stream = 0;
+
+    return libxl_domain_create_restore(
+        ctx, d_config, domid, restore_fd, &params, ao_how, aop_console_how);
+}
+
+#define libxl_domain_create_restore libxl_domain_create_restore_0x040200
+
+#endif
+
   /* A progress report will be made via ao_console_how, of type
    * domain_create_console_available, when the domain's primary
    * console is available and can be connected to.
@@ -599,6 +712,14 @@ int libxl_domain_preserve(libxl_ctx *ctx, uint32_t domid, libxl_domain_create_in
 
 /* get max. number of cpus supported by hypervisor */
 int libxl_get_max_cpus(libxl_ctx *ctx);
+
+/* get the actual number of currently online cpus on the host */
+int libxl_get_online_cpus(libxl_ctx *ctx);
+  /* Beware that no locking or serialization is provided by libxl,
+   * so the information can be outdated as far as the function
+   * returns. If there are other entities in the system capable
+   * of onlining/offlining CPUs, it is up to the application
+   * to guarantee consistency, if that is important. */
 
 /* get max. number of NUMA nodes supported by hypervisor */
 int libxl_get_max_nodes(libxl_ctx *ctx);
@@ -692,7 +813,7 @@ libxl_numainfo *libxl_get_numainfo(libxl_ctx *ctx, int *nr);
 void libxl_numainfo_list_free(libxl_numainfo *, int nr);
 
 libxl_vcpuinfo *libxl_list_vcpu(libxl_ctx *ctx, uint32_t domid,
-                                int *nb_vcpu, int *nr_vcpus_out);
+                                int *nb_vcpu, int *nr_cpus_out);
 void libxl_vcpuinfo_list_free(libxl_vcpuinfo *, int nr_vcpus);
 
 void libxl_device_vtpm_list_free(libxl_device_vtpm*, int nr_vtpms);
@@ -857,6 +978,18 @@ int libxl_device_pci_destroy(libxl_ctx *ctx, uint32_t domid,
 
 libxl_device_pci *libxl_device_pci_list(libxl_ctx *ctx, uint32_t domid,
                                         int *num);
+
+/*
+ * Turns the current process into a backend device service daemon
+ * for a driver domain.
+ *
+ * From a libxl API point of view, this starts a long-running
+ * operation.  That operation consists of "being a driver domain"
+ * and never completes.
+ */
+int libxl_device_events_handler(libxl_ctx *ctx,
+                                const libxl_asyncop_how *ao_how)
+                                LIBXL_EXTERNAL_CALLERS_ONLY;
 
 /*
  * Functions related to making devices assignable -- that is, bound to

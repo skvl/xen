@@ -272,8 +272,7 @@ ENTRY(sysenter_entry)
         pushq $FLAT_USER_SS
         pushq $0
         pushfq
-        .globl sysenter_eflags_saved
-sysenter_eflags_saved:
+GLOBAL(sysenter_eflags_saved)
         pushq $3 /* ring 3 null cs */
         pushq $0 /* null rip */
         pushq $0
@@ -371,7 +370,10 @@ create_bounce_frame:
         sbb   %ecx,%ecx                 # In +ve address space? Then okay.
         cmpq  %rax,%rsi
         adc   %ecx,%ecx                 # Above Xen private area? Then okay.
-        jg    domain_crash_synchronous
+UNLIKELY_START(g, create_bounce_frame_bad_sp)
+        lea   UNLIKELY_DISPATCH_LABEL(create_bounce_frame_bad_sp)(%rip), %rdi
+        jmp   asm_domain_crash_synchronous  /* Does not return */
+__UNLIKELY_END(create_bounce_frame_bad_sp)
         movb  TRAPBOUNCE_flags(%rdx),%cl
         subq  $40,%rsi
         movq  UREGS_ss+8(%rsp),%rax
@@ -430,26 +432,26 @@ UNLIKELY_END(bounce_failsafe)
         movq  $FLAT_KERNEL_CS,UREGS_cs+8(%rsp)
         movq  TRAPBOUNCE_eip(%rdx),%rax
         testq %rax,%rax
-        jz    domain_crash_synchronous
+UNLIKELY_START(z, create_bounce_frame_bad_bounce_ip)
+        lea   UNLIKELY_DISPATCH_LABEL(create_bounce_frame_bad_bounce_ip)(%rip), %rdi
+        jmp   asm_domain_crash_synchronous  /* Does not return */
+__UNLIKELY_END(create_bounce_frame_bad_bounce_ip)
         movq  %rax,UREGS_rip+8(%rsp)
         ret
-        _ASM_EXTABLE(.Lft2,  domain_crash_synchronous)
-        _ASM_EXTABLE(.Lft3,  domain_crash_synchronous)
-        _ASM_EXTABLE(.Lft4,  domain_crash_synchronous)
-        _ASM_EXTABLE(.Lft5,  domain_crash_synchronous)
-        _ASM_EXTABLE(.Lft6,  domain_crash_synchronous)
-        _ASM_EXTABLE(.Lft7,  domain_crash_synchronous)
-        _ASM_EXTABLE(.Lft8,  domain_crash_synchronous)
-        _ASM_EXTABLE(.Lft9,  domain_crash_synchronous)
-        _ASM_EXTABLE(.Lft10, domain_crash_synchronous)
-        _ASM_EXTABLE(.Lft11, domain_crash_synchronous)
-        _ASM_EXTABLE(.Lft12, domain_crash_synchronous)
-        _ASM_EXTABLE(.Lft13, domain_crash_synchronous)
+        _ASM_EXTABLE(.Lft2,  dom_crash_sync_extable)
+        _ASM_EXTABLE(.Lft3,  dom_crash_sync_extable)
+        _ASM_EXTABLE(.Lft4,  dom_crash_sync_extable)
+        _ASM_EXTABLE(.Lft5,  dom_crash_sync_extable)
+        _ASM_EXTABLE(.Lft6,  dom_crash_sync_extable)
+        _ASM_EXTABLE(.Lft7,  dom_crash_sync_extable)
+        _ASM_EXTABLE(.Lft8,  dom_crash_sync_extable)
+        _ASM_EXTABLE(.Lft9,  dom_crash_sync_extable)
+        _ASM_EXTABLE(.Lft10, dom_crash_sync_extable)
+        _ASM_EXTABLE(.Lft11, dom_crash_sync_extable)
+        _ASM_EXTABLE(.Lft12, dom_crash_sync_extable)
+        _ASM_EXTABLE(.Lft13, dom_crash_sync_extable)
 
-domain_crash_synchronous_string:
-        .asciz "domain_crash_sync called from entry.S\n"
-
-ENTRY(domain_crash_synchronous)
+ENTRY(dom_crash_sync_extable)
         # Get out of the guest-save area of the stack.
         GET_STACK_BASE(%rax)
         leaq  STACK_CPUINFO_FIELD(guest_cpu_user_regs)(%rax),%rsp
@@ -460,11 +462,8 @@ ENTRY(domain_crash_synchronous)
         setz  %al
         leal  (%rax,%rax,2),%eax
         orb   %al,UREGS_cs(%rsp)
-        # printk(domain_crash_synchronous_string)
-        leaq  domain_crash_synchronous_string(%rip),%rdi
-        xorl  %eax,%eax
-        call  printk
-        jmp  __domain_crash_synchronous
+        xorl  %edi,%edi
+        jmp   asm_domain_crash_synchronous /* Does not return */
 
 /* No special register assumptions. */
 ENTRY(ret_from_intr)
@@ -479,8 +478,7 @@ ENTRY(ret_from_intr)
 ENTRY(page_fault)
         movl  $TRAP_page_fault,4(%rsp)
 /* No special register assumptions. */
-	.globl handle_exception
-handle_exception:
+GLOBAL(handle_exception)
         SAVE_ALL
 handle_exception_saved:
         testb $X86_EFLAGS_IF>>8,UREGS_eflags+1(%rsp)
@@ -689,11 +687,8 @@ ENTRY(enable_nmis)
 1:
         retq
 
-/* No op trap handler.  Required for kexec crash path.  This is not
- * declared with the ENTRY() macro to avoid wasted alignment space.
- */
-.globl trap_nop
-trap_nop:
+/* No op trap handler.  Required for kexec crash path. */
+GLOBAL(trap_nop)
         iretq
 
 

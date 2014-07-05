@@ -69,10 +69,12 @@ struct symbol {
 
 guest_word_t kernel_stext, kernel_etext, kernel_sinittext, kernel_einittext, kernel_hypercallpage;
 
-#if defined (__i386__)
+#if defined (__i386__) || defined (__arm__)
 unsigned long long kernel_start = 0xc0000000;
-#else
+#elif defined (__x86_64__)
 unsigned long long kernel_start = 0xffffffff80000000UL;
+#elif defined (__aarch64__)
+unsigned long long kernel_start = 0xffffff8000000000UL;
 #endif
 
 static int is_kernel_text(guest_word_t addr)
@@ -167,6 +169,7 @@ static void read_symbol_table(const char *symtab)
     char *p;
     struct symbol *symbol;
     FILE *f;
+    guest_word_t address;
 
     f = fopen(symtab, "r");
     if(f == NULL) {
@@ -178,10 +181,8 @@ static void read_symbol_table(const char *symtab)
         if(fgets(line,256,f)==NULL)
             break;
 
-        symbol = malloc(sizeof(*symbol));
-
         /* need more checks for syntax here... */
-        symbol->address = strtoull(line, &p, 16);
+        address = strtoull(line, &p, 16);
         if (!isspace((uint8_t)*p++))
             continue;
         type = *p++;
@@ -196,7 +197,6 @@ static void read_symbol_table(const char *symtab)
          */
         if (p[strlen(p)-1] == '\n')
             p[strlen(p)-1] = '\0';
-        symbol->name = strdup(p);
 
         switch (type) {
         case 'A': /* global absolute */
@@ -207,20 +207,34 @@ static void read_symbol_table(const char *symtab)
         case 'w': /* undefined weak function */
             continue;
         default:
+            symbol = malloc(sizeof(*symbol));
+            if (symbol == NULL) {
+                fclose(f);
+                return;
+            }
+
+            symbol->address = address;
+            symbol->name = strdup(p);
+            if (symbol->name == NULL) {
+                free(symbol);
+                fclose(f);
+                return;
+            }
+
             insert_symbol(symbol);
             break;
         }
 
-        if (strcmp(symbol->name, "_stext") == 0)
-            kernel_stext = symbol->address;
-        else if (strcmp(symbol->name, "_etext") == 0)
-            kernel_etext = symbol->address;
-        else if (strcmp(symbol->name, "_sinittext") == 0)
-            kernel_sinittext = symbol->address;
-        else if (strcmp(symbol->name, "_einittext") == 0)
-            kernel_einittext = symbol->address;
-        else if (strcmp(symbol->name, "hypercall_page") == 0)
-            kernel_hypercallpage = symbol->address;
+        if (strcmp(p, "_stext") == 0)
+            kernel_stext = address;
+        else if (strcmp(p, "_etext") == 0)
+            kernel_etext = address;
+        else if (strcmp(p, "_sinittext") == 0)
+            kernel_sinittext = address;
+        else if (strcmp(p, "_einittext") == 0)
+            kernel_einittext = address;
+        else if (strcmp(p, "hypercall_page") == 0)
+            kernel_hypercallpage = address;
     }
 
     fclose(f);
@@ -497,7 +511,7 @@ static void print_ctx_64(vcpu_guest_context_t *ctx)
     print_symbol(regs->pc64);
     printf("\n");
 
-    printf("LR:       %016"PRIx64"zn", regs->x30);
+    printf("LR:       %016"PRIx64"\n", regs->x30);
     printf("ELR_EL1:  %016"PRIx64"\n", regs->elr_el1);
 
     printf("CPSR:     %08"PRIx32"\n", regs->cpsr);
@@ -564,7 +578,7 @@ static void print_ctx(vcpu_guest_context_any_t *ctx_any)
 #endif
 
     printf("SCTLR: %08"PRIx32"\n", ctx->sctlr);
-    printf("TTBCR: %08"PRIx32"\n", ctx->ttbcr);
+    printf("TTBCR: %016"PRIx64"\n", ctx->ttbcr);
     printf("TTBR0: %016"PRIx64"\n", ctx->ttbr0);
     printf("TTBR1: %016"PRIx64"\n", ctx->ttbr1);
 }
@@ -771,12 +785,9 @@ static void dump_ctx(int vcpu)
             }
             ctxt_word_size = (strstr(xen_caps, "xen-3.0-x86_64")) ? 8 : 4;
         } else {
-            struct xen_domctl domctl;
-            memset(&domctl, 0, sizeof domctl);
-            domctl.domain = xenctx.domid;
-            domctl.cmd = XEN_DOMCTL_get_address_size;
-            if (xc_domctl(xenctx.xc_handle, &domctl) == 0)
-                ctxt_word_size = guest_word_size = domctl.u.address_size.size / 8;
+            unsigned int gw;
+            if ( !xc_domain_get_guest_width(xenctx.xc_handle, xenctx.domid, &gw) )
+                ctxt_word_size = guest_word_size = gw;
         }
     }
 #endif
@@ -891,7 +902,7 @@ int main(int argc, char **argv)
         read_symbol_table(symbol_table);
 
     xenctx.xc_handle = xc_interface_open(0,0,0); /* for accessing control interface */
-    if (xenctx.xc_handle < 0) {
+    if (xenctx.xc_handle == NULL) {
         perror("xc_interface_open");
         exit(-1);
     }

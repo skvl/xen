@@ -27,8 +27,8 @@
 #ifndef __XEN_PUBLIC_ARCH_ARM_H__
 #define __XEN_PUBLIC_ARCH_ARM_H__
 
-/* hypercall calling convention
- * ----------------------------
+/*
+ * `incontents 50 arm_abi Hypercall Calling Convention
  *
  * A hypercall is issued using the ARM HVC instruction.
  *
@@ -58,6 +58,114 @@
  * (AAPCS64). Where there is a conflict the 64-bit standard should be
  * used regardless of guest type. Structures which are passed as
  * hypercall arguments are always little endian.
+ *
+ * All memory which is shared with other entities in the system
+ * (including the hypervisor and other guests) must reside in memory
+ * which is mapped as Normal Inner-cacheable. This applies to:
+ *  - hypercall arguments passed via a pointer to guest memory.
+ *  - memory shared via the grant table mechanism (including PV I/O
+ *    rings etc).
+ *  - memory shared with the hypervisor (struct shared_info, struct
+ *    vcpu_info, the grant table, etc).
+ *
+ * Any Inner cache allocation strategy (Write-Back, Write-Through etc)
+ * is acceptable. There is no restriction on the Outer-cacheability.
+ */
+
+/*
+ * `incontents 55 arm_hcall Supported Hypercalls
+ *
+ * Xen on ARM makes extensive use of hardware facilities and therefore
+ * only a subset of the potential hypercalls are required.
+ *
+ * Since ARM uses second stage paging any machine/physical addresses
+ * passed to hypercalls are Guest Physical Addresses (Intermediate
+ * Physical Addresses) unless otherwise noted.
+ *
+ * The following hypercalls (and sub operations) are supported on the
+ * ARM platform. Other hypercalls should be considered
+ * unavailable/unsupported.
+ *
+ *  HYPERVISOR_memory_op
+ *   All generic sub-operations.
+ *
+ *   In addition the following arch specific sub-ops:
+ *    * XENMEM_add_to_physmap
+ *    * XENMEM_add_to_physmap_batch
+ *
+ *  HYPERVISOR_domctl
+ *   All generic sub-operations, with the exception of:
+ *    * XEN_DOMCTL_iomem_permission (not yet implemented)
+ *    * XEN_DOMCTL_irq_permission (not yet implemented)
+ *
+ *  HYPERVISOR_sched_op
+ *   All generic sub-operations, with the exception of:
+ *    * SCHEDOP_block -- prefer wfi hardware instruction
+ *
+ *  HYPERVISOR_console_io
+ *   All generic sub-operations
+ *
+ *  HYPERVISOR_xen_version
+ *   All generic sub-operations
+ *
+ *  HYPERVISOR_event_channel_op
+ *   All generic sub-operations
+ *
+ *  HYPERVISOR_physdev_op
+ *   No sub-operations are currenty supported
+ *
+ *  HYPERVISOR_sysctl
+ *   All generic sub-operations, with the exception of:
+ *    * XEN_SYSCTL_page_offline_op
+ *    * XEN_SYSCTL_get_pmstat
+ *    * XEN_SYSCTL_pm_op
+ *
+ *  HYPERVISOR_hvm_op
+ *   Exactly these sub-operations are supported:
+ *    * HVMOP_set_param
+ *    * HVMOP_get_param
+ *
+ *  HYPERVISOR_grant_table_op
+ *   All generic sub-operations
+ *
+ *  HYPERVISOR_vcpu_op
+ *   Exactly these sub-operations are supported:
+ *    * VCPUOP_register_vcpu_info
+ *    * VCPUOP_register_runstate_memory_area
+ *
+ *
+ * Other notes on the ARM ABI:
+ *
+ * - struct start_info is not exported to ARM guests.
+ *
+ * - struct shared_info is mapped by ARM guests using the
+ *   HYPERVISOR_memory_op sub-op XENMEM_add_to_physmap, passing
+ *   XENMAPSPACE_shared_info as space parameter.
+ *
+ * - All the per-cpu struct vcpu_info are mapped by ARM guests using the
+ *   HYPERVISOR_vcpu_op sub-op VCPUOP_register_vcpu_info, including cpu0
+ *   struct vcpu_info.
+ *
+ * - The grant table is mapped using the HYPERVISOR_memory_op sub-op
+ *   XENMEM_add_to_physmap, passing XENMAPSPACE_grant_table as space
+ *   parameter. The memory range specified under the Xen compatible
+ *   hypervisor node on device tree can be used as target gpfn for the
+ *   mapping.
+ *
+ * - Xenstore is initialized by using the two hvm_params
+ *   HVM_PARAM_STORE_PFN and HVM_PARAM_STORE_EVTCHN. They can be read
+ *   with the HYPERVISOR_hvm_op sub-op HVMOP_get_param.
+ *
+ * - The paravirtualized console is initialized by using the two
+ *   hvm_params HVM_PARAM_CONSOLE_PFN and HVM_PARAM_CONSOLE_EVTCHN. They
+ *   can be read with the HYPERVISOR_hvm_op sub-op HVMOP_get_param.
+ *
+ * - Event channel notifications are delivered using the percpu GIC
+ *   interrupt specified under the Xen compatible hypervisor node on
+ *   device tree.
+ *
+ * - The device tree Xen compatible node is fully described under Linux
+ *   at Documentation/devicetree/bindings/arm/xen.txt.
  */
 
 #define XEN_HYPERCALL_TAG   0XEA1
@@ -182,6 +290,7 @@ typedef uint64_t xen_pfn_t;
 typedef uint64_t xen_ulong_t;
 #define PRI_xen_ulong PRIx64
 
+#if defined(__XEN__) || defined(__XEN_TOOLS__)
 struct vcpu_guest_context {
 #define _VGCF_online                   0
 #define VGCF_online                    (1<<_VGCF_online)
@@ -189,22 +298,36 @@ struct vcpu_guest_context {
 
     struct vcpu_guest_core_regs user_regs;  /* Core CPU registers */
 
-    uint32_t sctlr, ttbcr;
-    uint64_t ttbr0, ttbr1;
+    uint32_t sctlr;
+    uint64_t ttbcr, ttbr0, ttbr1;
 };
 typedef struct vcpu_guest_context vcpu_guest_context_t;
 DEFINE_XEN_GUEST_HANDLE(vcpu_guest_context_t);
+#endif
 
-struct arch_vcpu_info { };
+struct arch_vcpu_info {
+};
 typedef struct arch_vcpu_info arch_vcpu_info_t;
 
-struct arch_shared_info { };
+struct arch_shared_info {
+};
 typedef struct arch_shared_info arch_shared_info_t;
 typedef uint64_t xen_callback_t;
 
-#endif /* ifndef __ASSEMBLY __ */
+#endif
+
+#if defined(__XEN__) || defined(__XEN_TOOLS__)
 
 /* PSR bits (CPSR, SPSR)*/
+
+#define PSR_THUMB       (1<<5)        /* Thumb Mode enable */
+#define PSR_FIQ_MASK    (1<<6)        /* Fast Interrupt mask */
+#define PSR_IRQ_MASK    (1<<7)        /* Interrupt mask */
+#define PSR_ABT_MASK    (1<<8)        /* Asynchronous Abort mask */
+#define PSR_BIG_ENDIAN  (1<<9)        /* arm32: Big Endian Mode */
+#define PSR_DBG_MASK    (1<<9)        /* arm64: Debug Exception mask */
+#define PSR_IT_MASK     (0x0600fc00)  /* Thumb If-Then Mask */
+#define PSR_JAZELLE     (1<<24)       /* Jazelle Mode */
 
 /* 32 bit modes */
 #define PSR_MODE_USR 0x10
@@ -218,7 +341,6 @@ typedef uint64_t xen_callback_t;
 #define PSR_MODE_SYS 0x1f
 
 /* 64 bit modes */
-#ifdef __aarch64__
 #define PSR_MODE_BIT  0x10 /* Set iff AArch32 */
 #define PSR_MODE_EL3h 0x0d
 #define PSR_MODE_EL3t 0x0c
@@ -227,17 +349,44 @@ typedef uint64_t xen_callback_t;
 #define PSR_MODE_EL1h 0x05
 #define PSR_MODE_EL1t 0x04
 #define PSR_MODE_EL0t 0x00
+
+#define PSR_GUEST32_INIT  (PSR_ABT_MASK|PSR_FIQ_MASK|PSR_IRQ_MASK|PSR_MODE_SVC)
+#define PSR_GUEST64_INIT (PSR_ABT_MASK|PSR_FIQ_MASK|PSR_IRQ_MASK|PSR_MODE_EL1h)
+
+#define SCTLR_GUEST_INIT    0x00c50078
+
+/*
+ * Virtual machine platform (memory layout, interrupts)
+ *
+ * These are defined for consistency between the tools and the
+ * hypervisor. Guests must not rely on these hardcoded values but
+ * should instead use the FDT.
+ */
+
+/* Physical Address Space */
+#define GUEST_GICD_BASE   0x2c001000ULL
+#define GUEST_GICD_SIZE   0x1000ULL
+#define GUEST_GICC_BASE   0x2c002000ULL
+#define GUEST_GICC_SIZE   0x100ULL
+
+#define GUEST_RAM_BASE    0x80000000ULL
+
+#define GUEST_GNTTAB_BASE 0xb0000000ULL
+#define GUEST_GNTTAB_SIZE 0x00020000ULL
+
+/* Interrupts */
+#define GUEST_TIMER_VIRT_PPI    27
+#define GUEST_TIMER_PHYS_S_PPI  29
+#define GUEST_TIMER_PHYS_NS_PPI 30
+#define GUEST_EVTCHN_PPI        31
+
+/* PSCI functions */
+#define PSCI_cpu_suspend 0
+#define PSCI_cpu_off     1
+#define PSCI_cpu_on      2
+#define PSCI_migrate     3
+
 #endif
-
-#define PSR_THUMB       (1<<5)        /* Thumb Mode enable */
-#define PSR_FIQ_MASK    (1<<6)        /* Fast Interrupt mask */
-#define PSR_IRQ_MASK    (1<<7)        /* Interrupt mask */
-#define PSR_ABT_MASK    (1<<8)        /* Asynchronous Abort mask */
-#define PSR_BIG_ENDIAN  (1<<9)        /* Big Endian Mode */
-#define PSR_IT_MASK     (0x0600fc00)  /* Thumb If-Then Mask */
-#define PSR_JAZELLE     (1<<24)       /* Jazelle Mode */
-
-#define PSR_GUEST_INIT  (PSR_ABT_MASK|PSR_FIQ_MASK|PSR_IRQ_MASK|PSR_MODE_SVC)
 
 #endif /*  __XEN_PUBLIC_ARCH_ARM_H__ */
 

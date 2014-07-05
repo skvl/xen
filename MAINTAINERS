@@ -106,16 +106,21 @@ F:	xen/include/acpi/
 
 AMD IOMMU
 M:	Suravee Suthikulpanit <suravee.suthikulpanit@amd.com>
-M:	Jacob Shin <jacob.shin@amd.com>
 S:	Maintained
 F:	xen/drivers/passthrough/amd/
 
 AMD SVM
 M:	Boris Ostrovsky <boris.ostrovsky@oracle.com>
 M:	Suravee Suthikulpanit <suravee.suthikulpanit@amd.com>
-M:	Jacob Shin <jacob.shin@amd.com>
 S:	Supported
 F:	xen/arch/x86/hvm/svm/
+
+ARINC653 SCHEDULER
+M:	Nathan Studer <nate.studer@dornerworks.com>
+M:	Robert VanVossen <robert.vanvossen@dornerworks.com>
+S:	Supported
+F:	xen/common/sched_arinc653.c
+F:	tools/libxc/xc_arinc653.c
 
 ARM (W/ VIRTUALISATION EXTENSIONS) ARCHITECTURE
 M:	Ian Campbell <ian.campbell@citrix.com>
@@ -148,6 +153,12 @@ F:     xen/arch/x86/efi/
 F:     xen/include/efi/
 F:     xen/include/asm-x86/efi*.h
 F:     xen/include/asm-x86/x86_*/efi*.h
+
+EVENT CHANNELS (FIFO-BASED ABI)
+M:	David Vrabel <david.vrabel@citrix.com>
+S:	Supported
+F:	xen/common/event_fifo.c
+F:	xen/include/xen/event_fifo.h
 
 GDBSX DEBUGGER
 M:	Mukesh Rathor <mukesh.rathor@oracle.com>
@@ -190,15 +201,13 @@ X:	xen/drivers/passthrough/amd/
 X:	xen/drivers/passthrough/vtd/
 F:	xen/include/xen/iommu.h
 
-LINUX (PV_OPS)
-M:	Konrad Rzeszutek Wilk <konrad.wilk@oracle.com>
-S:	Supported
-T:	git git://git.kernel.org/pub/scm/linux/kernel/git/konrad/xen.git
-
-LINUX (XCP)
-M:	Ian Campbell <ian.campbell@citrix.com>
-S:	Supported
-T:	hg http://xenbits.xen.org/XCP/linux-2.6.*.pq.hg
+KEXEC
+M:      David Vrabel <david.vrabel@citrix.com>
+S:      Supported
+F:      xen/common/{kexec,kimage}.c
+F:      xen/include/{kexec,kimage}.h
+F:      xen/arch/x86/machine_kexec.c
+F:      xen/arch/x86/x86_64/kexec_reloc.S
 
 MACHINE CHECK (MCA) & RAS
 M:	Christoph Egger <chegger@amazon.de>
@@ -311,6 +320,14 @@ X86 MEMORY MANAGEMENT
 M:	Tim Deegan <tim@xen.org>
 S:	Supported
 F:	xen/arch/x86/mm/
+
+X86 MEMORY SHARING AND PAGING
+M:	Andres Lagar-Cavilla <andres@lagarcavilla.org>
+M:	Tim Deegan <tim@xen.org>
+S:	Supported
+F:	xen/arch/x86/mm/mem_sharing.c
+F:	xen/arch/x86/mm/mem_paging.c
+F:	tools/memshr
 
 XENTRACE
 M:	George Dunlap <george.dunlap@eu.citrix.com>

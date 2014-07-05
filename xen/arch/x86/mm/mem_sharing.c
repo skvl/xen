@@ -611,8 +611,15 @@ static int page_make_sharable(struct domain *d,
                        struct page_info *page, 
                        int expected_refcnt)
 {
-    int drop_dom_ref;
+    bool_t drop_dom_ref;
+
     spin_lock(&d->page_alloc_lock);
+
+    if ( d->is_dying )
+    {
+        spin_unlock(&d->page_alloc_lock);
+        return -EBUSY;
+    }
 
     /* Change page type and count atomically */
     if ( !get_page_and_type(page, d, PGT_shared_page) )
@@ -624,8 +631,8 @@ static int page_make_sharable(struct domain *d,
     /* Check it wasn't already sharable and undo if it was */
     if ( (page->u.inuse.type_info & PGT_count_mask) != 1 )
     {
-        put_page_and_type(page);
         spin_unlock(&d->page_alloc_lock);
+        put_page_and_type(page);
         return -EEXIST;
     }
 
@@ -633,15 +640,14 @@ static int page_make_sharable(struct domain *d,
      * the second from get_page_and_type at the top of this function */
     if ( page->count_info != (PGC_allocated | (2 + expected_refcnt)) )
     {
+        spin_unlock(&d->page_alloc_lock);
         /* Return type count back to zero */
         put_page_and_type(page);
-        spin_unlock(&d->page_alloc_lock);
         return -E2BIG;
     }
 
     page_set_owner(page, dom_cow);
-    domain_adjust_tot_pages(d, -1);
-    drop_dom_ref = (d->tot_pages == 0);
+    drop_dom_ref = !domain_adjust_tot_pages(d, -1);
     page_list_del(page, &d->page_list);
     spin_unlock(&d->page_alloc_lock);
 
@@ -659,6 +665,13 @@ static int page_make_private(struct domain *d, struct page_info *page)
     
     spin_lock(&d->page_alloc_lock);
 
+    if ( d->is_dying )
+    {
+        spin_unlock(&d->page_alloc_lock);
+        put_page(page);
+        return -EBUSY;
+    }
+
     /* We can only change the type if count is one */
     /* Because we are locking pages individually, we need to drop
      * the lock here, while the page is typed. We cannot risk the 
@@ -666,8 +679,8 @@ static int page_make_private(struct domain *d, struct page_info *page)
     expected_type = (PGT_shared_page | PGT_validated | PGT_locked | 2);
     if ( page->u.inuse.type_info != expected_type )
     {
-        put_page(page);
         spin_unlock(&d->page_alloc_lock);
+        put_page(page);
         return -EEXIST;
     }
 
@@ -682,7 +695,7 @@ static int page_make_private(struct domain *d, struct page_info *page)
     page_set_owner(page, d);
 
     if ( domain_adjust_tot_pages(d, 1) == 1 )
-        get_domain(d);
+        get_knownalive_domain(d);
     page_list_add_tail(page, &d->page_list);
     spin_unlock(&d->page_alloc_lock);
 
@@ -900,20 +913,8 @@ int mem_sharing_nominate_page(struct domain *d,
         goto out;
     }
 
-    /* Change the p2m type */
-    if ( p2m_change_type(d, gfn, p2mt, p2m_ram_shared) != p2mt ) 
-    {
-        /* This is unlikely, as the type must have changed since we've checked
-         * it a few lines above.
-         * The mfn needs to revert back to rw type. This should never fail,
-         * since no-one knew that the mfn was temporarily sharable */
-        mem_sharing_gfn_destroy(page, d, gfn_info);
-        xfree(page->sharing);
-        page->sharing = NULL;
-        /* NOTE: We haven't yet added this to the audit list. */
-        BUG_ON(page_make_private(d, page) != 0);
-        goto out;
-    }
+    /* Change the p2m type, should never fail with p2m locked. */
+    BUG_ON(p2m_change_type(d, gfn, p2mt, p2m_ram_shared) != p2mt);
 
     /* Account for this page. */
     atomic_inc(&nr_shared_mfns);
@@ -1289,15 +1290,21 @@ int relinquish_shared_pages(struct domain *d)
             set_rc = p2m->set_entry(p2m, gfn, _mfn(0), PAGE_ORDER_4K,
                                     p2m_invalid, p2m_access_rwx);
             ASSERT(set_rc != 0);
-            count++;
+            count += 0x10;
         }
+        else
+            ++count;
 
-        /* Preempt every 2MiB. Arbitrary */
-        if ( (count == 512) && hypercall_preempt_check() )
+        /* Preempt every 2MiB (shared) or 32MiB (unshared) - arbitrary. */
+        if ( count >= 0x2000 )
         {
-            p2m->next_shared_gfn_to_relinquish = gfn + 1;
-            rc = -EAGAIN;
-            break;
+            if ( hypercall_preempt_check() )
+            {
+                p2m->next_shared_gfn_to_relinquish = gfn + 1;
+                rc = -EAGAIN;
+                break;
+            }
+            count = 0;
         }
     }
 

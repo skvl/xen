@@ -104,7 +104,7 @@ void __init pt_pci_init(void)
 {
     radix_tree_init(&pci_segments);
     if ( !alloc_pseg(0) )
-        panic("Could not initialize PCI segment 0\n");
+        panic("Could not initialize PCI segment 0");
 }
 
 int __init pci_add_segment(u16 seg)
@@ -127,29 +127,20 @@ static unsigned int nr_phantom_devs;
 
 static void __init parse_phantom_dev(char *str) {
     const char *s = str;
+    unsigned int seg, bus, slot;
     struct phantom_dev phantom;
 
     if ( !s || !*s || nr_phantom_devs >= ARRAY_SIZE(phantom_devs) )
         return;
 
-    phantom.seg = simple_strtol(s, &s, 16);
-    if ( *s != ':' )
+    s = parse_pci(s, &seg, &bus, &slot, NULL);
+    if ( !s || *s != ',' )
         return;
 
-    phantom.bus = simple_strtol(s + 1, &s, 16);
-    if ( *s == ',' )
-    {
-        phantom.slot = phantom.bus;
-        phantom.bus = phantom.seg;
-        phantom.seg = 0;
-    }
-    else if ( *s == ':' )
-        phantom.slot = simple_strtol(s + 1, &s, 16);
-    else
-        return;
+    phantom.seg = seg;
+    phantom.bus = bus;
+    phantom.slot = slot;
 
-    if ( *s != ',' )
-        return;
     switch ( phantom.stride = simple_strtol(s + 1, &s, 0) )
     {
     case 1: case 2: case 4:
@@ -179,8 +170,22 @@ static struct pci_dev *alloc_pdev(struct pci_seg *pseg, u8 bus, u8 devfn)
     *((u8*) &pdev->devfn) = devfn;
     pdev->domain = NULL;
     INIT_LIST_HEAD(&pdev->msi_list);
+
+    if ( pci_find_cap_offset(pseg->nr, bus, PCI_SLOT(devfn), PCI_FUNC(devfn),
+                             PCI_CAP_ID_MSIX) )
+    {
+        struct arch_msix *msix = xzalloc(struct arch_msix);
+
+        if ( !msix )
+        {
+            xfree(pdev);
+            return NULL;
+        }
+        spin_lock_init(&msix->table_lock);
+        pdev->msix = msix;
+    }
+
     list_add(&pdev->alldevs_list, &pseg->alldevs_list);
-    spin_lock_init(&pdev->msix_table_lock);
 
     /* update bus2bridge */
     switch ( pdev->type = pdev_type(pseg->nr, bus, devfn) )
@@ -188,9 +193,6 @@ static struct pci_dev *alloc_pdev(struct pci_seg *pseg, u8 bus, u8 devfn)
         int pos;
         u16 cap;
         u8 sec_bus, sub_bus;
-
-        case DEV_TYPE_PCIe_BRIDGE:
-            break;
 
         case DEV_TYPE_PCIe2PCI_BRIDGE:
         case DEV_TYPE_LEGACY_PCI_BRIDGE:
@@ -239,6 +241,8 @@ static struct pci_dev *alloc_pdev(struct pci_seg *pseg, u8 bus, u8 devfn)
             break;
 
         case DEV_TYPE_PCI:
+        case DEV_TYPE_PCIe_BRIDGE:
+        case DEV_TYPE_PCI_HOST_BRIDGE:
             break;
 
         default:
@@ -277,6 +281,7 @@ static void free_pdev(struct pci_seg *pseg, struct pci_dev *pdev)
     }
 
     list_del(&pdev->alldevs_list);
+    xfree(pdev->msix);
     xfree(pdev);
 }
 
@@ -691,6 +696,7 @@ void pci_release_devices(struct domain *d)
     spin_unlock(&pcidevs_lock);
 }
 
+#define PCI_CLASS_BRIDGE_HOST    0x0600
 #define PCI_CLASS_BRIDGE_PCI     0x0604
 
 enum pdev_type pdev_type(u16 seg, u8 bus, u8 devfn)
@@ -714,6 +720,8 @@ enum pdev_type pdev_type(u16 seg, u8 bus, u8 devfn)
             return DEV_TYPE_PCI2PCIe_BRIDGE;
         }
         return DEV_TYPE_PCIe_BRIDGE;
+    case PCI_CLASS_BRIDGE_HOST:
+        return DEV_TYPE_PCI_HOST_BRIDGE;
 
     case 0x0000: case 0xffff:
         return DEV_TYPE_PCI_UNKNOWN;

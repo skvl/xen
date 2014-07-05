@@ -60,6 +60,15 @@
  * arguments, which are cp,opc1,crn,crm,opc2.
  */
 
+/* Coprocessor 10 */
+
+#define FPSID           p10,7,c0,c0,0   /* Floating-Point System ID Register */
+#define FPSCR           p10,7,c1,c0,0   /* Floating-Point Status and Control Register */
+#define MVFR0           p10,7,c7,c0,0   /* Media and VFP Feature Register 0 */
+#define FPEXC           p10,7,c8,c0,0   /* Floating-Point Exception Control Register */
+#define FPINST          p10,7,c9,c0,0   /* Floating-Point Instruction Register */
+#define FPINST2         p10,7,c10,c0,0  /* Floating-point Instruction Register 2 */
+
 /* Coprocessor 14 */
 
 /* CP14 CR0: */
@@ -112,6 +121,8 @@
 #define TTBR0           p15,0,c2        /* Translation Table Base Reg. 0 */
 #define TTBR1           p15,1,c2        /* Translation Table Base Reg. 1 */
 #define HTTBR           p15,4,c2        /* Hyp. Translation Table Base Register */
+#define TTBR0_32        p15,0,c2,c0,0   /* 32-bit access to TTBR0 */
+#define TTBR1_32        p15,0,c2,c0,1   /* 32-bit access to TTBR1 */
 #define HTCR            p15,4,c2,c0,2   /* Hyp. Translation Control Register */
 #define VTCR            p15,4,c2,c1,2   /* Virtualization Translation Control Register */
 #define VTTBR           p15,6,c2        /* Virtualization Translation Table Base Register */
@@ -145,7 +156,7 @@
 #define BPIALL          p15,0,c7,c5,6   /* Invalidate entire branch predictor array */
 #define BPIMVA          p15,0,c7,c5,7   /* Invalidate MVA from branch predictor array */
 #define DCIMVAC         p15,0,c7,c6,1   /* Invalidate data cache line by MVA to PoC */
-#define DCISW           p15,0,c7,c2,1   /* Invalidate data cache line by set/way */
+#define DCISW           p15,0,c7,c6,2   /* Invalidate data cache line by set/way */
 #define ATS1CPR         p15,0,c7,c8,0   /* Address Translation Stage 1. Non-Secure Kernel Read */
 #define ATS1CPW         p15,0,c7,c8,1   /* Address Translation Stage 1. Non-Secure Kernel Write */
 #define ATS1CUR         p15,0,c7,c8,2   /* Address Translation Stage 1. Non-Secure User Read */
@@ -157,6 +168,7 @@
 #define DCCMVAC         p15,0,c7,c10,1  /* Clean data or unified cache line by MVA to PoC */
 #define DCCSW           p15,0,c7,c10,2  /* Clean data cache line by set/way */
 #define DCCMVAU         p15,0,c7,c11,1  /* Clean data cache line by MVA to PoU */
+#define DCCIMVAC        p15,0,c7,c14,1  /* Data cache clean and invalidate by MVA */
 #define DCCISW          p15,0,c7,c14,2  /* Clean and invalidate data cache line by set/way */
 #define ATS1HR          p15,4,c7,c8,0   /* Address Translation Stage 1 Hyp. Read */
 #define ATS1HW          p15,4,c7,c8,1   /* Address Translation Stage 1 Hyp. Write */
@@ -190,6 +202,8 @@
 #define MAIR1           p15,0,c10,c2,1  /* Memory Attribute Indirection Register 1 AKA NMRR */
 #define HMAIR0          p15,4,c10,c2,0  /* Hyp. Memory Attribute Indirection Register 0 */
 #define HMAIR1          p15,4,c10,c2,1  /* Hyp. Memory Attribute Indirection Register 1 */
+#define AMAIR0          p15,0,c10,c3,0  /* Aux. Memory Attribute Indirection Register 0 */
+#define AMAIR1          p15,0,c10,c3,1  /* Aux. Memory Attribute Indirection Register 1 */
 
 /* CP15 CR11: DMA Operations for TCM Access */
 
@@ -248,8 +262,12 @@
 #define CPACR_EL1               CPACR
 #define CSSELR_EL1              CSSELR
 #define DACR32_EL2              DACR
+#define ESR_EL1                 DFSR
 #define ESR_EL2                 HSR
+#define FAR_EL1                 HIFAR
+#define FAR_EL2                 HIFAR
 #define HCR_EL2                 HCR
+#define HPFAR_EL2               HPFAR
 #define ID_AFR0_EL1             ID_AFR0
 #define ID_DFR0_EL1             ID_DFR0
 #define ID_ISAR0_EL1            ID_ISAR0

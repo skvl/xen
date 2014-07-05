@@ -693,11 +693,9 @@ uint8_t epte_get_entry_emt(struct domain *d, unsigned long gfn, mfn_t mfn,
          ((d->vcpu == NULL) || ((v = d->vcpu[0]) == NULL)) )
         return MTRR_TYPE_WRBACK;
 
-    if ( !v->domain->arch.hvm_domain.params[HVM_PARAM_IDENT_PT] )
+    if ( !is_pvh_vcpu(v) &&
+         !v->domain->arch.hvm_domain.params[HVM_PARAM_IDENT_PT] )
         return MTRR_TYPE_WRBACK;
-
-    if ( (v == current) && v->domain->arch.hvm_domain.is_in_uc_mode )
-        return MTRR_TYPE_UNCACHABLE;
 
     if ( !mfn_valid(mfn_x(mfn)) )
         return MTRR_TYPE_UNCACHABLE;
@@ -720,7 +718,10 @@ uint8_t epte_get_entry_emt(struct domain *d, unsigned long gfn, mfn_t mfn,
         return MTRR_TYPE_WRBACK;
     }
 
-    gmtrr_mtype = get_mtrr_type(&v->arch.hvm_vcpu.mtrr, (gfn << PAGE_SHIFT));
+    gmtrr_mtype = is_hvm_vcpu(v) ?
+                  get_mtrr_type(&v->arch.hvm_vcpu.mtrr, (gfn << PAGE_SHIFT)) :
+                  MTRR_TYPE_WRBACK;
+
     hmtrr_mtype = get_mtrr_type(&mtrr_state, (mfn_x(mfn) << PAGE_SHIFT));
     return ((gmtrr_mtype <= hmtrr_mtype) ? gmtrr_mtype : hmtrr_mtype);
 }

@@ -231,12 +231,16 @@ struct domain *domain_create(
     spin_lock_init(&d->shutdown_lock);
     d->shutdown_code = -1;
 
+    spin_lock_init(&d->pbuf_lock);
+
     err = -ENOMEM;
     if ( !zalloc_cpumask_var(&d->domain_dirty_cpumask) )
         goto fail;
 
     if ( domcr_flags & DOMCRF_hvm )
-        d->is_hvm = 1;
+        d->guest_type = guest_type_hvm;
+    else if ( domcr_flags & DOMCRF_pvh )
+        d->guest_type = guest_type_pvh;
 
     if ( domid == 0 )
     {
@@ -286,6 +290,10 @@ struct domain *domain_create(
         d->mem_event = xzalloc(struct mem_event_per_domain);
         if ( !d->mem_event )
             goto fail;
+
+        d->pbuf = xzalloc_array(char, DOMAIN_PBUF_SIZE);
+        if ( !d->pbuf )
+            goto fail;
     }
 
     if ( (err = arch_domain_create(d, domcr_flags)) != 0 )
@@ -318,6 +326,7 @@ struct domain *domain_create(
     d->is_dying = DOMDYING_dead;
     atomic_set(&d->refcnt, DOMAIN_DESTROYED);
     xfree(d->mem_event);
+    xfree(d->pbuf);
     if ( init_status & INIT_arch )
         arch_domain_destroy(d);
     if ( init_status & INIT_gnttab )
@@ -345,7 +354,6 @@ void domain_update_node_affinity(struct domain *d)
     cpumask_var_t cpumask;
     cpumask_var_t online_affinity;
     const cpumask_t *online;
-    nodemask_t nodemask = NODE_MASK_NONE;
     struct vcpu *v;
     unsigned int node;
 
@@ -367,28 +375,19 @@ void domain_update_node_affinity(struct domain *d)
         cpumask_or(cpumask, cpumask, online_affinity);
     }
 
+    /*
+     * If d->auto_node_affinity is true, the domain's node-affinity mask
+     * (d->node_affinity) is automaically computed from all the domain's
+     * vcpus' vcpu-affinity masks (the union of which we have just built
+     * above in cpumask). OTOH, if d->auto_node_affinity is false, we
+     * must leave the node-affinity of the domain alone.
+     */
     if ( d->auto_node_affinity )
     {
-        /* Node-affinity is automaically computed from all vcpu-affinities */
+        nodes_clear(d->node_affinity);
         for_each_online_node ( node )
             if ( cpumask_intersects(&node_to_cpumask(node), cpumask) )
-                node_set(node, nodemask);
-
-        d->node_affinity = nodemask;
-    }
-    else
-    {
-        /* Node-affinity is provided by someone else, just filter out cpus
-         * that are either offline or not in the affinity of any vcpus. */
-        nodemask = d->node_affinity;
-        for_each_node_mask ( node, d->node_affinity )
-            if ( !cpumask_intersects(&node_to_cpumask(node), cpumask) )
-                node_clear(node, nodemask);//d->node_affinity);
-
-        /* Avoid loosing track of node-affinity because of a bad
-         * vcpu-affinity has been specified. */
-        if ( !nodes_empty(nodemask) )
-            d->node_affinity = nodemask;
+                node_set(node, d->node_affinity);
     }
 
     sched_set_node_affinity(d, &d->node_affinity);
@@ -529,9 +528,9 @@ int domain_kill(struct domain *d)
         spin_barrier(&d->domain_lock);
         evtchn_destroy(d);
         gnttab_release_mappings(d);
-        tmem_destroy(d->tmem);
+        tmem_destroy(d->tmem_client);
         domain_set_outstanding_pages(d, 0);
-        d->tmem = NULL;
+        d->tmem_client = NULL;
         /* fallthrough */
     case DOMDYING_dying:
         rc = domain_relinquish_resources(d);
@@ -720,9 +719,9 @@ static void complete_domain_destroy(struct rcu_head *head)
 
     rangeset_domain_destroy(d);
 
-    cpupool_rm_domain(d);
-
     sched_destroy_domain(d);
+
+    cpupool_rm_domain(d);
 
     /* Free page used by xen oprofile buffer. */
 #ifdef CONFIG_XENOPROF
@@ -730,12 +729,14 @@ static void complete_domain_destroy(struct rcu_head *head)
 #endif
 
     xfree(d->mem_event);
+    xfree(d->pbuf);
 
     for ( i = d->max_vcpus - 1; i >= 0; i-- )
         if ( (v = d->vcpu[i]) != NULL )
         {
             free_cpumask_var(v->cpu_affinity);
             free_cpumask_var(v->cpu_affinity_tmp);
+            free_cpumask_var(v->cpu_affinity_saved);
             free_cpumask_var(v->vcpu_dirty_cpumask);
             free_vcpu_struct(v);
         }
@@ -815,6 +816,16 @@ void domain_pause(struct domain *d)
 
     for_each_vcpu( d, v )
         vcpu_sleep_sync(v);
+}
+
+void domain_pause_nosync(struct domain *d)
+{
+    struct vcpu *v;
+
+    atomic_inc(&d->pause_count);
+
+    for_each_vcpu( d, v )
+        vcpu_sleep_nosync(v);
 }
 
 void domain_unpause(struct domain *d)
@@ -921,7 +932,9 @@ int map_vcpu_info(struct vcpu *v, unsigned long gfn, unsigned offset)
     if ( v->vcpu_info == &dummy_vcpu_info )
     {
         memset(new_info, 0, sizeof(*new_info));
+#ifdef XEN_HAVE_PV_UPCALL_MASK
         __vcpu_info(v, new_info, evtchn_upcall_mask) = 1;
+#endif
     }
     else
     {
@@ -932,7 +945,7 @@ int map_vcpu_info(struct vcpu *v, unsigned long gfn, unsigned offset)
     v->vcpu_info_mfn = page_to_mfn(page);
 
     /* Set new vcpu_info pointer /before/ setting pending flags. */
-    wmb();
+    smp_wmb();
 
     /*
      * Mark everything as being pending just to make sure nothing gets
@@ -958,7 +971,8 @@ void unmap_vcpu_info(struct vcpu *v)
         return;
 
     mfn = v->vcpu_info_mfn;
-    unmap_domain_page_global(v->vcpu_info);
+    unmap_domain_page_global((void *)
+                             ((unsigned long)v->vcpu_info & PAGE_MASK));
 
     v->vcpu_info = &dummy_vcpu_info;
     v->vcpu_info_mfn = INVALID_MFN;

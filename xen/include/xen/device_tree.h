@@ -19,7 +19,14 @@
 #define DEVICE_TREE_MAX_DEPTH 16
 
 #define NR_MEM_BANKS 8
-#define NR_MODULES 2
+
+#define MOD_XEN    0
+#define MOD_FDT    1
+#define MOD_KERNEL 2
+#define MOD_INITRD 3
+#define NR_MODULES 4
+
+#define MOD_DISCARD_FIRST MOD_FDT
 
 struct membank {
     paddr_t start;
@@ -40,13 +47,26 @@ struct dt_mb_module {
 struct dt_module_info {
     int nr_mods;
     /* Module 0 is Xen itself, followed by the provided modules-proper */
-    struct dt_mb_module module[NR_MODULES + 1];
+    struct dt_mb_module module[NR_MODULES];
 };
 
 struct dt_early_info {
     struct dt_mem_info mem;
     struct dt_module_info modules;
 };
+
+/*
+ * Struct used for matching a device
+ */
+struct dt_device_match {
+    const char *path;
+    const char *type;
+    const char *compatible;
+};
+
+#define DT_MATCH_PATH(p)                { .path = p }
+#define DT_MATCH_TYPE(typ)              { .type = typ }
+#define DT_MATCH_COMPATIBLE(compat)     { .compatible = compat }
 
 typedef u32 dt_phandle;
 
@@ -158,25 +178,10 @@ typedef int (*device_tree_node_func)(const void *fdt,
                                      void *data);
 
 extern struct dt_early_info early_info;
-extern void *device_tree_flattened;
+extern const void *device_tree_flattened;
 
-size_t __init device_tree_early_init(const void *fdt);
+size_t __init device_tree_early_init(const void *fdt, paddr_t paddr);
 
-void __init device_tree_get_reg(const u32 **cell, u32 address_cells,
-                                u32 size_cells,
-                                u64 *start, u64 *size);
-void __init device_tree_set_reg(u32 **cell, u32 address_cells, u32 size_cells,
-                                u64 start, u64 size);
-u32 __init device_tree_get_u32(const void *fdt, int node,
-                               const char *prop_name, u32 dflt);
-bool_t __init device_tree_node_matches(const void *fdt, int node,
-                                       const char *match);
-bool_t __init device_tree_node_compatible(const void *fdt, int node,
-                                          const char *match);
-int __init find_compatible_node(const char *compatible, int *node, int *depth,
-                                u32 *address_cells, u32 *size_cells);
-int __init device_tree_for_each_node(const void *fdt,
-                                     device_tree_node_func func, void *data);
 const char __init *device_tree_bootargs(const void *fdt);
 void __init device_tree_dump(const void *fdt);
 
@@ -221,20 +226,25 @@ extern const struct dt_device_node *dt_interrupt_controller;
  *
  * If found, return the interrupt controller device node.
  */
-struct dt_device_node * __init dt_find_interrupt_controller(const char *compat);
+struct dt_device_node * __init
+dt_find_interrupt_controller(const struct dt_device_match *matches);
 
-#define dt_node_cmp(s1, s2) strcmp((s1), (s2))
-#define dt_compat_cmp(s1, s2, l) strnicmp((s1), (s2), l)
+#define dt_prop_cmp(s1, s2) strcmp((s1), (s2))
+#define dt_node_cmp(s1, s2) strcasecmp((s1), (s2))
+#define dt_compat_cmp(s1, s2) strcasecmp((s1), (s2))
 
 /* Default #address and #size cells */
-#define DT_ROOT_NODE_ADDR_CELLS_DEFAULT 1
+#define DT_ROOT_NODE_ADDR_CELLS_DEFAULT 2
 #define DT_ROOT_NODE_SIZE_CELLS_DEFAULT 1
 
-#define for_each_property_of_node(dn, pp)                   \
+#define dt_for_each_property_node(dn, pp)                   \
     for ( pp = dn->properties; pp != NULL; pp = pp->next )
 
-#define for_each_device_node(dt, dn)                         \
+#define dt_for_each_device_node(dt, dn)                     \
     for ( dn = dt; dn != NULL; dn = dn->allnext )
+
+#define dt_for_each_child_node(dt, dn)                      \
+    for ( dn = dt->child; dn != NULL; dn = dn->sibling )
 
 /* Helper to read a big number; size is in cells (not bytes) */
 static inline u64 dt_read_number(const __be32 *cell, int size)
@@ -246,6 +256,26 @@ static inline u64 dt_read_number(const __be32 *cell, int size)
     return r;
 }
 
+/* Helper to convert a number of cells to bytes */
+static inline int dt_cells_to_size(int size)
+{
+    return (size * sizeof (u32));
+}
+
+/* Helper to convert a number of bytes to cells, rounds down */
+static inline int dt_size_to_cells(int bytes)
+{
+    return (bytes / sizeof(u32));
+}
+
+static inline u64 dt_next_cell(int s, const __be32 **cellp)
+{
+    const __be32 *p = *cellp;
+
+    *cellp = p + s;
+    return dt_read_number(p, s);
+}
+
 static inline const char *dt_node_full_name(const struct dt_device_node *np)
 {
     return (np && np->full_name) ? np->full_name : "<no-node>";
@@ -254,6 +284,18 @@ static inline const char *dt_node_full_name(const struct dt_device_node *np)
 static inline const char *dt_node_name(const struct dt_device_node *np)
 {
     return (np && np->name) ? np->name : "<no-node>";
+}
+
+static inline bool_t dt_node_name_is_equal(const struct dt_device_node *np,
+                                           const char *name)
+{
+    return !dt_node_cmp(np->name, name);
+}
+
+static inline bool_t dt_node_path_is_equal(const struct dt_device_node *np,
+                                           const char *path)
+{
+    return !dt_node_cmp(np->full_name, path);
 }
 
 static inline bool_t
@@ -273,6 +315,12 @@ static inline void dt_device_set_used_by(struct dt_device_node *device,
 static inline domid_t dt_device_used_by(const struct dt_device_node *device)
 {
     return device->used_by;
+}
+
+static inline bool_t dt_property_name_is_equal(const struct dt_property *pp,
+                                               const char *name)
+{
+    return !dt_prop_cmp(pp->name, name);
 }
 
 /**
@@ -298,6 +346,45 @@ struct dt_device_node *dt_find_compatible_node(struct dt_device_node *from,
  */
 const void *dt_get_property(const struct dt_device_node *np,
                             const char *name, u32 *lenp);
+
+/**
+ * dt_property_read_u32 - Helper to read a u32 property.
+ * @np: node to get the value
+ * @name: name of the property
+ * @out_value: pointer to return value
+ *
+ * Return true if get the desired value.
+ */
+bool_t dt_property_read_u32(const struct dt_device_node *np,
+                            const char *name, u32 *out_value);
+/**
+ * dt_property_read_u64 - Helper to read a u64 property.
+ * @np: node to get the value
+ * @name: name of the property
+ * @out_value: pointer to return value
+ *
+ * Return true if get the desired value.
+ */
+bool_t dt_property_read_u64(const struct dt_device_node *np,
+                            const char *name, u64 *out_value);
+
+/**
+ * dt_property_read_string - Find and read a string from a property
+ * @np:         Device node from which the property value is to be read
+ * @propname:   Name of the property to be searched
+ * @out_string: Pointer to null terminated return string, modified only
+ *              if return value if 0.
+ *
+ * Search for a property in a device tree node and retrieve a null
+ * terminated string value (pointer to data, not a copy). Returns 0 on
+ * success, -EINVAL if the property does not exist, -ENODATA if property
+ * doest not have value, and -EILSEQ if the string is not
+ * null-terminated with the length of the property data.
+ *
+ * The out_string pointer is modified only if a valid string can be decoded.
+ */
+int dt_property_read_string(const struct dt_device_node *np,
+                            const char *propname, const char **out_string);
 
 /**
  * Checks if the given "compat" string matches one of the strings in
@@ -328,6 +415,12 @@ bool_t dt_machine_is_compatible(const char *compat);
  */
 struct dt_device_node *dt_find_node_by_name(struct dt_device_node *node,
                                             const char *name);
+
+/**
+ * dt_find_node_by_type - Find a node by its "type" property
+ */
+struct dt_device_node *dt_find_node_by_type(struct dt_device_node *from,
+                                            const char *type);
 
 /**
  * df_find_node_by_alias - Find a node matching an alias
@@ -433,4 +526,87 @@ int dt_n_size_cells(const struct dt_device_node *np);
  */
 int dt_n_addr_cells(const struct dt_device_node *np);
 
-#endif
+/**
+ * dt_device_is_available - Check if a device is available for use
+ *
+ * @device: Node to check for availability
+ *
+ * Returns true if the status property is absent or set to "okay" or "ok",
+ * false otherwise.
+ */
+bool_t dt_device_is_available(const struct dt_device_node *device);
+
+/**
+ * dt_match_node - Tell if a device_node has a matching of dt_device_match
+ * @matches: array of dt_device_match structures to search in
+ * @node: the dt_device_node structure to match against
+ *
+ * Returns true if the device node match one of dt_device_match.
+ */
+bool_t dt_match_node(const struct dt_device_match *matches,
+                     const struct dt_device_node *node);
+
+/**
+ * dt_find_matching_node - Find a node based on an dt_device_match match table
+ * @from: The node to start searching from or NULL, the node you pass
+ *        will not be searched, only the next one will; typically, you pass
+ *        what the returned call returned
+ * @matches: array of dt_device_match structures to search in
+ *
+ * Returns a node pointer.
+ */
+struct dt_device_node *
+dt_find_matching_node(struct dt_device_node *from,
+                      const struct dt_device_match *matches);
+
+/**
+ * dt_set_cell - Write a value into a series of cells
+ *
+ * @cellp: Pointer to cells
+ * @size: number of cells to write the value
+ * @value: number to write
+ *
+ * Write a value into a series of cells and update cellp to point to the
+ * cell just after.
+ */
+void dt_set_cell(__be32 **cellp, int size, u64 val);
+
+/**
+ * dt_set_range - Write range into a series of cells
+ *
+ * @cellp: Pointer to cells
+ * @np: Node which contains the encoding for the address and the size
+ * @address: Start of range
+ * @size: Size of the range
+ *
+ * Write a range into a series of cells and update cellp to point to the
+ * cell just after.
+ */
+void dt_set_range(__be32 **cellp, const struct dt_device_node *np,
+                  u64 address, u64 size);
+
+/**
+ * dt_get_range - Read a range (address/size) from a series of cells
+ *
+ * @cellp: Pointer to cells
+ * @np Node which  contains the encoding for the addresss and the size
+ * @address: Address filled by this function
+ * @size: Size filled by this function
+ *
+ * WARNING: This function should not be used to decode an address
+ * This function reads a range (address/size) from a series of cells and
+ * update cellp to point to the cell just after.
+ */
+void dt_get_range(const __be32 **cellp, const struct dt_device_node *np,
+                  u64 *address, u64 *size);
+
+#endif /* __XEN_DEVICE_TREE_H */
+
+/*
+ * Local variables:
+ * mode: C
+ * c-file-style: "BSD"
+ * c-basic-offset: 4
+ * indent-tabs-mode: nil
+ * End:
+ */

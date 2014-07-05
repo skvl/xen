@@ -21,6 +21,8 @@
 #include <asm/platform.h>
 #include <xen/mm.h>
 #include <xen/vmap.h>
+#include <asm/io.h>
+#include <asm/gic.h>
 
 #define DCC_SHIFT      26
 #define FUNCTION_SHIFT 20
@@ -110,24 +112,70 @@ static void vexpress_reset(void)
     }
 
     /* switch to slow mode */
-    iowritel(sp810, 0x3);
+    writel(0x3, sp810);
     dsb(); isb();
     /* writing any value to SCSYSSTAT reg will reset the system */
-    iowritel(sp810 + 4, 0x1);
+    writel(0x1, sp810 + 4);
     dsb(); isb();
 
     iounmap(sp810);
 }
 
-static const char const *vexpress_dt_compat[] __initdata =
+#ifdef CONFIG_ARM_32
+
+static int __init vexpress_smp_init(void)
+{
+    void __iomem *sysflags;
+
+    sysflags = ioremap_nocache(V2M_SYS_MMIO_BASE, PAGE_SIZE);
+    if ( !sysflags )
+    {
+        dprintk(XENLOG_ERR, "Unable to map vexpress MMIO\n");
+        return -EFAULT;
+    }
+
+    printk("Set SYS_FLAGS to %"PRIpaddr" (%p)\n",
+           __pa(init_secondary), init_secondary);
+    writel(~0, sysflags + V2M_SYS_FLAGSCLR);
+    writel(__pa(init_secondary), sysflags + V2M_SYS_FLAGSSET);
+
+    iounmap(sysflags);
+
+    return 0;
+}
+
+#endif
+
+static const char * const vexpress_dt_compat[] __initconst =
 {
     "arm,vexpress",
     NULL
 };
 
+static const struct dt_device_match vexpress_blacklist_dev[] __initconst =
+{
+    /* Cache Coherent Interconnect */
+    DT_MATCH_COMPATIBLE("arm,cci-400"),
+    DT_MATCH_COMPATIBLE("arm,cci-400-pmu"),
+    /* Video device
+     * TODO: remove it once memreserve is handled properly by Xen
+     */
+    DT_MATCH_COMPATIBLE("arm,hdlcd"),
+    /* Hardware power management */
+    DT_MATCH_COMPATIBLE("arm,vexpress-reset"),
+    DT_MATCH_COMPATIBLE("arm,vexpress-reboot"),
+    DT_MATCH_COMPATIBLE("arm,vexpress-shutdown"),
+    { /* sentinel */ },
+};
+
 PLATFORM_START(vexpress, "VERSATILE EXPRESS")
     .compatible = vexpress_dt_compat,
+#ifdef CONFIG_ARM_32
+    .smp_init = vexpress_smp_init,
+    .cpu_up = cpu_up_send_sgi,
+#endif
     .reset = vexpress_reset,
+    .blacklist_dev = vexpress_blacklist_dev,
 PLATFORM_END
 
 /*

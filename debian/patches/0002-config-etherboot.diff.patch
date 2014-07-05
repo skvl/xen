@@ -1,0 +1,22 @@
+From 67d01b8382184a6ed3ef2bcb5631ffcab3a90e93 Mon Sep 17 00:00:00 2001
+From: Bastian Blank <waldi@debian.org>
+Date: Sat, 5 Jul 2014 11:46:44 +0200
+Subject: config-etherboot.diff
+
+---
+ Config.mk | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/Config.mk b/Config.mk
+index eb2c192..f23b9d6 100644
+--- a/Config.mk
++++ b/Config.mk
+@@ -239,7 +239,7 @@ SEABIOS_UPSTREAM_TAG ?= rel-1.7.3.1
+ # Fri Aug 2 14:12:09 2013 -0400
+ # Fix bug in CBFS file walking with compressed files.
+ 
+-ETHERBOOT_NICS ?= rtl8139 8086100e
++ETHERBOOT_NICS ?= rtl8139 e1000_82540
+ 
+ # Specify which qemu-dm to use. This may be `ioemu' to use the old
+ # Mercurial in-tree version, or a local directory, or a git URL.

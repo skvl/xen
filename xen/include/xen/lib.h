@@ -63,6 +63,8 @@ do {                                                            \
 #define MASK_EXTR(v, m) (((v) & (m)) / ((m) & -(m)))
 #define MASK_INSR(v, m) (((v) * ((m) & -(m))) & (m))
 
+#define ROUNDUP(x, a) (((x) + (a) - 1) & ~((a) - 1))
+
 #define reserve_bootmem(_p,_l) ((void)0)
 
 struct domain;
@@ -83,6 +85,8 @@ extern void debugtrace_printk(const char *fmt, ...);
 #define _p(_x) ((void *)(unsigned long)(_x))
 extern void printk(const char *format, ...)
     __attribute__ ((format (printf, 1, 2)));
+extern void guest_printk(const struct domain *d, const char *format, ...)
+    __attribute__ ((format (printf, 2, 3)));
 extern void panic(const char *format, ...)
     __attribute__ ((format (printf, 1, 2)));
 extern long vm_assist(struct domain *, unsigned int, unsigned int);

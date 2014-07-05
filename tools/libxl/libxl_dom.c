@@ -209,7 +209,10 @@ int libxl__build_pre(libxl__gc *gc, uint32_t domid,
     char *xs_domid, *con_domid;
     int rc;
 
-    xc_domain_max_vcpus(ctx->xch, domid, info->max_vcpus);
+    if (xc_domain_max_vcpus(ctx->xch, domid, info->max_vcpus) != 0) {
+        LOG(ERROR, "Couldn't set max vcpu count");
+        return ERROR_FAIL;
+    }
 
     /*
      * Check if the domain has any CPU affinity. If not, try to build
@@ -221,7 +224,6 @@ int libxl__build_pre(libxl__gc *gc, uint32_t domid,
      * whatever that turns out to be.
      */
     if (libxl_defbool_val(info->numa_placement)) {
-
         if (!libxl_bitmap_is_full(&info->cpumap)) {
             LOG(ERROR, "Can run NUMA placement only if no vcpu "
                        "affinity is specified");
@@ -235,7 +237,12 @@ int libxl__build_pre(libxl__gc *gc, uint32_t domid,
     libxl_domain_set_nodeaffinity(ctx, domid, &info->nodemap);
     libxl_set_vcpuaffinity_all(ctx, domid, info->max_vcpus, &info->cpumap);
 
-    xc_domain_setmaxmem(ctx->xch, domid, info->target_memkb + LIBXL_MAXMEM_CONSTANT);
+    if (xc_domain_setmaxmem(ctx->xch, domid, info->target_memkb +
+        LIBXL_MAXMEM_CONSTANT) < 0) {
+        LIBXL__LOG_ERRNO(ctx, LIBXL__LOG_ERROR, "Couldn't set max memory");
+        return ERROR_FAIL;
+    }
+
     xs_domid = xs_read(ctx->xsh, XBT_NULL, "/tool/xenstored/domid", NULL);
     state->store_domid = xs_domid ? atoi(xs_domid) : 0;
     free(xs_domid);
@@ -267,6 +274,13 @@ int libxl__build_post(libxl__gc *gc, uint32_t domid,
     rc = libxl_domain_sched_params_set(CTX, domid, &info->sched_params);
     if (rc)
         return rc;
+
+    rc = xc_domain_set_max_evtchn(ctx->xch, domid, info->event_channels);
+    if (rc) {
+        LOG(ERROR, "Failed to set event channel limit to %d (%d)",
+            info->event_channels, rc);
+        return ERROR_FAIL;
+    }
 
     libxl_cpuid_apply_policy(ctx, domid);
     if (info->cpuid != NULL)
@@ -338,7 +352,10 @@ int libxl__build_pv(libxl__gc *gc, uint32_t domid,
         return ERROR_FAIL;
     }
 
-    LOG(DEBUG, "pv kernel mapped %d path %s\n", state->pv_kernel.mapped, state->pv_kernel.path);
+    dom->pvh_enabled = state->pvh_enabled;
+
+    LOG(DEBUG, "pv kernel mapped %d path %s", state->pv_kernel.mapped, state->pv_kernel.path);
+
     if (state->pv_kernel.mapped) {
         ret = xc_dom_kernel_mem(dom,
                                 state->pv_kernel.data,
@@ -380,8 +397,18 @@ int libxl__build_pv(libxl__gc *gc, uint32_t domid,
         LOGE(ERROR, "xc_dom_boot_xen_init failed");
         goto out;
     }
+#ifdef GUEST_RAM_BASE
+    if ( (ret = xc_dom_rambase_init(dom, GUEST_RAM_BASE)) != 0 ) {
+        LOGE(ERROR, "xc_dom_rambase failed");
+        goto out;
+    }
+#endif
     if ( (ret = xc_dom_parse_image(dom)) != 0 ) {
         LOGE(ERROR, "xc_dom_parse_image failed");
+        goto out;
+    }
+    if ( (ret = libxl__arch_domain_configure(gc, info, dom)) != 0 ) {
+        LOGE(ERROR, "libxl__arch_domain_configure failed");
         goto out;
     }
     if ( (ret = xc_dom_mem_init(dom, info->target_memkb / 1024)) != 0 ) {
@@ -955,7 +982,7 @@ int libxl__domain_suspend_device_model(libxl__gc *gc,
     case LIBXL_DEVICE_MODEL_VERSION_QEMU_XEN_TRADITIONAL: {
         LOG(DEBUG, "Saving device model state to %s", filename);
         libxl__qemu_traditional_cmd(gc, domid, "save");
-        libxl__wait_for_device_model(gc, domid, "paused", NULL, NULL, NULL);
+        libxl__wait_for_device_model_deprecated(gc, domid, "paused", NULL, NULL, NULL);
         break;
     }
     case LIBXL_DEVICE_MODEL_VERSION_QEMU_XEN:
@@ -979,12 +1006,13 @@ int libxl__domain_resume_device_model(libxl__gc *gc, uint32_t domid)
     switch (libxl__device_model_version_running(gc, domid)) {
     case LIBXL_DEVICE_MODEL_VERSION_QEMU_XEN_TRADITIONAL: {
         libxl__qemu_traditional_cmd(gc, domid, "continue");
-        libxl__wait_for_device_model(gc, domid, "running", NULL, NULL, NULL);
+        libxl__wait_for_device_model_deprecated(gc, domid, "running", NULL, NULL, NULL);
         break;
     }
     case LIBXL_DEVICE_MODEL_VERSION_QEMU_XEN:
         if (libxl__qmp_resume(gc, domid))
             return ERROR_FAIL;
+        break;
     default:
         return ERROR_INVAL;
     }
@@ -1030,7 +1058,11 @@ int libxl__domain_suspend_common_callback(void *user)
 
     if (dss->hvm && (!hvm_pvdrv || hvm_s_state)) {
         LOG(DEBUG, "Calling xc_domain_shutdown on HVM domain");
-        xc_domain_shutdown(CTX->xch, domid, SHUTDOWN_suspend);
+        ret = xc_domain_shutdown(CTX->xch, domid, SHUTDOWN_suspend);
+        if (ret < 0) {
+            LOGE(ERROR, "xc_domain_shutdown failed");
+            return 0;
+        }
         /* The guest does not (need to) respond to this sort of request. */
         dss->guest_responded = 1;
     } else {
@@ -1571,8 +1603,6 @@ int libxl_userdata_store(libxl_ctx *ctx, uint32_t domid,
     const char *newfilename;
     int e, rc;
     int fd = -1;
-    FILE *f = NULL;
-    size_t rs;
 
     filename = userdata_path(gc, domid, userdata_userid, "d");
     if (!filename) {
@@ -1593,38 +1623,33 @@ int libxl_userdata_store(libxl_ctx *ctx, uint32_t domid,
 
     rc = ERROR_FAIL;
 
-    fd= open(newfilename, O_RDWR|O_CREAT|O_TRUNC, 0600);
-    if (fd<0)
+    fd = open(newfilename, O_RDWR | O_CREAT | O_TRUNC, 0600);
+    if (fd < 0)
         goto err;
 
-    f= fdopen(fd, "wb");
-    if (!f)
+    if (libxl_write_exactly(ctx, fd, data, datalen, "userdata", newfilename))
         goto err;
-    fd = -1;
 
-    rs = fwrite(data, 1, datalen, f);
-    if (rs != datalen) {
-        assert(ferror(f));
+    if (close(fd) < 0) {
+        fd = -1;
         goto err;
     }
+    fd = -1;
 
-    if (fclose(f))
-        goto err;
-    f = 0;
-
-    if (rename(newfilename,filename))
+    if (rename(newfilename, filename))
         goto err;
 
     rc = 0;
 
 err:
-    e = errno;
-    if (f) fclose(f);
-    if (fd>=0) close(fd);
+    if (fd >= 0) {
+        e = errno;
+        close(fd);
+        errno = e;
+    }
 
-    errno = e;
-    if ( rc )
-        LIBXL__LOG_ERRNO(ctx, LIBXL__LOG_ERROR, "cannot write %s for %s",
+    if (rc)
+        LIBXL__LOG_ERRNO(ctx, LIBXL__LOG_ERROR, "cannot write/rename %s for %s",
                  newfilename, filename);
 out:
     GC_FREE;

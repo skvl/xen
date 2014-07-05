@@ -101,15 +101,19 @@ static uint32_t calibrate_timer(void)
 /* Set up the timer on the boot CPU */
 int __init init_xen_time(void)
 {
+    static const struct dt_device_match timer_ids[] __initconst =
+    {
+        DT_MATCH_TIMER,
+        { /* sentinel */ },
+    };
     struct dt_device_node *dev;
     int res;
     unsigned int i;
+    u32 rate;
 
-    dev = dt_find_compatible_node(NULL, NULL, "arm,armv7-timer");
+    dev = dt_find_matching_node(NULL, timer_ids);
     if ( !dev )
-        dev = dt_find_compatible_node(NULL, NULL, "arm,armv8-timer");
-    if ( !dev )
-        panic("Unable to find a compatible timer in the device tree\n");
+        panic("Unable to find a compatible timer in the device tree");
 
     dt_device_set_used_by(dev, DOMID_XEN);
 
@@ -118,7 +122,7 @@ int __init init_xen_time(void)
     {
         res = dt_device_get_irq(dev, i, &timer_irq[i]);
         if ( res )
-            panic("Timer: Unable to retrieve IRQ %u from the device tree\n", i);
+            panic("Timer: Unable to retrieve IRQ %u from the device tree", i);
     }
 
     printk("Generic Timer IRQ: phys=%u hyp=%u virt=%u\n",
@@ -128,13 +132,17 @@ int __init init_xen_time(void)
 
     res = platform_init_time();
     if ( res )
-        return res;
+        panic("Timer: Cannot initialize platform timer");
 
     /* Check that this CPU supports the Generic Timer interface */
     if ( !cpu_has_gentimer )
-        panic("CPU does not support the Generic Timer v1 interface.\n");
+        panic("CPU does not support the Generic Timer v1 interface");
 
-    cpu_khz = READ_SYSREG32(CNTFRQ_EL0) / 1000;
+    res = dt_property_read_u32(dev, "clock-frequency", &rate);
+    if ( res )
+        cpu_khz = rate / 1000;
+    else
+        cpu_khz = READ_SYSREG32(CNTFRQ_EL0) / 1000;
 
     boot_count = READ_SYSREG64(CNTPCT_EL0);
     printk("Using generic timer at %lu KHz\n", cpu_khz);
@@ -214,11 +222,11 @@ static void vtimer_interrupt(int irq, void *dev_id, struct cpu_user_regs *regs)
 void __cpuinit route_timer_interrupt(void)
 {
     gic_route_dt_irq(&timer_irq[TIMER_PHYS_NONSECURE_PPI],
-                     1u << smp_processor_id(), 0xa0);
+                     cpumask_of(smp_processor_id()), 0xa0);
     gic_route_dt_irq(&timer_irq[TIMER_HYP_PPI],
-                     1u << smp_processor_id(), 0xa0);
+                     cpumask_of(smp_processor_id()), 0xa0);
     gic_route_dt_irq(&timer_irq[TIMER_VIRT_PPI],
-                     1u << smp_processor_id(), 0xa0);
+                     cpumask_of(smp_processor_id()), 0xa0);
 }
 
 /* Set up the timer interrupt on this CPU */
@@ -238,11 +246,11 @@ void __cpuinit init_timer_interrupt(void)
     WRITE_SYSREG32(0, CNTHP_CTL_EL2);   /* Hypervisor's timer disabled */
     isb();
 
-    request_dt_irq(&timer_irq[TIMER_HYP_PPI], timer_interrupt, 0,
+    request_dt_irq(&timer_irq[TIMER_HYP_PPI], timer_interrupt,
                    "hyptimer", NULL);
-    request_dt_irq(&timer_irq[TIMER_VIRT_PPI], vtimer_interrupt, 0,
+    request_dt_irq(&timer_irq[TIMER_VIRT_PPI], vtimer_interrupt,
                    "virtimer", NULL);
-    request_dt_irq(&timer_irq[TIMER_PHYS_NONSECURE_PPI], timer_interrupt, 0,
+    request_dt_irq(&timer_irq[TIMER_PHYS_NONSECURE_PPI], timer_interrupt,
                    "phytimer", NULL);
 }
 

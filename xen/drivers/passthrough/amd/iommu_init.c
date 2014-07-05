@@ -48,19 +48,10 @@ static int iommu_has_ht_flag(struct amd_iommu *iommu, u8 mask)
 
 static int __init map_iommu_mmio_region(struct amd_iommu *iommu)
 {
-    unsigned long mfn;
-
-    if ( nr_amd_iommus > MAX_AMD_IOMMUS )
-    {
-        AMD_IOMMU_DEBUG("nr_amd_iommus %d > MAX_IOMMUS\n", nr_amd_iommus);
+    iommu->mmio_base = ioremap(iommu->mmio_base_phys,
+                               IOMMU_MMIO_REGION_LENGTH);
+    if ( !iommu->mmio_base )
         return -ENOMEM;
-    }
-
-    iommu->mmio_base = (void *)fix_to_virt(
-        FIX_IOMMU_MMIO_BASE_0 + nr_amd_iommus * MMIO_PAGES_PER_IOMMU);
-    mfn = (unsigned long)(iommu->mmio_base_phys >> PAGE_SHIFT);
-    map_pages_to_xen((unsigned long)iommu->mmio_base, mfn,
-                     MMIO_PAGES_PER_IOMMU, PAGE_HYPERVISOR_NOCACHE);
 
     memset(iommu->mmio_base, 0, IOMMU_MMIO_REGION_LENGTH);
 
@@ -344,13 +335,13 @@ static void set_iommu_ppr_log_control(struct amd_iommu *iommu,
         writeq(0, iommu->mmio_base + IOMMU_PPR_LOG_TAIL_OFFSET);
 
         iommu_set_bit(&entry, IOMMU_CONTROL_PPR_ENABLE_SHIFT);
-        iommu_set_bit(&entry, IOMMU_CONTROL_PPR_INT_SHIFT);
+        iommu_set_bit(&entry, IOMMU_CONTROL_PPR_LOG_INT_SHIFT);
         iommu_set_bit(&entry, IOMMU_CONTROL_PPR_LOG_ENABLE_SHIFT);
     }
     else
     {
         iommu_clear_bit(&entry, IOMMU_CONTROL_PPR_ENABLE_SHIFT);
-        iommu_clear_bit(&entry, IOMMU_CONTROL_PPR_INT_SHIFT);
+        iommu_clear_bit(&entry, IOMMU_CONTROL_PPR_LOG_INT_SHIFT);
         iommu_clear_bit(&entry, IOMMU_CONTROL_PPR_LOG_ENABLE_SHIFT);
     }
 
@@ -410,7 +401,7 @@ static void iommu_reset_log(struct amd_iommu *iommu,
                             void (*ctrl_func)(struct amd_iommu *iommu, int))
 {
     u32 entry;
-    int log_run, run_bit, of_bit;
+    int log_run, run_bit;
     int loop_count = 1000;
 
     BUG_ON(!iommu || ((log != &iommu->event_log) && (log != &iommu->ppr_log)));
@@ -418,10 +409,6 @@ static void iommu_reset_log(struct amd_iommu *iommu,
     run_bit = ( log == &iommu->event_log ) ?
         IOMMU_STATUS_EVENT_LOG_RUN_SHIFT :
         IOMMU_STATUS_PPR_LOG_RUN_SHIFT;
-
-    of_bit = ( log == &iommu->event_log ) ?
-        IOMMU_STATUS_EVENT_OVERFLOW_SHIFT :
-        IOMMU_STATUS_PPR_LOG_OVERFLOW_SHIFT;
 
     /* wait until EventLogRun bit = 0 */
     do {
@@ -439,9 +426,10 @@ static void iommu_reset_log(struct amd_iommu *iommu,
 
     ctrl_func(iommu, IOMMU_CONTROL_DISABLED);
 
-    /*clear overflow bit */
-    iommu_clear_bit(&entry, of_bit);
-    writel(entry, iommu->mmio_base + IOMMU_STATUS_MMIO_OFFSET);
+    /* RW1C overflow bit */
+    writel(log == &iommu->event_log ? IOMMU_STATUS_EVENT_OVERFLOW_MASK
+                                    : IOMMU_STATUS_PPR_LOG_OVERFLOW_MASK,
+           iommu->mmio_base + IOMMU_STATUS_MMIO_OFFSET);
 
     /*reset event log base address */
     log->head = 0;
@@ -536,7 +524,8 @@ static hw_irq_controller iommu_maskable_msi_type = {
 
 static void parse_event_log_entry(struct amd_iommu *iommu, u32 entry[])
 {
-    u16 domain_id, device_id, bdf, flags;
+    u16 domain_id, device_id, flags;
+    unsigned int bdf;
     u32 code;
     u64 *addr;
     int count = 0;
@@ -611,22 +600,41 @@ static void iommu_check_event_log(struct amd_iommu *iommu)
     u32 entry;
     unsigned long flags;
 
+    /* RW1C interrupt status bit */
+    writel(IOMMU_STATUS_EVENT_LOG_INT_MASK,
+           iommu->mmio_base + IOMMU_STATUS_MMIO_OFFSET);
+
     iommu_read_log(iommu, &iommu->event_log,
                    sizeof(event_entry_t), parse_event_log_entry);
 
     spin_lock_irqsave(&iommu->lock, flags);
     
-    /*check event overflow */
+    /* Check event overflow. */
     entry = readl(iommu->mmio_base + IOMMU_STATUS_MMIO_OFFSET);
-
     if ( iommu_get_bit(entry, IOMMU_STATUS_EVENT_OVERFLOW_SHIFT) )
         iommu_reset_log(iommu, &iommu->event_log, set_iommu_event_log_control);
+    else
+    {
+        entry = readl(iommu->mmio_base + IOMMU_CONTROL_MMIO_OFFSET);
+        if ( !(entry & IOMMU_CONTROL_EVENT_LOG_INT_MASK) )
+        {
+            entry |= IOMMU_CONTROL_EVENT_LOG_INT_MASK;
+            writel(entry, iommu->mmio_base + IOMMU_CONTROL_MMIO_OFFSET);
+            /*
+             * Re-schedule the tasklet to handle eventual log entries added
+             * between reading the log above and re-enabling the interrupt.
+             */
+            tasklet_schedule(&amd_iommu_irq_tasklet);
+        }
+    }
 
-    /* reset interrupt status bit */
+    /*
+     * Workaround for erratum787:
+     * Re-check to make sure the bit has been cleared.
+     */
     entry = readl(iommu->mmio_base + IOMMU_STATUS_MMIO_OFFSET);
-    iommu_set_bit(&entry, IOMMU_STATUS_EVENT_LOG_INT_SHIFT);
-
-    writel(entry, iommu->mmio_base + IOMMU_STATUS_MMIO_OFFSET);
+    if ( entry & IOMMU_STATUS_EVENT_LOG_INT_MASK )
+        tasklet_schedule(&amd_iommu_irq_tasklet);
 
     spin_unlock_irqrestore(&iommu->lock, flags);
 }
@@ -681,22 +689,41 @@ static void iommu_check_ppr_log(struct amd_iommu *iommu)
     u32 entry;
     unsigned long flags;
 
+    /* RW1C interrupt status bit */
+    writel(IOMMU_STATUS_PPR_LOG_INT_MASK,
+           iommu->mmio_base + IOMMU_STATUS_MMIO_OFFSET);
+
     iommu_read_log(iommu, &iommu->ppr_log,
                    sizeof(ppr_entry_t), parse_ppr_log_entry);
     
     spin_lock_irqsave(&iommu->lock, flags);
 
-    /*check event overflow */
+    /* Check event overflow. */
     entry = readl(iommu->mmio_base + IOMMU_STATUS_MMIO_OFFSET);
-
     if ( iommu_get_bit(entry, IOMMU_STATUS_PPR_LOG_OVERFLOW_SHIFT) )
         iommu_reset_log(iommu, &iommu->ppr_log, set_iommu_ppr_log_control);
+    else
+    {
+        entry = readl(iommu->mmio_base + IOMMU_CONTROL_MMIO_OFFSET);
+        if ( !(entry & IOMMU_CONTROL_PPR_LOG_INT_MASK) )
+        {
+            entry |= IOMMU_CONTROL_PPR_LOG_INT_MASK;
+            writel(entry, iommu->mmio_base + IOMMU_CONTROL_MMIO_OFFSET);
+            /*
+             * Re-schedule the tasklet to handle eventual log entries added
+             * between reading the log above and re-enabling the interrupt.
+             */
+            tasklet_schedule(&amd_iommu_irq_tasklet);
+        }
+    }
 
-    /* reset interrupt status bit */
+    /*
+     * Workaround for erratum787:
+     * Re-check to make sure the bit has been cleared.
+     */
     entry = readl(iommu->mmio_base + IOMMU_STATUS_MMIO_OFFSET);
-    iommu_set_bit(&entry, IOMMU_STATUS_PPR_LOG_INT_SHIFT);
-
-    writel(entry, iommu->mmio_base + IOMMU_STATUS_MMIO_OFFSET);
+    if ( entry & IOMMU_STATUS_PPR_LOG_INT_MASK )
+        tasklet_schedule(&amd_iommu_irq_tasklet);
 
     spin_unlock_irqrestore(&iommu->lock, flags);
 }
@@ -733,11 +760,14 @@ static void iommu_interrupt_handler(int irq, void *dev_id,
 
     spin_lock_irqsave(&iommu->lock, flags);
 
-    /* Silence interrupts from both event and PPR logging */
-    entry = readl(iommu->mmio_base + IOMMU_STATUS_MMIO_OFFSET);
-    iommu_clear_bit(&entry, IOMMU_STATUS_EVENT_LOG_INT_SHIFT);
-    iommu_clear_bit(&entry, IOMMU_STATUS_PPR_LOG_INT_SHIFT);
-    writel(entry, iommu->mmio_base+IOMMU_STATUS_MMIO_OFFSET);
+    /*
+     * Silence interrupts from both event and PPR by clearing the
+     * enable logging bits in the control register
+     */
+    entry = readl(iommu->mmio_base + IOMMU_CONTROL_MMIO_OFFSET);
+    iommu_clear_bit(&entry, IOMMU_CONTROL_EVENT_LOG_INT_SHIFT);
+    iommu_clear_bit(&entry, IOMMU_CONTROL_PPR_LOG_INT_SHIFT);
+    writel(entry, iommu->mmio_base + IOMMU_CONTROL_MMIO_OFFSET);
 
     spin_unlock_irqrestore(&iommu->lock, flags);
 
@@ -785,7 +815,7 @@ static bool_t __init set_iommu_interrupt_handler(struct amd_iommu *iommu)
         handler = &iommu_msi_type;
     ret = __setup_msi_irq(irq_to_desc(irq), &iommu->msi, handler);
     if ( !ret )
-        ret = request_irq(irq, iommu_interrupt_handler, 0, "amd_iommu", iommu);
+        ret = request_irq(irq, iommu_interrupt_handler, "amd_iommu", iommu);
     if ( ret )
     {
         destroy_irq(irq);
@@ -1074,7 +1104,7 @@ int iterate_ivrs_entries(int (*handler)(u16 seg, struct ivrs_mappings *))
 
     do {
         struct ivrs_mappings *map;
-        int bdf;
+        unsigned int bdf;
 
         if ( !radix_tree_gang_lookup(&ivrs_maps, (void **)&map, seg, 1) )
             break;
@@ -1089,7 +1119,7 @@ int iterate_ivrs_entries(int (*handler)(u16 seg, struct ivrs_mappings *))
 static int __init alloc_ivrs_mappings(u16 seg)
 {
     struct ivrs_mappings *ivrs_mappings;
-    int bdf;
+    unsigned int bdf;
 
     BUG_ON( !ivrs_bdf_entries );
 
@@ -1127,7 +1157,7 @@ static int __init alloc_ivrs_mappings(u16 seg)
 static int __init amd_iommu_setup_device_table(
     u16 seg, struct ivrs_mappings *ivrs_mappings)
 {
-    int bdf;
+    unsigned int bdf;
     void *intr_tb, *dte;
 
     BUG_ON( (ivrs_bdf_entries == 0) );
@@ -1277,7 +1307,8 @@ static void invalidate_all_domain_pages(void)
 static int _invalidate_all_devices(
     u16 seg, struct ivrs_mappings *ivrs_mappings)
 {
-    int bdf, req_id;
+    unsigned int bdf; 
+    u16 req_id;
     unsigned long flags;
     struct amd_iommu *iommu;
 

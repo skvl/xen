@@ -93,6 +93,12 @@ The old B<defaultbridge> option is deprecated and should not be used.
 
 Default: C<xenbr0>
 
+=item B<vif.default.backend="NAME">
+
+Configures the default backend to set for virtual network devices.
+
+Default: C<0>
+
 =item B<vif.default.gatewaydev="NAME">
 
 Configures the default gateway device to set for virtual network devices.
@@ -139,7 +145,7 @@ Xen hypervisor argument and as well on the Linux kernel command line.
 Note that the claim call is not attempted if C<superpages> option is
 used in the guest config (see xl.cfg(5)).
 
-Default: C<0>
+Default: C<1>
 
 =over 4
 

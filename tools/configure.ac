@@ -53,12 +53,71 @@ AX_ARG_DEFAULT_ENABLE([monitors], [Disable xenstat and xentop monitoring tools])
 AX_ARG_DEFAULT_DISABLE([xenapi], [Enable Xen API Bindings])
 AX_ARG_DEFAULT_ENABLE([ocamltools], [Disable Ocaml tools])
 AX_ARG_DEFAULT_ENABLE([xsmpolicy], [Disable XSM policy compilation])
-AX_ARG_DEFAULT_DISABLE([miniterm], [Enable miniterm])
-AX_ARG_DEFAULT_DISABLE([lomount], [Enable lomount])
 AX_ARG_DEFAULT_DISABLE([ovmf], [Enable OVMF])
 AX_ARG_DEFAULT_ENABLE([rombios], [Disable ROM BIOS])
 AX_ARG_DEFAULT_ENABLE([seabios], [Disable SeaBIOS])
 AX_ARG_DEFAULT_ENABLE([debug], [Disable debug build of tools])
+AX_ARG_DEFAULT_DISABLE([xend], [Enable xend toolstack])
+AX_ARG_DEFAULT_DISABLE([blktap1], [Enable blktap1 tools])
+
+AC_ARG_ENABLE([qemu-traditional],
+    AS_HELP_STRING([--enable-qemu-traditional],
+                   [Enable qemu traditional device model, (DEFAULT is on for x86, otherwise off)]),,[
+    case "$host_cpu" in
+        i[[3456]]86|x86_64)
+           enable_qemu_traditional="yes";;
+        *) enable_qemu_traditional="no";;
+    esac
+])
+AS_IF([test "x$enable_qemu_traditional" = "xyes"], [
+AC_DEFINE([HAVE_QEMU_TRADITIONAL], [1], [Qemu traditional enabled])
+    qemu_traditional=y],[
+    qemu_traditional=n
+])
+AC_SUBST(qemu_traditional)
+
+AC_ARG_WITH([system-qemu],
+    AS_HELP_STRING([--with-system-qemu@<:@=PATH@:>@],
+       [Use system supplied qemu PATH or qemu (taken from $PATH) as qemu-xen
+        device model instead of building and installing our own version]),[
+    case $withval in
+    yes) qemu_xen=n ; qemu_xen_path=qemu ;;
+    no)  qemu_xen=y ; qemu_xen_path= ;;
+    *)   qemu_xen=n ; qemu_xen_path=$withval ;;
+    esac
+],[
+    case "$host_cpu" in
+        i[[3456]]86|x86_64)
+           qemu_xen=y;;
+        *) qemu_xen=n;;
+    esac
+])
+AS_IF([test "x$qemu_xen" = "xn"], [
+    AC_DEFINE_UNQUOTED([QEMU_XEN_PATH], ["$qemu_xen_path"], [Qemu Xen path])
+])
+AC_SUBST(qemu_xen)
+
+AC_ARG_WITH([system-seabios],
+    AS_HELP_STRING([--with-system-seabios@<:@=PATH@:>@],
+       [Use system supplied seabios PATH instead of building and installing
+        our own version]),[
+    case $withval in
+        no) seabios_path= ;;
+        *)  seabios_path=$withval ;;
+    esac
+],[])
+AC_SUBST(seabios_path)
+
+AC_ARG_WITH([system-ovmf],
+    AS_HELP_STRING([--with-system-ovmf@<:@=PATH@:>@],
+       [Use system supplied OVMF PATH instead of building and installing
+        our own version]),[
+    case $withval in
+        no) ovmf_path= ;;
+        *)  ovmf_path=$withval ;;
+    esac
+],[])
+AC_SUBST(ovmf_path)
 
 AC_ARG_VAR([PREPEND_INCLUDES],
     [List of include folders to prepend to CFLAGS (without -I)])
@@ -154,7 +213,7 @@ AC_CHECK_HEADER([lzo/lzo1x.h], [
 AC_CHECK_LIB([lzo2], [lzo1x_decompress], [zlib="$zlib -DHAVE_LZO1X -llzo2"])
 ])
 AC_SUBST(zlib)
-AC_CHECK_LIB([aio], [io_setup], [system_aio="y"], [system_aio="n"])
+AC_CHECK_LIB([aio], [io_setup], [], [AC_MSG_ERROR([Could not find libaio])])
 AC_SUBST(system_aio)
 AC_CHECK_LIB([crypto], [MD5], [], [AC_MSG_ERROR([Could not find libcrypto])])
 AX_CHECK_EXTFS
@@ -168,7 +227,26 @@ AC_CHECK_LIB([z], [deflateCopy], [], [AC_MSG_ERROR([Could not find zlib])])
 AC_CHECK_LIB([iconv], [libiconv_open], [libiconv="y"], [libiconv="n"])
 AC_SUBST(libiconv)
 
+# FDT is needed only on ARM
+case "$host_cpu" in
+arm*|aarch64)
+AC_CHECK_LIB([fdt], [fdt_create], [], [AC_MSG_ERROR([Could not find libfdt])])
+esac
+
 # Checks for header files.
 AC_CHECK_HEADERS([yajl/yajl_version.h sys/eventfd.h])
 
 AC_OUTPUT()
+
+AS_IF([test "x$xend" = "xy" ], [
+    AC_MSG_WARN(
+[You have enabled the xend toolstack.
+
+xend is deprecated and scheduled for removal. Please migrate to another
+toolstack ASAP.
+
+See http://wiki.xen.org/wiki/Choice_of_Toolstacks for information on
+other alternatives, including xl which is designed to be a drop in
+replacement for xm (http://wiki.xen.org/wiki/XL).
+])
+])

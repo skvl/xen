@@ -164,7 +164,7 @@ void paging_free_log_dirty_bitmap(struct domain *d)
     paging_unlock(d);
 }
 
-int paging_log_dirty_enable(struct domain *d)
+int paging_log_dirty_enable(struct domain *d, bool_t log_global)
 {
     int ret;
 
@@ -172,7 +172,7 @@ int paging_log_dirty_enable(struct domain *d)
         return -EINVAL;
 
     domain_pause(d);
-    ret = d->arch.paging.log_dirty.enable_log_dirty(d);
+    ret = d->arch.paging.log_dirty.enable_log_dirty(d, log_global);
     domain_unpause(d);
 
     return ret;
@@ -330,8 +330,8 @@ int paging_log_dirty_op(struct domain *d, struct xen_domctl_shadow_op *sc)
 {
     int rv = 0, clean = 0, peek = 1;
     unsigned long pages = 0;
-    mfn_t *l4, *l3, *l2;
-    unsigned long *l1;
+    mfn_t *l4 = NULL, *l3 = NULL, *l2 = NULL;
+    unsigned long *l1 = NULL;
     int i4, i3, i2;
 
     domain_pause(d);
@@ -434,6 +434,16 @@ int paging_log_dirty_op(struct domain *d, struct xen_domctl_shadow_op *sc)
  out:
     paging_unlock(d);
     domain_unpause(d);
+
+    if ( l1 )
+        unmap_domain_page(l1);
+    if ( l2 )
+        unmap_domain_page(l2);
+    if ( l3 )
+        unmap_domain_page(l3);
+    if ( l4 )
+        unmap_domain_page(l4);
+
     return rv;
 }
 
@@ -479,7 +489,8 @@ void paging_log_dirty_range(struct domain *d,
  * These function pointers must not be followed with the log-dirty lock held.
  */
 void paging_log_dirty_init(struct domain *d,
-                           int    (*enable_log_dirty)(struct domain *d),
+                           int    (*enable_log_dirty)(struct domain *d,
+                                                      bool_t log_global),
                            int    (*disable_log_dirty)(struct domain *d),
                            void   (*clean_dirty_bitmap)(struct domain *d))
 {
@@ -580,7 +591,7 @@ int paging_domctl(struct domain *d, xen_domctl_shadow_op_t *sc,
     case XEN_DOMCTL_SHADOW_OP_ENABLE_LOGDIRTY:
         if ( hap_enabled(d) )
             hap_logdirty_init(d);
-        return paging_log_dirty_enable(d);
+        return paging_log_dirty_enable(d, 1);
 
     case XEN_DOMCTL_SHADOW_OP_OFF:
         if ( paging_mode_log_dirty(d) )
@@ -709,6 +720,7 @@ void paging_update_nestedmode(struct vcpu *v)
     else
         /* TODO: shadow-on-shadow */
         v->arch.paging.nestedmode = NULL;
+    hvm_asid_flush_vcpu(v);
 }
 
 void paging_write_p2m_entry(struct p2m_domain *p2m, unsigned long gfn,
