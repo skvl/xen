@@ -13,6 +13,9 @@ ifeq ($(CONFIG_Linux),y)
 LIBUUID_LIBS += -luuid
 endif
 
+LDFLAGS_XL = $(call LDFLAGS_RPATH,../lib)
+LDFLAGS_LIBXL = $(call LDFLAGS_RPATH)
+
 LIBXL_LIBS =
 LIBXL_LIBS = $(LDLIBS_libxentoollog) $(LDLIBS_libxenevtchn) $(LDLIBS_libxenctrl) $(LDLIBS_libxenguest) $(LDLIBS_libxenstore) $(LDLIBS_libblktapctl) $(LDLIBS_libxentoolcore) $(PTYFUNCS_LIBS) $(LIBUUID_LIBS)
 ifeq ($(CONFIG_LIBNL),y)
@@ -272,7 +275,7 @@ libxenlight.so: libxenlight-$(PACKAGE_VERSION).so
 	$(SYMLINK_SHLIB) $< $@
 
 libxenlight-$(PACKAGE_VERSION).so: $(LIBXL_OBJS)
-	$(CC) $(LDFLAGS) -Wl,$(SONAME_LDFLAG),$@ $(SHLIB_LDFLAGS) -o $@ $^ $(LIBXL_LIBS) $(APPEND_LDFLAGS)
+	$(CC) $(LDFLAGS) -Wl,$(SONAME_LDFLAG),$@ $(LDFLAGS_LIBXL) $(SHLIB_LDFLAGS) -o $@ $^ $(LIBXL_LIBS) $(APPEND_LDFLAGS)
 
 libxenlight_test.so: $(LIBXL_OBJS) $(LIBXL_TEST_OBJS)
 	$(CC) $(LDFLAGS) -Wl,$(SONAME_LDFLAG),$@ $(SHLIB_LDFLAGS) -o $@ $^ $(LIBXL_LIBS) $(APPEND_LDFLAGS)

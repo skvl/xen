@@ -41,15 +41,15 @@ xl: $(XL_OBJS)
 
 .PHONY: install
 install: all
-	$(INSTALL_DIR) $(DESTDIR)$(sbindir)
+	$(INSTALL_DIR) $(DESTDIR)$(LIBEXEC_BIN)
 	$(INSTALL_DIR) $(DESTDIR)$(BASH_COMPLETION_DIR)
-	$(INSTALL_PROG) xl $(DESTDIR)$(sbindir)
+	$(INSTALL_PROG) xl $(DESTDIR)$(LIBEXEC_BIN)
 	$(INSTALL_DATA) bash-completion $(DESTDIR)$(BASH_COMPLETION_DIR)/xl.sh
 
 .PHONY: uninstall
 uninstall:
 	rm -f $(DESTDIR)$(BASH_COMPLETION_DIR)/xl.sh
-	rm -f $(DESTDIR)$(sbindir)/xl
+	rm -f $(DESTDIR)$(LIBEXEC_BIN)/xl
 
 .PHONY: clean
 clean:
