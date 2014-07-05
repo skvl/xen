@@ -12,6 +12,7 @@ CFLAGS            += -Werror
 CFLAGS            += -Wno-unused
 CFLAGS            += -I../include
 CFLAGS            += -D_GNU_SOURCE
+CFLAGS  += $(CFLAGS_libxenctrl)
 
 ifeq ($(CONFIG_X86_64),y)
 CFLAGS            += -fPIC
