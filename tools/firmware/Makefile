@@ -10,7 +10,6 @@ SUBDIRS-$(CONFIG_OVMF) += ovmf
 SUBDIRS-$(CONFIG_SEABIOS) += seabios-dir
 SUBDIRS-$(CONFIG_ROMBIOS) += rombios
 SUBDIRS-$(CONFIG_ROMBIOS) += vgabios
-SUBDIRS-$(CONFIG_ROMBIOS) += etherboot
 SUBDIRS-y += hvmloader
 
 ovmf:
@@ -45,9 +44,6 @@ clean: subdirs-clean
 
 .PHONY: distclean
 distclean: subdirs-distclean
-
-subdir-distclean-etherboot: .phony
-	$(MAKE) -C etherboot distclean
 
 subdir-distclean-ovmf: .phony
 	rm -rf ovmf ovmf-remote
