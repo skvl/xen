@@ -8,6 +8,7 @@ CFLAGS  += $(CFLAGS_libxenstore)
 LDLIBS += $(LDLIBS_libxenctrl)
 LDLIBS += $(LDLIBS_libxenstore)
 LDLIBS += $(SOCKET_LIBS)
+LDFLAGS += $(call LDFLAGS_RPATH,../lib)
 
 LDLIBS_xenconsoled += $(UTIL_LIBS)
 LDLIBS_xenconsoled += -lrt
@@ -30,9 +31,7 @@ xenconsole: $(patsubst %.c,%.o,$(wildcard client/*.c))
 
 .PHONY: install
 install: $(BIN)
-	$(INSTALL_DIR) $(DESTDIR)/$(SBINDIR)
-	$(INSTALL_PROG) xenconsoled $(DESTDIR)/$(SBINDIR)
 	$(INSTALL_DIR) $(DESTDIR)$(PRIVATE_BINDIR)
-	$(INSTALL_PROG) xenconsole $(DESTDIR)$(PRIVATE_BINDIR)
+	$(INSTALL_PROG) xenconsole xenconsoled $(DESTDIR)$(PRIVATE_BINDIR)
 
 -include $(DEPS)
