@@ -13,11 +13,6 @@ install: all
 	CC="$(CC)" CFLAGS="$(CFLAGS) $(APPEND_LDFLAGS)" $(PYTHON) setup.py install \
 		$(PYTHON_PREFIX_ARG) --root="$(DESTDIR)" \
 		--install-scripts=$(LIBEXEC_BIN) --force
-	set -e; if [ $(BINDIR) != $(LIBEXEC_BIN) -a \
-	             "`readlink -f $(DESTDIR)/$(BINDIR)`" != \
-	             "`readlink -f $(LIBEXEC_BIN)`" ]; then \
-	    ln -sf $(LIBEXEC_BIN)/pygrub $(DESTDIR)/$(BINDIR); \
-	fi
 
 .PHONY: clean
 clean:
