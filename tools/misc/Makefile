@@ -55,18 +55,16 @@ all build: $(TARGETS_BUILD)
 
 .PHONY: install
 install: build
-	$(INSTALL_DIR) $(DESTDIR)$(bindir)
-	$(INSTALL_DIR) $(DESTDIR)$(sbindir)
 	$(INSTALL_DIR) $(DESTDIR)$(LIBEXEC_BIN)
-	$(INSTALL_PYTHON_PROG) $(INSTALL_BIN) $(DESTDIR)$(bindir)
-	$(INSTALL_PYTHON_PROG) $(INSTALL_SBIN) $(DESTDIR)$(sbindir)
+	$(INSTALL_PYTHON_PROG) $(INSTALL_BIN) $(DESTDIR)$(LIBEXEC_BIN)
+	$(INSTALL_PYTHON_PROG) $(INSTALL_SBIN) $(DESTDIR)$(LIBEXEC_BIN)
 	$(INSTALL_PYTHON_PROG) $(INSTALL_PRIVBIN) $(DESTDIR)$(LIBEXEC_BIN)
 
 .PHONY: uninstall
 uninstall:
 	rm -f $(addprefix $(DESTDIR)$(LIBEXEC_BIN)/, $(INSTALL_PRIVBIN))
-	rm -f $(addprefix $(DESTDIR)$(sbindir)/, $(INSTALL_SBIN))
-	rm -f $(addprefix $(DESTDIR)$(bindir)/, $(INSTALL_BIN))
+	rm -f $(addprefix $(DESTDIR)$(LIBEXEC_BIN)/, $(INSTALL_SBIN))
+	rm -f $(addprefix $(DESTDIR)$(LIBEXEC_BIN)/, $(INSTALL_BIN))
 
 .PHONY: clean
 clean:
