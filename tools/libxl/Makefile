@@ -5,12 +5,6 @@
 XEN_ROOT = $(CURDIR)/../..
 include $(XEN_ROOT)/tools/Rules.mk
 
-MAJOR = 4.5
-MINOR = 0
-
-XLUMAJOR = 4.3
-XLUMINOR = 0
-
 CFLAGS += -Werror -Wno-format-zero-length -Wmissing-declarations \
 	-Wno-declaration-after-statement -Wformat-nonliteral
 CFLAGS += -I. -fPIC
@@ -206,14 +200,11 @@ _libxl_type%.h _libxl_type%_json.h _libxl_type%_private.h _libxl_type%.c: libxl_
 	$(call move-if-changed,__libxl_type$*_json.h,_libxl_type$*_json.h)
 	$(call move-if-changed,__libxl_type$*.c,_libxl_type$*.c)
 
-libxenlight.so: libxenlight.so.$(MAJOR)
+libxenlight.so: libxenlight-$(PACKAGE_VERSION).so
 	$(SYMLINK_SHLIB) $< $@
 
-libxenlight.so.$(MAJOR): libxenlight.so.$(MAJOR).$(MINOR)
-	$(SYMLINK_SHLIB) $< $@
-
-libxenlight.so.$(MAJOR).$(MINOR): $(LIBXL_OBJS)
-	$(CC) $(LDFLAGS) -Wl,$(SONAME_LDFLAG) -Wl,libxenlight.so.$(MAJOR) $(SHLIB_LDFLAGS) -o $@ $^ $(LIBXL_LIBS) $(APPEND_LDFLAGS)
+libxenlight-$(PACKAGE_VERSION).so: $(LIBXL_OBJS)
+	$(CC) $(LDFLAGS) -Wl,$(SONAME_LDFLAG),$@ $(SHLIB_LDFLAGS) -o $@ $^ $(LIBXL_LIBS) $(APPEND_LDFLAGS)
 
 libxenlight_test.so: $(LIBXL_OBJS) $(LIBXL_TEST_OBJS)
 	$(CC) $(LDFLAGS) -Wl,$(SONAME_LDFLAG) -Wl,libxenlight.so.$(MAJOR) $(SHLIB_LDFLAGS) -o $@ $^ $(LIBXL_LIBS) $(APPEND_LDFLAGS)
@@ -221,14 +212,11 @@ libxenlight_test.so: $(LIBXL_OBJS) $(LIBXL_TEST_OBJS)
 libxenlight.a: $(LIBXL_OBJS)
 	$(AR) rcs libxenlight.a $^
 
-libxlutil.so: libxlutil.so.$(XLUMAJOR)
+libxlutil.so: libxlutil-$(PACKAGE_VERSION).so
 	$(SYMLINK_SHLIB) $< $@
 
-libxlutil.so.$(XLUMAJOR): libxlutil.so.$(XLUMAJOR).$(XLUMINOR)
-	$(SYMLINK_SHLIB) $< $@
-
-libxlutil.so.$(XLUMAJOR).$(XLUMINOR): $(LIBXLU_OBJS)
-	$(CC) $(LDFLAGS) -Wl,$(SONAME_LDFLAG) -Wl,libxlutil.so.$(XLUMAJOR) $(SHLIB_LDFLAGS) -o $@ $^ $(LIBXLU_LIBS) $(APPEND_LDFLAGS)
+libxlutil-$(PACKAGE_VERSION).so: $(LIBXLU_OBJS)
+	$(CC) $(LDFLAGS) -Wl,$(SONAME_LDFLAG),$@ $(SHLIB_LDFLAGS) -o $@ $^ $(LIBXLU_LIBS) $(APPEND_LDFLAGS)
 
 libxlutil.a: $(LIBXLU_OBJS)
 	$(AR) rcs libxlutil.a $^
@@ -258,13 +246,11 @@ install: all
 	$(INSTALL_PROG) xl $(DESTDIR)$(SBINDIR)
 	$(INSTALL_PROG) xen-init-dom0 $(DESTDIR)$(LIBEXEC_BIN)
 	$(INSTALL_PROG) libxl-save-helper $(DESTDIR)$(LIBEXEC_BIN)
-	$(INSTALL_SHLIB) libxenlight.so.$(MAJOR).$(MINOR) $(DESTDIR)$(LIBDIR)
-	$(SYMLINK_SHLIB) libxenlight.so.$(MAJOR).$(MINOR) $(DESTDIR)$(LIBDIR)/libxenlight.so.$(MAJOR)
-	$(SYMLINK_SHLIB) libxenlight.so.$(MAJOR) $(DESTDIR)$(LIBDIR)/libxenlight.so
+	$(INSTALL_SHLIB) libxenlight-$(PACKAGE_VERSION).so $(DESTDIR)$(LIBDIR)
+	$(SYMLINK_SHLIB) libxenlight-$(PACKAGE_VERSION).so $(DESTDIR)$(LIBDIR)/libxenlight.so
 	$(INSTALL_DATA) libxenlight.a $(DESTDIR)$(LIBDIR)
-	$(INSTALL_SHLIB) libxlutil.so.$(XLUMAJOR).$(XLUMINOR) $(DESTDIR)$(LIBDIR)
-	$(SYMLINK_SHLIB) libxlutil.so.$(XLUMAJOR).$(XLUMINOR) $(DESTDIR)$(LIBDIR)/libxlutil.so.$(XLUMAJOR)
-	$(SYMLINK_SHLIB) libxlutil.so.$(XLUMAJOR) $(DESTDIR)$(LIBDIR)/libxlutil.so
+	$(INSTALL_SHLIB) libxlutil-$(PACKAGE_VERSION).so $(DESTDIR)$(LIBDIR)
+	$(SYMLINK_SHLIB) libxlutil-$(PACKAGE_VERSION).so $(DESTDIR)$(LIBDIR)/libxlutil.so
 	$(INSTALL_DATA) libxlutil.a $(DESTDIR)$(LIBDIR)
 	$(INSTALL_DATA) libxl.h libxl_event.h libxl_json.h _libxl_types.h _libxl_types_json.h _libxl_list.h libxl_utils.h libxl_uuid.h $(DESTDIR)$(INCLUDEDIR)
 	$(INSTALL_DATA) bash-completion $(DESTDIR)$(BASH_COMPLETION_DIR)/xl.sh
