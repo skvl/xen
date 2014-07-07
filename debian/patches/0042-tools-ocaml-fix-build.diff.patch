@@ -1,4 +1,4 @@
-From 815f07c31a1aa2baa127cc3e7b30e02acf707026 Mon Sep 17 00:00:00 2001
+From d84affe162c222cd9c084bea6bc6ddcb9090fbcc Mon Sep 17 00:00:00 2001
 From: Debian Xen Team <pkg-xen-devel@lists.alioth.debian.org>
 Date: Tue, 29 Nov 2011 11:45:27 +0000
 Subject: tools-ocaml-fix-build.diff

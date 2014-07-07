@@ -28,8 +28,8 @@ SUBDIRS-$(CONFIG_Linux) += libvchan
 ifneq "$(MAKECMDGOALS)" "distclean"
 CONFIG_QEMU = $(CURDIR)/../qemu
 ifneq ($(wildcard $(CONFIG_QEMU)),)
-SUBDIRS-$(CONFIG_IOEMU) += qemu-xen-traditional-dir
-SUBDIRS-$(CONFIG_IOEMU) += qemu-xen-dir
+SUBDIRS-$(CONFIG_QEMU_TRAD) += qemu-xen-traditional-dir
+SUBDIRS-$(CONFIG_QEMU_XEN) += qemu-xen-dir
 endif
 endif
 

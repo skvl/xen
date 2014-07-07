@@ -1,4 +1,4 @@
-From e793a9f5ce7186d1f6dc89b0f166218dec931af2 Mon Sep 17 00:00:00 2001
+From 2d3956266e14f95f08c42b5d719f78b411cf101c Mon Sep 17 00:00:00 2001
 From: Bastian Blank <waldi@debian.org>
 Date: Sat, 5 Jul 2014 11:47:29 +0200
 Subject: tools-pygrub-remove-static-solaris-support

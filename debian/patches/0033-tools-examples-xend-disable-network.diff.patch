@@ -1,4 +1,4 @@
-From 9f62a1c0bf3bac128e480bfce492c7402bdab6c7 Mon Sep 17 00:00:00 2001
+From d0db074eb3af458abed5572c60a97d245426d49d Mon Sep 17 00:00:00 2001
 From: Bastian Blank <waldi@debian.org>
 Date: Sat, 5 Jul 2014 11:47:24 +0200
 Subject: tools-examples-xend-disable-network.diff
