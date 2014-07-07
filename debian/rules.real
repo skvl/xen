@@ -70,7 +70,8 @@ $(STAMPS_DIR)/setup-utils_$(ARCH):
 			--localstatedir=/var \
 			--disable-blktap1 \
 			--disable-qemu-traditional --disable-rombios \
-			--with-system-qemu=/usr/bin/qemu-system-i386
+			--with-system-qemu=/usr/bin/qemu-system-i386 \
+			--with-system-seabios=/usr/share/seabios/bios.bin
 	@$(stamp)
 
 $(STAMPS_DIR)/build-docs: DIR=$(BUILD_DIR)/build-docs

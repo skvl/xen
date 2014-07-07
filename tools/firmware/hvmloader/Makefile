@@ -39,7 +39,7 @@ CIRRUSVGA_DEBUG ?= n
 
 OVMF_DIR := ../ovmf-dir
 ROMBIOS_DIR := ../rombios
-SEABIOS_DIR := /usr/share/seabios
+SEABIOS_DIR := ../seabios-dir
 
 ifeq ($(CONFIG_ROMBIOS),y)
 STDVGA_ROM    := ../vgabios/VGABIOS-lgpl-latest.bin
@@ -74,7 +74,11 @@ endif
 ifeq ($(CONFIG_SEABIOS),y)
 OBJS += seabios.o
 CFLAGS += -DENABLE_SEABIOS
-SEABIOS_ROM := $(SEABIOS_DIR)/bios.bin
+ifeq ($(SEABIOS_PATH),)
+	SEABIOS_ROM := $(SEABIOS_DIR)/out/bios.bin
+else
+	SEABIOS_ROM := $(SEABIOS_PATH)
+endif
 ROMS += $(SEABIOS_ROM)
 endif
 
