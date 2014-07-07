@@ -68,7 +68,8 @@ $(STAMPS_DIR)/setup-utils_$(ARCH):
 			--infodir=$${prefix}/share/info \
 			--sysconfdir=/etc \
 			--localstatedir=/var \
-			--disable-blktap1
+			--disable-blktap1 \
+			--disable-qemu-traditional --disable-rombios
 	@$(stamp)
 
 $(STAMPS_DIR)/build-docs: DIR=$(BUILD_DIR)/build-docs

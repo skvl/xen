@@ -11,7 +11,6 @@ Build-Depends:
  gcc-multilib,
  e2fslibs-dev,
  iasl,
- ipxe-qemu,
  seabios,
  libaio-dev,
  libglib2.0-dev,

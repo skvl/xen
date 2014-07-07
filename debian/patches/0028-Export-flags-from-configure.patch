@@ -1,0 +1,25 @@
+From 295a8ed4e4b5ccc391a6e5530d61b47f89489830 Mon Sep 17 00:00:00 2001
+From: Bastian Blank <waldi@debian.org>
+Date: Sat, 5 Jul 2014 11:47:17 +0200
+Subject: Export flags from configure
+
+Origin: vendor
+Forwarded: not-needed
+---
+ config/Tools.mk.in | 3 +++
+ 1 file changed, 3 insertions(+)
+
+diff --git a/config/Tools.mk.in b/config/Tools.mk.in
+index d9d3239..0e6d648 100644
+--- a/config/Tools.mk.in
++++ b/config/Tools.mk.in
+@@ -26,6 +26,9 @@ FETCHER             := @FETCHER@
+ SEABIOS_PATH        := @seabios_path@
+ OVMF_PATH           := @ovmf_path@
+ 
++CFLAGS              += @CFLAGS@
++CPPFLAGS            += @CPPFLAGS@
++
+ # Extra folder for libs/includes
+ PREPEND_INCLUDES    := @PREPEND_INCLUDES@
+ PREPEND_LIB         := @PREPEND_LIB@

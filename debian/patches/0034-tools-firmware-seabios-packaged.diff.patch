@@ -1,0 +1,77 @@
+From 2b4cb6979efa8ba8cd303adf850a948e4962d841 Mon Sep 17 00:00:00 2001
+From: Bastian Blank <waldi@debian.org>
+Date: Sat, 5 Jul 2014 11:47:27 +0200
+Subject: tools-firmware-seabios-packaged.diff
+
+---
+ tools/firmware/Makefile           | 23 ++++++++++++-----------
+ tools/firmware/hvmloader/Makefile |  8 ++------
+ 2 files changed, 14 insertions(+), 17 deletions(-)
+
+diff --git a/tools/firmware/Makefile b/tools/firmware/Makefile
+index cb13212..1b81eed 100644
+--- a/tools/firmware/Makefile
++++ b/tools/firmware/Makefile
+@@ -6,12 +6,7 @@ TARGET      := hvmloader/hvmloader
+ INST_DIR := $(DESTDIR)$(XENFIRMWAREDIR)
+ 
+ SUBDIRS-y :=
+-ifeq ($(OVMF_PATH),)
+-SUBDIRS-$(CONFIG_OVMF) += ovmf-dir
+-endif
+-ifeq ($(SEABIOS_PATH),)
+-SUBDIRS-$(CONFIG_SEABIOS) += seabios-dir
+-endif
++SUBDIRS-$(CONFIG_OVMF) += ovmf
+ SUBDIRS-$(CONFIG_ROMBIOS) += rombios
+ SUBDIRS-$(CONFIG_ROMBIOS) += vgabios
+ SUBDIRS-$(CONFIG_ROMBIOS) += etherboot
+@@ -56,11 +51,17 @@ subdir-distclean-etherboot: .phony
+ subdir-distclean-ovmf: .phony
+ 	rm -rf ovmf-dir ovmf-dir-remote
+ 
+-subdir-distclean-seabios-dir: .phony
+-	rm -rf seabios-dir seabios-dir-remote
+-
+-.PHONY: ovmf-dir-force-update
+-ovmf-dir-force-update:
++.PHONY: ovmf-find
++ovmf-find:
++	if test -d $(OVMF_UPSTREAM_URL) ; then \
++	               mkdir -p ovmf; \
++        else \
++                export GIT=$(GIT); \
++                $(XEN_ROOT)/scripts/git-checkout.sh $(OVMF_UPSTREAM_URL) $(OVMF_UPSTREAM_REVISION) ovmf ; \
++        fi
++
++.PHONY: ovmf-force-update
++ovmf-force-update:
+ 	set -ex; \
+ 	if [ "$(OVMF_UPSTREAM_REVISION)" ]; then \
+ 		cd ovmf-dir-remote; \
+diff --git a/tools/firmware/hvmloader/Makefile b/tools/firmware/hvmloader/Makefile
+index 00ee952..4864fd7 100644
+--- a/tools/firmware/hvmloader/Makefile
++++ b/tools/firmware/hvmloader/Makefile
+@@ -39,7 +39,7 @@ CIRRUSVGA_DEBUG ?= n
+ 
+ OVMF_DIR := ../ovmf-dir
+ ROMBIOS_DIR := ../rombios
+-SEABIOS_DIR := ../seabios-dir
++SEABIOS_DIR := /usr/share/seabios
+ 
+ ifeq ($(CONFIG_ROMBIOS),y)
+ STDVGA_ROM    := ../vgabios/VGABIOS-lgpl-latest.bin
+@@ -74,11 +74,7 @@ endif
+ ifeq ($(CONFIG_SEABIOS),y)
+ OBJS += seabios.o
+ CFLAGS += -DENABLE_SEABIOS
+-ifeq ($(SEABIOS_PATH),)
+-	SEABIOS_ROM := $(SEABIOS_DIR)/out/bios.bin
+-else
+-	SEABIOS_ROM := $(SEABIOS_PATH)
+-endif
++SEABIOS_ROM := $(SEABIOS_DIR)/bios.bin
+ ROMS += $(SEABIOS_ROM)
+ endif
+ 

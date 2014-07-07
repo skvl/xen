@@ -48,7 +48,7 @@ CIRRUSVGA_ROM := ../vgabios/VGABIOS-lgpl-latest.cirrus.debug.bin
 else
 CIRRUSVGA_ROM := ../vgabios/VGABIOS-lgpl-latest.cirrus.bin
 endif
-ETHERBOOT_ROMS := $(addprefix /usr/lib/ipxe/, $(addsuffix .rom, $(ETHERBOOT_NICS)))
+ETHERBOOT_ROMS := $(addprefix ../etherboot/ipxe/src/bin/, $(addsuffix .rom, $(ETHERBOOT_NICS)))
 endif
 
 ROMS := 

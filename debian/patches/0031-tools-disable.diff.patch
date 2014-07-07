@@ -1,0 +1,51 @@
+From eb4b094e7d6b98c1277f10c417f9aa0200d99799 Mon Sep 17 00:00:00 2001
+From: Bastian Blank <waldi@debian.org>
+Date: Sat, 5 Jul 2014 11:47:23 +0200
+Subject: tools-disable.diff
+
+---
+ tools/Makefile | 5 +++--
+ tools/Rules.mk | 4 ----
+ 2 files changed, 3 insertions(+), 6 deletions(-)
+
+diff --git a/tools/Makefile b/tools/Makefile
+index 00c69ee..98e904a 100644
+--- a/tools/Makefile
++++ b/tools/Makefile
+@@ -19,8 +19,6 @@ SUBDIRS-$(CONFIG_Linux) += memshr
+ ifeq ($(CONFIG_X86)$(CONFIG_Linux),yy)
+ SUBDIRS-$(CONFIG_BLKTAP1) += blktap
+ endif
+-SUBDIRS-$(CONFIG_Linux) += blktap2
+-SUBDIRS-$(CONFIG_NetBSD) += blktap2
+ SUBDIRS-$(CONFIG_NetBSD) += xenbackendd
+ SUBDIRS-y += libfsimage
+ SUBDIRS-$(LIBXENAPI_BINDINGS) += libxen
+@@ -29,8 +27,11 @@ SUBDIRS-$(CONFIG_Linux) += libvchan
+ # do not recurse in to a dir we are about to delete
+ ifneq "$(MAKECMDGOALS)" "distclean"
+ SUBDIRS-$(CONFIG_QEMU_TRAD) += qemu-xen-traditional-dir
++CONFIG_QEMU = $(CURDIR)/../qemu
++ifneq ($(wildcard $(CONFIG_QEMU)),)
+ SUBDIRS-$(CONFIG_QEMU_XEN) += qemu-xen-dir
+ endif
++endif
+ 
+ SUBDIRS-y += xenpmd
+ SUBDIRS-y += libxl
+diff --git a/tools/Rules.mk b/tools/Rules.mk
+index 0d9d98c..74ce6bc 100644
+--- a/tools/Rules.mk
++++ b/tools/Rules.mk
+@@ -41,11 +41,7 @@ CFLAGS_libxenvchan = -I$(XEN_LIBVCHAN)
+ LDLIBS_libxenvchan = $(SHLIB_libxenctrl) $(SHLIB_libxenstore) -L$(XEN_LIBVCHAN) -lxenvchan
+ SHLIB_libxenvchan  = -Wl,-rpath-link=$(XEN_LIBVCHAN)
+ 
+-ifeq ($(CONFIG_Linux),y)
+-LIBXL_BLKTAP ?= y
+-else
+ LIBXL_BLKTAP ?= n
+-endif
+ 
+ ifeq ($(LIBXL_BLKTAP),y)
+ CFLAGS_libblktapctl = -I$(XEN_BLKTAP2)/control -I$(XEN_BLKTAP2)/include $(CFLAGS_xeninclude)
