@@ -67,7 +67,8 @@ $(STAMPS_DIR)/setup-utils_$(ARCH):
 			--mandir=$${prefix}/share/man \
 			--infodir=$${prefix}/share/info \
 			--sysconfdir=/etc \
-			--localstatedir=/var
+			--localstatedir=/var \
+			--disable-blktap1
 	@$(stamp)
 
 $(STAMPS_DIR)/build-docs: DIR=$(BUILD_DIR)/build-docs

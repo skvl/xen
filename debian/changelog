@@ -11,6 +11,7 @@ xen (4.4.0-1) UNRELEASED; urgency=medium
     - pygrub searches for extlinux.conf in the expected places (Closes: #697407).
     - Update scripts to use correct syntax for ip command. (Closes: #705659).
   * Fix install of xend configs to not break compatibility.
+  * Disable blktap1 support using new configure option instead of by patching.
 
  -- Bastian Blank <waldi@debian.org>  Sat, 05 Jul 2014 12:54:54 +0200
 
