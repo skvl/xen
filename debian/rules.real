@@ -69,7 +69,8 @@ $(STAMPS_DIR)/setup-utils_$(ARCH):
 			--sysconfdir=/etc \
 			--localstatedir=/var \
 			--disable-blktap1 \
-			--disable-qemu-traditional --disable-rombios
+			--disable-qemu-traditional --disable-rombios \
+			--with-system-qemu=/usr/bin/qemu-system-i386
 	@$(stamp)
 
 $(STAMPS_DIR)/build-docs: DIR=$(BUILD_DIR)/build-docs

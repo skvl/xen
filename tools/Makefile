@@ -27,10 +27,7 @@ SUBDIRS-$(CONFIG_Linux) += libvchan
 # do not recurse in to a dir we are about to delete
 ifneq "$(MAKECMDGOALS)" "distclean"
 SUBDIRS-$(CONFIG_QEMU_TRAD) += qemu-xen-traditional-dir
-CONFIG_QEMU = $(CURDIR)/../qemu
-ifneq ($(wildcard $(CONFIG_QEMU)),)
 SUBDIRS-$(CONFIG_QEMU_XEN) += qemu-xen-dir
-endif
 endif
 
 SUBDIRS-y += xenpmd

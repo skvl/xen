@@ -17,6 +17,7 @@ xen (4.4.0-1) UNRELEASED; urgency=medium
   * Disable blktap1 support using new configure option instead of by patching.
   * Disable qemu-traditional and rombios support using new configure option
     instead of by patching. No need to build-depend on ipxe any more.
+  * Use system qemu-xen via new configure option instead of patching.
 
  -- Bastian Blank <waldi@debian.org>  Sat, 05 Jul 2014 12:54:54 +0200
 
