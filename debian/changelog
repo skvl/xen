@@ -19,6 +19,7 @@ xen (4.4.0-1) UNRELEASED; urgency=medium
     instead of by patching. No need to build-depend on ipxe any more.
   * Use system qemu-xen via new configure option instead of patching.
   * Use system seabios via new configure option instead of patching.
+  * Use APPEND_{CFLAGS,CPPFLAGS,LDFLAGS} during build.
 
  -- Bastian Blank <waldi@debian.org>  Sat, 05 Jul 2014 12:54:54 +0200
 

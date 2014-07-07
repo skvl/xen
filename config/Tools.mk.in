@@ -26,9 +26,6 @@ FETCHER             := @FETCHER@
 SEABIOS_PATH        := @seabios_path@
 OVMF_PATH           := @ovmf_path@
 
-CFLAGS              += @CFLAGS@
-CPPFLAGS            += @CPPFLAGS@
-
 # Extra folder for libs/includes
 PREPEND_INCLUDES    := @PREPEND_INCLUDES@
 PREPEND_LIB         := @PREPEND_LIB@

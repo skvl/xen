@@ -59,7 +59,8 @@ $(STAMPS_DIR)/setup-utils_$(ARCH):
 	mkdir -p $(DIR)
 	cp -al $(SOURCE_FILES) $(DIR)
 	cd $(DIR)/tools; \
-		CFLAGS="$(CFLAGS)" CPPFLAGS="$(CPPFLAGS)" LDFLAGS="$(LDFLAGS)" \
+		APPEND_CFLAGS="$(CFLAGS)" APPEND_CPPFLAGS="$(CPPFLAGS)" \
+		APPEND_LDFLAGS="$(LDFLAGS)" \
 		WGET=/bin/false \
 		./configure \
 			--prefix=/usr \

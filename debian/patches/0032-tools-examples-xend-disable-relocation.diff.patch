@@ -1,4 +1,4 @@
-From 1f22f5fb5e4a7d0602f7a8de0f202fd7cb36be9a Mon Sep 17 00:00:00 2001
+From c7ed987e69ab06c4c2241de1e2c885e3485209c1 Mon Sep 17 00:00:00 2001
 From: Bastian Blank <waldi@debian.org>
 Date: Sat, 5 Jul 2014 11:47:25 +0200
 Subject: tools-examples-xend-disable-relocation.diff
