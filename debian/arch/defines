@@ -3,4 +3,5 @@
 [base]
 arches:
  amd64
+ armhf
  i386

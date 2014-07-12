@@ -108,8 +108,10 @@ $(STAMPS_DIR)/install-utils_$(ARCH): $(STAMPS_DIR)/build-utils_$(ARCH)
 	@rm -rf $(INSTALL_DIR)
 	mkdir -p $(INSTALL_DIR)/$(OCAML_DLL_DIR)
 	+$(MAKE_CLEAN) -C $(DIR)/tools install DESTDIR=$(CURDIR)/$(INSTALL_DIR) $(CONFIG)
+ifneq ($(filter i386 amd64,$(ARCH)),)
 	# hvmloader
 	strip --remove-section=.comment --remove-section=.note $(INSTALL_DIR)/usr/lib/xen*/boot/*
+endif
 	touch $@
 
 $(STAMPS_DIR)/install-utils-common: DIR = $(BUILD_DIR)/build-docs
