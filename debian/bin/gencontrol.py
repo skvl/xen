@@ -70,6 +70,7 @@ class Gencontrol(Base):
 
         for i in (
             ('xen-arch', 'XEN_ARCH'),
+            ('image-suffix', 'IMAGE_SUFFIX'),
         ):
             if config_entry.has_key(i[0]):
                 makeflags[i[1]] = config_entry[i[0]]
