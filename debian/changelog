@@ -2,15 +2,19 @@ xen (4.4.0-1) UNRELEASED; urgency=medium
 
   [ Bastian Blank ]
   * New upstream release.
-    - Update scripts for compatiblity with latest coreutils (Closes: #718898)
-    - Fix guest reboot with xl toolstack (Closes: #727100).
-    - CVE-2013-6375: Insufficient TLB flushing in VT-d (iommu) code
-      (Closes: #730254).
-    - xl support for global VNC options (Closes: #744157).
-    - vif scripts can now be named relative to /etc/xen/scripts (Closes: #744160).
-    - Support for arbitrary sized SeaBIOS binaries (Closes: #737905).
-    - pygrub searches for extlinux.conf in the expected places (Closes: #697407).
-    - Update scripts to use correct syntax for ip command. (Closes: #705659).
+    - Update scripts for compatiblity with latest coreutils.
+      (closes: #718898)
+    - Fix guest reboot with xl toolstack. (closes: #727100)
+    - CVE-2013-6375: Insufficient TLB flushing in VT-d (iommu) code.
+      (closes: #730254)
+    - xl support for global VNC options. (closes: #744157)
+    - vif scripts can now be named relative to /etc/xen/scripts.
+      (closes: #744160)
+    - Support for arbitrary sized SeaBIOS binaries. (closes: #737905)
+    - pygrub searches for extlinux.conf in the expected places.
+      (closes: #697407)
+    - Update scripts to use correct syntax for ip command.
+      (closes: #705659)
   * Fix install of xend configs to not break compatibility.
 
   [ Ian Campbell ]
