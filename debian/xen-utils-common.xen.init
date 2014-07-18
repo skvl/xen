@@ -194,6 +194,7 @@ xenstored_start()
 		$XENSTORED_ARGS --pid-file="$XENSTORED_PIDFILE" \
 		|| return 2
 	xenstore-write "/local/domain/0/name" "Domain-0"
+	xenstore-write "/local/domain/0/domid" "0"
 }
 
 case "$1" in

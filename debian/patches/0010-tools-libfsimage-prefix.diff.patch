@@ -1,0 +1,48 @@
+From 6ea03d7a26b3ef4f0e97c9f75a227850e68b4c22 Mon Sep 17 00:00:00 2001
+From: Bastian Blank <waldi@debian.org>
+Date: Sat, 5 Jul 2014 11:46:55 +0200
+Subject: tools-libfsimage-prefix.diff
+
+---
+ tools/libfsimage/Rules.mk        | 2 +-
+ tools/libfsimage/common/Makefile | 6 ++++--
+ 2 files changed, 5 insertions(+), 3 deletions(-)
+
+diff --git a/tools/libfsimage/Rules.mk b/tools/libfsimage/Rules.mk
+index 8a23655..9aedcc7 100644
+--- a/tools/libfsimage/Rules.mk
++++ b/tools/libfsimage/Rules.mk
+@@ -6,7 +6,7 @@ LDFLAGS += -L../common/
+ 
+ PIC_OBJS := $(patsubst %.c,%.opic,$(LIB_SRCS-y))
+ 
+-FSDIR = $(LIBDIR)/fs
++FSDIR = $(PRIVATE_LIBDIR)/fs
+ 
+ FSLIB = fsimage.so
+ 
+diff --git a/tools/libfsimage/common/Makefile b/tools/libfsimage/common/Makefile
+index 4202cc1..85f3d29 100644
+--- a/tools/libfsimage/common/Makefile
++++ b/tools/libfsimage/common/Makefile
+@@ -1,6 +1,8 @@
+ XEN_ROOT = $(CURDIR)/../../..
+ include $(XEN_ROOT)/tools/libfsimage/Rules.mk
+ 
++CFLAGS += -DFSDIR="\"$(PRIVATE_LIBDIR)/fs\""
++
+ LDFLAGS-$(CONFIG_SunOS) = -Wl,-M -Wl,mapfile-SunOS
+ LDFLAGS-$(CONFIG_Linux) = -Wl,mapfile-GNU
+ LDFLAGS = $(LDFLAGS-y)
+@@ -19,9 +21,9 @@ all: $(LIB)
+ 
+ .PHONY: install
+ install: all
+-	$(INSTALL_DIR) $(DESTDIR)$(LIBDIR)
++	$(INSTALL_DIR) $(DESTDIR)$(PRIVATE_LIBDIR)
+ 	$(INSTALL_DIR) $(DESTDIR)$(INCLUDEDIR)
+-	$(INSTALL_PROG) libfsimage.so $(DESTDIR)$(LIBDIR)
++	$(INSTALL_PROG) libfsimage.so $(DESTDIR)$(PRIVATE_LIBDIR)
+ 	$(INSTALL_DATA) fsimage.h $(DESTDIR)$(INCLUDEDIR)
+ 	$(INSTALL_DATA) fsimage_plugin.h $(DESTDIR)$(INCLUDEDIR)
+ 	$(INSTALL_DATA) fsimage_grub.h $(DESTDIR)$(INCLUDEDIR)

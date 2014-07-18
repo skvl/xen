@@ -59,7 +59,8 @@ $(STAMPS_DIR)/setup-utils_$(ARCH):
 	mkdir -p $(DIR)
 	cp -al $(SOURCE_FILES) $(DIR)
 	cd $(DIR)/tools; \
-		CFLAGS="$(CFLAGS)" CPPFLAGS="$(CPPFLAGS)" LDFLAGS="$(LDFLAGS)" \
+		APPEND_CFLAGS="$(CFLAGS)" APPEND_CPPFLAGS="$(CPPFLAGS)" \
+		APPEND_LDFLAGS="$(LDFLAGS)" \
 		WGET=/bin/false \
 		./configure \
 			--prefix=/usr \
@@ -67,7 +68,11 @@ $(STAMPS_DIR)/setup-utils_$(ARCH):
 			--mandir=$${prefix}/share/man \
 			--infodir=$${prefix}/share/info \
 			--sysconfdir=/etc \
-			--localstatedir=/var
+			--localstatedir=/var \
+			--disable-blktap1 \
+			--disable-qemu-traditional --disable-rombios \
+			--with-system-qemu=/usr/bin/qemu-system-i386 \
+			--with-system-seabios=/usr/share/seabios/bios.bin
 	@$(stamp)
 
 $(STAMPS_DIR)/build-docs: DIR=$(BUILD_DIR)/build-docs
