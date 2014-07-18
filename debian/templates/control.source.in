@@ -14,7 +14,7 @@ Build-Depends:
  iasl [i386 amd64],
  seabios [i386 amd64],
  libaio-dev,
- libfdt-dev [armhf],
+ libfdt-dev [armhf arm64],
  libglib2.0-dev,
  libgnutls-dev,
  liblzma-dev,
@@ -25,9 +25,9 @@ Build-Depends:
  pkg-config,
  uuid-dev,
  zlib1g-dev,
- ocaml-nox,
- dh-ocaml,
- ocaml-findlib
+ ocaml-nox [!arm64],
+ dh-ocaml [!arm64],
+ ocaml-findlib [!arm64]
 Standards-Version: 3.9.4
 XS-Python-Version: current
 

@@ -24,7 +24,7 @@ xen (4.4.0-1) UNRELEASED; urgency=medium
   * Use system qemu-xen via new configure option instead of patching.
   * Use system seabios via new configure option instead of patching.
   * Use EXTRA_CFLAGS_XEN_TOOLS and APPEND_{CPPFLAGS,LDFLAGS} during build.
-  * Add support for armhf.
+  * Add support for armhf and arm64.
   * Update config.{sub,guess}.
 
  -- Bastian Blank <waldi@debian.org>  Sat, 05 Jul 2014 12:54:54 +0200
