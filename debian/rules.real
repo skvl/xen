@@ -37,6 +37,7 @@ $(STAMPS_DIR)/setup-docs:
 	@rm -rf $(DIR)
 	mkdir -p $(DIR)
 	cp -al $(SOURCE_FILES) $(DIR)
+	cp -n /usr/share/misc/config.guess /usr/share/misc/config.sub $(DIR)
 	cd $(DIR)/docs; ./configure --prefix=/usr
 	cd $(DIR)/tools; \
 		WGET=/bin/false \
@@ -58,6 +59,7 @@ $(STAMPS_DIR)/setup-utils_$(ARCH):
 	@rm -rf $(DIR)
 	mkdir -p $(DIR)
 	cp -al $(SOURCE_FILES) $(DIR)
+	cp -n /usr/share/misc/config.guess /usr/share/misc/config.sub $(DIR)
 	cd $(DIR)/tools; \
 		WGET=/bin/false \
 		./configure \
