@@ -59,8 +59,6 @@ $(STAMPS_DIR)/setup-utils_$(ARCH):
 	mkdir -p $(DIR)
 	cp -al $(SOURCE_FILES) $(DIR)
 	cd $(DIR)/tools; \
-		APPEND_CFLAGS="$(CFLAGS)" APPEND_CPPFLAGS="$(CPPFLAGS)" \
-		APPEND_LDFLAGS="$(LDFLAGS)" \
 		WGET=/bin/false \
 		./configure \
 			--prefix=/usr \
@@ -93,6 +91,9 @@ $(STAMPS_DIR)/install-utils_$(ARCH): CONFIG = \
 		XEN_COMPILE_ARCH=$(XEN_ARCH) \
 		XEN_TARGET_ARCH=$(XEN_ARCH) \
 		XEN_VERSION=$(VERSION) \
+		EXTRA_CFLAGS_XEN_TOOLS="$(CFLAGS)" \
+		APPEND_CPPFLAGS="$(CPPFLAGS)" \
+		APPEND_LDFLAGS="$(LDFLAGS)" \
 		OCAMLDESTDIR=$(CURDIR)/$(BUILD_DIR)/install-utils_$(ARCH)/$(OCAML_STDLIB_DIR) \
 		PYTHON=$(shell pyversions -r)
 
