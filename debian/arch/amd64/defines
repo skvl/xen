@@ -2,6 +2,7 @@
 flavours:
  amd64
 xen-arch: x86_64
+image-suffix: .gz
 
 [amd64_description]
 hardware: AMD64
