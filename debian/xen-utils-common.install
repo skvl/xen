@@ -1,0 +1,7 @@
+etc/xen/scripts
+etc/xen/xl*
+lib/udev/rules.d/*.rules
+usr/lib/xen-common
+usr/sbin
+../../tree/xen-utils-common/* /
+../../../tools/examples/xend*
