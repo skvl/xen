@@ -1,4 +1,4 @@
-xen (4.4.0-1) UNRELEASED; urgency=medium
+xen (4.4.0-1) unstable; urgency=medium
 
   [ Bastian Blank ]
   * New upstream release.
@@ -27,7 +27,7 @@ xen (4.4.0-1) UNRELEASED; urgency=medium
   * Add support for armhf and arm64.
   * Update config.{sub,guess}.
 
- -- Bastian Blank <waldi@debian.org>  Sat, 05 Jul 2014 12:54:54 +0200
+ -- Bastian Blank <waldi@debian.org>  Sat, 09 Aug 2014 13:09:00 +0200
 
 xen (4.3.0-3) unstable; urgency=low
 
