@@ -1,7 +1,4 @@
 include /usr/share/dpkg/default.mk
-ifeq ($(WITH_OCAML),yes)
-include /usr/share/ocaml/ocamlvars.mk
-endif
 
 export DH_OPTIONS
 
@@ -19,10 +16,6 @@ binary-arch-arch: install-libxen-dev_$(ARCH)
 binary-arch-arch: install-libxenstore_$(ARCH)
 binary-arch-arch: install-utils_$(ARCH)
 binary-arch-arch: install-xenstore-utils_$(ARCH)
-ifeq ($(WITH_OCAML),yes)
-binary-arch-arch: install-lib-ocaml-dev_$(ARCH)
-binary-arch-arch: install-lib-ocaml_$(ARCH)
-endif
 binary-arch-flavour: install-hypervisor_$(ARCH)_$(FLAVOUR)
 
 binary-indep: install-utils-common
@@ -74,6 +67,7 @@ $(STAMPS_DIR)/setup-utils_$(ARCH):
 			--sysconfdir=/etc \
 			--localstatedir=/var \
 			--disable-blktap1 \
+			--disable-ocamltools \
 			--disable-qemu-traditional --disable-rombios \
 			--with-system-qemu=/usr/bin/qemu-system-i386 \
 			--with-system-seabios=/usr/share/seabios/bios.bin
@@ -112,9 +106,7 @@ $(STAMPS_DIR)/install-utils_$(ARCH): DIR = $(BUILD_DIR)/build-utils_$(ARCH)
 $(STAMPS_DIR)/install-utils_$(ARCH): INSTALL_DIR = $(BUILD_DIR)/install-utils_$(ARCH)
 $(STAMPS_DIR)/install-utils_$(ARCH): $(STAMPS_DIR)/build-utils_$(ARCH)
 	@rm -rf $(INSTALL_DIR)
-ifeq ($(WITH_OCAML),yes)
 	mkdir -p $(INSTALL_DIR)/$(OCAML_DLL_DIR)
-endif
 	+$(MAKE_CLEAN) -C $(DIR)/tools install DESTDIR=$(CURDIR)/$(INSTALL_DIR) $(CONFIG)
 ifneq ($(filter i386 amd64,$(ARCH)),)
 	# hvmloader
@@ -185,39 +177,6 @@ install-libxen-dev_$(ARCH): $(STAMPS_DIR)/install-utils_$(ARCH)
 	dh_strip
 	dh_shlibdeps
 	+$(MAKE_SELF) install-base
-
-ifeq ($(WITH_OCAML),yes)
-install-lib-ocaml_$(ARCH): DIR = $(BUILD_DIR)/install-utils_$(ARCH)
-install-lib-ocaml_$(ARCH): PACKAGE_NAME = libxen-ocaml
-install-lib-ocaml_$(ARCH): DH_OPTIONS = -p$(PACKAGE_NAME)
-install-lib-ocaml_$(ARCH): $(STAMPS_DIR)/install-utils_$(ARCH) install-libxen_$(ARCH)
-	dh_testdir
-	dh_testroot
-	dh_prep
-	dh_install --sourcedir=$(DIR) ./$(OCAML_STDLIB_DIR)/*/META
-	dh_install --sourcedir=$(DIR) ./$(OCAML_STDLIB_DIR)/*/*.cma
-	dh_install --sourcedir=$(DIR) -X.so.owner ./$(OCAML_DLL_DIR)/*
-	dh_strip
-	dh_shlibdeps
-	dh_ocaml
-	+$(MAKE_SELF) install-base
-
-install-lib-ocaml-dev_$(ARCH): DIR = $(BUILD_DIR)/install-utils_$(ARCH)
-install-lib-ocaml-dev_$(ARCH): PACKAGE_NAME = libxen-ocaml-dev
-install-lib-ocaml-dev_$(ARCH): DH_OPTIONS = -p$(PACKAGE_NAME)
-install-lib-ocaml-dev_$(ARCH): $(STAMPS_DIR)/install-utils_$(ARCH)
-	dh_testdir
-	dh_testroot
-	dh_prep
-	dh_install --sourcedir=$(DIR) ./$(OCAML_STDLIB_DIR)/*/*.cmx
-	dh_install --sourcedir=$(DIR) ./$(OCAML_STDLIB_DIR)/*/*.cmxa
-	dh_install --sourcedir=$(DIR) ./$(OCAML_STDLIB_DIR)/*/*.cmi
-	dh_install --sourcedir=$(DIR) ./$(OCAML_STDLIB_DIR)/*/*.a
-	dh_strip
-	dh_shlibdeps
-	dh_ocaml
-	+$(MAKE_SELF) install-base
-endif
 
 install-libxenstore_$(ARCH): DIR = $(BUILD_DIR)/install-utils_$(ARCH)
 install-libxenstore_$(ARCH): PACKAGE_NAME = libxenstore3.0

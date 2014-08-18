@@ -25,9 +25,6 @@ Build-Depends:
  pkg-config,
  uuid-dev,
  zlib1g-dev,
- ocaml-nox [!arm64],
- dh-ocaml [!arm64],
- ocaml-findlib [!arm64]
 Standards-Version: 3.9.4
 XS-Python-Version: current
 
