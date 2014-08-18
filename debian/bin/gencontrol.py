@@ -65,15 +65,12 @@ class Gencontrol(Base):
         config_entry = self.config.merge('base', arch, featureset, flavour)
         config_description = self.config.merge('description', arch, featureset, flavour)
 
-        config_entry.setdefault('with-ocaml', 'yes')
-
         vars['class'] = config_description['hardware']
         vars['longclass'] = config_description.get('hardware-long') or vars['class']
 
         for i in (
             ('xen-arch', 'XEN_ARCH'),
             ('image-suffix', 'IMAGE_SUFFIX'),
-            ('with-ocaml', 'WITH_OCAML')
         ):
             if config_entry.has_key(i[0]):
                 makeflags[i[1]] = config_entry[i[0]]
