@@ -70,7 +70,7 @@ $(STAMPS_DIR)/setup-utils_$(ARCH):
 			--disable-ocamltools \
 			--disable-qemu-traditional --disable-rombios \
 			--with-system-qemu=/usr/bin/qemu-system-i386 \
-			--with-system-seabios=/usr/share/seabios/bios.bin
+			--with-system-seabios=/usr/share/seabios/bios-256k.bin
 	@$(stamp)
 
 $(STAMPS_DIR)/build-docs: DIR=$(BUILD_DIR)/build-docs
