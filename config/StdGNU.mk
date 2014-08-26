@@ -1,3 +1,5 @@
+include /usr/share/dpkg/architecture.mk
+
 AS         = $(CROSS_COMPILE)as
 LD         = $(CROSS_COMPILE)ld
 ifeq ($(clang),y)
@@ -30,14 +32,14 @@ INSTALL_PROG = $(INSTALL) -m0755 -p
 PREFIX ?= /usr
 BINDIR = $(PREFIX)/bin
 INCLUDEDIR = $(PREFIX)/include
-LIBDIR = $(PREFIX)/lib
+LIBDIR = $(PREFIX)/lib/$(DEB_HOST_MULTIARCH)
 SHAREDIR = $(PREFIX)/share
 MANDIR = $(SHAREDIR)/man
 MAN1DIR = $(MANDIR)/man1
 MAN8DIR = $(MANDIR)/man8
 SBINDIR = $(PREFIX)/sbin
 
-PRIVATE_PREFIX = $(LIBDIR)/xen-$(XEN_VERSION)
+PRIVATE_PREFIX = $(PREFIX)/lib/xen-$(XEN_VERSION)
 PRIVATE_BINDIR = $(PRIVATE_PREFIX)/bin
 PRIVATE_LIBDIR = $(PRIVATE_PREFIX)/lib
 
