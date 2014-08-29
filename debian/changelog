@@ -1,3 +1,13 @@
+xen (4.4.0-3) unstable; urgency=medium
+
+  [ Ian Campbell ]
+  * Use correct SeaBIOS binary which supports Xen (Closes: #737905).
+
+  [ Bastian Blank ]
+  * Really update config.{sub,guess}.
+
+ -- Bastian Blank <waldi@debian.org>  Fri, 29 Aug 2014 16:33:19 +0200
+
 xen (4.4.0-2) unstable; urgency=medium
 
   * Remove broken and unused OCaml-support.

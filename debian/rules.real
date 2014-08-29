@@ -34,7 +34,7 @@ $(STAMPS_DIR)/setup-docs:
 	@rm -rf $(DIR)
 	mkdir -p $(DIR)
 	cp -al $(SOURCE_FILES) $(DIR)
-	cp -n /usr/share/misc/config.guess /usr/share/misc/config.sub $(DIR)
+	cp --remove-destination /usr/share/misc/config.guess /usr/share/misc/config.sub $(DIR)
 	cd $(DIR)/docs; ./configure --prefix=/usr
 	cd $(DIR)/tools; \
 		WGET=/bin/false \
@@ -56,7 +56,7 @@ $(STAMPS_DIR)/setup-utils_$(ARCH):
 	@rm -rf $(DIR)
 	mkdir -p $(DIR)
 	cp -al $(SOURCE_FILES) $(DIR)
-	cp -n /usr/share/misc/config.guess /usr/share/misc/config.sub $(DIR)
+	cp --remove-destination /usr/share/misc/config.guess /usr/share/misc/config.sub $(DIR)
 	cd $(DIR)/tools; \
 		WGET=/bin/false \
 		./configure \
@@ -70,7 +70,7 @@ $(STAMPS_DIR)/setup-utils_$(ARCH):
 			--disable-ocamltools \
 			--disable-qemu-traditional --disable-rombios \
 			--with-system-qemu=/usr/bin/qemu-system-i386 \
-			--with-system-seabios=/usr/share/seabios/bios.bin
+			--with-system-seabios=/usr/share/seabios/bios-256k.bin
 	@$(stamp)
 
 $(STAMPS_DIR)/build-docs: DIR=$(BUILD_DIR)/build-docs
