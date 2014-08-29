@@ -11,8 +11,6 @@ GLOBAL_TOOLSTACK_LINKS = \
 GLOBAL_TOOLSTACK_WRAPPER = xen-toolstack-wrapper
 
 GLOBAL_UTILS_LINKS = \
-	cpuperf-perfcntr \
-	cpuperf-xen \
 	xenperf \
 	xenpm \
 	xentop \
