@@ -1,4 +1,4 @@
-xen (4.4.0-3) UNRELEASED; urgency=medium
+xen (4.4.0-3) unstable; urgency=medium
 
   [ Ian Campbell ]
   * Use correct SeaBIOS binary which supports Xen (Closes: #737905).
@@ -6,7 +6,7 @@ xen (4.4.0-3) UNRELEASED; urgency=medium
   [ Bastian Blank ]
   * Really update config.{sub,guess}.
 
- -- Ian Campbell <ijc@hellion.org.uk>  Mon, 18 Aug 2014 15:59:57 +0100
+ -- Bastian Blank <waldi@debian.org>  Fri, 29 Aug 2014 16:33:19 +0200
 
 xen (4.4.0-2) unstable; urgency=medium
 
