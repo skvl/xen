@@ -116,6 +116,7 @@ endif
 
 $(STAMPS_DIR)/install-utils-common: DIR = $(BUILD_DIR)/build-docs
 $(STAMPS_DIR)/install-utils-common: INSTALL_DIR = $(BUILD_DIR)/install-utils-common
+$(STAMPS_DIR)/install-utils-common: export XEN_VERSION = common
 $(STAMPS_DIR)/install-utils-common: export DESTDIR = $(CURDIR)/$(INSTALL_DIR)
 $(STAMPS_DIR)/install-utils-common: $(STAMPS_DIR)/build-docs
 	@rm -rf $(INSTALL_DIR)
