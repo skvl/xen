@@ -224,7 +224,10 @@ install-utils-common: $(STAMPS_DIR)/install-utils-common
 	dh_installinit --name xen -- defaults 20 21
 	dh_installinit --name xend
 	dh_installinit --name xendomains --no-start -- defaults 21 20
-	dh_installman $(SOURCE_DIR)/docs/man1/* $(SOURCE_DIR)/docs/man5/*
+	dh_installman $(SOURCE_DIR)/docs/man1/* $(SOURCE_DIR)/docs/man5/* \
+		$(SOURCE_DIR)/tools/xentrace/xentrace_format.1 \
+		$(SOURCE_DIR)/tools/xentrace/xentrace.8 \
+		$(SOURCE_DIR)/tools/xenstat/xentop/xentop.1
 	dh_link
 	dh_ucf
 	+$(MAKE_SELF) install-base

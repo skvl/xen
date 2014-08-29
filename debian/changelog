@@ -8,6 +8,7 @@ xen (4.4.0-4) UNRELEASED; urgency=medium
   [ Ian Campbell ]
   * Correct contents of /etc/xen/scripts/hotplugpath.sh (Closes: #706283)
   * Drop references cpuperf-xen and cpuperf-perfcntr. (Closes: #733847)
+  * Install xentrace_format(1), xentrace(8) and xentop(1). (Closes: #407143)
 
  -- Bastian Blank <waldi@debian.org>  Fri, 29 Aug 2014 17:37:54 +0200
 
