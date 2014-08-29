@@ -5,6 +5,7 @@ xen (4.4.0-3) UNRELEASED; urgency=medium
 
   [ Bastian Blank ]
   * Really update config.{sub,guess}.
+  * Make library packages multi-arch: same. (closes: #730417)
 
  -- Ian Campbell <ijc@hellion.org.uk>  Mon, 18 Aug 2014 15:59:57 +0100
 
