@@ -1,12 +1,14 @@
 Package: libxen-@version@
 Section: libs
 Depends: ${shlibs:Depends}, ${misc:Depends}
+Multi-Arch: same
 Description: Public libs for Xen
  This package contains the shared libraries for Xen.
 
 Package: libxenstore3.0
 Section: libs
 Depends: ${shlibs:Depends}, ${misc:Depends}
+Multi-Arch: same
 Description: Xenstore communications library for Xen
  This package contains the public libxenstore.
 
