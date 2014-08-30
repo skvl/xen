@@ -1,4 +1,4 @@
-xen (4.4.0-4) UNRELEASED; urgency=medium
+xen (4.4.0-4) unstable; urgency=medium
 
   [ Bastian Blank ]
   * Also remove unused OCaml packages from control file.
@@ -10,7 +10,7 @@ xen (4.4.0-4) UNRELEASED; urgency=medium
   * Drop references cpuperf-xen and cpuperf-perfcntr. (Closes: #733847)
   * Install xentrace_format(1), xentrace(8) and xentop(1). (Closes: #407143)
 
- -- Bastian Blank <waldi@debian.org>  Fri, 29 Aug 2014 17:37:54 +0200
+ -- Bastian Blank <waldi@debian.org>  Sat, 30 Aug 2014 13:34:04 +0200
 
 xen (4.4.0-3) unstable; urgency=medium
 
