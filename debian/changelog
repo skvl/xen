@@ -1,3 +1,17 @@
+xen (4.4.0-4) unstable; urgency=medium
+
+  [ Bastian Blank ]
+  * Also remove unused OCaml packages from control file.
+  * Make library packages multi-arch: same. (closes: #730417)
+  * Use debhelper compat level 9. (closes: #692352)
+
+  [ Ian Campbell ]
+  * Correct contents of /etc/xen/scripts/hotplugpath.sh (Closes: #706283)
+  * Drop references cpuperf-xen and cpuperf-perfcntr. (Closes: #733847)
+  * Install xentrace_format(1), xentrace(8) and xentop(1). (Closes: #407143)
+
+ -- Bastian Blank <waldi@debian.org>  Sat, 30 Aug 2014 13:34:04 +0200
+
 xen (4.4.0-3) unstable; urgency=medium
 
   [ Ian Campbell ]
