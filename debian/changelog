@@ -1,6 +1,7 @@
 xen (4.4.0-5) UNRELEASED; urgency=medium
 
   * Expand on the descriptions of some packages. (Closes: #466683)
+  * Clarify where xen-utils-common is required. (Closes: #612403)
 
  -- Ian Campbell <ijc@hellion.org.uk>  Sun, 31 Aug 2014 02:53:20 +0100
 
