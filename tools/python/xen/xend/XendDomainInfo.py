@@ -2288,7 +2288,7 @@ class XendDomainInfo:
             # To prohibit directory traversal
             based_name = os.path.basename(self.info['name_label'])
             
-            coredir = "/var/xen/dump/%s" % (based_name)
+            coredir = "/var/lib/xen/dump/%s" % (based_name)
             if not os.path.exists(coredir):
                 try:
                     mkdir.parents(coredir, stat.S_IRWXU)
@@ -2297,7 +2297,7 @@ class XendDomainInfo:
 
             if not os.path.isdir(coredir):
                 # Use former directory to dump core
-                coredir = '/var/xen/dump'
+                coredir = '/var/lib/xen/dump/'
 
             this_time = time.strftime("%Y-%m%d-%H%M.%S", time.localtime())
             corefile = "%s/%s-%s.%s.core" % (coredir, this_time,
