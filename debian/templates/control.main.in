@@ -51,7 +51,7 @@ Description: Xenstore command line utilities for Xen
 
 Package: xen-utils-common
 Architecture: all
-Depends: gawk, lsb-base, python, udev, xenstore-utils, ${misc:Depends}
+Depends: lsb-base, python, udev, xenstore-utils, ${misc:Depends}
 Description: Xen administrative tools - common files
  The userspace tools to manage a system virtualized through the Xen virtual
  machine monitor.

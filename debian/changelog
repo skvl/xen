@@ -2,8 +2,10 @@ xen (4.4.0-5) UNRELEASED; urgency=medium
 
   * Expand on the descriptions of some packages. (Closes: #466683)
   * Clarify where xen-utils-common is required. (Closes: #612403)
+  * No longer depend on gawk. Xen can now use any awk one of which is always
+    present. (Closes: #589176)
 
- -- Ian Campbell <ijc@hellion.org.uk>  Sun, 31 Aug 2014 02:53:20 +0100
+ -- Ian Campbell <ijc@hellion.org.uk>  Sun, 31 Aug 2014 02:08:45 +0100
 
 xen (4.4.0-4) unstable; urgency=medium
 
