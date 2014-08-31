@@ -59,7 +59,7 @@ build all: subdirs-all
 
 .PHONY: install
 install: subdirs-install
-	$(INSTALL_DIR) $(DESTDIR)/var/xen/dump
+	$(INSTALL_DIR) $(DESTDIR)/var/lib/xen/dump/
 	$(INSTALL_DIR) $(DESTDIR)/var/log/xen
 	$(INSTALL_DIR) $(DESTDIR)/var/lib/xen
 
