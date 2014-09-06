@@ -42,7 +42,7 @@ shopt -s nullglob
 
 check_config_name()
 {
-  xen create --quiet --dryrun --defconfig "$1" | sed -n 's/^.*(name \(.*\))$/\1/p'
+  /usr/lib/xen-common/bin/xen-init-name "$1" 2>/dev/null
 }
 
 check_running()

@@ -1,3 +1,18 @@
+xen (4.4.0-5) unstable; urgency=medium
+
+  [ Ian Campbell ]
+  * Expand on the descriptions of some packages. (Closes: #466683)
+  * Clarify where xen-utils-common is required. (Closes: #612403)
+  * No longer depend on gawk. Xen can now use any awk one of which is always
+    present. (Closes: #589176)
+  * Put core dumps in /var/lib/xen/dump and ensure it exists.
+    (Closes: #444000)
+
+  [ Bastian Blank ]
+  * Handle JSON output from xl in xendomains init script.
+
+ -- Bastian Blank <waldi@debian.org>  Sat, 06 Sep 2014 22:11:20 +0200
+
 xen (4.4.0-4) unstable; urgency=medium
 
   [ Bastian Blank ]
