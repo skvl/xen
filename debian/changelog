@@ -1,4 +1,4 @@
-xen (4.4.0-5) UNRELEASED; urgency=medium
+xen (4.4.0-5) unstable; urgency=medium
 
   [ Ian Campbell ]
   * Expand on the descriptions of some packages. (Closes: #466683)
@@ -11,7 +11,7 @@ xen (4.4.0-5) UNRELEASED; urgency=medium
   [ Bastian Blank ]
   * Handle JSON output from xl in xendomains init script.
 
- -- Ian Campbell <ijc@hellion.org.uk>  Sun, 31 Aug 2014 02:08:45 +0100
+ -- Bastian Blank <waldi@debian.org>  Sat, 06 Sep 2014 22:11:20 +0200
 
 xen (4.4.0-4) unstable; urgency=medium
 
