@@ -4,6 +4,8 @@ xen (4.4.0-5) UNRELEASED; urgency=medium
   * Clarify where xen-utils-common is required. (Closes: #612403)
   * No longer depend on gawk. Xen can now use any awk one of which is always
     present. (Closes: #589176)
+  * Put core dumps in /var/lib/xen/dump and ensure it exists.
+    (Closes: #444000)
 
  -- Ian Campbell <ijc@hellion.org.uk>  Sun, 31 Aug 2014 02:08:45 +0100
 
