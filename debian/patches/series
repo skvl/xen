@@ -38,3 +38,4 @@
 0038-tools-ocaml-fix-build.diff.patch
 0039-tools-xenstore-compatibility.diff.patch
 0040-Set-library-path-to-multi-arch-location.patch
+0041-send-xl-coredumps-var-lib-xen-dump-NAME.patch
