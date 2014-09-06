@@ -14,7 +14,7 @@ class SXPParser(object):
     def loads(cls, input):
         data = []
         stack = []
-        for match in self.tokenizer_re.finditer(input):
+        for match in cls.tokenizer_re.finditer(input):
             if match.group('open'):
                 stack.append([])
             elif match.group('close'):
@@ -33,39 +33,27 @@ class SXPParser(object):
 
 class Data(object):
     def __call__(self, out):
-        for domid, info in sorted(self.data.iteritems(), reverse=True):
-            out.write('{!s} {}\n'.format(domid, *info))
+        out.write('{}\n'.format(self.name))
 
 
 class DataJSON(Data):
     def __init__(self, p):
         s = json.loads(p)
-        self.data = d = {}
-        for i in s:
-            domid = i['domid']
-            name = i['config']['c_info']['name']
-            d[domid] = (name, )
+        self.name = s['config']['c_info']['name']
 
 
 class DataSXP(Data):
     def __init__(self, p):
-        s = SXPParser()(p)
-        self.data = d = {}
+        s = SXPParser.loads(p)
         for i in s:
             if i and i[0] == 'domain':
-                try:
-                    data = dict(j for j in i if len(j) == 2)
-                    domid = int(data['domid'])
-                    name = data['name']
-                    if domid == 0:
-                        continue
-                    d[domid] = (name, )
-                except (KeyError, ValueError) as e:
-                    pass
+                data = dict(j for j in i if len(j) == 2)
+                self.name = data['name']
+                break
 
 
 if __name__ == '__main__':
-    p = subprocess.check_output(('xen', 'list', '-l'))
+    p = subprocess.check_output(('xen', 'create', '--quiet', '--dryrun', '--defconfig', sys.argv[1]))
     if p[0] == '(':
         d = DataSXP(p)
     else:
