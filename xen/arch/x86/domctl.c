@@ -920,7 +920,7 @@ long arch_do_domctl(
     case XEN_DOMCTL_set_cpuid:
     {
         xen_domctl_cpuid_t *ctl = &domctl->u.cpuid;
-        cpuid_input_t *cpuid = NULL; 
+        cpuid_input_t *cpuid, *unused = NULL;
         int i;
 
         for ( i = 0; i < MAX_CPUID_INPUT; i++ )
@@ -928,7 +928,11 @@ long arch_do_domctl(
             cpuid = &d->arch.cpuids[i];
 
             if ( cpuid->input[0] == XEN_CPUID_INPUT_UNUSED )
-                break;
+            {
+                if ( !unused )
+                    unused = cpuid;
+                continue;
+            }
 
             if ( (cpuid->input[0] == ctl->input[0]) &&
                  ((cpuid->input[1] == XEN_CPUID_INPUT_UNUSED) ||
@@ -936,15 +940,12 @@ long arch_do_domctl(
                 break;
         }
         
-        if ( i == MAX_CPUID_INPUT )
-        {
-            ret = -ENOENT;
-        }
+        if ( i < MAX_CPUID_INPUT )
+            *cpuid = *ctl;
+        else if ( unused )
+            *unused = *ctl;
         else
-        {
-            memcpy(cpuid, ctl, sizeof(cpuid_input_t));
-            ret = 0;
-        }
+            ret = -ENOENT;
     }
     break;
 
@@ -1018,7 +1019,7 @@ long arch_do_domctl(
         struct vcpu *v;
 
         ret = -EBUSY;
-        if ( !d->is_paused_by_controller )
+        if ( !d->controller_pause_count )
             break;
         ret = -EINVAL;
         if ( domctl->u.gdbsx_pauseunp_vcpu.vcpu >= MAX_VIRT_CPUS ||
@@ -1034,7 +1035,7 @@ long arch_do_domctl(
         struct vcpu *v;
 
         ret = -EBUSY;
-        if ( !d->is_paused_by_controller )
+        if ( !d->controller_pause_count )
             break;
         ret = -EINVAL;
         if ( domctl->u.gdbsx_pauseunp_vcpu.vcpu >= MAX_VIRT_CPUS ||
@@ -1052,7 +1053,7 @@ long arch_do_domctl(
         struct vcpu *v;
 
         domctl->u.gdbsx_domstatus.vcpu_id = -1;
-        domctl->u.gdbsx_domstatus.paused = d->is_paused_by_controller;
+        domctl->u.gdbsx_domstatus.paused = d->controller_pause_count > 0;
         if ( domctl->u.gdbsx_domstatus.paused )
         {
             for_each_vcpu ( d, v )
@@ -1088,45 +1089,48 @@ long arch_do_domctl(
              ((v = d->vcpu[evc->vcpu]) == NULL) )
             goto vcpuextstate_out;
 
+        ret = -EINVAL;
+        if ( v == current ) /* no vcpu_pause() */
+            goto vcpuextstate_out;
+
         if ( domctl->cmd == XEN_DOMCTL_getvcpuextstate )
         {
-            unsigned int size = PV_XSAVE_SIZE(v->arch.xcr0_accum);
+            unsigned int size;
 
-            if ( !evc->size && !evc->xfeature_mask )
+            ret = 0;
+            vcpu_pause(v);
+
+            size = PV_XSAVE_SIZE(v->arch.xcr0_accum);
+            if ( (!evc->size && !evc->xfeature_mask) ||
+                 guest_handle_is_null(evc->buffer) )
             {
                 evc->xfeature_mask = xfeature_mask;
                 evc->size = size;
-                ret = 0;
+                vcpu_unpause(v);
                 goto vcpuextstate_out;
             }
+
             if ( evc->size != size || evc->xfeature_mask != xfeature_mask )
-            {
                 ret = -EINVAL;
-                goto vcpuextstate_out;
-            }
-            if ( copy_to_guest_offset(domctl->u.vcpuextstate.buffer,
-                                      offset, (void *)&v->arch.xcr0,
-                                      sizeof(v->arch.xcr0)) )
-            {
+
+            if ( !ret && copy_to_guest_offset(evc->buffer, offset,
+                                              (void *)&v->arch.xcr0,
+                                              sizeof(v->arch.xcr0)) )
                 ret = -EFAULT;
-                goto vcpuextstate_out;
-            }
+
             offset += sizeof(v->arch.xcr0);
-            if ( copy_to_guest_offset(domctl->u.vcpuextstate.buffer,
-                                      offset, (void *)&v->arch.xcr0_accum,
-                                      sizeof(v->arch.xcr0_accum)) )
-            {
+            if ( !ret && copy_to_guest_offset(evc->buffer, offset,
+                                              (void *)&v->arch.xcr0_accum,
+                                              sizeof(v->arch.xcr0_accum)) )
                 ret = -EFAULT;
-                goto vcpuextstate_out;
-            }
+
             offset += sizeof(v->arch.xcr0_accum);
-            if ( copy_to_guest_offset(domctl->u.vcpuextstate.buffer,
-                                      offset, (void *)v->arch.xsave_area,
-                                      size - 2 * sizeof(uint64_t)) )
-            {
+            if ( !ret && copy_to_guest_offset(evc->buffer, offset,
+                                              (void *)v->arch.xsave_area,
+                                              size - 2 * sizeof(uint64_t)) )
                 ret = -EFAULT;
-                goto vcpuextstate_out;
-            }
+
+            vcpu_unpause(v);
         }
         else
         {
@@ -1175,20 +1179,20 @@ long arch_do_domctl(
 
             if ( evc->size <= PV_XSAVE_SIZE(_xcr0_accum) )
             {
+                vcpu_pause(v);
                 v->arch.xcr0 = _xcr0;
                 v->arch.xcr0_accum = _xcr0_accum;
                 if ( _xcr0_accum & XSTATE_NONLAZY )
                     v->arch.nonlazy_xstate_used = 1;
                 memcpy(v->arch.xsave_area, _xsave_area,
                        evc->size - 2 * sizeof(uint64_t));
+                vcpu_unpause(v);
             }
             else
                 ret = -EINVAL;
 
             xfree(receive_buf);
         }
-
-        ret = 0;
 
     vcpuextstate_out:
         if ( domctl->cmd == XEN_DOMCTL_getvcpuextstate )

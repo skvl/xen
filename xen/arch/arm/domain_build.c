@@ -967,7 +967,7 @@ static void initrd_load(struct kernel_info *kinfo)
         s = offs & ~PAGE_MASK;
         l = min(PAGE_SIZE - s, len);
 
-        rc = gvirt_to_maddr(load_addr + offs, &ma);
+        rc = gvirt_to_maddr(load_addr + offs, &ma, GV2M_WRITE);
         if ( rc )
         {
             panic("Unable to translate guest address");
@@ -986,6 +986,7 @@ static void initrd_load(struct kernel_info *kinfo)
 int construct_dom0(struct domain *d)
 {
     struct kernel_info kinfo = {};
+    struct vcpu *saved_current;
     int rc, i, cpu;
 
     struct vcpu *v = d->vcpu[0];
@@ -1020,15 +1021,13 @@ int construct_dom0(struct domain *d)
     if ( rc < 0 )
         return rc;
 
-    /* The following loads use the domain's p2m */
-    p2m_load_VTTBR(d);
-#ifdef CONFIG_ARM_64
-    d->arch.type = kinfo.type;
-    if ( is_pv32_domain(d) )
-        WRITE_SYSREG(READ_SYSREG(HCR_EL2) & ~HCR_RW, HCR_EL2);
-    else
-        WRITE_SYSREG(READ_SYSREG(HCR_EL2) | HCR_RW, HCR_EL2);
-#endif
+    /*
+     * The following loads use the domain's p2m and require current to
+     * be a vcpu of the domain, temporarily switch
+     */
+    saved_current = current;
+    p2m_restore_state(v);
+    set_current(v);
 
     /*
      * kernel_load will determine the placement of the initrd & fdt in
@@ -1038,6 +1037,10 @@ int construct_dom0(struct domain *d)
     /* initrd_load will fix up the fdt, so call it before dtb_load */
     initrd_load(&kinfo);
     dtb_load(&kinfo);
+
+    /* Now that we are done restore the original p2m and current. */
+    set_current(saved_current);
+    p2m_restore_state(saved_current);
 
     discard_initial_modules();
 

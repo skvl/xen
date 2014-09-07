@@ -326,7 +326,7 @@ hap_set_allocation(struct domain *d, unsigned int pages, int *preempted)
     else
         pages -= d->arch.paging.hap.p2m_pages;
 
-    while ( d->arch.paging.hap.total_pages != pages )
+    for ( ; ; )
     {
         if ( d->arch.paging.hap.total_pages < pages )
         {
@@ -355,6 +355,8 @@ hap_set_allocation(struct domain *d, unsigned int pages, int *preempted)
             d->arch.paging.hap.total_pages--;
             free_domheap_page(pg);
         }
+        else
+            break;
 
         /* Check to see if we need to yield and try again */
         if ( preempted && hypercall_preempt_check() )
@@ -709,9 +711,8 @@ hap_write_p2m_entry(struct vcpu *v, unsigned long gfn, l1_pgentry_t *p,
     }
 
     safe_write_pte(p, new);
-    if ( (old_flags & _PAGE_PRESENT)
-         && (level == 1 || (level == 2 && (old_flags & _PAGE_PSE))) )
-             flush_tlb_mask(d->domain_dirty_cpumask);
+    if ( old_flags & _PAGE_PRESENT )
+        flush_tlb_mask(d->domain_dirty_cpumask);
 
     paging_unlock(d);
 

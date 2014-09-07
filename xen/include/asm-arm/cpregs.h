@@ -71,6 +71,20 @@
 
 /* Coprocessor 14 */
 
+/* CP14 0: Debug Register interface */
+#define DBGDIDR         p14,0,c0,c0,0   /* Debug ID Register */
+#define DBGDSCRINT      p14,0,c0,c1,0   /* Debug Status and Control Internal */
+#define DBGDSCREXT      p14,0,c0,c2,2   /* Debug Status and Control External */
+#define DBGVCR          p14,0,c0,c7,0   /* Vector Catch */
+#define DBGBVR0         p14,0,c0,c0,4   /* Breakpoint Value 0 */
+#define DBGBCR0         p14,0,c0,c0,5   /* Breakpoint Control 0 */
+#define DBGWVR0         p14,0,c0,c0,6   /* Watchpoint Value 0 */
+#define DBGWCR0         p14,0,c0,c0,7   /* Watchpoint Control 0 */
+#define DBGBVR1         p14,0,c0,c1,4   /* Breakpoint Value 1 */
+#define DBGBCR1         p14,0,c0,c1,5   /* Breakpoint Control 1 */
+#define DBGOSLAR        p14,0,c1,c0,4   /* OS Lock Access */
+#define DBGOSDLR        p14,0,c1,c3,4   /* OS Double Lock */
+
 /* CP14 CR0: */
 #define TEECR           p14,6,c0,c0,0   /* ThumbEE Configuration Register */
 
@@ -115,6 +129,9 @@
 #define NSACR           p15,0,c1,c1,2   /* Non-Secure Access Control Register */
 #define HSCTLR          p15,4,c1,c0,0   /* Hyp. System Control Register */
 #define HCR             p15,4,c1,c1,0   /* Hyp. Configuration Register */
+#define HDCR            p15,4,c1,c1,1   /* Hyp. Debug Configuration Register */
+#define HCPTR           p15,4,c1,c1,2   /* Hyp. Coprocessor Trap Register */
+#define HSTR            p15,4,c1,c1,3   /* Hyp. System Trap Register */
 
 /* CP15 CR2: Translation Table Base and Control Registers */
 #define TTBCR           p15,0,c2,c0,2   /* Translatation Table Base Control Register */
@@ -195,7 +212,22 @@
 #define TLBIMVAH        p15,4,c8,c7,1   /* Invalidate Unified Hyp. TLB by MVA */
 #define TLBIALLNSNH     p15,4,c8,c7,4   /* Invalidate Entire Non-Secure Non-Hyp. Unified TLB */
 
-/* CP15 CR9: */
+/* CP15 CR9: Performance monitors */
+#define PMCR            p15,0,c9,c12,0  /* Perf. Mon. Control Register */
+#define PMCNTENSET      p15,0,c9,c12,1  /* Perf. Mon. Count Enable Set register */
+#define PMCNTENCLR      p15,0,c9,c12,2  /* Perf. Mon. Count Enable Clear register */
+#define PMOVSR          p15,0,c9,c12,3  /* Perf. Mon. Overflow Flag Status Register */
+#define PMSWINC         p15,0,c9,c12,4  /* Perf. Mon. Software Increment register */
+#define PMSELR          p15,0,c9,c12,5  /* Perf. Mon. Event Counter Selection Register */
+#define PMCEID0         p15,0,c9,c12,6  /* Perf. Mon. Common Event Identification register 0 */
+#define PMCEID1         p15,0,c9,c12,7  /* Perf. Mon. Common Event Identification register 1 */
+#define PMCCNTR         p15,0,c9,c13,0  /* Perf. Mon. Cycle Count Register */
+#define PMXEVCNTR       p15,0,c9,c13,1  /* Perf. Mon. Event Type Select Register */
+#define PMXEVCNR        p15,0,c9,c13,2  /* Perf. Mon. Event Count Register */
+#define PMUSERENR       p15,0,c9,c14,0  /* Perf. Mon. User Enable Register */
+#define PMINTENSET      p15,0,c9,c14,1  /* Perf. Mon. Interrupt Enable Set Register */
+#define PMINTENCLR      p15,0,c9,c14,2  /* Perf. Mon. Interrupt Enable Clear Register */
+#define PMOVSSET        p15,0,c9,c14,3  /* Perf. Mon. Overflow Flag Status Set register */
 
 /* CP15 CR10: */
 #define MAIR0           p15,0,c10,c2,0  /* Memory Attribute Indirection Register 0 AKA PRRR */
@@ -260,6 +292,7 @@
 #define CNTV_CVAL_EL0           CNTV_CVAL
 #define CONTEXTIDR_EL1          CONTEXTIDR
 #define CPACR_EL1               CPACR
+#define CPTR_EL2                HCPTR
 #define CSSELR_EL1              CSSELR
 #define DACR32_EL2              DACR
 #define ESR_EL1                 DFSR
@@ -268,6 +301,7 @@
 #define FAR_EL2                 HIFAR
 #define HCR_EL2                 HCR
 #define HPFAR_EL2               HPFAR
+#define HSTR_EL2                HSTR
 #define ID_AFR0_EL1             ID_AFR0
 #define ID_DFR0_EL1             ID_DFR0
 #define ID_ISAR0_EL1            ID_ISAR0
@@ -283,6 +317,7 @@
 #define ID_PFR0_EL1             ID_PFR0
 #define ID_PFR1_EL1             ID_PFR1
 #define IFSR32_EL2              IFSR
+#define MDCR_EL2                HDCR
 #define MIDR_EL1                MIDR
 #define MPIDR_EL1               MPIDR
 #define PAR_EL1                 PAR

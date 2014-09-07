@@ -27,6 +27,7 @@
 #include <xen/delay.h>
 #include <xen/keyhandler.h>
 #include <xen/radix-tree.h>
+#include <xen/softirq.h>
 #include <xen/tasklet.h>
 #include <xsm/xsm.h>
 #include <asm/msi.h>
@@ -153,6 +154,115 @@ static void __init parse_phantom_dev(char *str) {
 }
 custom_param("pci-phantom", parse_phantom_dev);
 
+static u16 __read_mostly command_mask;
+static u16 __read_mostly bridge_ctl_mask;
+
+/*
+ * The 'pci' parameter controls certain PCI device aspects.
+ * Optional comma separated value may contain:
+ *
+ *   serr                       don't suppress system errors (default)
+ *   no-serr                    suppress system errors
+ *   perr                       don't suppress parity errors (default)
+ *   no-perr                    suppress parity errors
+ */
+static void __init parse_pci_param(char *s)
+{
+    char *ss;
+
+    do {
+        bool_t on = !!strncmp(s, "no-", 3);
+        u16 cmd_mask = 0, brctl_mask = 0;
+
+        if ( !on )
+            s += 3;
+
+        ss = strchr(s, ',');
+        if ( ss )
+            *ss = '\0';
+
+        if ( !strcmp(s, "serr") )
+        {
+            cmd_mask = PCI_COMMAND_SERR;
+            brctl_mask = PCI_BRIDGE_CTL_SERR | PCI_BRIDGE_CTL_DTMR_SERR;
+        }
+        else if ( !strcmp(s, "perr") )
+        {
+            cmd_mask = PCI_COMMAND_PARITY;
+            brctl_mask = PCI_BRIDGE_CTL_PARITY;
+        }
+
+        if ( on )
+        {
+            command_mask &= ~cmd_mask;
+            bridge_ctl_mask &= ~brctl_mask;
+        }
+        else
+        {
+            command_mask |= cmd_mask;
+            bridge_ctl_mask |= brctl_mask;
+        }
+
+        s = ss + 1;
+    } while ( ss );
+}
+custom_param("pci", parse_pci_param);
+
+static void check_pdev(const struct pci_dev *pdev)
+{
+#define PCI_STATUS_CHECK \
+    (PCI_STATUS_PARITY | PCI_STATUS_SIG_TARGET_ABORT | \
+     PCI_STATUS_REC_TARGET_ABORT | PCI_STATUS_REC_MASTER_ABORT | \
+     PCI_STATUS_SIG_SYSTEM_ERROR | PCI_STATUS_DETECTED_PARITY)
+    u16 seg = pdev->seg;
+    u8 bus = pdev->bus;
+    u8 dev = PCI_SLOT(pdev->devfn);
+    u8 func = PCI_FUNC(pdev->devfn);
+    u16 val;
+
+    if ( command_mask )
+    {
+        val = pci_conf_read16(seg, bus, dev, func, PCI_COMMAND);
+        if ( val & command_mask )
+            pci_conf_write16(seg, bus, dev, func, PCI_COMMAND,
+                             val & ~command_mask);
+        val = pci_conf_read16(seg, bus, dev, func, PCI_STATUS);
+        if ( val & PCI_STATUS_CHECK )
+        {
+            printk(XENLOG_INFO "%04x:%02x:%02x.%u status %04x -> %04x\n",
+                   seg, bus, dev, func, val, val & ~PCI_STATUS_CHECK);
+            pci_conf_write16(seg, bus, dev, func, PCI_STATUS,
+                             val & PCI_STATUS_CHECK);
+        }
+    }
+
+    switch ( pci_conf_read8(seg, bus, dev, func, PCI_HEADER_TYPE) & 0x7f )
+    {
+    case PCI_HEADER_TYPE_BRIDGE:
+        if ( !bridge_ctl_mask )
+            break;
+        val = pci_conf_read16(seg, bus, dev, func, PCI_BRIDGE_CONTROL);
+        if ( val & bridge_ctl_mask )
+            pci_conf_write16(seg, bus, dev, func, PCI_BRIDGE_CONTROL,
+                             val & ~bridge_ctl_mask);
+        val = pci_conf_read16(seg, bus, dev, func, PCI_SEC_STATUS);
+        if ( val & PCI_STATUS_CHECK )
+        {
+            printk(XENLOG_INFO
+                   "%04x:%02x:%02x.%u secondary status %04x -> %04x\n",
+                   seg, bus, dev, func, val, val & ~PCI_STATUS_CHECK);
+            pci_conf_write16(seg, bus, dev, func, PCI_SEC_STATUS,
+                             val & PCI_STATUS_CHECK);
+        }
+        break;
+
+    case PCI_HEADER_TYPE_CARDBUS:
+        /* TODO */
+        break;
+    }
+#undef PCI_STATUS_CHECK
+}
+
 static struct pci_dev *alloc_pdev(struct pci_seg *pseg, u8 bus, u8 devfn)
 {
     struct pci_dev *pdev;
@@ -250,6 +360,8 @@ static struct pci_dev *alloc_pdev(struct pci_seg *pseg, u8 bus, u8 devfn)
                    __func__, pseg->nr, bus, PCI_SLOT(devfn), PCI_FUNC(devfn));
             break;
     }
+
+    check_pdev(pdev);
 
     return pdev;
 }
@@ -564,6 +676,8 @@ int pci_add_device(u16 seg, u8 bus, u8 devfn, const struct pci_dev_info *info)
                    " functions already enabled (%04x)\n",
                    seg, bus, slot, func, ctrl);
     }
+
+    check_pdev(pdev);
 
     ret = 0;
     if ( !pdev->domain )
@@ -922,6 +1036,20 @@ static int __init _setup_dom0_pci_devices(struct pci_seg *pseg, void *arg)
                 printk(XENLOG_WARNING "Dom%d owning %04x:%02x:%02x.%u?\n",
                        pdev->domain->domain_id, pseg->nr, bus,
                        PCI_SLOT(devfn), PCI_FUNC(devfn));
+
+            if ( iommu_verbose )
+            {
+                spin_unlock(&pcidevs_lock);
+                process_pending_softirqs();
+                spin_lock(&pcidevs_lock);
+            }
+        }
+
+        if ( !iommu_verbose )
+        {
+            spin_unlock(&pcidevs_lock);
+            process_pending_softirqs();
+            spin_lock(&pcidevs_lock);
         }
     }
 
@@ -937,6 +1065,106 @@ void __init setup_dom0_pci_devices(
     pci_segments_iterate(_setup_dom0_pci_devices, &ctxt);
     spin_unlock(&pcidevs_lock);
 }
+
+#ifdef CONFIG_ACPI
+#include <acpi/acpi.h>
+#include <acpi/apei.h>
+
+static int hest_match_pci(const struct acpi_hest_aer_common *p,
+                          const struct pci_dev *pdev)
+{
+    return ACPI_HEST_SEGMENT(p->bus) == pdev->seg &&
+           ACPI_HEST_BUS(p->bus)     == pdev->bus &&
+           p->device                 == PCI_SLOT(pdev->devfn) &&
+           p->function               == PCI_FUNC(pdev->devfn);
+}
+
+static bool_t hest_match_type(const struct acpi_hest_header *hest_hdr,
+                              const struct pci_dev *pdev)
+{
+    unsigned int pos = pci_find_cap_offset(pdev->seg, pdev->bus,
+                                           PCI_SLOT(pdev->devfn),
+                                           PCI_FUNC(pdev->devfn),
+                                           PCI_CAP_ID_EXP);
+    u8 pcie = MASK_EXTR(pci_conf_read16(pdev->seg, pdev->bus,
+                                        PCI_SLOT(pdev->devfn),
+                                        PCI_FUNC(pdev->devfn),
+                                        pos + PCI_EXP_FLAGS),
+                        PCI_EXP_FLAGS_TYPE);
+
+    switch ( hest_hdr->type )
+    {
+    case ACPI_HEST_TYPE_AER_ROOT_PORT:
+        return pcie == PCI_EXP_TYPE_ROOT_PORT;
+    case ACPI_HEST_TYPE_AER_ENDPOINT:
+        return pcie == PCI_EXP_TYPE_ENDPOINT;
+    case ACPI_HEST_TYPE_AER_BRIDGE:
+        return pci_conf_read16(pdev->seg, pdev->bus, PCI_SLOT(pdev->devfn),
+                               PCI_FUNC(pdev->devfn), PCI_CLASS_DEVICE) ==
+               PCI_CLASS_BRIDGE_PCI;
+    }
+
+    return 0;
+}
+
+struct aer_hest_parse_info {
+    const struct pci_dev *pdev;
+    bool_t firmware_first;
+};
+
+static bool_t hest_source_is_pcie_aer(const struct acpi_hest_header *hest_hdr)
+{
+    if ( hest_hdr->type == ACPI_HEST_TYPE_AER_ROOT_PORT ||
+         hest_hdr->type == ACPI_HEST_TYPE_AER_ENDPOINT ||
+         hest_hdr->type == ACPI_HEST_TYPE_AER_BRIDGE )
+        return 1;
+    return 0;
+}
+
+static int aer_hest_parse(const struct acpi_hest_header *hest_hdr, void *data)
+{
+    struct aer_hest_parse_info *info = data;
+    const struct acpi_hest_aer_common *p;
+    bool_t ff;
+
+    if ( !hest_source_is_pcie_aer(hest_hdr) )
+        return 0;
+
+    p = (const struct acpi_hest_aer_common *)(hest_hdr + 1);
+    ff = !!(p->flags & ACPI_HEST_FIRMWARE_FIRST);
+
+    /*
+     * If no specific device is supplied, determine whether
+     * FIRMWARE_FIRST is set for *any* PCIe device.
+     */
+    if ( !info->pdev )
+    {
+        info->firmware_first |= ff;
+        return 0;
+    }
+
+    /* Otherwise, check the specific device */
+    if ( p->flags & ACPI_HEST_GLOBAL ?
+         hest_match_type(hest_hdr, info->pdev) :
+         hest_match_pci(p, info->pdev) )
+    {
+        info->firmware_first = ff;
+        return 1;
+    }
+
+    return 0;
+}
+
+bool_t pcie_aer_get_firmware_first(const struct pci_dev *pdev)
+{
+    struct aer_hest_parse_info info = { .pdev = pdev };
+
+    return pci_find_cap_offset(pdev->seg, pdev->bus, PCI_SLOT(pdev->devfn),
+                               PCI_FUNC(pdev->devfn), PCI_CAP_ID_EXP) &&
+           apei_hest_parse(aer_hest_parse, &info) >= 0 &&
+           info.firmware_first;
+}
+#endif
 
 static int _dump_pci_devices(struct pci_seg *pseg, void *arg)
 {

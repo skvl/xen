@@ -140,8 +140,11 @@ int pci_mmcfg_write(unsigned int seg, unsigned int bus,
 int pci_find_cap_offset(u16 seg, u8 bus, u8 dev, u8 func, u8 cap);
 int pci_find_next_cap(u16 seg, u8 bus, unsigned int devfn, u8 pos, int cap);
 int pci_find_ext_capability(int seg, int bus, int devfn, int cap);
+int pci_find_next_ext_capability(int seg, int bus, int devfn, int pos, int cap);
 const char *parse_pci(const char *, unsigned int *seg, unsigned int *bus,
                       unsigned int *dev, unsigned int *func);
+
+bool_t pcie_aer_get_firmware_first(const struct pci_dev *);
 
 struct pirq;
 int msixtbl_pt_register(struct domain *, struct pirq *, uint64_t gtable);

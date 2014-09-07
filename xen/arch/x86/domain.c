@@ -180,6 +180,28 @@ void dump_pageframe_info(struct domain *d)
     spin_unlock(&d->page_alloc_lock);
 }
 
+/*
+ * The hole may be at or above the 44-bit boundary, so we need to determine
+ * the total bit count until reaching 32 significant (not squashed out) bits
+ * in PFN representations.
+ * Note that the way "bits" gets initialized/updated/bounds-checked guarantees
+ * that the function will never return zero, and hence will never be called
+ * more than once (which is important due to it being deliberately placed in
+ * .init.text).
+ */
+static unsigned int __init noinline _domain_struct_bits(void)
+{
+    unsigned int bits = 32 + PAGE_SHIFT;
+    unsigned int sig = hweight32(~pfn_hole_mask);
+    unsigned int mask = pfn_hole_mask >> 32;
+
+    for ( ; bits < BITS_PER_LONG && sig < 32; ++bits, mask >>= 1 )
+        if ( !(mask & 1) )
+            ++sig;
+
+    return bits;
+}
+
 struct domain *alloc_domain_struct(void)
 {
     struct domain *d;
@@ -187,7 +209,10 @@ struct domain *alloc_domain_struct(void)
      * We pack the PDX of the domain structure into a 32-bit field within
      * the page_info structure. Hence the MEMF_bits() restriction.
      */
-    unsigned int bits = 32 + PAGE_SHIFT + pfn_pdx_hole_shift;
+    static unsigned int __read_mostly bits;
+
+    if ( unlikely(!bits) )
+         bits = _domain_struct_bits();
 
     BUILD_BUG_ON(sizeof(*d) > PAGE_SIZE);
     d = alloc_xenheap_pages(0, MEMF_bits(bits));
@@ -422,10 +447,6 @@ int vcpu_initialise(struct vcpu *v)
 
         /* PV guests by default have a 100Hz ticker. */
         v->periodic_period = MILLISECS(10);
-
-        /* PV guests get an emulated PIT too for video BIOSes to use. */
-        if ( v->vcpu_id == 0 )
-            pit_init(v, cpu_khz);
     }
 
     v->arch.schedule_tail = continue_nonidle_domain;
@@ -528,7 +549,7 @@ int arch_domain_create(struct domain *d, unsigned int domcr_flags)
 
     if ( !is_idle_domain(d) )
     {
-        d->arch.cpuids = xzalloc_array(cpuid_input_t, MAX_CPUID_INPUT);
+        d->arch.cpuids = xmalloc_array(cpuid_input_t, MAX_CPUID_INPUT);
         rc = -ENOMEM;
         if ( d->arch.cpuids == NULL )
             goto fail;
@@ -578,6 +599,9 @@ int arch_domain_create(struct domain *d, unsigned int domcr_flags)
     /* initialize default tsc behavior in case tools don't */
     tsc_set_info(d, TSC_MODE_DEFAULT, 0UL, 0, 0);
     spin_lock_init(&d->arch.vtsc_lock);
+
+    /* PV/PVH guests get an emulated PIT too for video BIOSes to use. */
+    pit_init(d, cpu_khz);
 
     return 0;
 
@@ -1979,6 +2003,8 @@ int domain_relinquish_resources(struct domain *d)
     default:
         BUG();
     }
+
+    pit_deinit(d);
 
     if ( has_hvm_container_domain(d) )
         hvm_domain_relinquish_resources(d);

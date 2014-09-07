@@ -568,7 +568,7 @@ int mem_sharing_notify_enomem(struct domain *d, unsigned long gfn,
     if ( v->domain == d )
     {
         req.flags = MEM_EVENT_FLAG_VCPU_PAUSED;
-        vcpu_pause_nosync(v);
+        mem_event_vcpu_pause(v);
     }
 
     req.p2mt = p2m_ram_shared;
@@ -596,11 +596,20 @@ int mem_sharing_sharing_resume(struct domain *d)
     /* Get all requests off the ring */
     while ( mem_event_get_response(d, &d->mem_event->share, &rsp) )
     {
+        struct vcpu *v;
+
         if ( rsp.flags & MEM_EVENT_FLAG_DUMMY )
             continue;
+
+        /* Validate the vcpu_id in the response. */
+        if ( (rsp.vcpu_id >= d->max_vcpus) || !d->vcpu[rsp.vcpu_id] )
+            continue;
+
+        v = d->vcpu[rsp.vcpu_id];
+
         /* Unpause domain/vcpu */
         if ( rsp.flags & MEM_EVENT_FLAG_VCPU_PAUSED )
-            vcpu_unpause(d->vcpu[rsp.vcpu_id]);
+            mem_event_vcpu_unpause(v);
     }
 
     return 0;
@@ -1268,8 +1277,8 @@ int relinquish_shared_pages(struct domain *d)
         return 0;
 
     p2m_lock(p2m);
-    for (gfn = p2m->next_shared_gfn_to_relinquish; 
-         gfn < p2m->max_mapped_pfn; gfn++ )
+    for ( gfn = p2m->next_shared_gfn_to_relinquish;
+          gfn <= p2m->max_mapped_pfn; gfn++ )
     {
         p2m_access_t a;
         p2m_type_t t;

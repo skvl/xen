@@ -617,6 +617,14 @@ static void vmx_fpu_leave(struct vcpu *v)
 
 static void vmx_ctxt_switch_from(struct vcpu *v)
 {
+    /*
+     * Return early if trying to do a context switch without VMX enabled,
+     * this can happen when the hypervisor shuts down with HVM guests
+     * still running.
+     */
+    if ( unlikely(!this_cpu(vmxon)) )
+        return;
+
     vmx_fpu_leave(v);
     vmx_save_guest_msrs(v);
     vmx_restore_host_msrs();
@@ -984,6 +992,8 @@ static void vmx_handle_cd(struct vcpu *v, unsigned long value)
 
             vmx_get_guest_pat(v, pat);
             vmx_set_guest_pat(v, uc_pat);
+            vmx_enable_intercept_for_msr(v, MSR_IA32_CR_PAT,
+                                         MSR_TYPE_R | MSR_TYPE_W);
 
             wbinvd();               /* flush possibly polluted cache */
             hvm_asid_flush_vcpu(v); /* invalidate memory type cached in TLB */
@@ -993,6 +1003,9 @@ static void vmx_handle_cd(struct vcpu *v, unsigned long value)
         {
             v->arch.hvm_vcpu.cache_mode = NORMAL_CACHE_MODE;
             vmx_set_guest_pat(v, *pat);
+            if ( !iommu_enabled || iommu_snoop )
+                vmx_disable_intercept_for_msr(v, MSR_IA32_CR_PAT,
+                                              MSR_TYPE_R | MSR_TYPE_W);
             hvm_asid_flush_vcpu(v); /* no need to flush cache */
         }
     }
@@ -1914,10 +1927,14 @@ static const struct lbr_info *last_branch_msr_get(void)
         case 58: case 62:
         /* Haswell */
         case 60: case 63: case 69: case 70:
+        /* future */
+        case 61: case 78:
             return nh_lbr;
             break;
         /* Atom */
-        case 28:
+        case 28: case 38: case 39: case 53: case 54:
+        /* Silvermont */
+        case 55: case 74: case 77: case 90: case 93:
             return at_lbr;
             break;
         }
@@ -2038,9 +2055,9 @@ static int vmx_alloc_vlapic_mapping(struct domain *d)
     if ( apic_va == NULL )
         return -ENOMEM;
     share_xen_page_with_guest(virt_to_page(apic_va), d, XENSHARE_writable);
+    d->arch.hvm_domain.vmx.apic_access_mfn = virt_to_mfn(apic_va);
     set_mmio_p2m_entry(d, paddr_to_pfn(APIC_DEFAULT_PHYS_BASE),
         _mfn(virt_to_mfn(apic_va)));
-    d->arch.hvm_domain.vmx.apic_access_mfn = virt_to_mfn(apic_va);
 
     return 0;
 }
@@ -2541,6 +2558,7 @@ void vmx_vmexit_handler(struct cpu_user_regs *regs)
     vcpu_nestedhvm(v).nv_vmswitch_in_progress = 0;
     if ( nestedhvm_vcpu_in_guestmode(v) )
     {
+        paging_update_nestedmode(v);
         if ( nvmx_n2_vmexit_handler(regs, exit_reason) )
             goto out;
     }
