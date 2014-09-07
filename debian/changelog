@@ -1,3 +1,9 @@
+xen (4.4.1-1) UNRELEASED; urgency=medium
+
+  * New upstream release.
+
+ -- Bastian Blank <waldi@debian.org>  Sun, 07 Sep 2014 11:14:39 +0200
+
 xen (4.4.0-5) unstable; urgency=medium
 
   [ Ian Campbell ]
