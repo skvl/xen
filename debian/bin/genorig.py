@@ -39,10 +39,10 @@ class Main(object):
 
         if options.component:
             self.orig_dir = options.component
-            self.orig_tar = '%s_%s.orig-%s.tar.gz' % (self.source, self.version.upstream, options.component)
+            self.orig_tar = '%s_%s.orig-%s.tar.xz' % (self.source, self.version.upstream, options.component)
         else:
             self.orig_dir = '%s-%s' % (self.source, self.version.upstream)
-            self.orig_tar = '%s_%s.orig.tar.gz' % (self.source, self.version.upstream)
+            self.orig_tar = '%s_%s.orig.tar.xz' % (self.source, self.version.upstream)
             if options.tag is None:
                 options.tag = 'RELEASE-' + self.version.upstream
 
@@ -78,7 +78,7 @@ class Main(object):
             raise RuntimeError("Destination already exists")
         except OSError: pass
 
-        subprocess.check_call(('tar', '-C', self.temp_dir, '-czf', out, self.orig_dir))
+        subprocess.check_call(('tar', '-C', self.temp_dir, '-caf', out, self.orig_dir))
 
 
 if __name__ == '__main__':
