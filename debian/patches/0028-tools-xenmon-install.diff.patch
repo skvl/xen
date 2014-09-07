@@ -1,4 +1,4 @@
-From e16bd9e6d1442a765debb612b4294bdce01a0202 Mon Sep 17 00:00:00 2001
+From 30ea99f928f36b916868e9eeb0f91160fdf0ddec Mon Sep 17 00:00:00 2001
 From: Bastian Blank <waldi@debian.org>
 Date: Sat, 5 Jul 2014 11:47:31 +0200
 Subject: tools-xenmon-install.diff

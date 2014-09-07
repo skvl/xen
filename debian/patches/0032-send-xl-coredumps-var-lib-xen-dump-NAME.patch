@@ -1,4 +1,4 @@
-From 071ee641afc48f40b8052c77c5eb1e4086297654 Mon Sep 17 00:00:00 2001
+From 2dec9f02a44a006887469c80a7649c31bb518899 Mon Sep 17 00:00:00 2001
 From: Ian Campbell <ijc@hellion.org.uk>
 Date: Sun, 31 Aug 2014 01:42:03 +0100
 Subject: send xl coredumps /var/lib/xen/dump/NAME

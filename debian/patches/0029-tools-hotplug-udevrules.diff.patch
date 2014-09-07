@@ -1,4 +1,4 @@
-From d1c768ea46c9b5ba443651a0ab58221a879bd198 Mon Sep 17 00:00:00 2001
+From f8e9bfff4a0b504fbd509dc87f053e90a4593064 Mon Sep 17 00:00:00 2001
 From: Bastian Blank <waldi@debian.org>
 Date: Sat, 5 Jul 2014 11:47:32 +0200
 Subject: tools-hotplug-udevrules.diff

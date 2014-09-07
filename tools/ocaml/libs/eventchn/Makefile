@@ -9,7 +9,6 @@ INTF = $(foreach obj, $(OBJS),$(obj).cmi)
 LIBS = xeneventchn.cma xeneventchn.cmxa
 
 LIBS_xeneventchn = $(LDLIBS_libxenctrl)
-LIBS_xeneventchn_SYSTEM = $(LDLIBS_libxenctrl_SYSTEM)
 
 all: $(INTF) $(LIBS) $(PROGRAMS)
 

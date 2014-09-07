@@ -1,4 +1,4 @@
-From 0764e612e4b46dab9adad7106aab901bf0896ef3 Mon Sep 17 00:00:00 2001
+From bd104cd974cc0997028f7c1209ca3ee96fda7db6 Mon Sep 17 00:00:00 2001
 From: Bastian Blank <waldi@debian.org>
 Date: Sat, 5 Jul 2014 11:46:49 +0200
 Subject: tools-libxl-abiname.diff

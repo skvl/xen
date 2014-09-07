@@ -10,7 +10,6 @@ INTF = xenctrl.cmi
 LIBS = xenctrl.cma xenctrl.cmxa
 
 LIBS_xenctrl = $(LDLIBS_libxenctrl) $(LDLIBS_libxenguest)
-LIBS_xenctrl_SYSTEM = $(LDLIBS_libxenctrl_SYSTEM) $(LDLIBS_libxenguest_SYSTEM)
 
 xenctrl_OBJS = $(OBJS)
 xenctrl_C_OBJS = xenctrl_stubs

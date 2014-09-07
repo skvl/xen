@@ -233,9 +233,9 @@ static inline void *maddr_to_virt(paddr_t ma)
 }
 #endif
 
-static inline int gvirt_to_maddr(vaddr_t va, paddr_t *pa)
+static inline int gvirt_to_maddr(vaddr_t va, paddr_t *pa, unsigned int flags)
 {
-    uint64_t par = gva_to_ma_par(va);
+    uint64_t par = gva_to_ma_par(va, flags);
     if ( par & PAR_F )
         return -EFAULT;
     *pa = (par & PADDR_MASK & PAGE_MASK) | ((unsigned long) va & ~PAGE_MASK);
@@ -272,6 +272,9 @@ static inline void *page_to_virt(const struct page_info *pg)
 struct domain *page_get_owner_and_reference(struct page_info *page);
 void put_page(struct page_info *page);
 int  get_page(struct page_info *page, struct domain *domain);
+
+struct page_info *get_page_from_gva(struct domain *d, vaddr_t va,
+                                    unsigned long flags);
 
 /*
  * The MPT (machine->physical mapping table) is an array of word-sized

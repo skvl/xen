@@ -1,4 +1,4 @@
-From f2203c717c8e26d6c203bf96199343c74163badb Mon Sep 17 00:00:00 2001
+From 4a7370d08f7bffe4ceb57151ac95af99ae3cde11 Mon Sep 17 00:00:00 2001
 From: Bastian Blank <waldi@debian.org>
 Date: Sat, 5 Jul 2014 11:46:47 +0200
 Subject: tools-libfsimage-abiname.diff

@@ -89,8 +89,17 @@ int domain_vgic_init(struct domain *d)
 
     d->arch.vgic.shared_irqs =
         xzalloc_array(struct vgic_irq_rank, DOMAIN_NR_RANKS(d));
+    if ( d->arch.vgic.shared_irqs == NULL )
+        return -ENOMEM;
+
     d->arch.vgic.pending_irqs =
         xzalloc_array(struct pending_irq, d->arch.vgic.nr_lines);
+    if ( d->arch.vgic.pending_irqs == NULL )
+    {
+        xfree(d->arch.vgic.shared_irqs);
+        return -ENOMEM;
+    }
+
     for (i=0; i<d->arch.vgic.nr_lines; i++)
     {
         INIT_LIST_HEAD(&d->arch.vgic.pending_irqs[i].inflight);
@@ -583,8 +592,8 @@ static int vgic_distr_mmio_write(struct vcpu *v, mmio_info_t *info)
     case GICD_ICFGR + 2 ... GICD_ICFGRN: /* SPIs */
         if ( dabt.size != 2 ) goto bad_width;
         rank = vgic_irq_rank(v, 2, gicd_reg - GICD_ICFGR);
-        vgic_lock_rank(v, rank);
         if ( rank == NULL) goto write_ignore;
+        vgic_lock_rank(v, rank);
         rank->icfg[REG_RANK_INDEX(2, gicd_reg - GICD_ICFGR)] = *r;
         vgic_unlock_rank(v, rank);
         return 1;

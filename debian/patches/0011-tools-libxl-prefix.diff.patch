@@ -1,4 +1,4 @@
-From 115e1e09532eaa3c48f29cd8fea6043decafef3b Mon Sep 17 00:00:00 2001
+From 27d21e69f7e9766c61ea44c8662907dbadd8f86d Mon Sep 17 00:00:00 2001
 From: Bastian Blank <waldi@debian.org>
 Date: Sat, 5 Jul 2014 11:46:57 +0200
 Subject: tools-libxl-prefix.diff

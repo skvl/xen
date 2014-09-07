@@ -1674,7 +1674,7 @@ static unsigned int sh_set_allocation(struct domain *d,
     SHADOW_PRINTK("current %i target %i\n", 
                    d->arch.paging.shadow.total_pages, pages);
 
-    while ( d->arch.paging.shadow.total_pages != pages ) 
+    for ( ; ; )
     {
         if ( d->arch.paging.shadow.total_pages < pages ) 
         {
@@ -1709,6 +1709,8 @@ static unsigned int sh_set_allocation(struct domain *d,
             d->arch.paging.shadow.total_pages--;
             free_domheap_page(sp);
         }
+        else
+            break;
 
         /* Check to see if we need to yield and try again */
         if ( preempted && hypercall_preempt_check() )
@@ -3487,9 +3489,7 @@ int shadow_track_dirty_vram(struct domain *d,
     struct sh_dirty_vram *dirty_vram = d->arch.hvm_domain.dirty_vram;
     struct p2m_domain *p2m = p2m_get_hostp2m(d);
 
-    if (end_pfn < begin_pfn
-            || begin_pfn > p2m->max_mapped_pfn
-            || end_pfn >= p2m->max_mapped_pfn)
+    if ( end_pfn < begin_pfn || end_pfn > p2m->max_mapped_pfn + 1 )
         return -EINVAL;
 
     /* We perform p2m lookups, so lock the p2m upfront to avoid deadlock */

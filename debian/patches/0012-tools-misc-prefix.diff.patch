@@ -1,18 +1,27 @@
-From 63986546e43197e064de938e8c99baec0214a8cc Mon Sep 17 00:00:00 2001
+From fd88c7796ab07d79cfe0c6cd1c4bb2ad6e6907fe Mon Sep 17 00:00:00 2001
 From: Bastian Blank <waldi@debian.org>
 Date: Sat, 5 Jul 2014 11:46:59 +0200
 Subject: tools-misc-prefix.diff
 
 ---
- tools/misc/Makefile        | 6 +-----
+ tools/misc/Makefile        | 8 +++-----
  tools/python/xen/xend/xend | 2 ++
- 2 files changed, 3 insertions(+), 5 deletions(-)
+ 2 files changed, 5 insertions(+), 5 deletions(-)
 
 diff --git a/tools/misc/Makefile b/tools/misc/Makefile
-index 17aeda5..fbc20cf 100644
+index 17aeda5..56d4b82 100644
 --- a/tools/misc/Makefile
 +++ b/tools/misc/Makefile
-@@ -41,12 +41,8 @@ build: $(TARGETS)
+@@ -32,6 +32,8 @@ INSTALL_PRIVBIN := $(INSTALL_PRIVBIN-y)
+ # Include configure output (config.h) to headers search path
+ CFLAGS += -I$(XEN_ROOT)/tools
+ 
++APPEND_LDFLAGS += $(call LDFLAGS_RPATH,../lib)
++
+ .PHONY: all
+ all: build
+ 
+@@ -41,12 +43,8 @@ build: $(TARGETS)
  
  .PHONY: install
  install: build

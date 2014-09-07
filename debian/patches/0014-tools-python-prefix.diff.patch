@@ -1,11 +1,12 @@
-From a2a35eed745082415d89f2ef5893708d3247abf6 Mon Sep 17 00:00:00 2001
+From 98e7698ea7ca4bcde5d9160e9b03cb3ffaea0fdb Mon Sep 17 00:00:00 2001
 From: Bastian Blank <waldi@debian.org>
-Date: Sat, 5 Jul 2014 11:47:03 +0200
-Subject: tools-python-rpath.diff
+Date: Sat, 5 Jul 2014 11:47:02 +0200
+Subject: tools-python-prefix.diff
 
 ---
- tools/python/setup.py | 10 ++++++++++
- 1 file changed, 10 insertions(+)
+ tools/python/setup.py           | 10 ++++++++++
+ tools/python/xen/util/auxbin.py | 36 +++++++++++++++++++-----------------
+ 2 files changed, 29 insertions(+), 17 deletions(-)
 
 diff --git a/tools/python/setup.py b/tools/python/setup.py
 index 8127b21..702a383 100644
@@ -91,3 +92,56 @@ index 8127b21..702a383 100644
                 include_dirs       = [ PATH_XEN, PATH_LIBXL, PATH_LIBXC, "xen/lowlevel/xl" ],
                 library_dirs       = [ PATH_LIBXL ],
                 libraries          = [ "xenlight" ],
+diff --git a/tools/python/xen/util/auxbin.py b/tools/python/xen/util/auxbin.py
+index a690ad9..b1bd191 100644
+--- a/tools/python/xen/util/auxbin.py
++++ b/tools/python/xen/util/auxbin.py
+@@ -19,29 +19,31 @@
+ import os
+ import os.path
+ import sys
+-from xen.util.path import *
++import xen.util.path
++
++
++class _Path(object):
++    def __init__(self, path=[]):
++        self._path = path
++    def __call__(self, name):
++        for dir in self._path:
++            real = os.path.join(dir, name)
++            if os.path.exists(real):
++                return real
++
++
++path_bin = _Path([xen.util.path.PRIVATE_BINDIR, '/usr/lib/xen/bin', '/usr/sbin', '/sbin', '/usr/bin', '/bin'])
++path_boot = _Path([xen.util.path.XENFIRMWAREDIR, '/usr/lib/xen/boot', '/boot'])
+ 
+ def execute(exe, args = None):
+-    exepath = pathTo(exe)
++    exepath = path_bin(exe)
+     a = [ exepath ]
+     if args:
+         a.extend(args)
+-    try:
+-        os.execv(exepath, a)
+-    except (OSError, TypeError), exn:
+-        print exepath, ": ", exn
+-        sys.exit(1)
+-
+-SEARCHDIRS = [ BINDIR, SBINDIR, LIBEXEC, PRIVATE_BINDIR, XENFIRMWAREDIR ]
+-def pathTo(exebin):
+-    for dir in SEARCHDIRS:
+-        exe = os.path.join(dir, exebin)
+-        if os.path.exists(exe):
+-            return exe
+-    return None
++    os.execv(exepath, a)
+ 
+ def xen_configdir():
+-    return XEN_CONFIG_DIR
++    return xen.util.path.XEN_CONFIG_DIR
+ 
+ def scripts_dir():
+-    return XEN_SCRIPT_DIR
++    return xen.util.path.XEN_SCRIPT_DIR

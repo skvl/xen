@@ -1,17 +1,25 @@
-From 6cfdf1c164beaec90d7d5edfe7b65a6f0f0389a0 Mon Sep 17 00:00:00 2001
+From 114369c0e83424814962f0cd5784d54d5ec63813 Mon Sep 17 00:00:00 2001
 From: Bastian Blank <waldi@debian.org>
 Date: Sat, 5 Jul 2014 11:47:14 +0200
 Subject: tools-xentrace-prefix.diff
 
 ---
- tools/xentrace/Makefile | 8 +++-----
- 1 file changed, 3 insertions(+), 5 deletions(-)
+ tools/xentrace/Makefile | 9 ++++-----
+ 1 file changed, 4 insertions(+), 5 deletions(-)
 
 diff --git a/tools/xentrace/Makefile b/tools/xentrace/Makefile
-index 63b09c0..a559110 100644
+index 63b09c0..fcc578a 100644
 --- a/tools/xentrace/Makefile
 +++ b/tools/xentrace/Makefile
-@@ -20,13 +20,11 @@ build: $(BIN) $(LIBBIN)
+@@ -5,6 +5,7 @@ CFLAGS += -Werror
+ 
+ CFLAGS += $(CFLAGS_libxenctrl)
+ LDLIBS += $(LDLIBS_libxenctrl)
++LDFLAGS += $(call LDFLAGS_RPATH,../lib)
+ 
+ BIN      = xentrace xentrace_setsize
+ LIBBIN   = xenctx
+@@ -20,13 +21,11 @@ build: $(BIN) $(LIBBIN)
  
  .PHONY: install
  install: build

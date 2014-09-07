@@ -1094,7 +1094,7 @@ void p2m_mem_paging_populate(struct domain *d, unsigned long gfn)
     /* Pause domain if request came from guest and gfn has paging type */
     if ( p2m_is_paging(p2mt) && v->domain == d )
     {
-        vcpu_pause_nosync(v);
+        mem_event_vcpu_pause(v);
         req.flags |= MEM_EVENT_FLAG_VCPU_PAUSED;
     }
     /* No need to inform pager if the gfn is not in the page-out path */
@@ -1228,8 +1228,17 @@ void p2m_mem_paging_resume(struct domain *d)
     /* Pull all responses off the ring */
     while( mem_event_get_response(d, &d->mem_event->paging, &rsp) )
     {
+        struct vcpu *v;
+
         if ( rsp.flags & MEM_EVENT_FLAG_DUMMY )
             continue;
+
+        /* Validate the vcpu_id in the response. */
+        if ( (rsp.vcpu_id >= d->max_vcpus) || !d->vcpu[rsp.vcpu_id] )
+            continue;
+
+        v = d->vcpu[rsp.vcpu_id];
+
         /* Fix p2m entry if the page was not dropped */
         if ( !(rsp.flags & MEM_EVENT_FLAG_DROP_PAGE) )
         {
@@ -1248,7 +1257,7 @@ void p2m_mem_paging_resume(struct domain *d)
         }
         /* Unpause domain */
         if ( rsp.flags & MEM_EVENT_FLAG_VCPU_PAUSED )
-            vcpu_unpause(d->vcpu[rsp.vcpu_id]);
+            mem_event_vcpu_unpause(v);
     }
 }
 
@@ -1343,7 +1352,7 @@ bool_t p2m_mem_access_check(paddr_t gpa, bool_t gla_valid, unsigned long gla,
 
     /* Pause the current VCPU */
     if ( p2ma != p2m_access_n2rwx )
-        vcpu_pause_nosync(v);
+        mem_event_vcpu_pause(v);
 
     /* VCPU may be paused, return whether we promoted automatically */
     return (p2ma == p2m_access_n2rwx);
@@ -1356,25 +1365,33 @@ void p2m_mem_access_resume(struct domain *d)
     /* Pull all responses off the ring */
     while( mem_event_get_response(d, &d->mem_event->access, &rsp) )
     {
+        struct vcpu *v;
+
         if ( rsp.flags & MEM_EVENT_FLAG_DUMMY )
             continue;
+
+        /* Validate the vcpu_id in the response. */
+        if ( (rsp.vcpu_id >= d->max_vcpus) || !d->vcpu[rsp.vcpu_id] )
+            continue;
+
+        v = d->vcpu[rsp.vcpu_id];
+
         /* Unpause domain */
         if ( rsp.flags & MEM_EVENT_FLAG_VCPU_PAUSED )
-            vcpu_unpause(d->vcpu[rsp.vcpu_id]);
+            mem_event_vcpu_unpause(v);
     }
 }
 
 /* Set access type for a region of pfns.
  * If start_pfn == -1ul, sets the default access type */
-int p2m_set_mem_access(struct domain *d, unsigned long start_pfn, 
-                       uint32_t nr, hvmmem_access_t access) 
+long p2m_set_mem_access(struct domain *d, unsigned long pfn, uint32_t nr,
+                        hvmmem_access_t access)
 {
     struct p2m_domain *p2m = p2m_get_hostp2m(d);
-    unsigned long pfn;
     p2m_access_t a, _a;
     p2m_type_t t;
     mfn_t mfn;
-    int rc = 0;
+    long rc;
 
     /* N.B. _not_ static: initializer depends on p2m->default_access */
     p2m_access_t memaccess[] = {
@@ -1397,19 +1414,29 @@ int p2m_set_mem_access(struct domain *d, unsigned long start_pfn,
     a = memaccess[access];
 
     /* If request to set default access */
-    if ( start_pfn == ~0ull ) 
+    if ( pfn == ~0ul )
     {
         p2m->default_access = a;
         return 0;
     }
 
+    if ( !nr )
+        return 0;
+
     p2m_lock(p2m);
-    for ( pfn = start_pfn; pfn < start_pfn + nr; pfn++ )
+    for ( ; ; ++pfn )
     {
         mfn = p2m->get_entry(p2m, pfn, &t, &_a, 0, NULL);
         if ( p2m->set_entry(p2m, pfn, mfn, PAGE_ORDER_4K, t, a) == 0 )
         {
             rc = -ENOMEM;
+            break;
+        }
+
+        /* Check for continuation if it's not the last interation. */
+        if ( !--nr || hypercall_preempt_check() )
+        {
+            rc = nr;
             break;
         }
     }
