@@ -51,11 +51,6 @@ class Main(object):
         else:
             raise NotImplementedError
 
-        try:
-            os.symlink(os.path.join('orig', self.orig_tar), os.path.join('..', self.orig_tar))
-        except OSError:
-            pass
-
     def __call__(self):
         import tempfile
         self.temp_dir = tempfile.mkdtemp(prefix='genorig', dir='debian')
@@ -79,6 +74,11 @@ class Main(object):
         except OSError: pass
 
         subprocess.check_call(('tar', '-C', self.temp_dir, '-caf', out, self.orig_dir))
+
+        try:
+            os.symlink(os.path.join('orig', self.orig_tar), os.path.join('..', self.orig_tar))
+        except OSError:
+            pass
 
 
 if __name__ == '__main__':
