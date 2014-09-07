@@ -12,17 +12,6 @@ from debian_xen.debian import VersionXen
 from debian_linux.debian import Changelog
 
 
-class RepoHg(object):
-    def __init__(self, repo, options):
-        self.repo = repo
-        self.tag = options.tag or 'tip'
-
-    def do_archive(self, info):
-        orig_dir = os.path.join(info.temp_dir, info.orig_dir)
-        args = ('hg', 'archive', '-r', self.tag, os.path.realpath(orig_dir))
-        subprocess.check_call(args, cwd=self.repo)
-
-
 class RepoGit(object):
     def __init__(self, repo, options):
         self.repo = repo
@@ -57,9 +46,7 @@ class Main(object):
             if options.tag is None:
                 options.tag = 'RELEASE-' + self.version.upstream
 
-        if os.path.exists(os.path.join(repo, '.hg')):
-            self.repo = RepoHg(repo, options)
-        elif os.path.exists(os.path.join(repo, '.git')):
+        if os.path.exists(os.path.join(repo, '.git')):
             self.repo = RepoGit(repo, options)
         else:
             raise NotImplementedError
