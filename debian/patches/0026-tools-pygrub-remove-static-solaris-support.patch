@@ -1,4 +1,4 @@
-From 3ac76cd474a0df61206685ea32f7d606edcd0eab Mon Sep 17 00:00:00 2001
+From e201b0c3404d104e6dda72eb498440110bf2f1f9 Mon Sep 17 00:00:00 2001
 From: Bastian Blank <waldi@debian.org>
 Date: Sat, 5 Jul 2014 11:47:29 +0200
 Subject: tools-pygrub-remove-static-solaris-support
@@ -8,7 +8,7 @@ Subject: tools-pygrub-remove-static-solaris-support
  1 file changed, 1 insertion(+), 50 deletions(-)
 
 diff --git a/tools/pygrub/src/pygrub b/tools/pygrub/src/pygrub
-index 111750b..cd493b7 100644
+index 1e3e3ba..2964140 100644
 --- a/tools/pygrub/src/pygrub
 +++ b/tools/pygrub/src/pygrub
 @@ -17,7 +17,6 @@ import os, sys, string, struct, tempfile, re, traceback

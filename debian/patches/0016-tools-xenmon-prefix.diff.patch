@@ -1,17 +1,25 @@
-From 0c76747bca83b242b069196e534a7f3675466a8e Mon Sep 17 00:00:00 2001
+From ef86f13850569fe145993fe826344f5ff013d80e Mon Sep 17 00:00:00 2001
 From: Bastian Blank <waldi@debian.org>
 Date: Sat, 5 Jul 2014 11:47:06 +0200
 Subject: tools-xenmon-prefix.diff
 
 ---
- tools/xenmon/Makefile | 8 ++++----
- 1 file changed, 4 insertions(+), 4 deletions(-)
+ tools/xenmon/Makefile | 9 +++++----
+ 1 file changed, 5 insertions(+), 4 deletions(-)
 
 diff --git a/tools/xenmon/Makefile b/tools/xenmon/Makefile
-index 3fe87ba..76383e0 100644
+index 3fe87ba..dab5415 100644
 --- a/tools/xenmon/Makefile
 +++ b/tools/xenmon/Makefile
-@@ -27,10 +27,10 @@ build: xentrace_setmask xenbaked
+@@ -16,6 +16,7 @@ include $(XEN_ROOT)/tools/Rules.mk
+ CFLAGS  += -Werror
+ CFLAGS  += $(CFLAGS_libxenctrl)
+ LDLIBS  += $(LDLIBS_libxenctrl)
++LDFLAGS += $(call LDFLAGS_RPATH,../lib)
+ 
+ SCRIPTS = xenmon.py
+ 
+@@ -27,10 +28,10 @@ build: xentrace_setmask xenbaked
  
  .PHONY: install
  install: build

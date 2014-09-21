@@ -139,6 +139,9 @@ static void do_get_hw_residencies(void *arg)
     case 0x3F:
     case 0x45:
     case 0x46:
+    /* future */
+    case 0x3D:
+    case 0x4E:
         GET_PC2_RES(hw_res->pc2);
         GET_CC7_RES(hw_res->cc7);
         /* fall through */
@@ -295,6 +298,9 @@ void mwait_idle_with_hints(unsigned int eax, unsigned int ecx)
 {
     unsigned int cpu = smp_processor_id();
     s_time_t expires = per_cpu(timer_deadline, cpu);
+
+    if ( boot_cpu_has(X86_FEATURE_CLFLUSH_MONITOR) )
+        clflush((void *)&mwait_wakeup(cpu));
 
     __monitor((void *)&mwait_wakeup(cpu), 0, 0);
     smp_mb();

@@ -145,7 +145,7 @@ bool_t is_var_mtrr_overlapped(struct mtrr_state *m)
 
 static int hvm_mtrr_pat_init(void)
 {
-    unsigned int i, j, phys_addr;
+    unsigned int i, j;
 
     memset(&mtrr_epat_tbl, INVALID_MEM_TYPE, sizeof(mtrr_epat_tbl));
     for ( i = 0; i < MTRR_NUM_TYPES; i++ )
@@ -172,11 +172,7 @@ static int hvm_mtrr_pat_init(void)
         }
     }
 
-    phys_addr = 36;
-    if ( cpuid_eax(0x80000000) >= 0x80000008 )
-        phys_addr = (uint8_t)cpuid_eax(0x80000008);
-
-    size_or_mask = ~((1 << (phys_addr - PAGE_SHIFT)) - 1);
+    size_or_mask = ~((1 << (paddr_bits - PAGE_SHIFT)) - 1);
 
     return 0;
 }
@@ -455,7 +451,7 @@ bool_t mtrr_fix_range_msr_set(struct mtrr_state *m, uint32_t row,
 bool_t mtrr_var_range_msr_set(
     struct domain *d, struct mtrr_state *m, uint32_t msr, uint64_t msr_content)
 {
-    uint32_t index, type, phys_addr, eax, ebx, ecx, edx;
+    uint32_t index, type, phys_addr, eax;
     uint64_t msr_mask;
     uint64_t *var_range_base = (uint64_t*)m->var_ranges;
 
@@ -468,16 +464,21 @@ bool_t mtrr_var_range_msr_set(
                     type == 4 || type == 5 || type == 6)) )
         return 0;
 
-    phys_addr = 36;
-    domain_cpuid(d, 0x80000000, 0, &eax, &ebx, &ecx, &edx);
-    if ( eax >= 0x80000008 )
+    if ( d == current->domain )
     {
-        domain_cpuid(d, 0x80000008, 0, &eax, &ebx, &ecx, &edx);
-        phys_addr = (uint8_t)eax;
+        phys_addr = 36;
+        hvm_cpuid(0x80000000, &eax, NULL, NULL, NULL);
+        if ( eax >= 0x80000008 )
+        {
+            hvm_cpuid(0x80000008, &eax, NULL, NULL, NULL);
+            phys_addr = (uint8_t)eax;
+        }
     }
+    else
+        phys_addr = paddr_bits;
     msr_mask = ~((((uint64_t)1) << phys_addr) - 1);
     msr_mask |= (index & 1) ? 0x7ffUL : 0xf00UL;
-    if ( unlikely(msr_content && (msr_content & msr_mask)) )
+    if ( unlikely(msr_content & msr_mask) )
     {
         HVM_DBG_LOG(DBG_LEVEL_MSR, "invalid msr content:%"PRIx64"\n",
                     msr_content);
@@ -689,13 +690,8 @@ uint8_t epte_get_entry_emt(struct domain *d, unsigned long gfn, mfn_t mfn,
 
     *ipat = 0;
 
-    if ( (current->domain != d) &&
-         ((d->vcpu == NULL) || ((v = d->vcpu[0]) == NULL)) )
-        return MTRR_TYPE_WRBACK;
-
-    if ( !is_pvh_vcpu(v) &&
-         !v->domain->arch.hvm_domain.params[HVM_PARAM_IDENT_PT] )
-        return MTRR_TYPE_WRBACK;
+    if ( v->domain != d )
+        v = d->vcpu ? d->vcpu[0] : NULL;
 
     if ( !mfn_valid(mfn_x(mfn)) )
         return MTRR_TYPE_UNCACHABLE;
@@ -703,14 +699,24 @@ uint8_t epte_get_entry_emt(struct domain *d, unsigned long gfn, mfn_t mfn,
     if ( hvm_get_mem_pinned_cacheattr(d, gfn, &type) )
         return type;
 
-    if ( !iommu_enabled )
+    if ( !iommu_enabled ||
+         (rangeset_is_empty(d->iomem_caps) &&
+          rangeset_is_empty(d->arch.ioport_caps) &&
+          !has_arch_pdevs(d)) )
     {
+        ASSERT(!direct_mmio ||
+               mfn_x(mfn) == d->arch.hvm_domain.vmx.apic_access_mfn);
         *ipat = 1;
         return MTRR_TYPE_WRBACK;
     }
 
     if ( direct_mmio )
-        return MTRR_TYPE_UNCACHABLE;
+    {
+        if ( mfn_x(mfn) != d->arch.hvm_domain.vmx.apic_access_mfn )
+            return MTRR_TYPE_UNCACHABLE;
+        *ipat = 1;
+        return MTRR_TYPE_WRBACK;
+    }
 
     if ( iommu_snoop )
     {
@@ -718,10 +724,41 @@ uint8_t epte_get_entry_emt(struct domain *d, unsigned long gfn, mfn_t mfn,
         return MTRR_TYPE_WRBACK;
     }
 
-    gmtrr_mtype = is_hvm_vcpu(v) ?
+    gmtrr_mtype = is_hvm_domain(d) && v &&
+                  d->arch.hvm_domain.params[HVM_PARAM_IDENT_PT] ?
                   get_mtrr_type(&v->arch.hvm_vcpu.mtrr, (gfn << PAGE_SHIFT)) :
                   MTRR_TYPE_WRBACK;
 
     hmtrr_mtype = get_mtrr_type(&mtrr_state, (mfn_x(mfn) << PAGE_SHIFT));
-    return ((gmtrr_mtype <= hmtrr_mtype) ? gmtrr_mtype : hmtrr_mtype);
+
+    /* If both types match we're fine. */
+    if ( likely(gmtrr_mtype == hmtrr_mtype) )
+        return hmtrr_mtype;
+
+    /* If either type is UC, we have to go with that one. */
+    if ( gmtrr_mtype == MTRR_TYPE_UNCACHABLE ||
+         hmtrr_mtype == MTRR_TYPE_UNCACHABLE )
+        return MTRR_TYPE_UNCACHABLE;
+
+    /* If either type is WB, we have to go with the other one. */
+    if ( gmtrr_mtype == MTRR_TYPE_WRBACK )
+        return hmtrr_mtype;
+    if ( hmtrr_mtype == MTRR_TYPE_WRBACK )
+        return gmtrr_mtype;
+
+    /*
+     * At this point we have disagreeing WC, WT, or WP types. The only
+     * combination that can be cleanly resolved is WT:WP. The ones involving
+     * WC need to be converted to UC, both due to the memory ordering
+     * differences and because WC disallows reads to be cached (WT and WP
+     * permit this), while WT and WP require writes to go straight to memory
+     * (WC can buffer them).
+     */
+    if ( (gmtrr_mtype == MTRR_TYPE_WRTHROUGH &&
+          hmtrr_mtype == MTRR_TYPE_WRPROT) ||
+         (gmtrr_mtype == MTRR_TYPE_WRPROT &&
+          hmtrr_mtype == MTRR_TYPE_WRTHROUGH) )
+        return MTRR_TYPE_WRPROT;
+
+    return MTRR_TYPE_UNCACHABLE;
 }

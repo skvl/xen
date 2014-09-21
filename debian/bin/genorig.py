@@ -12,17 +12,6 @@ from debian_xen.debian import VersionXen
 from debian_linux.debian import Changelog
 
 
-class RepoHg(object):
-    def __init__(self, repo, options):
-        self.repo = repo
-        self.tag = options.tag or 'tip'
-
-    def do_archive(self, info):
-        orig_dir = os.path.join(info.temp_dir, info.orig_dir)
-        args = ('hg', 'archive', '-r', self.tag, os.path.realpath(orig_dir))
-        subprocess.check_call(args, cwd=self.repo)
-
-
 class RepoGit(object):
     def __init__(self, repo, options):
         self.repo = repo
@@ -50,24 +39,17 @@ class Main(object):
 
         if options.component:
             self.orig_dir = options.component
-            self.orig_tar = '%s_%s.orig-%s.tar.gz' % (self.source, self.version.upstream, options.component)
+            self.orig_tar = '%s_%s.orig-%s.tar.xz' % (self.source, self.version.upstream, options.component)
         else:
             self.orig_dir = '%s-%s' % (self.source, self.version.upstream)
-            self.orig_tar = '%s_%s.orig.tar.gz' % (self.source, self.version.upstream)
+            self.orig_tar = '%s_%s.orig.tar.xz' % (self.source, self.version.upstream)
             if options.tag is None:
                 options.tag = 'RELEASE-' + self.version.upstream
 
-        if os.path.exists(os.path.join(repo, '.hg')):
-            self.repo = RepoHg(repo, options)
-        elif os.path.exists(os.path.join(repo, '.git')):
+        if os.path.exists(os.path.join(repo, '.git')):
             self.repo = RepoGit(repo, options)
         else:
             raise NotImplementedError
-
-        try:
-            os.symlink(os.path.join('orig', self.orig_tar), os.path.join('..', self.orig_tar))
-        except OSError:
-            pass
 
     def __call__(self):
         import tempfile
@@ -91,7 +73,12 @@ class Main(object):
             raise RuntimeError("Destination already exists")
         except OSError: pass
 
-        subprocess.check_call(('tar', '-C', self.temp_dir, '-czf', out, self.orig_dir))
+        subprocess.check_call(('tar', '-C', self.temp_dir, '-caf', out, self.orig_dir))
+
+        try:
+            os.symlink(os.path.join('orig', self.orig_tar), os.path.join('..', self.orig_tar))
+        except OSError:
+            pass
 
 
 if __name__ == '__main__':

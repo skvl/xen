@@ -478,7 +478,7 @@ static int hvm_set_ioreq_page(
 
     if ( (iorp->va != NULL) || d->is_dying )
     {
-        destroy_ring_for_helper(&iorp->va, iorp->page);
+        destroy_ring_for_helper(&va, page);
         spin_unlock(&iorp->lock);
         return -EINVAL;
     }
@@ -643,7 +643,6 @@ void hvm_domain_relinquish_resources(struct domain *d)
     rtc_deinit(d);
     if ( d->vcpu != NULL && d->vcpu[0] != NULL )
     {
-        pit_deinit(d);
         pmtimer_deinit(d);
         hpet_deinit(d);
     }
@@ -858,7 +857,7 @@ static int hvm_load_cpu_ctxt(struct domain *d, hvm_domain_context_t *h)
         return -EINVAL;
     }
 
-    if ( ctxt.cr4 & HVM_CR4_GUEST_RESERVED_BITS(v) )
+    if ( ctxt.cr4 & HVM_CR4_GUEST_RESERVED_BITS(v, 1) )
     {
         printk(XENLOG_G_ERR "HVM%d restore: bad CR4 %#" PRIx64 "\n",
                d->domain_id, ctxt.cr4);
@@ -1217,7 +1216,6 @@ int hvm_vcpu_initialise(struct vcpu *v)
     if ( v->vcpu_id == 0 )
     {
         /* NB. All these really belong in hvm_domain_initialise(). */
-        pit_init(v, cpu_khz);
         pmtimer_init(v);
         hpet_init(v);
  
@@ -1529,6 +1527,11 @@ int hvm_hap_nested_page_fault(paddr_t gpa,
          (access_w && (p2mt == p2m_ram_ro)) )
     {
         put_gfn(p2m->domain, gfn);
+
+        rc = 0;
+        if ( unlikely(is_pvh_vcpu(v)) )
+            goto out;
+
         if ( !handle_mmio() )
             hvm_inject_hw_exception(TRAP_gp_fault, 0);
         rc = 1;
@@ -1923,6 +1926,7 @@ int hvm_set_cr0(unsigned long value)
         hvm_funcs.handle_cd(v, value);
 
     hvm_update_cr(v, 0, value);
+    hvm_memory_event_cr0(value, old_value);
 
     if ( (value ^ old_value) & X86_CR0_PG ) {
         if ( !nestedhvm_vmswitch_in_progress(v) && nestedhvm_vcpu_in_guestmode(v) )
@@ -1977,7 +1981,7 @@ int hvm_set_cr4(unsigned long value)
     struct vcpu *v = current;
     unsigned long old_cr;
 
-    if ( value & HVM_CR4_GUEST_RESERVED_BITS(v) )
+    if ( value & HVM_CR4_GUEST_RESERVED_BITS(v, 0) )
     {
         HVM_DBG_LOG(DBG_LEVEL_1,
                     "Guest attempts to set reserved bit in CR4: %lx",
@@ -2885,6 +2889,8 @@ void hvm_cpuid(unsigned int input, unsigned int *eax, unsigned int *ebx,
 
     switch ( input )
     {
+        unsigned int sub_leaf, _eax, _ebx, _ecx, _edx;
+
     case 0x1:
         /* Fix up VLAPIC details. */
         *ebx &= 0x00FFFFFFu;
@@ -2918,8 +2924,6 @@ void hvm_cpuid(unsigned int input, unsigned int *eax, unsigned int *ebx,
         *edx = v->vcpu_id * 2;
         break;
     case 0xd:
-    {
-        unsigned int sub_leaf, _eax, _ebx, _ecx, _edx;
         /* EBX value of main leaf 0 depends on enabled xsave features */
         if ( count == 0 && v->arch.xcr0 ) 
         {
@@ -2936,7 +2940,7 @@ void hvm_cpuid(unsigned int input, unsigned int *eax, unsigned int *ebx,
             }
         }
         break;
-    }
+
     case 0x80000001:
         /* We expose RDTSCP feature to guest only when
            tsc_mode == TSC_MODE_DEFAULT and host_tsc_is_safe() returns 1 */
@@ -2949,6 +2953,23 @@ void hvm_cpuid(unsigned int input, unsigned int *eax, unsigned int *ebx,
         /* Only provide PSE36 when guest runs in 32bit PAE or in long mode */
         if ( !(hvm_pae_enabled(v) || hvm_long_mode_enabled(v)) )
             *edx &= ~cpufeat_mask(X86_FEATURE_PSE36);
+        break;
+
+    case 0x80000008:
+        count = cpuid_eax(0x80000008);
+        count = (count >> 16) & 0xff ?: count & 0xff;
+        if ( (*eax & 0xff) > count )
+            *eax = (*eax & ~0xff) | count;
+
+        hvm_cpuid(1, NULL, NULL, NULL, &_edx);
+        count = _edx & (cpufeat_mask(X86_FEATURE_PAE) |
+                        cpufeat_mask(X86_FEATURE_PSE36)) ? 36 : 32;
+        if ( (*eax & 0xff) < count )
+            *eax = (*eax & ~0xff) | count;
+
+        hvm_cpuid(0x80000001, NULL, NULL, NULL, &_edx);
+        *eax = (*eax & ~0xffff00) | (_edx & cpufeat_mask(X86_FEATURE_LM)
+                                     ? 0x3000 : 0x2000);
         break;
     }
 }
@@ -3294,6 +3315,12 @@ static long hvm_physdev_op(int cmd, XEN_GUEST_HANDLE_PARAM(void) arg)
     case PHYSDEVOP_irq_status_query:
     case PHYSDEVOP_get_free_pirq:
         return do_physdev_op(cmd, arg);
+
+    /* pvh fixme: coming soon */
+    case PHYSDEVOP_pirq_eoi_gmfn_v1:
+    case PHYSDEVOP_pirq_eoi_gmfn_v2:
+        return -ENOSYS;
+
     }
 }
 
@@ -4393,12 +4420,10 @@ long do_hvm_op(unsigned long op, XEN_GUEST_HANDLE_PARAM(void) arg)
                 rc = -EINVAL;
                 goto param_fail4;
             } 
-            if ( p2m_is_grant(t) )
+            if ( !p2m_is_ram(t) &&
+                 (!p2m_is_hole(t) || a.hvmmem_type != HVMMEM_mmio_dm) )
             {
                 put_gfn(d, pfn);
-                gdprintk(XENLOG_WARNING,
-                         "type for pfn %#lx changed to grant while "
-                         "we were working?\n", pfn);
                 goto param_fail4;
             }
             else
@@ -4465,6 +4490,15 @@ long do_hvm_op(unsigned long op, XEN_GUEST_HANDLE_PARAM(void) arg)
             goto param_fail5;
             
         rc = p2m_set_mem_access(d, a.first_pfn, a.nr, a.hvmmem_access);
+        if ( rc > 0 )
+        {
+            a.first_pfn += a.nr - rc;
+            a.nr = rc;
+            if ( __copy_to_guest(arg, &a, 1) )
+                rc = -EFAULT;
+            else
+                rc = -EAGAIN;
+        }
 
     param_fail5:
         rcu_unlock_domain(d);
@@ -4671,7 +4705,7 @@ static int hvm_memory_event_traps(long p, uint32_t reason,
     if ( (p & HVMPME_MODE_MASK) == HVMPME_mode_sync ) 
     {
         req.flags |= MEM_EVENT_FLAG_VCPU_PAUSED;    
-        vcpu_pause_nosync(v);   
+        mem_event_vcpu_pause(v);
     }
 
     req.gfn = value;

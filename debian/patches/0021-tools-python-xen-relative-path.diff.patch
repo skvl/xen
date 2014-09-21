@@ -1,4 +1,4 @@
-From 304ab83d71fd0e5070b81a36d5fa220083a84e09 Mon Sep 17 00:00:00 2001
+From bf9eda5579d44877c9dfe76d4d1a63f2b42d11fc Mon Sep 17 00:00:00 2001
 From: Bastian Blank <waldi@debian.org>
 Date: Sat, 5 Jul 2014 11:47:19 +0200
 Subject: tools-python-xen-relative-path.diff

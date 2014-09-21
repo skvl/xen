@@ -1,18 +1,22 @@
-From 6ea03d7a26b3ef4f0e97c9f75a227850e68b4c22 Mon Sep 17 00:00:00 2001
+From fc454a556a6877b0aecc560bd2abefc87eef45f5 Mon Sep 17 00:00:00 2001
 From: Bastian Blank <waldi@debian.org>
 Date: Sat, 5 Jul 2014 11:46:55 +0200
 Subject: tools-libfsimage-prefix.diff
 
 ---
- tools/libfsimage/Rules.mk        | 2 +-
+ tools/libfsimage/Rules.mk        | 3 ++-
  tools/libfsimage/common/Makefile | 6 ++++--
- 2 files changed, 5 insertions(+), 3 deletions(-)
+ 2 files changed, 6 insertions(+), 3 deletions(-)
 
 diff --git a/tools/libfsimage/Rules.mk b/tools/libfsimage/Rules.mk
-index 8a23655..9aedcc7 100644
+index 8a23655..2750f4f 100644
 --- a/tools/libfsimage/Rules.mk
 +++ b/tools/libfsimage/Rules.mk
-@@ -6,7 +6,7 @@ LDFLAGS += -L../common/
+@@ -3,10 +3,11 @@ include $(XEN_ROOT)/tools/Rules.mk
+ CFLAGS += -Wno-unknown-pragmas -I$(XEN_ROOT)/tools/libfsimage/common/ -DFSIMAGE_FSDIR=\"$(FSDIR)\"
+ CFLAGS += -Werror -D_GNU_SOURCE
+ LDFLAGS += -L../common/
++LDFLAGS += $(call LDFLAGS_RPATH,../..)
  
  PIC_OBJS := $(patsubst %.c,%.opic,$(LIB_SRCS-y))
  

@@ -1,4 +1,4 @@
-From e4f9e8c63dd2ea84a9484537850fcaf20596c418 Mon Sep 17 00:00:00 2001
+From bd93072208e5ddfc026059c811b2eacd8fdd6883 Mon Sep 17 00:00:00 2001
 From: Bastian Blank <waldi@debian.org>
 Date: Sat, 5 Jul 2014 11:46:54 +0200
 Subject: tools-console-prefix.diff

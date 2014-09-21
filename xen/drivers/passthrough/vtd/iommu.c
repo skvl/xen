@@ -31,7 +31,6 @@
 #include <xen/pci.h>
 #include <xen/pci_regs.h>
 #include <xen/keyhandler.h>
-#include <xen/softirq.h>
 #include <asm/msi.h>
 #include <asm/irq.h>
 #include <asm/hvm/vmx/vmx.h>
@@ -42,6 +41,12 @@
 #include "extern.h"
 #include "vtd.h"
 #include "../ats.h"
+
+struct mapped_rmrr {
+    struct list_head list;
+    u64 base, end;
+    unsigned int count;
+};
 
 /* Possible unfiltered LAPIC/MSI messages from untrusted sources? */
 bool_t __read_mostly untrusted_msi;
@@ -620,7 +625,6 @@ static void dma_pte_clear_one(struct domain *domain, u64 addr)
     struct hvm_iommu *hd = domain_hvm_iommu(domain);
     struct dma_pte *page = NULL, *pte = NULL;
     u64 pg_maddr;
-    struct mapped_rmrr *mrmrr;
 
     spin_lock(&hd->mapping_lock);
     /* get last level pte */
@@ -649,21 +653,6 @@ static void dma_pte_clear_one(struct domain *domain, u64 addr)
         __intel_iommu_iotlb_flush(domain, addr >> PAGE_SHIFT_4K, 1, 1);
 
     unmap_vtd_domain_page(page);
-
-    /* if the cleared address is between mapped RMRR region,
-     * remove the mapped RMRR
-     */
-    spin_lock(&hd->mapping_lock);
-    list_for_each_entry ( mrmrr, &hd->mapped_rmrrs, list )
-    {
-        if ( addr >= mrmrr->base && addr <= mrmrr->end )
-        {
-            list_del(&mrmrr->list);
-            xfree(mrmrr);
-            break;
-        }
-    }
-    spin_unlock(&hd->mapping_lock);
 }
 
 static void iommu_free_pagetable(u64 pt_maddr, int level)
@@ -1453,7 +1442,7 @@ static int domain_context_mapping(
         ret = domain_context_mapping_one(domain, drhd->iommu, bus, devfn,
                                          pdev);
         if ( !ret && devfn == pdev->devfn && ats_device(pdev, drhd) > 0 )
-            enable_ats_device(seg, bus, devfn);
+            enable_ats_device(seg, bus, devfn, drhd->iommu);
 
         break;
 
@@ -1494,8 +1483,8 @@ static int domain_context_mapping(
         break;
     }
 
-    if ( iommu_verbose )
-        process_pending_softirqs();
+    if ( !ret && devfn == pdev->devfn )
+        pci_vtd_quirk(pdev);
 
     return ret;
 }
@@ -1704,9 +1693,16 @@ static int reassign_device_ownership(
 void iommu_domain_teardown(struct domain *d)
 {
     struct hvm_iommu *hd = domain_hvm_iommu(d);
+    struct mapped_rmrr *mrmrr, *tmp;
 
     if ( list_empty(&acpi_drhd_units) )
         return;
+
+    list_for_each_entry_safe ( mrmrr, tmp, &hd->mapped_rmrrs, list )
+    {
+        list_del(&mrmrr->list);
+        xfree(mrmrr);
+    }
 
     if ( iommu_use_hap_pt(d) )
         return;
@@ -1852,14 +1848,17 @@ static int rmrr_identity_mapping(struct domain *d,
     ASSERT(rmrr->base_address < rmrr->end_address);
 
     /*
-     * No need to acquire hd->mapping_lock, as the only theoretical race is
-     * with the insertion below (impossible due to holding pcidevs_lock).
+     * No need to acquire hd->mapping_lock: Both insertion and removal
+     * get done while holding pcidevs_lock.
      */
     list_for_each_entry( mrmrr, &hd->mapped_rmrrs, list )
     {
         if ( mrmrr->base == rmrr->base_address &&
              mrmrr->end == rmrr->end_address )
+        {
+            ++mrmrr->count;
             return 0;
+        }
     }
 
     base = rmrr->base_address & PAGE_MASK_4K;
@@ -1880,9 +1879,8 @@ static int rmrr_identity_mapping(struct domain *d,
         return -ENOMEM;
     mrmrr->base = rmrr->base_address;
     mrmrr->end = rmrr->end_address;
-    spin_lock(&hd->mapping_lock);
+    mrmrr->count = 1;
     list_add_tail(&mrmrr->list, &hd->mapped_rmrrs);
-    spin_unlock(&hd->mapping_lock);
 
     return 0;
 }
@@ -1927,10 +1925,12 @@ static int intel_iommu_enable_device(struct pci_dev *pdev)
     struct acpi_drhd_unit *drhd = acpi_find_matched_drhd_unit(pdev);
     int ret = drhd ? ats_device(pdev, drhd) : -ENODEV;
 
+    pci_vtd_quirk(pdev);
+
     if ( ret <= 0 )
         return ret;
 
-    ret = enable_ats_device(pdev->seg, pdev->bus, pdev->devfn);
+    ret = enable_ats_device(pdev->seg, pdev->bus, pdev->devfn, drhd->iommu);
 
     return ret >= 0 ? 0 : ret;
 }
@@ -1944,17 +1944,52 @@ static int intel_iommu_remove_device(u8 devfn, struct pci_dev *pdev)
     if ( !pdev->domain )
         return -EINVAL;
 
-    /* If the device belongs to dom0, and it has RMRR, don't remove it
-     * from dom0, because BIOS may use RMRR at booting time.
-     */
-    if ( pdev->domain->domain_id == 0 )
+    for_each_rmrr_device ( rmrr, bdf, i )
     {
-        for_each_rmrr_device ( rmrr, bdf, i )
+        struct hvm_iommu *hd;
+        struct mapped_rmrr *mrmrr, *tmp;
+
+        if ( rmrr->segment != pdev->seg ||
+             PCI_BUS(bdf) != pdev->bus ||
+             PCI_DEVFN2(bdf) != devfn )
+            continue;
+
+        /*
+         * If the device belongs to dom0, and it has RMRR, don't remove
+         * it from dom0, because BIOS may use RMRR at booting time.
+         */
+        if ( is_hardware_domain(pdev->domain) )
+            return 0;
+
+        hd = domain_hvm_iommu(pdev->domain);
+
+        /*
+         * No need to acquire hd->mapping_lock: Both insertion and removal
+         * get done while holding pcidevs_lock.
+         */
+        ASSERT(spin_is_locked(&pcidevs_lock));
+        list_for_each_entry_safe ( mrmrr, tmp, &hd->mapped_rmrrs, list )
         {
-            if ( rmrr->segment == pdev->seg &&
-                 PCI_BUS(bdf) == pdev->bus &&
-                 PCI_DEVFN2(bdf) == devfn )
-                return 0;
+            unsigned long base_pfn, end_pfn;
+
+            if ( rmrr->base_address != mrmrr->base ||
+                 rmrr->end_address != mrmrr->end )
+                continue;
+
+            if ( --mrmrr->count )
+                break;
+
+            base_pfn = (mrmrr->base & PAGE_MASK_4K) >> PAGE_SHIFT_4K;
+            end_pfn = PAGE_ALIGN_4K(mrmrr->end) >> PAGE_SHIFT_4K;
+            while ( base_pfn < end_pfn )
+            {
+                if ( intel_iommu_unmap_page(pdev->domain, base_pfn) )
+                    return -ENXIO;
+                base_pfn++;
+            }
+
+            list_del(&mrmrr->list);
+            xfree(mrmrr);
         }
     }
 
@@ -1963,12 +1998,7 @@ static int intel_iommu_remove_device(u8 devfn, struct pci_dev *pdev)
 
 static int __init setup_dom0_device(u8 devfn, struct pci_dev *pdev)
 {
-    int err;
-
-    err = domain_context_mapping(pdev->domain, devfn, pdev);
-    if ( !err && devfn == pdev->devfn )
-        pci_vtd_quirk(pdev);
-    return err;
+    return domain_context_mapping(pdev->domain, devfn, pdev);
 }
 
 void clear_fault_bits(struct iommu *iommu)

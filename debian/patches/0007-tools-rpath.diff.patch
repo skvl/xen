@@ -1,4 +1,4 @@
-From 479d90ee22e4a370a65f3fb90476884ff1e2629d Mon Sep 17 00:00:00 2001
+From 95a24141c687055133b46b179b4a3eb72a2c6c13 Mon Sep 17 00:00:00 2001
 From: Bastian Blank <waldi@debian.org>
 Date: Sat, 5 Jul 2014 11:46:51 +0200
 Subject: tools-rpath.diff

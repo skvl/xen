@@ -1,17 +1,26 @@
-From 02ab630bf4b056fd3e042be3fa76536d9c2164c6 Mon Sep 17 00:00:00 2001
+From 46661fdde15627db208e3f28c61f96a50ee27165 Mon Sep 17 00:00:00 2001
 From: Bastian Blank <waldi@debian.org>
 Date: Sat, 5 Jul 2014 11:47:12 +0200
 Subject: tools-xenstore-prefix.diff
 
 ---
- tools/xenstore/Makefile | 14 +++++++-------
- 1 file changed, 7 insertions(+), 7 deletions(-)
+ tools/xenstore/Makefile | 16 +++++++++-------
+ 1 file changed, 9 insertions(+), 7 deletions(-)
 
 diff --git a/tools/xenstore/Makefile b/tools/xenstore/Makefile
-index 262f401..f8237ed 100644
+index 262f401..153c36f 100644
 --- a/tools/xenstore/Makefile
 +++ b/tools/xenstore/Makefile
-@@ -58,10 +58,10 @@ endif
+@@ -8,6 +8,8 @@ CFLAGS += -Werror
+ CFLAGS += -I.
+ CFLAGS += $(CFLAGS_libxenctrl)
+ 
++LDFLAGS_libxenctrl += $(call LDFLAGS_RPATH,../lib)
++
+ CLIENTS := xenstore-exists xenstore-list xenstore-read xenstore-rm xenstore-chmod
+ CLIENTS += xenstore-write xenstore-ls xenstore-watch
+ 
+@@ -58,10 +60,10 @@ endif
  init-xenstore-domain.o: CFLAGS += $(CFLAGS_libxenguest)
  
  init-xenstore-domain: init-xenstore-domain.o $(LIBXENSTORE)
@@ -24,7 +33,7 @@ index 262f401..f8237ed 100644
  
  xenstored.a: $(XENSTORED_OBJS)
  	$(AR) cr $@ $^
-@@ -109,17 +109,17 @@ tarball: clean
+@@ -109,17 +111,17 @@ tarball: clean
  
  .PHONY: install
  install: all

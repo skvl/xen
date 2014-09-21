@@ -47,7 +47,7 @@ ALL_OCAML_OBJ_SOURCES=$(addsuffix .ml, $(ALL_OCAML_OBJS))
 clean: $(CLEAN_HOOKS)
 	$(Q)rm -f .*.d *.o *.so *.a *.cmo *.cmi *.cma *.cmx *.cmxa *.annot *.spot *.spit $(LIBS) $(PROGRAMS) $(GENERATED_FILES) .ocamldep.make META
 
-quiet-command = $1
+quiet-command = $(if $(V),$1,@printf " %-8s %s\n" "$2" "$3" && $1)
 
 mk-caml-lib-native = $(call quiet-command, $(OCAMLOPT) $(OCAMLOPTFLAGS) -a -o $1 $2 $3,MLA,$1)
 mk-caml-lib-bytecode = $(call quiet-command, $(OCAMLC) $(OCAMLCFLAGS) -a -o $1 $2 $3,MLA,$1)
@@ -58,8 +58,14 @@ mk-caml-lib-stubs = \
 
 # define a library target <name>.cmxa and <name>.cma
 define OCAML_LIBRARY_template
- $(1).cma: $(foreach obj,$($(1)_OBJS),$(obj).cmx $(obj).cmo) $(foreach obj,$($(1)_C_OBJS),$(obj).o)
-	$(OCAMLMKLIB) -o $1 -oc $(1)_stubs $(foreach obj,$($(1)_OBJS),$(obj).cmx $(obj).cmo) $(foreach obj,$($(1)_C_OBJS),$(obj).o) $(foreach lib, $(LIBS_$(1)_SYSTEM), -cclib $(lib)) $(foreach arg,$(LIBS_$(1)),-ldopt $(arg))
+ $(1).cmxa: lib$(1)_stubs.a $(foreach obj,$($(1)_OBJS),$(obj).cmx)
+	$(call mk-caml-lib-native,$$@, -cclib -l$(1)_stubs $(foreach lib,$(LIBS_$(1)),-cclib $(lib)), $(foreach obj,$($(1)_OBJS),$(obj).cmx))
+ $(1).cma: $(foreach obj,$($(1)_OBJS),$(obj).cmo)
+	$(call mk-caml-lib-bytecode,$$@, -dllib dll$(1)_stubs.so -cclib -l$(1)_stubs, $$+)
+ $(1)_stubs.a: $(foreach obj,$$($(1)_C_OBJS),$(obj).o)
+	$(call mk-caml-stubs,$$@, $$+)
+ lib$(1)_stubs.a: $(foreach obj,$($(1)_C_OBJS),$(obj).o)
+	$(call mk-caml-lib-stubs,$$@, $$+)
 endef
 
 define OCAML_NOC_LIBRARY_template
