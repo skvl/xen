@@ -1,4 +1,4 @@
-xen (4.4.1-1) UNRELEASED; urgency=medium
+xen (4.4.1-1) unstable; urgency=medium
 
   * New upstream release.
     - Fix several vulnerabilities. (closes: #757724)
@@ -6,7 +6,7 @@ xen (4.4.1-1) UNRELEASED; urgency=medium
       CVE-2014-3967, CVE-2014-3968,
       CVE-2014-4021
 
- -- Bastian Blank <waldi@debian.org>  Sun, 07 Sep 2014 11:14:39 +0200
+ -- Bastian Blank <waldi@debian.org>  Sun, 21 Sep 2014 10:45:47 +0200
 
 xen (4.4.0-5) unstable; urgency=medium
 
