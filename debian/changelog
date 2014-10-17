@@ -1,4 +1,4 @@
-xen (4.4.1-3) UNRELEASED; urgency=medium
+xen (4.4.1-3) unstable; urgency=medium
 
   [ Bastian Blank ]
   * Remove unused build-depencencies.
@@ -16,7 +16,7 @@ xen (4.4.1-3) UNRELEASED; urgency=medium
   [ Ian Campbell ]
   * Install xen.efi into /boot for amd64 builds.
 
- -- Bastian Blank <waldi@debian.org>  Mon, 06 Oct 2014 21:01:16 +0200
+ -- Bastian Blank <waldi@debian.org>  Fri, 17 Oct 2014 16:27:46 +0200
 
 xen (4.4.1-2) unstable; urgency=medium
 
