@@ -1,5 +1,6 @@
 xen (4.4.1-3) UNRELEASED; urgency=medium
 
+  [ Bastian Blank ]
   * Remove unused build-depencencies.
   * Extend list affected systems for broken interrupt assignment.
     CVE-2013-3495
@@ -11,6 +12,9 @@ xen (4.4.1-3) UNRELEASED; urgency=medium
     CVE-2014-6268
   * Fix MSR range check in emulation.
     CVE-2014-7188
+
+  [ Ian Campbell ]
+  * Install xen.efi into /boot for amd64 builds.
 
  -- Bastian Blank <waldi@debian.org>  Mon, 06 Oct 2014 21:01:16 +0200
 

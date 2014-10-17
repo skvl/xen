@@ -153,6 +153,9 @@ install-hypervisor_$(ARCH)_$(FLAVOUR): $(STAMPS_DIR)/build-hypervisor_$(ARCH)_$(
 	dh_prep
 	dh_installdirs boot
 	cp $(DIR)/xen/xen$(IMAGE_SUFFIX) debian/$(PACKAGE_NAME)/boot/xen-$(VERSION)-$(FLAVOUR)$(IMAGE_SUFFIX)
+ifeq ($(ARCH),amd64)
+	cp $(DIR)/xen/xen.efi debian/$(PACKAGE_NAME)/boot/xen-$(VERSION)-$(FLAVOUR).efi
+endif
 	+$(MAKE_SELF) install-base
 
 install-libxen_$(ARCH): DIR = $(BUILD_DIR)/install-utils_$(ARCH)
