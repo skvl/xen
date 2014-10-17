@@ -1,0 +1,57 @@
+From e4aa132e656197ccd65e612f1e1dc49b1d46f8b9 Mon Sep 17 00:00:00 2001
+From: Andrew Cooper <andrew.cooper3@citrix.com>
+Date: Tue, 23 Sep 2014 14:39:05 +0200
+Subject: x86/shadow: fix race condition sampling the dirty vram state
+
+d->arch.hvm_domain.dirty_vram must be read with the domain's paging lock held.
+
+If not, two concurrent hypercalls could both end up attempting to free
+dirty_vram (the second of which will free a wild pointer), or both end up
+allocating a new dirty_vram structure (the first of which will be leaked).
+
+This is XSA-104.
+
+Signed-off-by: Andrew Cooper <andrew.cooper3@citrix.com>
+Reviewed-by: Tim Deegan <tim@xen.org>
+master commit: 46a49b91f1026f64430b84dd83e845a33f06415e
+master date: 2014-09-23 14:31:47 +0200
+---
+ xen/arch/x86/mm/shadow/common.c  | 4 +++-
+ xen/include/asm-x86/hvm/domain.h | 2 +-
+ 2 files changed, 4 insertions(+), 2 deletions(-)
+
+diff --git a/xen/arch/x86/mm/shadow/common.c b/xen/arch/x86/mm/shadow/common.c
+index be095f6..3ed48c4 100644
+--- a/xen/arch/x86/mm/shadow/common.c
++++ b/xen/arch/x86/mm/shadow/common.c
+@@ -3486,7 +3486,7 @@ int shadow_track_dirty_vram(struct domain *d,
+     int flush_tlb = 0;
+     unsigned long i;
+     p2m_type_t t;
+-    struct sh_dirty_vram *dirty_vram = d->arch.hvm_domain.dirty_vram;
++    struct sh_dirty_vram *dirty_vram;
+     struct p2m_domain *p2m = p2m_get_hostp2m(d);
+ 
+     if ( end_pfn < begin_pfn || end_pfn > p2m->max_mapped_pfn + 1 )
+@@ -3496,6 +3496,8 @@ int shadow_track_dirty_vram(struct domain *d,
+     p2m_lock(p2m_get_hostp2m(d));
+     paging_lock(d);
+ 
++    dirty_vram = d->arch.hvm_domain.dirty_vram;
++
+     if ( dirty_vram && (!nr ||
+              ( begin_pfn != dirty_vram->begin_pfn
+             || end_pfn   != dirty_vram->end_pfn )) )
+diff --git a/xen/include/asm-x86/hvm/domain.h b/xen/include/asm-x86/hvm/domain.h
+index b1e3187..99c5e44 100644
+--- a/xen/include/asm-x86/hvm/domain.h
++++ b/xen/include/asm-x86/hvm/domain.h
+@@ -67,7 +67,7 @@ struct hvm_domain {
+     /* Memory ranges with pinned cache attributes. */
+     struct list_head       pinned_cacheattr_ranges;
+ 
+-    /* VRAM dirty support. */
++    /* VRAM dirty support.  Protect with the domain paging lock. */
+     struct sh_dirty_vram *dirty_vram;
+ 
+     /* If one of vcpus of this domain is in no_fill_mode or

@@ -30,3 +30,9 @@
 0030-tools-python-shebang.diff.patch
 0031-tools-xenstore-compatibility.diff.patch
 0032-send-xl-coredumps-var-lib-xen-dump-NAME.patch
+0033-evtchn-check-control-block-exists-when-using-FIFO-ba.patch
+0034-x86-shadow-fix-race-condition-sampling-the-dirty-vra.patch
+0035-x86-emulate-check-cpl-for-all-privileged-instruction.patch
+0036-x86emul-only-emulate-software-interrupt-injection-fo.patch
+0037-x86-HVM-properly-bound-x2APIC-MSR-range.patch
+0038-VT-d-suppress-UR-signaling-for-further-desktop-chips.patch
