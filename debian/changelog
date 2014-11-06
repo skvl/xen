@@ -37,6 +37,8 @@ xen (4.8.0-1~) unstable; urgency=high
     Incorporate a timeout so as not to block boot (Mitigates #737613)
   * Correct syntax error in xen-init-list when running with xend
     (Closes: #763102)
+  * Apply SELinux labels to directories created by initscripts. Patch from
+    Russell Coker. (Closes: #764912)
 
   [ Lubomir Host ]
   * Fix xen-init-name to not fail looking for a nonexistent 'config'
