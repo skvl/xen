@@ -35,10 +35,9 @@ $(STAMPS_DIR)/setup-docs:
 	mkdir -p $(DIR)
 	cp -al $(SOURCE_FILES) $(DIR)
 	cp --remove-destination /usr/share/misc/config.guess /usr/share/misc/config.sub $(DIR)
-	cd $(DIR)/docs; ./configure --prefix=/usr
-	cd $(DIR)/tools; \
+	cd $(DIR); \
 		WGET=/bin/false \
-		./configure --prefix=/usr
+		./configure --disable-stubdom --disable-xen --prefix=/usr
 	@$(stamp)
 
 $(STAMPS_DIR)/setup-hypervisor_$(ARCH)_$(FLAVOUR): SOURCE_FILES = $(filter-out debian, $(wildcard *))
@@ -57,9 +56,10 @@ $(STAMPS_DIR)/setup-utils_$(ARCH):
 	mkdir -p $(DIR)
 	cp -al $(SOURCE_FILES) $(DIR)
 	cp --remove-destination /usr/share/misc/config.guess /usr/share/misc/config.sub $(DIR)
-	cd $(DIR)/tools; \
+	cd $(DIR); \
 		WGET=/bin/false \
 		./configure \
+			--disable-docs --disable-stubdom --disable-xen \
 			--prefix=/usr \
 			--includedir=$${prefix}/include \
 			--mandir=$${prefix}/share/man \
