@@ -231,6 +231,11 @@ install-utils-common: $(STAMPS_DIR)/install-utils-common
 		$(SOURCE_DIR)/tools/xentrace/xentrace_format.1 \
 		$(SOURCE_DIR)/tools/xentrace/xentrace.8 \
 		$(SOURCE_DIR)/tools/xenstat/xentop/xentop.1
+	dh_installdocs $(SOURCE_DIR)/docs/txt/misc/efi.txt
+	dh_installdocs $(SOURCE_DIR)/docs/txt/misc/xen-command-line.txt
+	dh_installdocs $(SOURCE_DIR)/docs/txt/misc/xl-disk-configuration.txt
+	dh_installdocs $(SOURCE_DIR)/docs/txt/misc/xl-network-configuration.txt
+	dh_installdocs $(SOURCE_DIR)/docs/txt/misc/xl-numa-placement.txt
 	dh_link
 	dh_ucf
 	+$(MAKE_SELF) install-base
