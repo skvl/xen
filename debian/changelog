@@ -3,6 +3,11 @@ xen (4.8.0~rc5-2~) unstable; urgency=medium
   * Drop -lcrypto search from upstream configure, and from our
     Build-Depends.  Closes:#844419.
 
+  [ Ian Campbell ]
+  * Start a qemu process in dom0 to service the toolstacks loopback disk
+    attaches. (Closes: #770456)
+  * Remove correct pidfile when stopping xenconsoled.
+
  --
 
 xen (4.8.0~rc5-1) unstable; urgency=medium
