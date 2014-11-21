@@ -37,6 +37,9 @@ XENCONSOLED="$ROOT"/bin/xenconsoled
 XENCONSOLED_PIDFILE="/var/run/xenconsoled.pid"
 XENSTORED="$ROOT"/bin/xenstored
 XENSTORED_PIDFILE="/var/run/xenstore.pid"
+QEMU=/usr/bin/qemu-system-i386
+QEMU_PIDFILE="/var/run/qemu-dom0.pid"
+QEMU_ARGS="-xen-domid 0 -xen-attach -name dom0 -nographic -M xenpv -daemonize -monitor /dev/null -serial /dev/null -parallel /dev/null"
 
 modules_setup()
 {
@@ -179,9 +182,64 @@ xenconsoled_stop_real()
 	[ "$RETVAL" = 2 ] && return 2
 	start-stop-daemon --stop --quiet --oknodo --retry=0/30/KILL/5 --exec "$XENCONSOLED"
 	[ "$?" = 2 ] && return 2
-	rm -f $PIDFILE
+	rm -f $XENCONSOLED_PIDFILE
 	return "$RETVAL"
 }
+
+qemu_start()
+{
+	[ -x $QEMU ] || return 0
+	log_progress_msg "qemu"
+	qemu_start_real
+	return $?
+}
+
+qemu_stop()
+{
+	[ -x $QEMU ] || return 0
+	log_progress_msg "qemu"
+	qemu_stop_real
+	return $?
+}
+
+qemu_restart()
+{
+	[ -x $QEMU ] || return 0
+	log_progress_msg "qemu"
+	qemu_stop_real
+	case "$?" in
+		0|1)
+		qemu_start_real
+		case "$?" in
+			0) ;;
+			*) return 2 ;;
+		esac
+		;;
+		*) return 2 ;;
+	esac
+	return 0
+}
+
+qemu_start_real()
+{
+	start-stop-daemon --start --quiet --pidfile "$QEMU_PIDFILE" --exec "$QEMU" --test > /dev/null \
+		|| return 1
+	start-stop-daemon --start --quiet --pidfile "$QEMU_PIDFILE" --exec "$QEMU" -- \
+		$QEMU_ARGS -pidfile "$QEMU_PIDFILE" \
+		|| return 2
+}
+
+qemu_stop_real()
+{
+	start-stop-daemon --stop --quiet --retry=TERM/30/KILL/5 --pidfile "$QEMU_PIDFILE" --exec "$QEMU"
+	RETVAL="$?"
+	[ "$RETVAL" = 2 ] && return 2
+	start-stop-daemon --stop --quiet --oknodo --retry=0/30/KILL/5 --exec "$QEMU"
+	[ "$?" = 2 ] && return 2
+	rm -f $QEMU_PIDFILE
+	return "$RETVAL"
+}
+
 
 xenstored_start()
 {
@@ -241,6 +299,11 @@ case "$1" in
 		0|1) ;;
 		*) log_end_msg 1; exit ;;
 	esac
+	qemu_start
+	case "$?" in
+		0|1) ;;
+		*) log_end_msg 1; exit ;;
+	esac
 	log_end_msg 0
 	;;
   stop)
@@ -251,6 +314,11 @@ case "$1" in
 	esac
 	log_daemon_msg "Stopping $DESC"
 	ret=0
+	qemu_stop
+	case "$?" in
+		0|1) ;;
+		*) ret=1 ;;
+	esac
 	xend_stop
 	case "$?" in
 		0|1) ;;
@@ -271,6 +339,11 @@ case "$1" in
 	esac
 	log_daemon_msg "Restarting $DESC"
 	ret=0
+	qemu_restart
+	case "$?" in
+		0|1) ;;
+		*) ret=1 ;;
+	esac
 	xend_restart
 	case "$?" in
 		0|1) ;;
