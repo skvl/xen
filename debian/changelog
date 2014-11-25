@@ -3,8 +3,9 @@ xen (4.4.1-4) UNRELEASED; urgency=medium
   [ Ian Campbell ]
   * Add licensing for tools/python/logging to debian/copyright.
     (Closes: #759384)
+  * Correctly include xen-init-name in xen-utils-common. (Closes: #769543)
 
- -- Ian Campbell <ijc@debian.org>  Thu, 06 Nov 2014 11:28:54 +0000
+ -- Ian Campbell <ijc@debian.org>  Tue, 25 Nov 2014 13:15:45 +0000
 
 xen (4.4.1-3) unstable; urgency=medium
 

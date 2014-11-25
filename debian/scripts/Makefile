@@ -24,6 +24,7 @@ GLOBAL_UTILS_WRAPPER = xen-utils-wrapper
 PRIVATE_SCRIPTS = \
 	xen-dir \
 	xen-init-list \
+	xen-init-name \
 	xen-toolstack \
 	xen-version \
 	$(GLOBAL_TOOLSTACK_WRAPPER) \
