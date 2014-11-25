@@ -33,6 +33,8 @@ xen (4.8.0-1~) unstable; urgency=high
   * Start a qemu process in dom0 to service the toolstacks loopback disk
     attaches. (Closes: #770456)
   * Remove correct pidfile when stopping xenconsoled.
+  * Check that xenstored has actually started before talking to it.
+    Incorporate a timeout so as not to block boot (Mitigates #737613)
 
   [ Lubomir Host ]
   * Fix xen-init-name to not fail looking for a nonexistent 'config'
