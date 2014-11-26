@@ -40,3 +40,4 @@
 0040-x86-don-t-allow-page-table-updates-on-non-PV-page-ta.patch
 0041-x86emul-enforce-privilege-level-restrictions-when-lo.patch
 0042-x86-mm-fix-a-reference-counting-error-in-MMU_MACHPHY.patch
+0043-tools-libxl-do-not-overrun-input-buffer-in-libxl__pa.patch

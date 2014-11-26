@@ -10,6 +10,7 @@ xen (4.4.1-4) UNRELEASED; urgency=medium
   * Fix reference counter leak.
     CVE-2014-9030
   * Use linux 3.16.0-4 stuff.
+  * Fix memory leak in xl. (closes: #767295)
 
   [ Ian Campbell ]
   * Add licensing for tools/python/logging to debian/copyright.
