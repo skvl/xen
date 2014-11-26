@@ -9,6 +9,7 @@ xen (4.4.1-4) UNRELEASED; urgency=medium
     CVE-2014-8595
   * Fix reference counter leak.
     CVE-2014-9030
+  * Use linux 3.16.0-4 stuff.
 
   [ Ian Campbell ]
   * Add licensing for tools/python/logging to debian/copyright.
