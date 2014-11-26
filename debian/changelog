@@ -1,5 +1,15 @@
 xen (4.4.1-4) UNRELEASED; urgency=medium
 
+  [ Bastian Blank ]
+  * Make operations pre-emptible.
+    CVE-2014-5146, CVE-2014-5149
+  * Don't allow page table updates from non-PV page tables.
+    CVE-2014-8594
+  * Enforce privilege level while loading code segment.
+    CVE-2014-8595
+  * Fix reference counter leak.
+    CVE-2014-9030
+
   [ Ian Campbell ]
   * Add licensing for tools/python/logging to debian/copyright.
     (Closes: #759384)

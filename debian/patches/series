@@ -36,3 +36,7 @@
 0036-x86emul-only-emulate-software-interrupt-injection-fo.patch
 0037-x86-HVM-properly-bound-x2APIC-MSR-range.patch
 0038-VT-d-suppress-UR-signaling-for-further-desktop-chips.patch
+0039-x86-paging-make-log-dirty-operations-preemptible.patch
+0040-x86-don-t-allow-page-table-updates-on-non-PV-page-ta.patch
+0041-x86emul-enforce-privilege-level-restrictions-when-lo.patch
+0042-x86-mm-fix-a-reference-counting-error-in-MMU_MACHPHY.patch
