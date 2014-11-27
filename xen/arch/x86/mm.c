@@ -3508,6 +3508,10 @@ long do_mmu_update(
         {
             p2m_type_t p2mt;
 
+            rc = -EOPNOTSUPP;
+            if ( unlikely(paging_mode_refcounts(pt_owner)) )
+                break;
+
             xsm_needed |= XSM_MMU_NORMAL_UPDATE;
             if ( get_pte_flags(req.val) & _PAGE_PRESENT )
             {
@@ -3630,6 +3634,12 @@ long do_mmu_update(
 
         case MMU_MACHPHYS_UPDATE:
 
+            if ( unlikely(paging_mode_translate(pg_owner)) )
+            {
+                rc = -EINVAL;
+                break;
+            }
+
             mfn = req.ptr >> PAGE_SHIFT;
             gpfn = req.val;
 
@@ -3645,13 +3655,6 @@ long do_mmu_update(
             if ( unlikely(!get_page_from_pagenr(mfn, pg_owner)) )
             {
                 MEM_LOG("Could not get page for mach->phys update");
-                rc = -EINVAL;
-                break;
-            }
-
-            if ( unlikely(paging_mode_translate(pg_owner)) )
-            {
-                MEM_LOG("Mach-phys update on auto-translate guest");
                 rc = -EINVAL;
                 break;
             }

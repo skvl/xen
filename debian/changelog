@@ -1,3 +1,25 @@
+xen (4.4.1-4) unstable; urgency=medium
+
+  [ Bastian Blank ]
+  * Make operations pre-emptible.
+    CVE-2014-5146, CVE-2014-5149
+  * Don't allow page table updates from non-PV page tables.
+    CVE-2014-8594
+  * Enforce privilege level while loading code segment.
+    CVE-2014-8595
+  * Fix reference counter leak.
+    CVE-2014-9030
+  * Use linux 3.16.0-4 stuff.
+  * Fix memory leak in xl. (closes: #767295)
+
+  [ Ian Campbell ]
+  * Add licensing for tools/python/logging to debian/copyright.
+    (Closes: #759384)
+  * Correctly include xen-init-name in xen-utils-common. (Closes: #769543)
+  * xen-utils recommends grub-xen-host package (Closes: #770460)
+
+ -- Bastian Blank <waldi@debian.org>  Thu, 27 Nov 2014 20:17:36 +0100
+
 xen (4.4.1-3) unstable; urgency=medium
 
   [ Bastian Blank ]
