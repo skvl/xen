@@ -1,4 +1,4 @@
-xen (4.4.1-4) UNRELEASED; urgency=medium
+xen (4.4.1-4) unstable; urgency=medium
 
   [ Bastian Blank ]
   * Make operations pre-emptible.
@@ -18,7 +18,7 @@ xen (4.4.1-4) UNRELEASED; urgency=medium
   * Correctly include xen-init-name in xen-utils-common. (Closes: #769543)
   * xen-utils recommends grub-xen-host package (Closes: #770460)
 
- -- Ian Campbell <ijc@debian.org>  Fri, 21 Nov 2014 13:06:49 +0000
+ -- Bastian Blank <waldi@debian.org>  Thu, 27 Nov 2014 20:17:36 +0100
 
 xen (4.4.1-3) unstable; urgency=medium
 
