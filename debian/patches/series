@@ -41,3 +41,5 @@
 0041-x86emul-enforce-privilege-level-restrictions-when-lo.patch
 0042-x86-mm-fix-a-reference-counting-error-in-MMU_MACHPHY.patch
 0043-tools-libxl-do-not-overrun-input-buffer-in-libxl__pa.patch
+0044-x86-limit-checks-in-hypercall_xlat_continuation-to-a.patch
+0045-x86-HVM-confine-internally-handled-MMIO-to-solitary-.patch
