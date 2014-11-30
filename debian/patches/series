@@ -43,3 +43,5 @@
 0043-tools-libxl-do-not-overrun-input-buffer-in-libxl__pa.patch
 0044-x86-limit-checks-in-hypercall_xlat_continuation-to-a.patch
 0045-x86-HVM-confine-internally-handled-MMIO-to-solitary-.patch
+0046-libxc-don-t-leak-buffer-containing-the-uncompressed-.patch
+0047-tools-libxl-do-not-leak-diskpath-during-local-disk-a.patch
