@@ -1,0 +1,37 @@
+From 260a7a8659cb54d90b238bf9dd0f2961a6b38025 Mon Sep 17 00:00:00 2001
+From: Ian Campbell <ian.campbell@citrix.com>
+Date: Thu, 6 Nov 2014 13:00:31 +0000
+Subject: tools: libxl: do not leak diskpath during local disk attach
+
+libxl__device_disk_local_initiate_attach is assigning dls->diskpath with a
+strdup of the device path. This is then passed to the callback, e.g.
+parse_bootloader_result but bootloader_cleanup will not free it.
+
+Since the callback is within the scope of the (e)gc and therefore doesn't need
+to be malloc'd, a gc'd alloc will do. All other assignments to this field use
+the gc.
+
+https://bugs.debian.org/cgi-bin/bugreport.cgi?bug=767295
+
+Reported-by: Gedalya <gedalya@gedalya.net>
+Signed-off-by: Ian Campbell <ian.campbell@citrix.com>
+Acked-by: Ian Jackson <ian.jackson@eu.citrix.com>
+Acked-by: Wei Liu <wei.liu2@citrix.com>
+(cherry picked from commit 379b351889a8f02abe30a06e2ce9ba8b381b91ab)
+---
+ tools/libxl/libxl.c | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/tools/libxl/libxl.c b/tools/libxl/libxl.c
+index 2d29ad2..c47f957 100644
+--- a/tools/libxl/libxl.c
++++ b/tools/libxl/libxl.c
+@@ -2678,7 +2678,7 @@ void libxl__device_disk_local_initiate_attach(libxl__egc *egc,
+     }
+ 
+     if (dev != NULL)
+-        dls->diskpath = strdup(dev);
++        dls->diskpath = libxl__strdup(gc, dev);
+ 
+     dls->callback(egc, dls, 0);
+     return;
