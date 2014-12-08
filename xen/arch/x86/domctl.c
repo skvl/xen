@@ -30,11 +30,12 @@
 #include <xen/hypercall.h> /* for arch_do_domctl */
 #include <xsm/xsm.h>
 #include <xen/iommu.h>
-#include <asm/mem_event.h>
+#include <xen/mem_event.h>
 #include <public/mem_event.h>
 #include <asm/mem_sharing.h>
 #include <asm/xstate.h>
 #include <asm/debugger.h>
+#include <asm/psr.h>
 
 static int gdbsx_guest_mem_io(
     domid_t domid, struct xen_domctl_gdbsx_memio *iop)
@@ -46,21 +47,26 @@ static int gdbsx_guest_mem_io(
     return (iop->remain ? -EFAULT : 0);
 }
 
+#define MAX_IOPORTS 0x10000
+
 long arch_do_domctl(
     struct xen_domctl *domctl, struct domain *d,
     XEN_GUEST_HANDLE_PARAM(xen_domctl_t) u_domctl)
 {
     long ret = 0;
     bool_t copyback = 0;
+    unsigned long i;
 
     switch ( domctl->cmd )
     {
 
     case XEN_DOMCTL_shadow_op:
     {
-        ret = paging_domctl(d,
-                            &domctl->u.shadow_op,
-                            guest_handle_cast(u_domctl, void));
+        ret = paging_domctl(d, &domctl->u.shadow_op,
+                            guest_handle_cast(u_domctl, void), 0);
+        if ( ret == -ERESTART )
+            return hypercall_create_continuation(__HYPERVISOR_arch_1,
+                                                 "h", u_domctl);
         copyback = 1;
     }
     break;
@@ -71,18 +77,18 @@ long arch_do_domctl(
         unsigned int np = domctl->u.ioport_permission.nr_ports;
         int allow = domctl->u.ioport_permission.allow_access;
 
-        ret = -EINVAL;
-        if ( (fp + np) > 65536 )
-            break;
-
-        if ( np == 0 )
-            ret = 0;
-        else if ( xsm_ioport_permission(XSM_HOOK, d, fp, fp + np - 1, allow) )
+        if ( (fp + np) <= fp || (fp + np) > MAX_IOPORTS )
+            ret = -EINVAL;
+        else if ( !ioports_access_permitted(current->domain,
+                                            fp, fp + np - 1) ||
+                  xsm_ioport_permission(XSM_HOOK, d, fp, fp + np - 1, allow) )
             ret = -EPERM;
         else if ( allow )
             ret = ioports_permit_access(d, fp, fp + np - 1);
         else
             ret = ioports_deny_access(d, fp, fp + np - 1);
+        if ( !ret )
+            memory_type_changed(d);
     }
     break;
 
@@ -319,7 +325,6 @@ long arch_do_domctl(
 
     case XEN_DOMCTL_getmemlist:
     {
-        int i;
         unsigned long max_pfns = domctl->u.getmemlist.max_pfns;
         uint64_t mfn;
         struct page_info *page;
@@ -639,79 +644,8 @@ long arch_do_domctl(
     }
     break;
 
-    case XEN_DOMCTL_memory_mapping:
-    {
-        unsigned long gfn = domctl->u.memory_mapping.first_gfn;
-        unsigned long mfn = domctl->u.memory_mapping.first_mfn;
-        unsigned long nr_mfns = domctl->u.memory_mapping.nr_mfns;
-        int add = domctl->u.memory_mapping.add_mapping;
-        unsigned long i;
-
-        ret = -EINVAL;
-        if ( (mfn + nr_mfns - 1) < mfn || /* wrap? */
-             ((mfn | (mfn + nr_mfns - 1)) >> (paddr_bits - PAGE_SHIFT)) ||
-             (gfn + nr_mfns - 1) < gfn ) /* wrap? */
-            break;
-
-        ret = -EPERM;
-        if ( !iomem_access_permitted(current->domain, mfn, mfn + nr_mfns - 1) )
-            break;
-
-        ret = xsm_iomem_mapping(XSM_HOOK, d, mfn, mfn + nr_mfns - 1, add);
-        if ( ret )
-            break;
-
-        if ( add )
-        {
-            printk(XENLOG_G_INFO
-                   "memory_map:add: dom%d gfn=%lx mfn=%lx nr=%lx\n",
-                   d->domain_id, gfn, mfn, nr_mfns);
-
-            ret = iomem_permit_access(d, mfn, mfn + nr_mfns - 1);
-            if ( !ret && paging_mode_translate(d) )
-            {
-                for ( i = 0; !ret && i < nr_mfns; i++ )
-                    if ( !set_mmio_p2m_entry(d, gfn + i, _mfn(mfn + i)) )
-                        ret = -EIO;
-                if ( ret )
-                {
-                    printk(XENLOG_G_WARNING
-                           "memory_map:fail: dom%d gfn=%lx mfn=%lx\n",
-                           d->domain_id, gfn + i, mfn + i);
-                    while ( i-- )
-                        clear_mmio_p2m_entry(d, gfn + i);
-                    if ( iomem_deny_access(d, mfn, mfn + nr_mfns - 1) &&
-                         is_hardware_domain(current->domain) )
-                        printk(XENLOG_ERR
-                               "memory_map: failed to deny dom%d access to [%lx,%lx]\n",
-                               d->domain_id, mfn, mfn + nr_mfns - 1);
-                }
-            }
-        }
-        else
-        {
-            printk(XENLOG_G_INFO
-                   "memory_map:remove: dom%d gfn=%lx mfn=%lx nr=%lx\n",
-                   d->domain_id, gfn, mfn, nr_mfns);
-
-            if ( paging_mode_translate(d) )
-                for ( i = 0; i < nr_mfns; i++ )
-                    add |= !clear_mmio_p2m_entry(d, gfn + i);
-            ret = iomem_deny_access(d, mfn, mfn + nr_mfns - 1);
-            if ( !ret && add )
-                ret = -EIO;
-            if ( ret && is_hardware_domain(current->domain) )
-                printk(XENLOG_ERR
-                       "memory_map: error %ld %s dom%d access to [%lx,%lx]\n",
-                       ret, add ? "removing" : "denying", d->domain_id,
-                       mfn, mfn + nr_mfns - 1);
-        }
-    }
-    break;
-
     case XEN_DOMCTL_ioport_mapping:
     {
-#define MAX_IOPORTS    0x10000
         struct hvm_iommu *hd;
         unsigned int fgp = domctl->u.ioport_mapping.first_gport;
         unsigned int fmp = domctl->u.ioport_mapping.first_mport;
@@ -745,7 +679,7 @@ long arch_do_domctl(
                    "ioport_map:add: dom%d gport=%x mport=%x nr=%x\n",
                    d->domain_id, fgp, fmp, np);
 
-            list_for_each_entry(g2m_ioport, &hd->g2m_ioport_list, list)
+            list_for_each_entry(g2m_ioport, &hd->arch.g2m_ioport_list, list)
                 if (g2m_ioport->mport == fmp )
                 {
                     g2m_ioport->gport = fgp;
@@ -764,7 +698,7 @@ long arch_do_domctl(
                 g2m_ioport->gport = fgp;
                 g2m_ioport->mport = fmp;
                 g2m_ioport->np = np;
-                list_add_tail(&g2m_ioport->list, &hd->g2m_ioport_list);
+                list_add_tail(&g2m_ioport->list, &hd->arch.g2m_ioport_list);
             }
             if ( !ret )
                 ret = ioports_permit_access(d, fmp, fmp + np - 1);
@@ -779,7 +713,7 @@ long arch_do_domctl(
             printk(XENLOG_G_INFO
                    "ioport_map:remove: dom%d gport=%x mport=%x nr=%x\n",
                    d->domain_id, fgp, fmp, np);
-            list_for_each_entry(g2m_ioport, &hd->g2m_ioport_list, list)
+            list_for_each_entry(g2m_ioport, &hd->arch.g2m_ioport_list, list)
                 if ( g2m_ioport->mport == fmp )
                 {
                     list_del(&g2m_ioport->list);
@@ -792,6 +726,8 @@ long arch_do_domctl(
                        "ioport_map: error %ld denying dom%d access to [%x,%x]\n",
                        ret, d->domain_id, fmp, fmp + np - 1);
         }
+        if ( !ret )
+            memory_type_changed(d);
     }
     break;
 
@@ -921,7 +857,6 @@ long arch_do_domctl(
     {
         xen_domctl_cpuid_t *ctl = &domctl->u.cpuid;
         cpuid_input_t *cpuid, *unused = NULL;
-        int i;
 
         for ( i = 0; i < MAX_CPUID_INPUT; i++ )
         {
@@ -1022,11 +957,10 @@ long arch_do_domctl(
         if ( !d->controller_pause_count )
             break;
         ret = -EINVAL;
-        if ( domctl->u.gdbsx_pauseunp_vcpu.vcpu >= MAX_VIRT_CPUS ||
+        if ( domctl->u.gdbsx_pauseunp_vcpu.vcpu >= d->max_vcpus ||
              (v = d->vcpu[domctl->u.gdbsx_pauseunp_vcpu.vcpu]) == NULL )
             break;
-        vcpu_pause(v);
-        ret = 0;
+        ret = vcpu_pause_by_systemcontroller(v);
     }
     break;
 
@@ -1038,13 +972,14 @@ long arch_do_domctl(
         if ( !d->controller_pause_count )
             break;
         ret = -EINVAL;
-        if ( domctl->u.gdbsx_pauseunp_vcpu.vcpu >= MAX_VIRT_CPUS ||
+        if ( domctl->u.gdbsx_pauseunp_vcpu.vcpu >= d->max_vcpus ||
              (v = d->vcpu[domctl->u.gdbsx_pauseunp_vcpu.vcpu]) == NULL )
             break;
-        if ( !atomic_read(&v->pause_count) )
-            printk("WARN: Unpausing vcpu:%d which is not paused\n", v->vcpu_id);
-        vcpu_unpause(v);
-        ret = 0;
+        ret = vcpu_unpause_by_systemcontroller(v);
+        if ( ret == -EINVAL )
+            printk(XENLOG_G_WARNING
+                   "WARN: d%d attempting to unpause %pv which is not paused\n",
+                   current->domain->domain_id, v);
     }
     break;
 
@@ -1166,8 +1101,7 @@ long arch_do_domctl(
             {
                 if ( evc->size >= 2 * sizeof(uint64_t) + XSTATE_AREA_MIN_SIZE )
                     ret = validate_xstate(_xcr0, _xcr0_accum,
-                                          _xsave_area->xsave_hdr.xstate_bv,
-                                          evc->xfeature_mask);
+                                          _xsave_area->xsave_hdr.xstate_bv);
             }
             else if ( !_xcr0 )
                 ret = 0;
@@ -1200,14 +1134,6 @@ long arch_do_domctl(
     }
     break;
 
-    case XEN_DOMCTL_mem_event_op:
-    {
-        ret = mem_event_domctl(d, &domctl->u.mem_event_op,
-                              guest_handle_cast(u_domctl, void));
-        copyback = 1;
-    }
-    break;
-
     case XEN_DOMCTL_mem_sharing_op:
     {
         ret = mem_sharing_domctl(d, &domctl->u.mem_sharing_op);
@@ -1232,33 +1158,175 @@ long arch_do_domctl(
     break;
 #endif /* P2M_AUDIT */
 
-    case XEN_DOMCTL_set_access_required:
-    {
-        struct p2m_domain* p2m;
-        
-        ret = -EPERM;
-        if ( current->domain == d )
-            break;
-
-        ret = 0;
-        p2m = p2m_get_hostp2m(d);
-        p2m->access_required = domctl->u.access_required.access_required;
-    }
-    break;
-
     case XEN_DOMCTL_set_broken_page_p2m:
     {
         p2m_type_t pt;
         unsigned long pfn = domctl->u.set_broken_page_p2m.pfn;
         mfn_t mfn = get_gfn_query(d, pfn, &pt);
 
-        if ( unlikely(!mfn_valid(mfn_x(mfn)) || !p2m_is_ram(pt) ||
-                     (p2m_change_type(d, pfn, pt, p2m_ram_broken) != pt)) )
+        if ( unlikely(!mfn_valid(mfn_x(mfn))) || unlikely(!p2m_is_ram(pt)) )
             ret = -EINVAL;
+        else
+            ret = p2m_change_type_one(d, pfn, pt, p2m_ram_broken);
 
         put_gfn(d, pfn);
     }
     break;
+
+    case XEN_DOMCTL_get_vcpu_msrs:
+    case XEN_DOMCTL_set_vcpu_msrs:
+    {
+        struct xen_domctl_vcpu_msrs *vmsrs = &domctl->u.vcpu_msrs;
+        struct xen_domctl_vcpu_msr msr;
+        struct vcpu *v;
+        uint32_t nr_msrs = 0;
+
+        ret = -ESRCH;
+        if ( (vmsrs->vcpu >= d->max_vcpus) ||
+             ((v = d->vcpu[vmsrs->vcpu]) == NULL) )
+            break;
+
+        ret = -EINVAL;
+        if ( (v == current) || /* no vcpu_pause() */
+             !is_pv_domain(d) )
+            break;
+
+        /* Count maximum number of optional msrs. */
+        if ( boot_cpu_has(X86_FEATURE_DBEXT) )
+            nr_msrs += 4;
+
+        if ( domctl->cmd == XEN_DOMCTL_get_vcpu_msrs )
+        {
+            ret = 0; copyback = 1;
+
+            /* NULL guest handle is a request for max size. */
+            if ( guest_handle_is_null(vmsrs->msrs) )
+                vmsrs->msr_count = nr_msrs;
+            else
+            {
+                i = 0;
+
+                vcpu_pause(v);
+
+                if ( boot_cpu_has(X86_FEATURE_DBEXT) )
+                {
+                    unsigned int j;
+
+                    if ( v->arch.pv_vcpu.dr_mask[0] )
+                    {
+                        if ( i < vmsrs->msr_count && !ret )
+                        {
+                            msr.index = MSR_AMD64_DR0_ADDRESS_MASK;
+                            msr.reserved = 0;
+                            msr.value = v->arch.pv_vcpu.dr_mask[0];
+                            if ( copy_to_guest_offset(vmsrs->msrs, i, &msr, 1) )
+                                ret = -EFAULT;
+                        }
+                        ++i;
+                    }
+
+                    for ( j = 0; j < 3; ++j )
+                    {
+                        if ( !v->arch.pv_vcpu.dr_mask[1 + j] )
+                            continue;
+                        if ( i < vmsrs->msr_count && !ret )
+                        {
+                            msr.index = MSR_AMD64_DR1_ADDRESS_MASK + j;
+                            msr.reserved = 0;
+                            msr.value = v->arch.pv_vcpu.dr_mask[1 + j];
+                            if ( copy_to_guest_offset(vmsrs->msrs, i, &msr, 1) )
+                                ret = -EFAULT;
+                        }
+                        ++i;
+                    }
+                }
+
+                vcpu_unpause(v);
+
+                if ( i > vmsrs->msr_count && !ret )
+                    ret = -ENOBUFS;
+                vmsrs->msr_count = i;
+            }
+        }
+        else
+        {
+            ret = -EINVAL;
+            if ( vmsrs->msr_count > nr_msrs )
+                break;
+
+            vcpu_pause(v);
+
+            for ( i = 0; i < vmsrs->msr_count; ++i )
+            {
+                ret = -EFAULT;
+                if ( copy_from_guest_offset(&msr, vmsrs->msrs, i, 1) )
+                    break;
+
+                ret = -EINVAL;
+                if ( msr.reserved )
+                    break;
+
+                switch ( msr.index )
+                {
+                case MSR_AMD64_DR0_ADDRESS_MASK:
+                    if ( !boot_cpu_has(X86_FEATURE_DBEXT) ||
+                         (msr.value >> 32) )
+                        break;
+                    v->arch.pv_vcpu.dr_mask[0] = msr.value;
+                    continue;
+
+                case MSR_AMD64_DR1_ADDRESS_MASK ...
+                    MSR_AMD64_DR3_ADDRESS_MASK:
+                    if ( !boot_cpu_has(X86_FEATURE_DBEXT) ||
+                         (msr.value >> 32) )
+                        break;
+                    msr.index -= MSR_AMD64_DR1_ADDRESS_MASK - 1;
+                    v->arch.pv_vcpu.dr_mask[msr.index] = msr.value;
+                    continue;
+                }
+                break;
+            }
+
+            vcpu_unpause(v);
+
+            if ( i == vmsrs->msr_count )
+                ret = 0;
+            else
+            {
+                vmsrs->msr_count = i;
+                copyback = 1;
+            }
+        }
+    }
+    break;
+
+    case XEN_DOMCTL_psr_cmt_op:
+        if ( !psr_cmt_enabled() )
+        {
+            ret = -ENODEV;
+            break;
+        }
+
+        switch ( domctl->u.psr_cmt_op.cmd )
+        {
+        case XEN_DOMCTL_PSR_CMT_OP_ATTACH:
+            ret = psr_alloc_rmid(d);
+            break;
+        case XEN_DOMCTL_PSR_CMT_OP_DETACH:
+            if ( d->arch.psr_rmid > 0 )
+                psr_free_rmid(d);
+            else
+                ret = -ENOENT;
+            break;
+        case XEN_DOMCTL_PSR_CMT_OP_QUERY_RMID:
+            domctl->u.psr_cmt_op.data = d->arch.psr_rmid;
+            copyback = 1;
+            break;
+        default:
+            ret = -ENOSYS;
+            break;
+        }
+        break;
 
     default:
         ret = iommu_do_domctl(domctl, d, u_domctl);

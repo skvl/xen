@@ -218,7 +218,7 @@ struct lzma_header {
 	uint8_t pos;
 	uint32_t dict_size;
 	uint64_t dst_size;
-} __attribute__ ((packed)) ;
+} __attribute__((packed)) ;
 
 
 #define LZMA_BASE_SIZE 1846

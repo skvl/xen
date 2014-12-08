@@ -1,7 +1,6 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <inttypes.h>
-#include <endian.h>
 #include <stdint.h>
 
 #include "xg_private.h"
@@ -104,6 +103,11 @@ int xc_try_lz4_decode(
 
 		if (size == 0)
 		{
+			if ( xc_dom_register_external(dom, output, out_len) )
+			{
+				msg = "Error registering stream output";
+				goto exit_2;
+			}
 			*blob = output;
 			*psize = out_len;
 			return 0;

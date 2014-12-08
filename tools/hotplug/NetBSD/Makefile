@@ -8,8 +8,7 @@ XEN_SCRIPTS += vif-bridge
 XEN_SCRIPTS += vif-ip
 
 XEN_SCRIPT_DATA =
-XEN_RCD_PROG-$(CONFIG_XEND) = rc.d/xend
-XEN_RCD_PROG = rc.d/xencommons $(XEN_RCD_PROG-y) rc.d/xendomains rc.d/xen-watchdog
+XEN_RCD_PROG = rc.d/xencommons rc.d/xendomains rc.d/xen-watchdog
 
 .PHONY: all
 all:
@@ -18,7 +17,7 @@ all:
 build:
 
 .PHONY: install
-install: all install-scripts install-rcd
+install: install-scripts install-rcd
 
 .PHONY: install-scripts
 install-scripts:
@@ -34,12 +33,12 @@ install-scripts:
 
 .PHONY: install-rcd
 install-rcd:
-	$(INSTALL_DIR) $(DESTDIR)$(CONFIG_DIR)/rc.d
+	$(INSTALL_DIR) $(DESTDIR)$(INITD_DIR)
 	set -e; for i in $(XEN_RCD_PROG); \
 	   do \
-	   $(INSTALL_PROG) $$i $(DESTDIR)$(CONFIG_DIR)/rc.d; \
+	   $(INSTALL_PROG) $$i $(DESTDIR)$(INITD_DIR); \
 	done
-	$(INSTALL_DATA) ../common/hotplugpath.sh $(DESTDIR)$(CONFIG_DIR)/rc.d/xen-hotplugpath.sh
+	$(INSTALL_DATA) ../common/hotplugpath.sh $(DESTDIR)$(INITD_DIR)/xen-hotplugpath.sh
 
 .PHONY: clean
 clean:

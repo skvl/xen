@@ -117,7 +117,7 @@ static void __init snb_errata_init(void)
  */
 static void __init map_igd_reg(void)
 {
-    u64 igd_mmio, igd_reg;
+    u64 igd_mmio;
 
     if ( !is_cantiga_b3 && !is_snb_gfx )
         return;
@@ -125,16 +125,10 @@ static void __init map_igd_reg(void)
     if ( igd_reg_va )
         return;
 
-    /* get IGD mmio address in PCI BAR */
-    igd_mmio = ((u64)pci_conf_read32(0, 0, IGD_DEV, 0, 0x14) << 32) +
-                     pci_conf_read32(0, 0, IGD_DEV, 0, 0x10);
-
-    /* offset of IGD regster we want to access is in 0x2000 range */
-    igd_reg = (igd_mmio & IGD_BAR_MASK) + 0x2000;
-
-    /* ioremap this physical page */
-    set_fixmap_nocache(FIX_IGD_MMIO, igd_reg);
-    igd_reg_va = (u8 *)fix_to_virt(FIX_IGD_MMIO);
+    igd_mmio   = pci_conf_read32(0, 0, IGD_DEV, 0, PCI_BASE_ADDRESS_1);
+    igd_mmio <<= 32;
+    igd_mmio  += pci_conf_read32(0, 0, IGD_DEV, 0, PCI_BASE_ADDRESS_0);
+    igd_reg_va = ioremap(igd_mmio & IGD_BAR_MASK, 0x3000);
 }
 
 /*
@@ -152,12 +146,10 @@ static int cantiga_vtd_ops_preamble(struct iommu* iommu)
         return 0;
 
     /*
-     * read IGD register at IGD MMIO + 0x20A4 to force IGD
-     * to exit low power state.  Since map_igd_reg()
-     * already mapped page starting 0x2000, we just need to
-     * add page offset 0x0A4 to virtual address base.
+     * Read IGD register at IGD MMIO + 0x20A4 to force IGD
+     * to exit low power state.
      */
-    return ( *((volatile int *)(igd_reg_va + 0x0A4)) );
+    return *(volatile int *)(igd_reg_va + 0x20A4);
 }
 
 /*
@@ -179,11 +171,11 @@ static void snb_vtd_ops_preamble(struct iommu* iommu)
     if ( !igd_reg_va )
         return;
 
-    *((volatile u32 *)(igd_reg_va + 0x54)) = 0x000FFFFF;
-    *((volatile u32 *)(igd_reg_va + 0x700)) = 0;
+    *(volatile u32 *)(igd_reg_va + 0x2054) = 0x000FFFFF;
+    *(volatile u32 *)(igd_reg_va + 0x2700) = 0;
 
     start_time = NOW();
-    while ( (*((volatile u32 *)(igd_reg_va + 0x2AC)) & 0xF) != 0 )
+    while ( (*(volatile u32 *)(igd_reg_va + 0x22AC) & 0xF) != 0 )
     {
         if ( NOW() > start_time + DMAR_OPERATION_TIMEOUT )
         {
@@ -194,7 +186,7 @@ static void snb_vtd_ops_preamble(struct iommu* iommu)
         cpu_relax();
     }
 
-    *((volatile u32*)(igd_reg_va + 0x50)) = 0x10001;
+    *(volatile u32 *)(igd_reg_va + 0x2050) = 0x10001;
 }
 
 static void snb_vtd_ops_postamble(struct iommu* iommu)
@@ -208,8 +200,8 @@ static void snb_vtd_ops_postamble(struct iommu* iommu)
     if ( !igd_reg_va )
         return;
 
-    *((volatile u32 *)(igd_reg_va + 0x54)) = 0xA;
-    *((volatile u32 *)(igd_reg_va + 0x50)) = 0x10000;
+    *(volatile u32 *)(igd_reg_va + 0x2054) = 0xA;
+    *(volatile u32 *)(igd_reg_va + 0x2050) = 0x10000;
 }
 
 /*
@@ -474,10 +466,12 @@ void pci_vtd_quirk(const struct pci_dev *pdev)
                action, seg, bus, dev, func);
         break;
 
-    case 0x100: case 0x104: case 0x108: /* Sandybridge */
-    case 0x150: case 0x154: case 0x158: /* Ivybridge */
-    case 0xa04: /* Haswell ULT */
-    case 0xc00: case 0xc04: case 0xc08: /* Haswell */
+    case 0x0040: case 0x0044: case 0x0048: /* Nehalem/Westmere */
+    case 0x0100: case 0x0104: case 0x0108: /* Sandybridge */
+    case 0x0150: case 0x0154: case 0x0158: /* Ivybridge */
+    case 0x0a04: /* Haswell ULT */
+    case 0x0c00: case 0x0c04: case 0x0c08: /* Haswell */
+    case 0x1600: case 0x1604: case 0x1608: /* Broadwell */
         bar = pci_conf_read32(seg, bus, dev, func, 0x6c);
         bar = (bar << 32) | pci_conf_read32(seg, bus, dev, func, 0x68);
         pa = bar & 0x7ffffff000UL; /* bits 12...38 */

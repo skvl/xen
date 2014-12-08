@@ -24,7 +24,7 @@ bool_t __read_mostly cpu_has_xsaveopt;
 static u32 __read_mostly xsave_cntxt_size;
 
 /* A 64-bit bitmask of the XSAVE/XRSTOR features supported by processor. */
-u64 xfeature_mask;
+u64 __read_mostly xfeature_mask;
 
 /* Cached xcr0 for fast read */
 static DEFINE_PER_CPU(uint64_t, xcr0);
@@ -250,10 +250,37 @@ void xstate_free_save_area(struct vcpu *v)
     v->arch.xsave_area = NULL;
 }
 
+static unsigned int _xstate_ctxt_size(u64 xcr0)
+{
+    u64 act_xcr0 = get_xcr0();
+    u32 eax, ebx = 0, ecx, edx;
+    bool_t ok = set_xcr0(xcr0);
+
+    ASSERT(ok);
+    cpuid_count(XSTATE_CPUID, 0, &eax, &ebx, &ecx, &edx);
+    ASSERT(ebx <= ecx);
+    ok = set_xcr0(act_xcr0);
+    ASSERT(ok);
+
+    return ebx;
+}
+
+/* Fastpath for common xstate size requests, avoiding reloads of xcr0. */
+unsigned int xstate_ctxt_size(u64 xcr0)
+{
+    if ( xcr0 == xfeature_mask )
+        return xsave_cntxt_size;
+
+    if ( xcr0 == 0 )
+        return 0;
+
+    return _xstate_ctxt_size(xcr0);
+}
+
 /* Collect the information of processor's extended state */
 void xstate_init(bool_t bsp)
 {
-    u32 eax, ebx, ecx, edx, min_size;
+    u32 eax, ebx, ecx, edx;
     u64 feature_mask;
 
     if ( boot_cpu_data.cpuid_level < XSTATE_CPUID )
@@ -269,12 +296,6 @@ void xstate_init(bool_t bsp)
     BUG_ON((eax & XSTATE_YMM) && !(eax & XSTATE_SSE));
     feature_mask = (((u64)edx << 32) | eax) & XCNTXT_MASK;
 
-    /* FP/SSE, XSAVE.HEADER, YMM */
-    min_size =  XSTATE_AREA_MIN_SIZE;
-    if ( eax & XSTATE_YMM )
-        min_size += XSTATE_YMM_SIZE;
-    BUG_ON(ecx < min_size);
-
     /*
      * Set CR4_OSXSAVE and run "cpuid" to get xsave_cntxt_size.
      */
@@ -289,14 +310,14 @@ void xstate_init(bool_t bsp)
          * xsave_cntxt_size is the max size required by enabled features.
          * We know FP/SSE and YMM about eax, and nothing about edx at present.
          */
-        xsave_cntxt_size = xstate_ctxt_size(feature_mask);
+        xsave_cntxt_size = _xstate_ctxt_size(feature_mask);
         printk("%s: using cntxt_size: %#x and states: %#"PRIx64"\n",
             __func__, xsave_cntxt_size, xfeature_mask);
     }
     else
     {
         BUG_ON(xfeature_mask != feature_mask);
-        BUG_ON(xsave_cntxt_size != xstate_ctxt_size(feature_mask));
+        BUG_ON(xsave_cntxt_size != _xstate_ctxt_size(feature_mask));
     }
 
     /* Check XSAVEOPT feature. */
@@ -307,34 +328,37 @@ void xstate_init(bool_t bsp)
         BUG_ON(!cpu_has_xsaveopt != !(eax & XSTATE_FEATURE_XSAVEOPT));
 }
 
-unsigned int xstate_ctxt_size(u64 xcr0)
+static bool_t valid_xcr0(u64 xcr0)
 {
-    u32 ebx = 0;
+    /* FP must be unconditionally set. */
+    if ( !(xcr0 & XSTATE_FP) )
+        return 0;
 
-    if ( xcr0 )
+    /* YMM depends on SSE. */
+    if ( (xcr0 & XSTATE_YMM) && !(xcr0 & XSTATE_SSE) )
+        return 0;
+
+    if ( xcr0 & (XSTATE_OPMASK | XSTATE_ZMM | XSTATE_HI_ZMM) )
     {
-        u64 act_xcr0 = get_xcr0();
-        u32 eax, ecx, edx;
-        bool_t ok = set_xcr0(xcr0);
+        /* OPMASK, ZMM, and HI_ZMM require YMM. */
+        if ( !(xcr0 & XSTATE_YMM) )
+            return 0;
 
-        ASSERT(ok);
-        cpuid_count(XSTATE_CPUID, 0, &eax, &ebx, &ecx, &edx);
-        ASSERT(ebx <= ecx);
-        ok = set_xcr0(act_xcr0);
-        ASSERT(ok);
+        /* OPMASK, ZMM, and HI_ZMM must be the same. */
+        if ( ~xcr0 & (XSTATE_OPMASK | XSTATE_ZMM | XSTATE_HI_ZMM) )
+            return 0;
     }
 
-    return ebx;
+    /* BNDREGS and BNDCSR must be the same. */
+    return !(xcr0 & XSTATE_BNDREGS) == !(xcr0 & XSTATE_BNDCSR);
 }
 
-int validate_xstate(u64 xcr0, u64 xcr0_accum, u64 xstate_bv, u64 xfeat_mask)
+int validate_xstate(u64 xcr0, u64 xcr0_accum, u64 xstate_bv)
 {
-    if ( (xcr0_accum & ~xfeat_mask) ||
-         (xstate_bv & ~xcr0_accum) ||
+    if ( (xstate_bv & ~xcr0_accum) ||
          (xcr0 & ~xcr0_accum) ||
-         !(xcr0 & XSTATE_FP) ||
-         ((xcr0 & XSTATE_YMM) && !(xcr0 & XSTATE_SSE)) ||
-         ((xcr0_accum & XSTATE_YMM) && !(xcr0_accum & XSTATE_SSE)) )
+         !valid_xcr0(xcr0) ||
+         !valid_xcr0(xcr0_accum) )
         return -EINVAL;
 
     if ( xcr0_accum & ~xfeature_mask )
@@ -351,10 +375,7 @@ int handle_xsetbv(u32 index, u64 new_bv)
     if ( index != XCR_XFEATURE_ENABLED_MASK )
         return -EOPNOTSUPP;
 
-    if ( (new_bv & ~xfeature_mask) || !(new_bv & XSTATE_FP) )
-        return -EINVAL;
-
-    if ( (new_bv & XSTATE_YMM) && !(new_bv & XSTATE_SSE) )
+    if ( (new_bv & ~xfeature_mask) || !valid_xcr0(new_bv) )
         return -EINVAL;
 
     if ( !set_xcr0(new_bv) )
@@ -363,6 +384,10 @@ int handle_xsetbv(u32 index, u64 new_bv)
     mask = new_bv & ~curr->arch.xcr0_accum;
     curr->arch.xcr0 = new_bv;
     curr->arch.xcr0_accum |= new_bv;
+
+    /* LWP sets nonlazy_xstate_used independently. */
+    if ( new_bv & (XSTATE_NONLAZY & ~XSTATE_LWP) )
+        curr->arch.nonlazy_xstate_used = 1;
 
     mask &= curr->fpu_dirtied ? ~XSTATE_FP_SSE : XSTATE_NONLAZY;
     if ( mask )

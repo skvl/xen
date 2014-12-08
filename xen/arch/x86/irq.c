@@ -19,6 +19,7 @@
 #include <xen/iommu.h>
 #include <xen/symbols.h>
 #include <xen/trace.h>
+#include <xen/softirq.h>
 #include <xsm/xsm.h>
 #include <asm/msi.h>
 #include <asm/current.h>
@@ -185,9 +186,9 @@ int create_irq(int node)
         desc->arch.used = IRQ_UNUSED;
         irq = ret;
     }
-    else if ( dom0 )
+    else if ( hardware_domain )
     {
-        ret = irq_permit_access(dom0, irq);
+        ret = irq_permit_access(hardware_domain, irq);
         if ( ret )
             printk(XENLOG_G_ERR
                    "Could not grant Dom0 access to IRQ%d (error %d)\n",
@@ -205,9 +206,9 @@ void destroy_irq(unsigned int irq)
 
     BUG_ON(!MSI_IRQ(irq));
 
-    if ( dom0 )
+    if ( hardware_domain )
     {
-        int err = irq_deny_access(dom0, irq);
+        int err = irq_deny_access(hardware_domain, irq);
 
         if ( err )
             printk(XENLOG_G_ERR
@@ -949,7 +950,7 @@ static int __init irq_ratelimit_init(void)
 }
 __initcall(irq_ratelimit_init);
 
-int __init request_irq(unsigned int irq,
+int __init request_irq(unsigned int irq, unsigned int irqflags,
         void (*handler)(int, void *, struct cpu_user_regs *),
         const char * devname, void *dev_id)
 {
@@ -976,14 +977,14 @@ int __init request_irq(unsigned int irq,
     action->dev_id = dev_id;
     action->free_on_release = 1;
 
-    retval = setup_irq(irq, action);
+    retval = setup_irq(irq, irqflags, action);
     if (retval)
         xfree(action);
 
     return retval;
 }
 
-void __init release_irq(unsigned int irq)
+void __init release_irq(unsigned int irq, const void *dev_id)
 {
     struct irq_desc *desc;
     unsigned long flags;
@@ -1005,10 +1006,13 @@ void __init release_irq(unsigned int irq)
         xfree(action);
 }
 
-int __init setup_irq(unsigned int irq, struct irqaction *new)
+int __init setup_irq(unsigned int irq, unsigned int irqflags,
+                     struct irqaction *new)
 {
     struct irq_desc *desc;
     unsigned long flags;
+
+    ASSERT(irqflags == 0);
 
     desc = irq_to_desc(irq);
  
@@ -1068,14 +1072,14 @@ bool_t cpu_has_pending_apic_eoi(void)
 
 static inline void set_pirq_eoi(struct domain *d, unsigned int irq)
 {
-    if ( is_pv_domain(d) && d->arch.pv_domain.pirq_eoi_map )
-        set_bit(irq, d->arch.pv_domain.pirq_eoi_map);
+    if ( d->arch.pirq_eoi_map )
+        set_bit(irq, d->arch.pirq_eoi_map);
 }
 
 static inline void clear_pirq_eoi(struct domain *d, unsigned int irq)
 {
-    if ( is_pv_domain(d) && d->arch.pv_domain.pirq_eoi_map )
-        clear_bit(irq, d->arch.pv_domain.pirq_eoi_map);
+    if ( d->arch.pirq_eoi_map )
+        clear_bit(irq, d->arch.pirq_eoi_map);
 }
 
 static void set_eoi_ready(void *data);
@@ -2231,6 +2235,8 @@ static void dump_irqs(unsigned char key)
 
     for ( irq = 0; irq < nr_irqs; irq++ )
     {
+        if ( !(irq & 0x1f) )
+            process_pending_softirqs();
 
         desc = irq_to_desc(irq);
 
@@ -2284,6 +2290,7 @@ static void dump_irqs(unsigned char key)
         xfree(ssid);
     }
 
+    process_pending_softirqs();
     printk("Direct vector information:\n");
     for ( i = FIRST_DYNAMIC_VECTOR; i < NR_VECTORS; ++i )
         if ( direct_apic_vector[i] )

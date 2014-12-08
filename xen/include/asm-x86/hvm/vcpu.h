@@ -54,8 +54,9 @@ struct hvm_vcpu_io {
      * HVM emulation:
      *  Virtual address @mmio_gva maps to MMIO physical frame @mmio_gpfn.
      *  The latter is known to be an MMIO frame (not RAM).
-     *  This translation is only valid if @mmio_gva is non-zero.
+     *  This translation is only valid for accesses as per @mmio_access.
      */
+    struct npfec        mmio_access;
     unsigned long       mmio_gva;
     unsigned long       mmio_gpfn;
 
@@ -138,9 +139,7 @@ struct hvm_vcpu {
     spinlock_t          tm_lock;
     struct list_head    tm_list;
 
-    int                 xen_port;
-
-    bool_t              flag_dr_dirty;
+    u8                  flag_dr_dirty;
     bool_t              debug_state_latch;
     bool_t              single_step;
 
@@ -186,3 +185,13 @@ struct hvm_vcpu {
 };
 
 #endif /* __ASM_X86_HVM_VCPU_H__ */
+
+/*
+ * Local variables:
+ * mode: C
+ * c-file-style: "BSD"
+ * c-basic-offset: 4
+ * tab-width: 4
+ * indent-tabs-mode: nil
+ * End:
+ */

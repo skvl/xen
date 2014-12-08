@@ -38,8 +38,7 @@ static inline void atomic_add(int i, atomic_t *v)
 "	stxr	%w1, %w0, %2\n"
 "	cbnz	%w1, 1b"
 	: "=&r" (result), "=&r" (tmp), "+Q" (v->counter)
-	: "Ir" (i)
-	: "cc");
+	: "Ir" (i));
 }
 
 static inline int atomic_add_return(int i, atomic_t *v)
@@ -48,14 +47,15 @@ static inline int atomic_add_return(int i, atomic_t *v)
 	int result;
 
 	asm volatile("// atomic_add_return\n"
-"1:	ldaxr	%w0, %2\n"
+"1:	ldxr	%w0, %2\n"
 "	add	%w0, %w0, %w3\n"
 "	stlxr	%w1, %w0, %2\n"
 "	cbnz	%w1, 1b"
 	: "=&r" (result), "=&r" (tmp), "+Q" (v->counter)
 	: "Ir" (i)
-	: "cc", "memory");
+	: "memory");
 
+	smp_mb();
 	return result;
 }
 
@@ -70,8 +70,7 @@ static inline void atomic_sub(int i, atomic_t *v)
 "	stxr	%w1, %w0, %2\n"
 "	cbnz	%w1, 1b"
 	: "=&r" (result), "=&r" (tmp), "+Q" (v->counter)
-	: "Ir" (i)
-	: "cc");
+	: "Ir" (i));
 }
 
 static inline int atomic_sub_return(int i, atomic_t *v)
@@ -80,14 +79,15 @@ static inline int atomic_sub_return(int i, atomic_t *v)
 	int result;
 
 	asm volatile("// atomic_sub_return\n"
-"1:	ldaxr	%w0, %2\n"
+"1:	ldxr	%w0, %2\n"
 "	sub	%w0, %w0, %w3\n"
 "	stlxr	%w1, %w0, %2\n"
 "	cbnz	%w1, 1b"
 	: "=&r" (result), "=&r" (tmp), "+Q" (v->counter)
 	: "Ir" (i)
-	: "cc", "memory");
+	: "memory");
 
+	smp_mb();
 	return result;
 }
 
@@ -96,32 +96,21 @@ static inline int atomic_cmpxchg(atomic_t *ptr, int old, int new)
 	unsigned long tmp;
 	int oldval;
 
+	smp_mb();
+
 	asm volatile("// atomic_cmpxchg\n"
-"1:	ldaxr	%w1, %2\n"
+"1:	ldxr	%w1, %2\n"
 "	cmp	%w1, %w3\n"
 "	b.ne	2f\n"
-"	stlxr	%w0, %w4, %2\n"
+"	stxr	%w0, %w4, %2\n"
 "	cbnz	%w0, 1b\n"
 "2:"
 	: "=&r" (tmp), "=&r" (oldval), "+Q" (ptr->counter)
 	: "Ir" (old), "r" (new)
-	: "cc", "memory");
-
-	return oldval;
-}
-
-static inline void atomic_clear_mask(unsigned long mask, unsigned long *addr)
-{
-	unsigned long tmp, tmp2;
-
-	asm volatile("// atomic_clear_mask\n"
-"1:	ldxr	%0, %2\n"
-"	bic	%0, %0, %3\n"
-"	stxr	%w1, %0, %2\n"
-"	cbnz	%w1, 1b"
-	: "=&r" (tmp), "=&r" (tmp2), "+Q" (*addr)
-	: "Ir" (mask)
 	: "cc");
+
+	smp_mb();
+	return oldval;
 }
 
 #define atomic_xchg(v, new) (xchg(&((v)->counter), new))
@@ -147,17 +136,12 @@ static inline int __atomic_add_unless(atomic_t *v, int a, int u)
 
 #define atomic_add_negative(i,v) (atomic_add_return(i, v) < 0)
 
-#define smp_mb__before_atomic_dec()	smp_mb()
-#define smp_mb__after_atomic_dec()	smp_mb()
-#define smp_mb__before_atomic_inc()	smp_mb()
-#define smp_mb__after_atomic_inc()	smp_mb()
-
 #endif
 /*
  * Local variables:
  * mode: C
  * c-file-style: "BSD"
- * c-basic-offset: 4
- * indent-tabs-mode: nil
+ * c-basic-offset: 8
+ * indent-tabs-mode: t
  * End:
  */

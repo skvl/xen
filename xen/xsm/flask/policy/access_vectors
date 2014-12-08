@@ -3,9 +3,9 @@
 #
 # class class_name { permission_name ... }
 
-# Class xen consists of dom0-only operations dealing with the hypervisor itself.
-# Unless otherwise specified, the source is the domain executing the hypercall,
-# and the target is the xen initial sid (type xen_t).
+# Class xen and xen2 consists of dom0-only operations dealing with the
+# hypervisor itself. Unless otherwise specified, the source is the domain
+# executing the hypercall, and the target is the xen initial sid (type xen_t).
 class xen
 {
 # XENPF_settime
@@ -75,6 +75,16 @@ class xen
     setscheduler
 }
 
+# This is a continuation of class xen, since only 32 permissions can be
+# defined per class
+class xen2
+{
+# XENPF_resource_op
+    resource_op
+# XEN_SYSCTL_psr_cmt_op
+    psr_cmt_op
+}
+
 # Classes domain and domain2 consist of operations that a domain performs on
 # another domain or on itself.  Unless otherwise specified, the source is the
 # domain executing the hypercall, and the target is the domain being operated on
@@ -92,7 +102,7 @@ class domain
     unpause
 # XEN_DOMCTL_resumedomain
     resume
-# XEN_DOMCTL_createdomain
+# XEN_DOMCTL_arm_createdomain
     create
 # checked in FLASK_RELABEL_DOMAIN for any relabel operation:
 #  source = the old label of the domain
@@ -141,8 +151,10 @@ class domain
 # XEN_DOMCTL_sendtrigger
     trigger
 # XEN_DOMCTL_get_ext_vcpucontext
+# XEN_DOMCTL_set_vcpu_msrs
     getextvcpucontext
 # XEN_DOMCTL_set_ext_vcpucontext
+# XEN_DOMCTL_get_vcpu_msrs
     setextvcpucontext
 # XEN_DOMCTL_getvcpuextstate
     getvcpuextstate
@@ -198,6 +210,16 @@ class domain2
     set_max_evtchn
 # XEN_DOMCTL_cacheflush
     cacheflush
+# Creation of the hardware domain when it is not dom0
+    create_hardware_domain
+# XEN_DOMCTL_setvnumainfo
+    set_vnumainfo
+# XENMEM_getvnumainfo
+    get_vnumainfo
+# XEN_DOMCTL_psr_cmt_op
+    psr_cmt_op
+# XEN_DOMCTL_configure_domain
+    configure_domain
 }
 
 # Similar to class domain, but primarily contains domctls related to HVM domains

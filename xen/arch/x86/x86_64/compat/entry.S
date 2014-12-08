@@ -13,6 +13,7 @@
 #include <irq_vectors.h>
 
 ENTRY(compat_hypercall)
+        ASM_CLAC
         pushq $0
         SAVE_VOLATILE type=TRAP_syscall compat=1
 
@@ -404,7 +405,7 @@ ENTRY(compat_hypercall_table)
         .quad compat_vcpu_op
         .quad compat_ni_hypercall       /* 25 */
         .quad compat_mmuext_op
-        .quad do_xsm_op
+        .quad compat_xsm_op
         .quad compat_nmi_op
         .quad compat_sched_op
         .quad compat_callback_op        /* 30 */
@@ -420,6 +421,7 @@ ENTRY(compat_hypercall_table)
         .quad compat_ni_hypercall
         .endr
         .quad do_mca                    /* 48 */
+        .quad paging_domctl_continuation
         .rept NR_hypercalls-((.-compat_hypercall_table)/8)
         .quad compat_ni_hypercall
         .endr
@@ -468,6 +470,7 @@ ENTRY(compat_hypercall_args_table)
         .byte 0 /* compat_ni_hypercall      */
         .endr
         .byte 1 /* do_mca                   */
+        .byte 1 /* paging_domctl_continuation      */
         .rept NR_hypercalls-(.-compat_hypercall_args_table)
         .byte 0 /* compat_ni_hypercall      */
         .endr

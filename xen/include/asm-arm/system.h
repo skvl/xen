@@ -8,8 +8,30 @@
 #define nop() \
     asm volatile ( "nop" )
 
-#define xchg(ptr,x) \
-        ((__typeof__(*(ptr)))__xchg((unsigned long)(x),(ptr),sizeof(*(ptr))))
+#define sev()           asm volatile("sev" : : : "memory")
+#define wfe()           asm volatile("wfe" : : : "memory")
+#define wfi()           asm volatile("wfi" : : : "memory")
+
+#define isb()           asm volatile("isb" : : : "memory")
+#define dsb(scope)      asm volatile("dsb " #scope : : : "memory")
+#define dmb(scope)      asm volatile("dmb " #scope : : : "memory")
+
+#define mb()            dsb(sy)
+#ifdef CONFIG_ARM_64
+#define rmb()           dsb(ld)
+#else
+#define rmb()           dsb(sy) /* 32-bit has no ld variant. */
+#endif
+#define wmb()           dsb(st)
+
+#define smp_mb()        dmb(ish)
+#ifdef CONFIG_ARM_64
+#define smp_rmb()       dmb(ishld)
+#else
+#define smp_rmb()       dmb(ish) /* 32-bit has no ishld variant. */
+#endif
+
+#define smp_wmb()       dmb(ishst)
 
 /*
  * This is used to ensure the compiler did actually allocate the register we

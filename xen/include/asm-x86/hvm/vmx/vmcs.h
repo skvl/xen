@@ -124,6 +124,9 @@ struct arch_vmx_struct {
 
     unsigned long        host_cr0;
 
+    /* Do we need to tolerate a spurious EPT_MISCONFIG VM exit? */
+    bool_t               ept_spurious_misconfig;
+
     /* Is the guest in real mode? */
     uint8_t              vmx_realmode;
     /* Are we emulating rather than VMENTERing? */
@@ -186,6 +189,7 @@ extern u32 vmx_pin_based_exec_control;
 #define VM_EXIT_SAVE_GUEST_EFER         0x00100000
 #define VM_EXIT_LOAD_HOST_EFER          0x00200000
 #define VM_EXIT_SAVE_PREEMPT_TIMER      0x00400000
+#define VM_EXIT_CLEAR_BNDCFGS           0x00800000
 extern u32 vmx_vmexit_control;
 
 #define VM_ENTRY_IA32E_MODE             0x00000200
@@ -194,6 +198,7 @@ extern u32 vmx_vmexit_control;
 #define VM_ENTRY_LOAD_PERF_GLOBAL_CTRL  0x00002000
 #define VM_ENTRY_LOAD_GUEST_PAT         0x00004000
 #define VM_ENTRY_LOAD_GUEST_EFER        0x00008000
+#define VM_ENTRY_LOAD_BNDCFGS           0x00010000
 extern u32 vmx_vmentry_control;
 
 #define SECONDARY_EXEC_VIRTUALIZE_APIC_ACCESSES 0x00000001
@@ -365,6 +370,8 @@ enum vmcs_field {
     GUEST_PDPTR2_HIGH               = 0x0000280f,
     GUEST_PDPTR3                    = 0x00002810,
     GUEST_PDPTR3_HIGH               = 0x00002811,
+    GUEST_BNDCFGS                   = 0x00002812,
+    GUEST_BNDCFGS_HIGH              = 0x00002813,
     HOST_PAT                        = 0x00002c00,
     HOST_PAT_HIGH                   = 0x00002c01,
     HOST_EFER                       = 0x00002c02,
@@ -463,6 +470,13 @@ enum vmcs_field {
     HOST_RSP                        = 0x00006c14,
     HOST_RIP                        = 0x00006c16,
 };
+
+/*
+ * A set of MSR-s that need to be enabled for memory introspection
+ * to work.
+ */
+extern const u32 vmx_introspection_force_enabled_msrs[];
+extern const unsigned int vmx_introspection_force_enabled_msrs_size;
 
 #define VMCS_VPID_WIDTH 16
 

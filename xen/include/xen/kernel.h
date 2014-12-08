@@ -65,7 +65,7 @@
 	1;                                      \
 })
 
-extern char _start[], _end[];
+extern char _start[], _end[], start[];
 #define is_kernel(p) ({                         \
     char *__p = (char *)(unsigned long)(p);     \
     (__p >= _start) && (__p < _end);            \
@@ -92,6 +92,7 @@ extern char _sinittext[], _einittext[];
 extern enum system_state {
     SYS_STATE_early_boot,
     SYS_STATE_boot,
+    SYS_STATE_smp_boot,
     SYS_STATE_active,
     SYS_STATE_suspend,
     SYS_STATE_resume

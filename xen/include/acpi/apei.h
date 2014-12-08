@@ -16,11 +16,11 @@ typedef int (*apei_hest_func_t)(const struct acpi_hest_header *, void *);
 int apei_hest_parse(apei_hest_func_t, void *);
 
 int erst_write(const struct cper_record_header *record);
-size_t erst_get_record_count(void);
+ssize_t erst_get_record_count(void);
 int erst_get_next_record_id(u64 *record_id);
-size_t erst_read(u64 record_id, struct cper_record_header *record,
+ssize_t erst_read(u64 record_id, struct cper_record_header *record,
 		  size_t buflen);
-size_t erst_read_next(struct cper_record_header *record, size_t buflen);
+ssize_t erst_read_next(struct cper_record_header *record, size_t buflen);
 int erst_clear(u64 record_id);
 
 void __iomem *apei_pre_map(paddr_t paddr, unsigned long size);

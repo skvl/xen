@@ -111,9 +111,8 @@ struct paging_mode {
                                             unsigned int *page_order);
     void          (*update_cr3            )(struct vcpu *v, int do_locking);
     void          (*update_paging_modes   )(struct vcpu *v);
-    void          (*write_p2m_entry       )(struct vcpu *v, unsigned long gfn,
-                                            l1_pgentry_t *p, mfn_t table_mfn, 
-                                            l1_pgentry_t new, 
+    void          (*write_p2m_entry       )(struct domain *d, unsigned long gfn,
+                                            l1_pgentry_t *p, l1_pgentry_t new,
                                             unsigned int level);
     int           (*write_guest_entry     )(struct vcpu *v, intpte_t *p,
                                             intpte_t new, mfn_t gmfn);
@@ -133,9 +132,6 @@ struct paging_mode {
 /*****************************************************************************
  * Log dirty code */
 
-/* free log dirty bitmap resource */
-void paging_free_log_dirty_bitmap(struct domain *d);
-
 /* get the dirty bitmap for a specific range of pfns */
 void paging_log_dirty_range(struct domain *d,
                             unsigned long begin_pfn,
@@ -144,9 +140,6 @@ void paging_log_dirty_range(struct domain *d,
 
 /* enable log dirty */
 int paging_log_dirty_enable(struct domain *d, bool_t log_global);
-
-/* disable log dirty */
-int paging_log_dirty_disable(struct domain *d);
 
 /* log dirty initialization */
 void paging_log_dirty_init(struct domain *d,
@@ -204,10 +197,13 @@ int paging_domain_init(struct domain *d, unsigned int domcr_flags);
  * and disable ephemeral shadow modes (test mode and log-dirty mode) and
  * manipulate the log-dirty bitmap. */
 int paging_domctl(struct domain *d, xen_domctl_shadow_op_t *sc,
-                  XEN_GUEST_HANDLE_PARAM(void) u_domctl);
+                  XEN_GUEST_HANDLE_PARAM(void) u_domctl, bool_t resuming);
+
+/* Helper hypercall for dealing with continuations. */
+long paging_domctl_continuation(XEN_GUEST_HANDLE_PARAM(xen_domctl_t));
 
 /* Call when destroying a domain */
-void paging_teardown(struct domain *d);
+int paging_teardown(struct domain *d);
 
 /* Call once all of the references to the domain have gone away */
 void paging_final_teardown(struct domain *d);
@@ -335,9 +331,9 @@ static inline void safe_write_pte(l1_pgentry_t *p, l1_pgentry_t new)
  * we are writing. */
 struct p2m_domain;
 
-void paging_write_p2m_entry(struct p2m_domain *p2m, unsigned long gfn, 
-                            l1_pgentry_t *p, mfn_t table_mfn,
-                            l1_pgentry_t new, unsigned int level);
+void paging_write_p2m_entry(struct p2m_domain *p2m, unsigned long gfn,
+                            l1_pgentry_t *p, l1_pgentry_t new,
+                            unsigned int level);
 
 /* Called from the guest to indicate that the a process is being
  * torn down and its pagetables will soon be discarded */

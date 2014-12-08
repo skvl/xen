@@ -1,9 +1,4 @@
-# Prefix and install folder
-prefix              := @prefix@
-PREFIX              := $(prefix)
-exec_prefix         := @exec_prefix@
-libdir              := @libdir@
-LIBDIR              := $(libdir)
+-include $(XEN_ROOT)/config/Paths.mk
 
 # Path Programs
 CMAKE               := @CMAKE@
@@ -11,7 +6,6 @@ FETCHER             := @FETCHER@
 
 # A debug build of stubdom? //FIXME: Someone make this do something
 debug               := @debug@
-vtpm = @vtpm@
 
 STUBDOM_TARGETS     := @STUBDOM_TARGETS@
 STUBDOM_BUILD       := @STUBDOM_BUILD@

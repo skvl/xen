@@ -3,7 +3,13 @@
 
 #include <xen/mm.h>
 
+#include <xen/p2m-common.h>
+
+#define paddr_bits PADDR_BITS
+
 struct domain;
+
+extern void memory_type_changed(struct domain *);
 
 /* Per-p2m-table state */
 struct p2m_domain {
@@ -13,8 +19,8 @@ struct p2m_domain {
     /* Pages used to construct the p2m */
     struct page_list_head pages;
 
-    /* Root of p2m page tables, 2 contiguous pages */
-    struct page_info *first_level;
+    /* The root of the p2m tree. May be concatenated */
+    struct page_info *root;
 
     /* Current VMID in use */
     uint8_t vmid;
@@ -29,6 +35,19 @@ struct p2m_domain {
      * resume the search. Apart from during teardown this can only
      * decrease. */
     unsigned long lowest_mapped_gfn;
+
+    /* Gather some statistics for information purposes only */
+    struct {
+        /* Number of mappings at each p2m tree level */
+        unsigned long mappings[4];
+        /* Number of times we have shattered a mapping
+         * at each p2m tree level. */
+        unsigned long shattered[4];
+    } stats;
+
+    /* If true, and an access fault comes in and there is no mem_event listener,
+     * pause domain. Otherwise, remove access restrictions. */
+    bool_t access_required;
 };
 
 /* List of possible type for each page in the p2m entry.
@@ -45,14 +64,33 @@ typedef enum {
     p2m_map_foreign,    /* Ram pages from foreign domain */
     p2m_grant_map_rw,   /* Read/write grant mapping */
     p2m_grant_map_ro,   /* Read-only grant mapping */
+    /* The types below are only used to decide the page attribute in the P2M */
+    p2m_iommu_map_rw,   /* Read/write iommu mapping */
+    p2m_iommu_map_ro,   /* Read-only iommu mapping */
     p2m_max_real_type,  /* Types after this won't be store in the p2m */
 } p2m_type_t;
+
+static inline
+void p2m_mem_event_emulate_check(struct vcpu *v,
+                                 const mem_event_response_t *rsp)
+{
+    /* Not supported on ARM. */
+};
+
+static inline
+void p2m_setup_introspection(struct domain *d)
+{
+    /* No special setup on ARM. */
+}
 
 #define p2m_is_foreign(_t)  ((_t) == p2m_map_foreign)
 #define p2m_is_ram(_t)      ((_t) == p2m_ram_rw || (_t) == p2m_ram_ro)
 
 /* Initialise vmid allocator */
 void p2m_vmid_allocator_init(void);
+
+/* Second stage paging setup, to be called on all CPUs */
+void __cpuinit setup_virt_paging(void);
 
 /* Init the datastructures for later use by the p2m code */
 int p2m_init(struct domain *d);
@@ -72,12 +110,12 @@ int relinquish_p2m_mapping(struct domain *d);
  */
 int p2m_alloc_table(struct domain *d);
 
-/* */
-void p2m_load_VTTBR(struct domain *d);
-
 /* Context switch */
 void p2m_save_state(struct vcpu *p);
 void p2m_restore_state(struct vcpu *n);
+
+/* Print debugging/statistial info about a domain's p2m */
+void p2m_dump_info(struct domain *d);
 
 /* Look up the MFN corresponding to a domain's PFN. */
 paddr_t p2m_lookup(struct domain *d, paddr_t gpfn, p2m_type_t *t);
@@ -87,11 +125,6 @@ int p2m_cache_flush(struct domain *d, xen_pfn_t start_mfn, xen_pfn_t end_mfn);
 
 /* Setup p2m RAM mapping for domain d from start-end. */
 int p2m_populate_ram(struct domain *d, paddr_t start, paddr_t end);
-/* Map MMIO regions in the p2m: start_gaddr and end_gaddr is the range
- * in the guest physical address space to map, starting from the machine
- * address maddr. */
-int map_mmio_regions(struct domain *d, paddr_t start_gaddr,
-                     paddr_t end_gaddr, paddr_t maddr);
 
 int guest_physmap_add_entry(struct domain *d,
                             unsigned long gfn,
@@ -180,6 +213,9 @@ static inline int get_page_and_type(struct page_info *page,
 
     return rc;
 }
+
+/* get host p2m table */
+#define p2m_get_hostp2m(d) (&(d)->arch.p2m)
 
 #endif /* _XEN_P2M_H */
 

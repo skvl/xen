@@ -1,7 +1,7 @@
 XEN_ROOT = $(CURDIR)/../..
 include $(XEN_ROOT)/tools/Rules.mk
 
-MAJOR    = 4.4
+MAJOR    = 4.5
 MINOR    = 0
 
 CTRL_SRCS-y       :=
@@ -20,6 +20,7 @@ CTRL_SRCS-y       += xc_sedf.c
 CTRL_SRCS-y       += xc_csched.c
 CTRL_SRCS-y       += xc_csched2.c
 CTRL_SRCS-y       += xc_arinc653.c
+CTRL_SRCS-y       += xc_rt.c
 CTRL_SRCS-y       += xc_tbuf.c
 CTRL_SRCS-y       += xc_pm.c
 CTRL_SRCS-y       += xc_cpu_hotplug.c
@@ -34,8 +35,11 @@ CTRL_SRCS-y       += xc_foreign_memory.c
 CTRL_SRCS-y       += xc_kexec.c
 CTRL_SRCS-y       += xtl_core.c
 CTRL_SRCS-y       += xtl_logger_stdio.c
+CTRL_SRCS-y       += xc_resource.c
+CTRL_SRCS-$(CONFIG_X86) += xc_psr.c
 CTRL_SRCS-$(CONFIG_X86) += xc_pagetab.c
 CTRL_SRCS-$(CONFIG_Linux) += xc_linux.c xc_linux_osdep.c
+CTRL_SRCS-$(CONFIG_FreeBSD) += xc_freebsd.c xc_freebsd_osdep.c
 CTRL_SRCS-$(CONFIG_SunOS) += xc_solaris.c
 CTRL_SRCS-$(CONFIG_NetBSD) += xc_netbsd.c
 CTRL_SRCS-$(CONFIG_MiniOS) += xc_minios.c
@@ -88,16 +92,12 @@ OSDEP_SRCS-y                 += xenctrl_osdep_ENOSYS.c
 -include $(XEN_TARGET_ARCH)/Makefile
 
 CFLAGS   += -Werror -Wmissing-prototypes
-CFLAGS   += -I. $(CFLAGS_xeninclude)
+CFLAGS   += -I. -I./include $(CFLAGS_xeninclude)
 
 # Needed for posix_fadvise64() in xc_linux.c
 CFLAGS-$(CONFIG_Linux) += -D_GNU_SOURCE
 
 CFLAGS	+= $(PTHREAD_CFLAGS)
-
-# Define this to make it possible to run valgrind on code linked with these
-# libraries.
-#CFLAGS   += -DVALGRIND -O0 -ggdb3
 
 CTRL_LIB_OBJS := $(patsubst %.c,%.o,$(CTRL_SRCS-y))
 CTRL_PIC_OBJS := $(patsubst %.c,%.opic,$(CTRL_SRCS-y))
@@ -108,19 +108,30 @@ GUEST_PIC_OBJS := $(patsubst %.c,%.opic,$(GUEST_SRCS-y))
 OSDEP_LIB_OBJS := $(patsubst %.c,%.o,$(OSDEP_SRCS-y))
 OSDEP_PIC_OBJS := $(patsubst %.c,%.opic,$(OSDEP_SRCS-y))
 
+$(CTRL_LIB_OBJS) $(GUEST_LIB_OBJS) $(OSDEP_LIB_OBJS) \
+$(CTRL_PIC_OBJS) $(GUEST_PIC_OBJS) $(OSDEP_PIC_OBJS) : CFLAGS += -include $(XEN_ROOT)/tools/config.h
+
 LIB := libxenctrl.a
-ifneq ($(stubdom),y)
+ifneq ($(nosharedlibs),y)
 LIB += libxenctrl.so libxenctrl.so.$(MAJOR) libxenctrl.so.$(MAJOR).$(MINOR)
 endif
 
 LIB += libxenguest.a
-ifneq ($(stubdom),y)
+ifneq ($(nosharedlibs),y)
 LIB += libxenguest.so libxenguest.so.$(MAJOR) libxenguest.so.$(MAJOR).$(MINOR)
 endif
 
-ifneq ($(stubdom),y)
+ifneq ($(nosharedlibs),y)
 LIB += xenctrl_osdep_ENOSYS.so
 endif
+
+genpath-target = $(call buildmakevars2header,_paths.h)
+$(eval $(genpath-target))
+
+xc_private.h: _paths.h
+
+$(CTRL_LIB_OBJS) $(GUEST_LIB_OBJS) $(OSDEP_LIB_OBJS) \
+$(CTRL_PIC_OBJS) $(GUEST_PIC_OBJS) $(OSDEP_PIC_OBJS): xc_private.h
 
 .PHONY: all
 all: build
@@ -136,16 +147,16 @@ libs: $(LIB)
 install: build
 	$(INSTALL_DIR) $(DESTDIR)$(LIBDIR)
 	$(INSTALL_DIR) $(DESTDIR)$(INCLUDEDIR)
-	$(INSTALL_PROG) libxenctrl.so.$(MAJOR).$(MINOR) $(DESTDIR)$(LIBDIR)
+	$(INSTALL_SHLIB) libxenctrl.so.$(MAJOR).$(MINOR) $(DESTDIR)$(LIBDIR)
 	$(INSTALL_DATA) libxenctrl.a $(DESTDIR)$(LIBDIR)
-	ln -sf libxenctrl.so.$(MAJOR).$(MINOR) $(DESTDIR)$(LIBDIR)/libxenctrl.so.$(MAJOR)
-	ln -sf libxenctrl.so.$(MAJOR) $(DESTDIR)$(LIBDIR)/libxenctrl.so
-	$(INSTALL_DATA) xenctrl.h xenctrlosdep.h xentoollog.h $(DESTDIR)$(INCLUDEDIR)
-	$(INSTALL_PROG) libxenguest.so.$(MAJOR).$(MINOR) $(DESTDIR)$(LIBDIR)
+	$(SYMLINK_SHLIB) libxenctrl.so.$(MAJOR).$(MINOR) $(DESTDIR)$(LIBDIR)/libxenctrl.so.$(MAJOR)
+	$(SYMLINK_SHLIB) libxenctrl.so.$(MAJOR) $(DESTDIR)$(LIBDIR)/libxenctrl.so
+	$(INSTALL_DATA) include/xenctrl.h include/xenctrlosdep.h include/xentoollog.h $(DESTDIR)$(INCLUDEDIR)
+	$(INSTALL_SHLIB) libxenguest.so.$(MAJOR).$(MINOR) $(DESTDIR)$(LIBDIR)
 	$(INSTALL_DATA) libxenguest.a $(DESTDIR)$(LIBDIR)
-	ln -sf libxenguest.so.$(MAJOR).$(MINOR) $(DESTDIR)$(LIBDIR)/libxenguest.so.$(MAJOR)
-	ln -sf libxenguest.so.$(MAJOR) $(DESTDIR)$(LIBDIR)/libxenguest.so
-	$(INSTALL_DATA) xenguest.h $(DESTDIR)$(INCLUDEDIR)
+	$(SYMLINK_SHLIB) libxenguest.so.$(MAJOR).$(MINOR) $(DESTDIR)$(LIBDIR)/libxenguest.so.$(MAJOR)
+	$(SYMLINK_SHLIB) libxenguest.so.$(MAJOR) $(DESTDIR)$(LIBDIR)/libxenguest.so
+	$(INSTALL_DATA) include/xenguest.h $(DESTDIR)$(INCLUDEDIR)
 
 .PHONY: TAGS
 TAGS:
@@ -154,6 +165,7 @@ TAGS:
 .PHONY: clean
 clean:
 	rm -rf *.rpm $(LIB) *~ $(DEPS) \
+            _paths.h \
             $(CTRL_LIB_OBJS) $(CTRL_PIC_OBJS) \
             $(GUEST_LIB_OBJS) $(GUEST_PIC_OBJS) \
             $(OSDEP_LIB_OBJS) $(OSDEP_PIC_OBJS)
@@ -174,9 +186,9 @@ libxenctrl.a: $(CTRL_LIB_OBJS)
 	$(AR) rc $@ $^
 
 libxenctrl.so: libxenctrl.so.$(MAJOR)
-	ln -sf $< $@
+	$(SYMLINK_SHLIB) $< $@
 libxenctrl.so.$(MAJOR): libxenctrl.so.$(MAJOR).$(MINOR)
-	ln -sf $< $@
+	$(SYMLINK_SHLIB) $< $@
 
 libxenctrl.so.$(MAJOR).$(MINOR): $(CTRL_PIC_OBJS)
 	$(CC) $(LDFLAGS) $(PTHREAD_LDFLAGS) -Wl,$(SONAME_LDFLAG) -Wl,libxenctrl.so.$(MAJOR) $(SHLIB_LDFLAGS) -o $@ $^ $(DLOPEN_LIBS) $(PTHREAD_LIBS) $(APPEND_LDFLAGS)
@@ -187,9 +199,9 @@ libxenguest.a: $(GUEST_LIB_OBJS)
 	$(AR) rc $@ $^
 
 libxenguest.so: libxenguest.so.$(MAJOR)
-	ln -sf $< $@
+	$(SYMLINK_SHLIB) $< $@
 libxenguest.so.$(MAJOR): libxenguest.so.$(MAJOR).$(MINOR)
-	ln -sf $< $@
+	$(SYMLINK_SHLIB) $< $@
 
 ifeq ($(CONFIG_MiniOS),y)
 zlib-options =
@@ -205,7 +217,7 @@ libxenguest.so.$(MAJOR).$(MINOR): $(GUEST_PIC_OBJS) libxenctrl.so
 	$(CC) $(LDFLAGS) -Wl,$(SONAME_LDFLAG) -Wl,libxenguest.so.$(MAJOR) $(SHLIB_LDFLAGS) -o $@ $(GUEST_PIC_OBJS) $(COMPRESSION_LIBS) -lz $(LDLIBS_libxenctrl) $(PTHREAD_LIBS) $(APPEND_LDFLAGS)
 
 xenctrl_osdep_ENOSYS.so: $(OSDEP_PIC_OBJS) libxenctrl.so
-	$(CC) -g $(LDFLAGS) $(SHLIB_LDFLAGS) -o $@ $(OSDEP_PIC_OBJS) $(LDLIBS_libxenctrl) $(APPEND_LDFLAGS)
+	$(CC) $(LDFLAGS) $(SHLIB_LDFLAGS) -o $@ $(OSDEP_PIC_OBJS) $(LDLIBS_libxenctrl) $(APPEND_LDFLAGS)
 
 -include $(DEPS)
 

@@ -51,7 +51,7 @@
  * In the event that a change is required which cannot be made
  * backwards compatible in this manner a #define of the form
  * LIBXL_HAVE_<interface> will always be added in order to make it
- * possible to write applciations which build against any version of
+ * possible to write applications which build against any version of
  * libxl. Such changes are expected to be exceptional and used as a
  * last resort. The barrier for backporting such a change to a stable
  * branch will be very high.
@@ -66,6 +66,22 @@
  * API compatibility will be maintained for all versions of Xen using
  * the same $(XEN_VERSION) (e.g. throughout a major release).
  */
+
+/* LIBXL_HAVE_USERDATA_UNLINK
+ *
+ * If it is defined, libxl has a library function called
+ * libxl_userdata_unlink.
+ */
+#define LIBXL_HAVE_USERDATA_UNLINK 1
+
+/* LIBXL_HAVE_CPUPOOL_QUALIFIER_TO_CPUPOOLID
+ *
+ * If this is defined, libxl has a library function called
+ * libxl_cpupool_qualifier_to_cpupoolid, which takes in a CPU pool
+ * qualifier in the form of number or string, then returns the ID of
+ * that CPU pool.
+ */
+#define LIBXL_HAVE_CPUPOOL_QUALIFIER_TO_CPUPOOLID 1
 
 /*
  * LIBXL_HAVE_FIRMWARE_PASSTHROUGH indicates the feature for
@@ -93,6 +109,58 @@
  * The libxl_domain_build_info has the event_channels field.
  */
 #define LIBXL_HAVE_BUILDINFO_EVENT_CHANNELS 1
+
+/*
+ * libxl_domain_build_info has the u.hvm.ms_vm_genid field.
+ */
+#define LIBXL_HAVE_BUILDINFO_HVM_MS_VM_GENID 1
+
+/*
+ * LIBXL_HAVE_VCPUINFO_SOFT_AFFINITY indicates that a 'cpumap_soft'
+ * field (of libxl_bitmap type) is present in libxl_vcpuinfo,
+ * containing the soft affinity of a vcpu.
+ */
+#define LIBXL_HAVE_VCPUINFO_SOFT_AFFINITY 1
+
+/*
+ * LIBXL_HAVE_DEVICE_DISK_DIRECT_IO_SAFE indicates that a
+ * 'direct_io_safe' field (of boolean type) is present in
+ * libxl_device_disk.
+ */
+#define LIBXL_HAVE_DEVICE_DISK_DIRECT_IO_SAFE 1
+
+/*
+ * The libxl_device_disk has the discard_enable field.
+ */
+#define LIBXL_HAVE_LIBXL_DEVICE_DISK_DISCARD_ENABLE 1
+
+/*
+ * LIBXL_HAVE_BUILDINFO_IOMEM_START_GFN indicates that it is possible
+ * to specify the start guest frame number used to map a range of I/O
+ * memory machine frame numbers via the 'gfn' field (of type uint64)
+ * of the 'iomem' structure. An array of iomem structures is embedded
+ * in libxl_domain_build_info and used to map the indicated memory
+ * ranges during domain build.
+ */
+#define LIBXL_HAVE_BUILDINFO_IOMEM_START_GFN 1
+
+/*
+ * LIBXL_HAVE_SCHED_RTDS indicates that the RTDS real time scheduler
+ * is available. A 'budget' field added in libxl_domain_sched_params.
+ */
+#define LIBXL_HAVE_SCHED_RTDS 1
+
+/*
+ * libxl_domain_build_info has u.hvm.viridian_enable and _disable bitmaps
+ * of the specified width.
+ */
+#define LIBXL_HAVE_BUILDINFO_HVM_VIRIDIAN_ENABLE_DISABLE 1
+#define LIBXL_BUILDINFO_HVM_VIRIDIAN_ENABLE_DISABLE_WIDTH 64
+
+/*
+ * libxl_domain_build_info has the u.hvm.mmio_hole_memkb field.
+ */
+#define LIBXL_HAVE_BUILDINFO_HVM_MMIO_HOLE_MEMKB 1
 
 /*
  * libxl ABI compatibility
@@ -233,6 +301,16 @@
  * libxl_types.idl). The library provides a common set of methods for
  * initialising and freeing these types.
  *
+ * IDL-generated libxl types should be used as follows: the user must
+ * always call the "init" function before using a type, even if the
+ * variable is simply being passed by reference as an out parameter
+ * to a libxl function.  The user must always calls "dispose" exactly
+ * once afterwards, to clean up, regardless of whether operations on
+ * this object succeeded or failed.  See the xl code for examples.
+ *
+ * "init" is idempotent.  We intend that "dispose" will become
+ * idempotent, but this is not currently the case.
+ *
  * void libxl_<type>_init(<type> *p):
  *
  *    Initialises the members of "p" to all defaults. These may either
@@ -269,6 +347,25 @@
  *    Frees any dynamically allocated memory used by the members of
  *    "p" but not the storage used by "p" itself (this allows for the
  *    allocation of arrays of types and for the composition of types).
+ *
+ * char *libxl_<type>_to_json(instance *p)
+ *
+ *    Generates a JSON object from "p" in the form of a NULL terminated
+ *    string.
+ *
+ * <type *> libxl_<type>_from_json(const char *json)
+ * int      libxl_<type>_from_json(const char *json)
+ *
+ *    Parses "json" and returns:
+ *
+ *    an int value, if <type> is enumeration type. The value is the enum value
+ *    representing the respective string in "json".
+ *
+ *    an instance of <type>, if <type> is aggregate type. The returned
+ *    instance has its fields filled in by the parser according to "json".
+ *
+ *    If the parsing fails, caller cannot rely on the value / instance
+ *    returned.
  */
 #ifndef LIBXL_H
 #define LIBXL_H
@@ -283,16 +380,50 @@
 
 #include <xentoollog.h>
 
+typedef struct libxl__ctx libxl_ctx;
+
 #include <libxl_uuid.h>
 #include <_libxl_list.h>
 
 /* API compatibility. */
 #ifdef LIBXL_API_VERSION
 #if LIBXL_API_VERSION != 0x040200 && LIBXL_API_VERSION != 0x040300 && \
-    LIBXL_API_VERSION != 0x040400
+    LIBXL_API_VERSION != 0x040400 && LIBXL_API_VERSION != 0x040500
 #error Unknown LIBXL_API_VERSION
 #endif
 #endif
+
+/* LIBXL_HAVE_RETRIEVE_DOMAIN_CONFIGURATION
+ *
+ * If this is defined we have libxl_retrieve_domain_configuration which
+ * returns the current configuration of a domain, which can be used to
+ * rebuild a domain.
+ */
+#define LIBXL_HAVE_RETRIEVE_DOMAIN_CONFIGURATION 1
+
+/*
+ * LIBXL_HAVE_BUILDINFO_VCPU_AFFINITY_ARRAYS
+ *
+ * If this is defined, then the libxl_domain_build_info structure will
+ * contain two arrays of libxl_bitmap-s, with all the necessary information
+ * to set the hard affinity (vcpu_hard_affinity) and the soft affinity
+ * (vcpu_soft_affinity) of the VCPUs.
+ *
+ * Note that, if the vcpu_hard_affinity array is used, libxl will ignore
+ * the content of the cpumap field of libxl_domain_build_info. That is to
+ * say, if the array is allocated and used by the caller, it is it and
+ * only it that determines the hard affinity of the domain's VCPUs.
+ *
+ * The number of libxl_bitmap-s in the arrays should be equal to the
+ * maximum number of VCPUs of the domain. If there only are N elements in
+ * an array, with N smaller the the maximum number of VCPUs, the hard or
+ * soft affinity (depending on which array we are talking about) will be
+ * set only for the first N VCPUs. The other VCPUs will just have affinity,
+ * both hard and soft, with all the host PCPUs.
+ * Each bitmap should be big enough to accommodate the maximum number of
+ * PCPUs of the host.
+ */
+#define LIBXL_HAVE_BUILDINFO_VCPU_AFFINITY_ARRAYS 1
 
 /*
  * LIBXL_HAVE_BUILDINFO_USBDEVICE_LIST
@@ -445,6 +576,40 @@
 #define LIBXL_HAVE_NO_SUSPEND_RESUME 1
 #endif
 
+/*
+ * LIBXL_HAVE_DEVICE_PCI_SEIZE
+ *
+ * If this is defined, then the libxl_device_pci struct will contain
+ * the "seize" boolean field.  If this field is set, libxl_pci_add will
+ * check to see if the device is currently assigned to pciback, and if not,
+ * it will attempt to do so (unbinding the device from the existing driver).
+ */
+#define LIBXL_HAVE_DEVICE_PCI_SEIZE 1
+
+/*
+ * LIBXL_HAVE_BUILDINFO_KERNEL
+ *
+ * If this is defined, then the libxl_domain_build_info structure will
+ * contain 'kernel', 'ramdisk', 'cmdline' fields. 'kernel' is a string
+ * to indicate kernel image location, 'ramdisk' is a string to indicate
+ * ramdisk location, 'cmdline' is a string to indicate the paramters which
+ * would be appended to kernel image.
+ *
+ * Both PV guest and HVM guest can use these fields for direct kernel boot.
+ * But for compatibility reason, u.pv.kernel, u.pv.ramdisk and u.pv.cmdline
+ * still exist.
+ */
+#define LIBXL_HAVE_BUILDINFO_KERNEL 1
+
+/*
+ * LIBXL_HAVE_DEVICE_CHANNEL
+ *
+ * If this is defined, then the libxl_device_channel struct exists
+ * and channels can be attached to a domain. Channels manifest as consoles
+ * with names, see docs/misc/console.txt.
+ */
+#define LIBXL_HAVE_DEVICE_CHANNEL 1
+
 /* Functions annotated with LIBXL_EXTERNAL_CALLERS_ONLY may not be
  * called from within libxl itself. Callers outside libxl, who
  * do not #include libxl_internal.h, are fine. */
@@ -452,19 +617,86 @@
 #define LIBXL_EXTERNAL_CALLERS_ONLY /* disappears for callers outside libxl */
 #endif
 
+/*
+ *  LIBXL_HAVE_UUID_COPY_CTX_PARAM
+ *
+ * If this is defined, libxl_uuid_copy has changed to take a libxl_ctx
+ * structure.
+ */
+#define LIBXL_HAVE_UUID_COPY_CTX_PARAM 1
+
+/*
+ * LIBXL_HAVE_SSID_LABEL
+ *
+ * If this is defined, then libxl IDL contains string of XSM security
+ * label in all XSM related structures.
+ *
+ * If set this string takes precedence over the numeric field.
+ */
+#define LIBXL_HAVE_SSID_LABEL 1
+
+/*
+ * LIBXL_HAVE_CPUPOOL_NAME
+ *
+ * If this is defined, then libxl IDL contains string of CPU pool
+ * name in all CPU pool related structures.
+ *
+ * If set this string takes precedence over the numeric field.
+ */
+#define LIBXL_HAVE_CPUPOOL_NAME 1
+
+/*
+ * LIBXL_HAVE_BUILDINFO_SERIAL_LIST
+ *
+ * If this is defined, then the libxl_domain_build_info structure will
+ * contain hvm.serial_list, a libxl_string_list type that contains
+ * a list of serial ports to specify on the qemu command-line.
+ *
+ * If it is set, callers may use either hvm.serial or
+ * hvm.serial_list, but not both; if both are set, libxl will
+ * throw an error.
+ *
+ * If this is not defined, callers can only use hvm.serial.  Note
+ * that this means only one serial port can be added at domain build time.
+ */
+#define LIBXL_HAVE_BUILDINFO_SERIAL_LIST 1
+
+/*
+ * LIBXL_HAVE_REMUS
+ * If this is defined, then libxl supports remus.
+ */
+#define LIBXL_HAVE_REMUS 1
+
 typedef uint8_t libxl_mac[6];
 #define LIBXL_MAC_FMT "%02hhx:%02hhx:%02hhx:%02hhx:%02hhx:%02hhx"
 #define LIBXL_MAC_FMTLEN ((2*6)+5) /* 6 hex bytes plus 5 colons */
 #define LIBXL_MAC_BYTES(mac) mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]
+void libxl_mac_copy(libxl_ctx *ctx, libxl_mac *dst, libxl_mac *src);
+
+#if defined(__i386__) || defined(__x86_64__)
+/*
+ * LIBXL_HAVE_PSR_CMT
+ *
+ * If this is defined, the Cache Monitoring Technology feature is supported.
+ */
+#define LIBXL_HAVE_PSR_CMT 1
+#endif
 
 typedef char **libxl_string_list;
 void libxl_string_list_dispose(libxl_string_list *sl);
 int libxl_string_list_length(const libxl_string_list *sl);
+void libxl_string_list_copy(libxl_ctx *ctx, libxl_string_list *dst,
+                            libxl_string_list *src);
 
 typedef char **libxl_key_value_list;
 void libxl_key_value_list_dispose(libxl_key_value_list *kvl);
+int libxl_key_value_list_length(libxl_key_value_list *kvl);
+void libxl_key_value_list_copy(libxl_ctx *ctx,
+                               libxl_key_value_list *dst,
+                               libxl_key_value_list *src);
 
 typedef uint32_t libxl_hwcap[8];
+void libxl_hwcap_copy(libxl_ctx *ctx, libxl_hwcap *dst, libxl_hwcap *src);
 
 typedef uint64_t libxl_ev_user;
 
@@ -482,6 +714,10 @@ void libxl_bitmap_dispose(libxl_bitmap *map);
 typedef struct libxl__cpuid_policy libxl_cpuid_policy;
 typedef libxl_cpuid_policy * libxl_cpuid_policy_list;
 void libxl_cpuid_dispose(libxl_cpuid_policy_list *cpuid_list);
+int libxl_cpuid_policy_list_length(libxl_cpuid_policy_list *l);
+void libxl_cpuid_policy_list_copy(libxl_ctx *ctx,
+                                  libxl_cpuid_policy_list *dst,
+                                  libxl_cpuid_policy_list *src);
 
 #define LIBXL_PCI_FUNC_ALL (~0U)
 
@@ -526,10 +762,13 @@ bool libxl_defbool_val(libxl_defbool db);
 
 const char *libxl_defbool_to_string(libxl_defbool b);
 
-typedef struct libxl__ctx libxl_ctx;
-
 #define LIBXL_TIMER_MODE_DEFAULT -1
 #define LIBXL_MEMKB_DEFAULT ~0ULL
+
+#define LIBXL_MS_VM_GENID_LEN 16
+typedef struct {
+    uint8_t bytes[LIBXL_MS_VM_GENID_LEN];
+} libxl_ms_vm_genid;
 
 #include "_libxl_types.h"
 
@@ -665,10 +904,15 @@ int static inline libxl_domain_create_restore_0x040200(
     LIBXL_EXTERNAL_CALLERS_ONLY
 {
     libxl_domain_restore_params params;
-    params.checkpointed_stream = 0;
+    int ret;
 
-    return libxl_domain_create_restore(
+    libxl_domain_restore_params_init(&params);
+
+    ret = libxl_domain_create_restore(
         ctx, d_config, domid, restore_fd, &params, ao_how, aop_console_how);
+
+    libxl_domain_restore_params_dispose(&params);
+    return ret;
 }
 
 #define libxl_domain_create_restore libxl_domain_create_restore_0x040200
@@ -682,6 +926,14 @@ int static inline libxl_domain_create_restore_0x040200(
 
 void libxl_domain_config_init(libxl_domain_config *d_config);
 void libxl_domain_config_dispose(libxl_domain_config *d_config);
+
+/*
+ * Retrieve domain configuration and filled it in d_config. The
+ * returned configuration can be used to rebuild a domain. It only
+ * works with DomU.
+ */
+int libxl_retrieve_domain_configuration(libxl_ctx *ctx, uint32_t domid,
+                                        libxl_domain_config *d_config);
 
 int libxl_domain_suspend(libxl_ctx *ctx, uint32_t domid, int fd,
                          int flags, /* LIBXL_SUSPEND_* */
@@ -857,6 +1109,10 @@ void libxl_vtpminfo_list_free(libxl_vtpminfo *, int nr_vtpms);
  *   domain to connect to the device and therefore cannot block on the
  *   guest.
  *
+ *   device is an in/out parameter:  fields left unspecified when the
+ *   structure is passed in are filled in with appropriate values for
+ *   the device created.
+ *
  * libxl_device_<type>_remove(ctx, domid, device):
  *
  *   Removes the given device from the specified domain by performing
@@ -918,6 +1174,17 @@ int libxl_device_nic_destroy(libxl_ctx *ctx, uint32_t domid,
 libxl_device_nic *libxl_device_nic_list(libxl_ctx *ctx, uint32_t domid, int *num);
 int libxl_device_nic_getinfo(libxl_ctx *ctx, uint32_t domid,
                               libxl_device_nic *nic, libxl_nicinfo *nicinfo);
+
+/*
+ * Virtual Channels
+ * Channels manifest as consoles with names, see docs/misc/channels.txt
+ */
+libxl_device_channel *libxl_device_channel_list(libxl_ctx *ctx,
+                                                uint32_t domid,
+                                                int *num);
+int libxl_device_channel_getinfo(libxl_ctx *ctx, uint32_t domid,
+                                 libxl_device_channel *channel,
+                                 libxl_channelinfo *channelinfo);
 
 /* Virtual TPMs */
 int libxl_device_vtpm_add(libxl_ctx *ctx, uint32_t domid, libxl_device_vtpm *vtpm,
@@ -1038,6 +1305,14 @@ void libxl_cpuid_set(libxl_ctx *ctx, uint32_t domid,
  *  "xl"          domain config file in xl format, Unix line endings
  *  "libvirt-xml" domain config file in libvirt XML format.  See
  *                http://libvirt.org/formatdomain.html
+ *  "domain-userdata-lock"  lock file to protect domain userdata in libxl.
+ *                          It's a per-domain lock. Applications should
+ *                          not touch this file.
+ *  "libxl-json"  libxl_domain_config object in JSON format, generated
+ *                by libxl. Applications should not access this file
+ *                directly. This file is protected by domain-userdata-lock
+ *                for against Read-Modify-Write operation and domain
+ *                destruction.
  *
  * libxl does not enforce the registration of userdata userids or the
  * semantics of the data.  For specifications of the data formats
@@ -1057,12 +1332,28 @@ int libxl_userdata_retrieve(libxl_ctx *ctx, uint32_t domid,
    * data_r and datalen_r may be 0.
    * On error return, *data_r and *datalen_r are undefined.
    */
+int libxl_userdata_unlink(libxl_ctx *ctx, uint32_t domid,
+                          const char *userdata_userid);
+
 
 int libxl_get_physinfo(libxl_ctx *ctx, libxl_physinfo *physinfo);
 int libxl_set_vcpuaffinity(libxl_ctx *ctx, uint32_t domid, uint32_t vcpuid,
-                           libxl_bitmap *cpumap);
+                           const libxl_bitmap *cpumap_hard,
+                           const libxl_bitmap *cpumap_soft);
 int libxl_set_vcpuaffinity_all(libxl_ctx *ctx, uint32_t domid,
-                               unsigned int max_vcpus, libxl_bitmap *cpumap);
+                               unsigned int max_vcpus,
+                               const libxl_bitmap *cpumap_hard,
+                               const libxl_bitmap *cpumap_soft);
+
+#if defined (LIBXL_API_VERSION) && LIBXL_API_VERSION < 0x040500
+
+#define libxl_set_vcpuaffinity(ctx, domid, vcpuid, map) \
+    libxl_set_vcpuaffinity((ctx), (domid), (vcpuid), (map), NULL)
+#define libxl_set_vcpuaffinity_all(ctx, domid, max_vcpus, map) \
+    libxl_set_vcpuaffinity_all((ctx), (domid), (max_vcpus), (map), NULL)
+
+#endif
+
 int libxl_domain_set_nodeaffinity(libxl_ctx *ctx, uint32_t domid,
                                   libxl_bitmap *nodemap);
 int libxl_domain_get_nodeaffinity(libxl_ctx *ctx, uint32_t domid,
@@ -1085,6 +1376,7 @@ int libxl_sched_credit_params_set(libxl_ctx *ctx, uint32_t poolid,
 #define LIBXL_DOMAIN_SCHED_PARAM_SLICE_DEFAULT     -1
 #define LIBXL_DOMAIN_SCHED_PARAM_LATENCY_DEFAULT   -1
 #define LIBXL_DOMAIN_SCHED_PARAM_EXTRATIME_DEFAULT -1
+#define LIBXL_DOMAIN_SCHED_PARAM_BUDGET_DEFAULT    -1
 
 int libxl_domain_sched_params_get(libxl_ctx *ctx, uint32_t domid,
                                   libxl_domain_sched_params *params);
@@ -1140,6 +1432,23 @@ int libxl_flask_sid_to_context(libxl_ctx *ctx, uint32_t ssidref, char **buf,
 int libxl_flask_getenforce(libxl_ctx *ctx);
 int libxl_flask_setenforce(libxl_ctx *ctx, int mode);
 int libxl_flask_loadpolicy(libxl_ctx *ctx, void *policy, uint32_t size);
+
+int libxl_ms_vm_genid_generate(libxl_ctx *ctx, libxl_ms_vm_genid *id);
+bool libxl_ms_vm_genid_is_zero(const libxl_ms_vm_genid *id);
+void libxl_ms_vm_genid_copy(libxl_ctx *ctx, libxl_ms_vm_genid *dst,
+                            libxl_ms_vm_genid *src);
+
+#ifdef LIBXL_HAVE_PSR_CMT
+int libxl_psr_cmt_attach(libxl_ctx *ctx, uint32_t domid);
+int libxl_psr_cmt_detach(libxl_ctx *ctx, uint32_t domid);
+int libxl_psr_cmt_domain_attached(libxl_ctx *ctx, uint32_t domid);
+int libxl_psr_cmt_enabled(libxl_ctx *ctx);
+int libxl_psr_cmt_get_total_rmid(libxl_ctx *ctx, uint32_t *total_rmid);
+int libxl_psr_cmt_get_l3_cache_size(libxl_ctx *ctx, uint32_t socketid,
+    uint32_t *l3_cache_size);
+int libxl_psr_cmt_get_cache_occupancy(libxl_ctx *ctx, uint32_t domid,
+    uint32_t socketid, uint32_t *l3_cache_occupancy);
+#endif
 
 /* misc */
 

@@ -37,19 +37,19 @@ static bool reset_vals_valid = false;
 
 static uint32_t xgene_storm_quirks(void)
 {
-    return PLATFORM_QUIRK_GIC_64K_STRIDE;
+    return PLATFORM_QUIRK_GIC_64K_STRIDE|PLATFORM_QUIRK_GUEST_PIRQ_NEED_EOI;
 }
 
 static int map_one_mmio(struct domain *d, const char *what,
-                         paddr_t start, paddr_t end)
+                         unsigned long start, unsigned long end)
 {
     int ret;
 
-    printk("Additional MMIO %"PRIpaddr"-%"PRIpaddr" (%s)\n",
+    printk("Additional MMIO %lx-%lx (%s)\n",
            start, end, what);
-    ret = map_mmio_regions(d, start, end, start);
+    ret = map_mmio_regions(d, start, end - start, start);
     if ( ret )
-        printk("Failed to map %s @ %"PRIpaddr" to dom%d\n",
+        printk("Failed to map %s @ %lx to dom%d\n",
                what, start, d->domain_id);
     return ret;
 }
@@ -57,19 +57,61 @@ static int map_one_mmio(struct domain *d, const char *what,
 static int map_one_spi(struct domain *d, const char *what,
                        unsigned int spi, unsigned int type)
 {
-    struct dt_irq irq;
+    unsigned int irq;
     int ret;
 
-    irq.type = type;
+    irq = spi + 32; /* SPIs start at IRQ 32 */
 
-    irq.irq = spi + 32; /* SPIs start at IRQ 32 */
+    ret = irq_set_spi_type(irq, type);
+    if ( ret )
+    {
+        printk("Failed to set the type for IRQ%u\n", irq);
+        return ret;
+    }
 
-    printk("Additional IRQ %u (%s)\n", irq.irq, what);
+    printk("Additional IRQ %u (%s)\n", irq, what);
 
-    ret = gic_route_irq_to_guest(d, &irq, what);
+    ret = route_irq_to_guest(d, irq, what);
     if ( ret )
         printk("Failed to route %s to dom%d\n", what, d->domain_id);
 
+    return ret;
+}
+
+/* Creates MMIO mappings base..end as well as 4 SPIs from the given base. */
+static int xgene_storm_pcie_specific_mapping(struct domain *d,
+                                             const struct dt_device_node *node,
+                                             paddr_t base, paddr_t end,
+                                             int base_spi)
+{
+    int ret;
+
+    printk("Mapping additional regions for PCIe device %s\n",
+           dt_node_full_name(node));
+
+    /* Map the PCIe bus resources */
+    ret = map_one_mmio(d, "PCI MEMORY", paddr_to_pfn(base), paddr_to_pfn(end));
+    if ( ret )
+        goto err;
+
+    ret = map_one_spi(d, "PCI#INTA", base_spi+0, DT_IRQ_TYPE_LEVEL_HIGH);
+    if ( ret )
+        goto err;
+
+    ret = map_one_spi(d, "PCI#INTB", base_spi+1, DT_IRQ_TYPE_LEVEL_HIGH);
+    if ( ret )
+        goto err;
+
+    ret = map_one_spi(d, "PCI#INTC", base_spi+2, DT_IRQ_TYPE_LEVEL_HIGH);
+    if ( ret )
+        goto err;
+
+    ret = map_one_spi(d, "PCI#INTD", base_spi+3, DT_IRQ_TYPE_LEVEL_HIGH);
+    if ( ret )
+        goto err;
+
+    ret = 0;
+err:
     return ret;
 }
 
@@ -81,43 +123,59 @@ static int map_one_spi(struct domain *d, const char *what,
  */
 static int xgene_storm_specific_mapping(struct domain *d)
 {
+    struct dt_device_node *node = NULL;
     int ret;
 
-    /* Map the PCIe bus resources */
-    ret = map_one_mmio(d, "PCI MEM REGION", 0xe000000000UL, 0xe010000000UL);
-    if ( ret )
-        goto err;
+    while ( (node = dt_find_compatible_node(node, "pci", "apm,xgene-pcie")) )
+    {
+        u64 addr;
 
-    ret = map_one_mmio(d, "PCI IO REGION", 0xe080000000UL, 0xe080010000UL);
-    if ( ret )
-        goto err;
+        /* Identify the bus via it's control register address */
+        ret = dt_device_get_address(node, 0, &addr, NULL);
+        if ( ret < 0 )
+            return ret;
 
-    ret = map_one_mmio(d, "PCI CFG REGION", 0xe0d0000000UL, 0xe0d0200000UL);
-    if ( ret )
-        goto err;
-    ret = map_one_mmio(d, "PCI MSI REGION", 0xe010000000UL, 0xe010800000UL);
-    if ( ret )
-        goto err;
+        if ( !dt_device_is_available(node) )
+            continue;
 
-    ret = map_one_spi(d, "PCI#INTA", 0xc2, DT_IRQ_TYPE_LEVEL_HIGH);
-    if ( ret )
-        goto err;
+       switch ( addr )
+        {
+        case 0x1f2b0000: /* PCIe0 */
+            ret = xgene_storm_pcie_specific_mapping(d,
+                node,
+                0x0e000000000UL, 0x10000000000UL, 0xc2);
+            break;
+        case 0x1f2c0000: /* PCIe1 */
+            ret = xgene_storm_pcie_specific_mapping(d,
+                node,
+                0x0d000000000UL, 0x0e000000000UL, 0xc8);
+            break;
+        case 0x1f2d0000: /* PCIe2 */
+            ret = xgene_storm_pcie_specific_mapping(d,
+                node,
+                0x09000000000UL, 0x0a000000000UL, 0xce);
+            break;
+        case 0x1f500000: /* PCIe3 */
+            ret = xgene_storm_pcie_specific_mapping(d,
+                node,
+                0x0a000000000UL, 0x0c000000000UL, 0xd4);
+            break;
+        case 0x1f510000: /* PCIe4 */
+            ret = xgene_storm_pcie_specific_mapping(d,
+                node,
+                0x0c000000000UL, 0x0d000000000UL, 0xda);
+            break;
 
-    ret = map_one_spi(d, "PCI#INTB", 0xc3, DT_IRQ_TYPE_LEVEL_HIGH);
-    if ( ret )
-        goto err;
+        default:
+            printk("Ignoring unknown PCI bus %s\n", dt_node_full_name(node));
+            continue;
+        }
 
-    ret = map_one_spi(d, "PCI#INTC", 0xc4, DT_IRQ_TYPE_LEVEL_HIGH);
-    if ( ret )
-        goto err;
+        if ( ret < 0 )
+            return ret;
+    }
 
-    ret = map_one_spi(d, "PCI#INTD", 0xc5, DT_IRQ_TYPE_LEVEL_HIGH);
-    if ( ret )
-        goto err;
-
-    ret = 0;
-err:
-    return ret;
+    return 0;
 }
 
 static void xgene_storm_reset(void)

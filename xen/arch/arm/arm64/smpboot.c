@@ -32,8 +32,7 @@ static int __init smp_spin_table_cpu_up(int cpu)
         return -EFAULT;
     }
 
-    release[0] = __pa(init_secondary);
-    flush_xen_data_tlb_range_va((vaddr_t)release, sizeof(*release));
+    writeq(__pa(init_secondary), release);
 
     iounmap(release);
 
@@ -55,7 +54,7 @@ static void __init smp_spin_table_init(int cpu, struct dt_device_node *dn)
 
 static int __init smp_psci_init(int cpu)
 {
-    if ( !psci_available )
+    if ( !psci_ver )
     {
         printk("CPU%d asks for PSCI, but DTB has no PSCI node\n", cpu);
         return -ENODEV;

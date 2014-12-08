@@ -48,6 +48,7 @@
 #include <asm/setup.h>
 #include <xen/cpu.h>
 #include <asm/nmi.h>
+#include <asm/alternative.h>
 
 /* opt_nosmp: If true, secondary processors are ignored. */
 static bool_t __initdata opt_nosmp;
@@ -61,18 +62,21 @@ integer_param("maxcpus", max_cpus);
 static bool_t __initdata disable_smep;
 invbool_param("smep", disable_smep);
 
+/* smap: Enable/disable Supervisor Mode Access Prevention (default on). */
+static bool_t __initdata disable_smap;
+invbool_param("smap", disable_smap);
+
+/* Boot dom0 in pvh mode */
+static bool_t __initdata opt_dom0pvh;
+boolean_param("dom0pvh", opt_dom0pvh);
+
 /* **** Linux config option: propagated to domain0. */
 /* "acpi=off":    Sisables both ACPI table parsing and interpreter. */
 /* "acpi=force":  Override the disable blacklist.                   */
-/* "acpi=strict": Disables out-of-spec workarounds.                 */
 /* "acpi=ht":     Limit ACPI just to boot-time to enable HT.        */
 /* "acpi=noirq":  Disables ACPI interrupt routing.                  */
 static void parse_acpi_param(char *s);
 custom_param("acpi", parse_acpi_param);
-
-/* **** Linux config option: propagated to domain0. */
-/* acpi_skip_timer_override: Skip IRQ0 overrides. */
-boolean_param("acpi_skip_timer_override", acpi_skip_timer_override);
 
 /* **** Linux config option: propagated to domain0. */
 /* noapic: Disable IOAPIC setup. */
@@ -100,8 +104,7 @@ char __attribute__ ((__section__(".bss.stack_aligned"))) cpu0_stack[STACK_SIZE];
 
 struct cpuinfo_x86 __read_mostly boot_cpu_data = { 0, 0, 0, 0, -1 };
 
-unsigned long __read_mostly mmu_cr4_features =
-    X86_CR4_PSE | X86_CR4_PGE | X86_CR4_PAE;
+unsigned long __read_mostly mmu_cr4_features = XEN_MINIMAL_CR4;
 
 bool_t __initdata acpi_disabled;
 bool_t __initdata acpi_force;
@@ -133,11 +136,6 @@ static void __init parse_acpi_param(char *s)
         acpi_noirq_set();
     }
 }
-
-#define EARLY_FAIL(f, a...) do {                \
-    printk( f , ## a );                         \
-    for ( ; ; ) halt();                         \
-} while (0)
 
 static const module_t *__initdata initial_images;
 static unsigned int __initdata nr_initial_images;
@@ -394,16 +392,6 @@ static void __init setup_max_pdx(unsigned long top_page)
     max_page = pdx_to_pfn(max_pdx - 1) + 1;
 }
 
-void set_pdx_range(unsigned long smfn, unsigned long emfn)
-{
-    unsigned long idx, eidx;
-
-    idx = pfn_to_pdx(smfn) / PDX_GROUP_COUNT;
-    eidx = (pfn_to_pdx(emfn - 1) + PDX_GROUP_COUNT) / PDX_GROUP_COUNT;
-    for ( ; idx < eidx; ++idx )
-        __set_bit(idx, pdx_group_valid);
-}
-
 /* A temporary copy of the e820 map that we can mess with during bootstrap. */
 static struct e820map __initdata boot_e820;
 
@@ -520,7 +508,7 @@ static bool_t __init loader_is_grub2(const char *loader_name)
     return (p != NULL) && (p[5] != '0');
 }
 
-static char * __init cmdline_cook(char *p, char *loader_name)
+static char * __init cmdline_cook(char *p, const char *loader_name)
 {
     p = p ? : "";
 
@@ -541,25 +529,38 @@ static char * __init cmdline_cook(char *p, char *loader_name)
     return p;
 }
 
-void __init __start_xen(unsigned long mbi_p)
+void __init noreturn __start_xen(unsigned long mbi_p)
 {
     char *memmap_type = NULL;
     char *cmdline, *kextra, *loader;
-    unsigned int initrdidx;
+    unsigned int initrdidx, domcr_flags = DOMCRF_s3_integrity;
     multiboot_info_t *mbi = __va(mbi_p);
     module_t *mod = (module_t *)__va(mbi->mods_addr);
     unsigned long nr_pages, raw_max_page, modules_headroom, *module_map;
     int i, j, e820_warn = 0, bytes = 0;
     bool_t acpi_boot_table_init_done = 0;
+    struct domain *dom0;
     struct ns16550_defaults ns16550 = {
         .data_bits = 8,
         .parity    = 'n',
         .stop_bits = 1
     };
 
+    /* Critical region without IDT or TSS.  Any fault is deadly! */
+
+    set_processor_id(0);
+    set_current((struct vcpu *)0xfffff000); /* debug sanity. */
+    idle_vcpu[0] = current;
+
     percpu_init_areas();
 
-    set_intr_gate(TRAP_page_fault, &early_page_fault);
+    init_idt_traps();
+    load_system_tables();
+
+    smp_prepare_boot_cpu();
+    sort_exception_tables();
+
+    /* Full exception support from here on in. */
 
     loader = (mbi->flags & MBI_LOADERNAME)
         ? (char *)__va(mbi->boot_loader_name) : "unknown";
@@ -587,14 +588,9 @@ void __init __start_xen(unsigned long mbi_p)
 
     parse_video_info();
 
-    set_current((struct vcpu *)0xfffff000); /* debug sanity */
-    idle_vcpu[0] = current;
-    set_processor_id(0); /* needed early, for smp_processor_id() */
     if ( cpu_has_efer )
         rdmsrl(MSR_EFER, this_cpu(efer));
     asm volatile ( "mov %%cr4,%0" : "=r" (this_cpu(cr4)) );
-
-    smp_prepare_boot_cpu();
 
     /* We initialise the serial devices very early so we can get debugging. */
     ns16550.io_base = 0x3f8;
@@ -662,11 +658,10 @@ void __init __start_xen(unsigned long mbi_p)
 
     /* Check that we have at least one Multiboot module. */
     if ( !(mbi->flags & MBI_MODULES) || (mbi->mods_count == 0) )
-        EARLY_FAIL("dom0 kernel not specified. "
-                   "Check bootloader configuration.\n");
+        panic("dom0 kernel not specified. Check bootloader configuration.");
 
     if ( ((unsigned long)cpu0_stack & (STACK_SIZE-1)) != 0 )
-        EARLY_FAIL("Misaligned CPU0 stack.\n");
+        panic("Misaligned CPU0 stack.");
 
     if ( efi_enabled )
     {
@@ -747,9 +742,7 @@ void __init __start_xen(unsigned long mbi_p)
         e820_raw_nr = 2;
     }
     else
-    {
-        EARLY_FAIL("Bootloader provided no memory information.\n");
-    }
+        panic("Bootloader provided no memory information.");
 
     /* Sanitise the raw E820 map to produce a final clean version. */
     max_page = raw_max_page = init_e820(memmap_type, e820_raw, &e820_raw_nr);
@@ -784,7 +777,7 @@ void __init __start_xen(unsigned long mbi_p)
     for ( i = 0; !efi_enabled && i < mbi->mods_count; i++ )
     {
         if ( mod[i].mod_start & (PAGE_SIZE - 1) )
-            EARLY_FAIL("Bootloader didn't honor module alignment request.\n");
+            panic("Bootloader didn't honor module alignment request.");
         mod[i].mod_end -= mod[i].mod_start;
         mod[i].mod_start >>= PAGE_SHIFT;
         mod[i].reserved = 0;
@@ -905,15 +898,17 @@ void __init __start_xen(unsigned long mbi_p)
 
             /* Re-sync the stack and then switch to relocated pagetables. */
             asm volatile (
-                "rep movsb        ; " /* re-sync the stack */
+                "rep movsq        ; " /* re-sync the stack */
                 "movq %%cr4,%%rsi ; "
                 "andb $0x7f,%%sil ; "
                 "movq %%rsi,%%cr4 ; " /* CR4.PGE == 0 */
-                "movq %0,%%cr3    ; " /* CR3 == new pagetables */
+                "movq %[pg],%%cr3 ; " /* CR3 == new pagetables */
                 "orb $0x80,%%sil  ; "
                 "movq %%rsi,%%cr4   " /* CR4.PGE == 1 */
-                : : "r" (__pa(idle_pg_table)), "S" (cpu0_stack),
-                "D" (__va(__pa(cpu0_stack))), "c" (STACK_SIZE) : "memory" );
+                : "=&S" (i), "=&D" (i), "=&c" (i) /* All outputs discarded. */
+                :  [pg] "r" (__pa(idle_pg_table)), "0" (cpu0_stack),
+                   "1" (__va(__pa(cpu0_stack))), "2" (STACK_SIZE / 8)
+                : "memory" );
 
             bootstrap_map(NULL);
         }
@@ -957,7 +952,7 @@ void __init __start_xen(unsigned long mbi_p)
     }
 
     if ( modules_headroom && !mod->reserved )
-        EARLY_FAIL("Not enough memory to relocate the dom0 kernel image.\n");
+        panic("Not enough memory to relocate the dom0 kernel image.");
     for ( i = 0; i < mbi->mods_count; ++i )
     {
         uint64_t s = (uint64_t)mod[i].mod_start << PAGE_SHIFT;
@@ -966,7 +961,7 @@ void __init __start_xen(unsigned long mbi_p)
     }
 
     if ( !xen_phys_start )
-        EARLY_FAIL("Not enough memory to relocate Xen.\n");
+        panic("Not enough memory to relocate Xen.");
     reserve_e820_ram(&boot_e820, efi_enabled ? mbi->mem_upper : __pa(&_start),
                      __pa(&_end));
 
@@ -1211,8 +1206,6 @@ void __init __start_xen(unsigned long mbi_p)
     if ( opt_watchdog ) 
         nmi_watchdog = NMI_LOCAL_APIC;
 
-    sort_exception_tables();
-
     find_smp_config();
 
     dmi_scan_machine();
@@ -1255,7 +1248,7 @@ void __init __start_xen(unsigned long mbi_p)
     bitmap_fill(module_map, mbi->mods_count);
     __clear_bit(0, module_map); /* Dom0 kernel is always first */
 
-    xsm_init(module_map, mbi, bootstrap_map);
+    xsm_multiboot_init(module_map, mbi, bootstrap_map);
 
     microcode_grab_module(module_map, mbi, bootstrap_map);
 
@@ -1283,8 +1276,15 @@ void __init __start_xen(unsigned long mbi_p)
     if ( cpu_has_smep )
         set_in_cr4(X86_CR4_SMEP);
 
+    if ( disable_smap )
+        setup_clear_cpu_cap(X86_FEATURE_SMAP);
+    if ( cpu_has_smap )
+        set_in_cr4(X86_CR4_SMAP);
+
     if ( cpu_has_fsgsbase )
         set_in_cr4(X86_CR4_FSGSBASE);
+
+    alternative_instructions();
 
     local_irq_enable();
 
@@ -1312,6 +1312,8 @@ void __init __start_xen(unsigned long mbi_p)
     initialize_keytable();
 
     console_init_postirq();
+
+    system_state = SYS_STATE_smp_boot;
 
     do_presmp_initcalls();
 
@@ -1341,9 +1343,12 @@ void __init __start_xen(unsigned long mbi_p)
     if ( !tboot_protect_mem_regions() )
         panic("Could not protect TXT memory regions");
 
+    if ( opt_dom0pvh )
+        domcr_flags |= DOMCRF_pvh | DOMCRF_hap;
+
     /* Create initial domain 0. */
-    dom0 = domain_create(0, DOMCRF_s3_integrity, 0);
-    if ( IS_ERR(dom0) || (alloc_dom0_vcpu0() == NULL) )
+    dom0 = domain_create(0, domcr_flags, 0);
+    if ( IS_ERR(dom0) || (alloc_dom0_vcpu0(dom0) == NULL) )
         panic("Error creating domain 0");
 
     dom0->is_privileged = 1;
@@ -1365,9 +1370,6 @@ void __init __start_xen(unsigned long mbi_p)
         /* Append any extra parameters. */
         if ( skip_ioapic_setup && !strstr(dom0_cmdline, "noapic") )
             safe_strcat(dom0_cmdline, " noapic");
-        if ( acpi_skip_timer_override &&
-             !strstr(dom0_cmdline, "acpi_skip_timer_override") )
-            safe_strcat(dom0_cmdline, " acpi_skip_timer_override");
         if ( (strlen(acpi_param) == 0) && acpi_disabled )
         {
             printk("ACPI is disabled, notifying Domain 0 (acpi=off)\n");
@@ -1392,6 +1394,14 @@ void __init __start_xen(unsigned long mbi_p)
                initrdidx);
 
     /*
+     * Temporarily clear SMAP in CR4 to allow user-accesses in construct_dom0().
+     * This saves a large number of corner cases interactions with
+     * copy_from_user().
+     */
+    if ( cpu_has_smap )
+        write_cr4(read_cr4() & ~X86_CR4_SMAP);
+
+    /*
      * We're going to setup domain0 using the module(s) that we stashed safely
      * above our heap. The second module, if present, is an initrd ramdisk.
      */
@@ -1400,6 +1410,9 @@ void __init __start_xen(unsigned long mbi_p)
                         ? mod + initrdidx : NULL,
                         bootstrap_map, cmdline) != 0)
         panic("Could not set up DOM0 guest OS");
+
+    if ( cpu_has_smap )
+        write_cr4(read_cr4() | X86_CR4_SMAP);
 
     /* Scrub RAM that is still free and so may go to an unprivileged domain. */
     scrub_heap_pages();
@@ -1445,7 +1458,7 @@ void arch_get_xen_caps(xen_capabilities_info_t *info)
     }
 }
 
-int __init xen_in_range(unsigned long mfn)
+int __hwdom_init xen_in_range(unsigned long mfn)
 {
     paddr_t start, end;
     int i;
@@ -1453,7 +1466,7 @@ int __init xen_in_range(unsigned long mfn)
     enum { region_s3, region_text, region_bss, nr_regions };
     static struct {
         paddr_t s, e;
-    } xen_regions[nr_regions] __initdata;
+    } xen_regions[nr_regions] __hwdom_initdata;
 
     /* initialize first time */
     if ( !xen_regions[0].s )

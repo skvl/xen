@@ -15,6 +15,7 @@
 #include <unistd.h>
 #include <xenbus.h>
 #include <events.h>
+#include <mini-os/lib.h>
 
 extern int main(int argc, char *argv[], char *envp[]);
 extern void __libc_init_array(void);
@@ -185,7 +186,7 @@ void _exit(int ret)
 
 int app_main(start_info_t *si)
 {
-    printk("Dummy main: start_info=%p\n", si);
+    printk("main.c: dummy main: start_info=%p\n", si);
     main_thread = create_thread("main", call_main, si);
     return 0;
 }

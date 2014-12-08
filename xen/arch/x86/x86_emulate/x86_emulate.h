@@ -51,11 +51,26 @@ enum x86_segment {
 
 #define is_x86_user_segment(seg) ((unsigned)(seg) <= x86_seg_gs)
 
+/* Classification of the types of software generated interrupts/exceptions. */
+enum x86_swint_type {
+    x86_swint_icebp, /* 0xf1 */
+    x86_swint_int3,  /* 0xcc */
+    x86_swint_into,  /* 0xce */
+    x86_swint_int,   /* 0xcd $n */
+};
+
+/* How much help is required with software event injection? */
+enum x86_swint_emulation {
+    x86_swint_emulate_none, /* Hardware supports all software injection properly */
+    x86_swint_emulate_icebp,/* Help needed with `icebp` (0xf1) */
+    x86_swint_emulate_all,  /* Help needed with all software events */
+};
+
 /* 
  * Attribute for segment selector. This is a copy of bit 40:47 & 52:55 of the
  * segment descriptor. It happens to match the format of an AMD SVM VMCB.
  */
-typedef union segment_attributes {
+typedef union __packed segment_attributes {
     uint16_t bytes;
     struct
     {
@@ -69,18 +84,18 @@ typedef union segment_attributes {
         uint16_t g:   1;    /* 11; Bit 55 */
         uint16_t pad: 4;
     } fields;
-} __attribute__ ((packed)) segment_attributes_t;
+} segment_attributes_t;
 
 /*
  * Full state of a segment register (visible and hidden portions).
  * Again, this happens to match the format of an AMD SVM VMCB.
  */
-struct segment_register {
+struct __packed segment_register {
     uint16_t   sel;
     segment_attributes_t attr;
     uint32_t   limit;
     uint64_t   base;
-} __attribute__ ((packed));
+};
 
 /*
  * Return codes from state-accessor functions and from x86_emulate().
@@ -337,6 +352,7 @@ struct x86_emulate_ops
 
     /* inject_sw_interrupt */
     int (*inject_sw_interrupt)(
+        enum x86_swint_type type,
         uint8_t vector,
         uint8_t insn_len,
         struct x86_emulate_ctxt *ctxt);
@@ -378,6 +394,9 @@ struct x86_emulate_ctxt
 
     /* Set this if writes may have side effects. */
     uint8_t force_writeback;
+
+    /* Software event injection support. */
+    enum x86_swint_emulation swint_emulate;
 
     /* Retirement state, set by the emulator (valid only on X86EMUL_OKAY). */
     union {

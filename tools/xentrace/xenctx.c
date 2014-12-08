@@ -23,25 +23,31 @@
 #include <string.h>
 #include <inttypes.h>
 #include <getopt.h>
+#include <limits.h>
 
 #include "xenctrl.h"
 #include <xen/foreign/x86_32.h>
 #include <xen/foreign/x86_64.h>
 #include <xen/hvm/save.h>
 
-static struct xenctx {
-    xc_interface *xc_handle;
-    int domid;
-    int frame_ptrs;
-    int stack_trace;
-    int disp_all;
-    int all_vcpus;
-    int self_paused;
-    xc_dominfo_t dominfo;
-} xenctx;
+#define DEFAULT_NR_STACK_PAGES 1
+#define DEFAULT_BYTES_PER_LINE 32
+#define DEFAULT_LINES 5
+
+/* Note: the order of these matter.
+ * NOT_KERNEL_ADDR must be < both KERNEL_DATA_ADDR and KERNEL_TEXT_ADDR.
+ * KERNEL_DATA_ADDR must be < KERNEL_TEXT_ADDR. */
+typedef enum type_of_addr_ {
+    NOT_KERNEL_ADDR,
+    KERNEL_DATA_ADDR,
+    KERNEL_TEXT_ADDR,
+} type_of_addr;
 
 #if defined (__i386__) || defined (__x86_64__)
+static const uint64_t cr_reg_mask[5] = { [2] = ~UINT64_C(0) };
+static const uint64_t dr_reg_mask[8] = { [0 ... 3] = ~UINT64_C(0) };
 typedef unsigned long long guest_word_t;
+#define FMT_16B_WORD "%04llx"
 #define FMT_32B_WORD "%08llx"
 #define FMT_64B_WORD "%016llx"
 /* Word-length of the guest's own data structures */
@@ -52,14 +58,41 @@ int guest_protected_mode = 1;
 #elif defined(__arm__)
 #define NO_TRANSLATION
 typedef uint64_t guest_word_t;
+#define FMT_16B_WORD "%04llx"
 #define FMT_32B_WORD "%08llx"
 #define FMT_64B_WORD "%016llx"
 #elif defined(__aarch64__)
 #define NO_TRANSLATION
 typedef uint64_t guest_word_t;
-#define FMT_32B_WORD "%08lx"
-#define FMT_64B_WORD "%016lx"
+#define FMT_16B_WORD "%04llx"
+#define FMT_32B_WORD "%08llx"
+#define FMT_64B_WORD "%016llx"
 #endif
+
+#define MAX_BYTES_PER_LINE 128
+
+static struct xenctx {
+    xc_interface *xc_handle;
+    int domid;
+    int frame_ptrs;
+    int stack_trace;
+    int disp_all;
+    int nr_stack_pages;
+    int bytes_per_line;
+    int lines;
+    int decode_as_ascii;
+    int tag_stack_dump;
+    int tag_call_trace;
+    int all_vcpus;
+#ifndef NO_TRANSLATION
+    guest_word_t mem_addr;
+    guest_word_t stk_addr;
+    int do_memory;
+    int do_stack;
+#endif
+    int kernel_start_set;
+    xc_dominfo_t dominfo;
+} xenctx;
 
 struct symbol {
     guest_word_t address;
@@ -68,30 +101,52 @@ struct symbol {
 } *symbol_table = NULL;
 
 guest_word_t kernel_stext, kernel_etext, kernel_sinittext, kernel_einittext, kernel_hypercallpage;
+guest_word_t kernel_text;
 
 #if defined (__i386__) || defined (__arm__)
 unsigned long long kernel_start = 0xc0000000;
+unsigned long long kernel_end = 0xffffffffULL;
 #elif defined (__x86_64__)
 unsigned long long kernel_start = 0xffffffff80000000UL;
+unsigned long long kernel_end = 0xffffffffffffffffUL;
 #elif defined (__aarch64__)
 unsigned long long kernel_start = 0xffffff8000000000UL;
+unsigned long long kernel_end = 0xffffffffffffffffULL;
 #endif
 
-static int is_kernel_text(guest_word_t addr)
+static type_of_addr kernel_addr(guest_word_t addr)
 {
-    if (symbol_table == NULL)
-        return (addr > kernel_start);
+    if ( symbol_table == NULL )
+    {
+        if ( addr > kernel_start )
+            return KERNEL_TEXT_ADDR;
+        else
+            return NOT_KERNEL_ADDR;
+    }
 
     if (addr >= kernel_stext &&
         addr <= kernel_etext)
-        return 1;
-    if (addr >= kernel_hypercallpage &&
-        addr <= kernel_hypercallpage + 4096)
-        return 1;
+        return KERNEL_TEXT_ADDR;
+    if ( kernel_hypercallpage &&
+         (addr >= kernel_hypercallpage &&
+          addr <= kernel_hypercallpage + 4096) )
+        return KERNEL_TEXT_ADDR;
     if (addr >= kernel_sinittext &&
         addr <= kernel_einittext)
-        return 1;
-    return 0;
+        return KERNEL_TEXT_ADDR;
+    if ( xenctx.kernel_start_set )
+    {
+        if ( addr > kernel_start )
+            return KERNEL_TEXT_ADDR;
+    } else {
+        if ( addr >= kernel_text &&
+             addr <= kernel_end )
+            return KERNEL_DATA_ADDR;
+        if ( addr >= kernel_start &&
+             addr <= kernel_end )
+            return KERNEL_TEXT_ADDR;
+    }
+    return NOT_KERNEL_ADDR;
 }
 
 #if 0
@@ -145,11 +200,11 @@ static struct symbol *lookup_symbol(guest_word_t address)
     return s->next && s->next->address <= address ? s->next : s;
 }
 
-static void print_symbol(guest_word_t addr)
+static void print_symbol(guest_word_t addr, type_of_addr type)
 {
     struct symbol *s;
 
-    if (!is_kernel_text(addr))
+    if ( kernel_addr(addr) < type )
         return;
 
     s = lookup_symbol(addr);
@@ -158,9 +213,9 @@ static void print_symbol(guest_word_t addr)
         return;
 
     if (addr==s->address)
-        printf("%s ", s->name);
+        printf(" %s", s->name);
     else
-        printf("%s+%#x ", s->name, (unsigned int)(addr - s->address));
+        printf(" %s+%#x", s->name, (unsigned int)(addr - s->address));
 }
 
 static void read_symbol_table(const char *symtab)
@@ -229,6 +284,10 @@ static void read_symbol_table(const char *symtab)
             kernel_stext = address;
         else if (strcmp(p, "_etext") == 0)
             kernel_etext = address;
+        else if ( strcmp(p, "_text") == 0 )
+            kernel_text = address;
+        else if ( strcmp(p, "_end") == 0 || strcmp(p, "__bss_stop") == 0 )
+            kernel_end = address;
         else if (strcmp(p, "_sinittext") == 0)
             kernel_sinittext = address;
         else if (strcmp(p, "_einittext") == 0)
@@ -281,17 +340,29 @@ static void print_flags(uint64_t flags)
     printf("\n");
 }
 
-static void print_special(void *regs, const char *name, unsigned int mask, int width)
+static void print_special(void *regs, const char *name, unsigned int mask,
+                          const uint64_t reg_is_addr_mask[], int width)
 {
     unsigned int i;
 
     printf("\n");
     for (i = 0; mask; mask >>= 1, ++i)
         if (mask & 1) {
-            if (width == 4)
-                printf("%s%u: %08"PRIx32"\n", name, i, ((uint32_t *) regs)[i]);
+            if ( width == 4 )
+            {
+                printf("%s%u: %08"PRIx32, name, i, ((uint32_t *) regs)[i]);
+                if ( reg_is_addr_mask[i] )
+                    print_symbol(reg_is_addr_mask[i] & ((uint32_t *) regs)[i],
+                                 KERNEL_DATA_ADDR);
+            }
             else
-                printf("%s%u: %08"PRIx64"\n", name, i, ((uint64_t *) regs)[i]);
+            {
+                printf("%s%u: %016"PRIx64, name, i, ((uint64_t *) regs)[i]);
+                if ( reg_is_addr_mask[i] )
+                    print_symbol(reg_is_addr_mask[i] & ((uint64_t *) regs)[i],
+                                 KERNEL_DATA_ADDR);
+            }
+            printf("\n");
         }
 }
 
@@ -299,8 +370,8 @@ static void print_ctx_32(vcpu_guest_context_x86_32_t *ctx)
 {
     struct cpu_user_regs_x86_32 *regs = &ctx->user_regs;
 
-    printf("cs:eip: %04x:%08x ", regs->cs, regs->eip);
-    print_symbol(regs->eip);
+    printf("cs:eip: %04x:%08x", regs->cs, regs->eip);
+    print_symbol(regs->eip, KERNEL_TEXT_ADDR);
     print_flags(regs->eflags);
     printf("ss:esp: %04x:%08x\n", regs->ss, regs->esp);
 
@@ -319,8 +390,8 @@ static void print_ctx_32(vcpu_guest_context_x86_32_t *ctx)
     printf(" gs:     %04x\n", regs->gs);
 
     if (xenctx.disp_all) {
-        print_special(ctx->ctrlreg, "cr", 0x1d, 4);
-        print_special(ctx->debugreg, "dr", 0xcf, 4);
+        print_special(ctx->ctrlreg, "cr", 0x1d, cr_reg_mask, 4);
+        print_special(ctx->debugreg, "dr", 0xcf, dr_reg_mask, 4);
     }
 }
 
@@ -328,8 +399,8 @@ static void print_ctx_32on64(vcpu_guest_context_x86_64_t *ctx)
 {
     struct cpu_user_regs_x86_64 *regs = &ctx->user_regs;
 
-    printf("cs:eip: %04x:%08x ", regs->cs, (uint32_t)regs->eip);
-    print_symbol((uint32_t)regs->eip);
+    printf("cs:eip: %04x:%08x", regs->cs, (uint32_t)regs->eip);
+    print_symbol((uint32_t)regs->eip, KERNEL_TEXT_ADDR);
     print_flags((uint32_t)regs->eflags);
     printf("ss:esp: %04x:%08x\n", regs->ss, (uint32_t)regs->esp);
 
@@ -348,8 +419,15 @@ static void print_ctx_32on64(vcpu_guest_context_x86_64_t *ctx)
     printf(" gs:     %04x\n", regs->gs);
 
     if (xenctx.disp_all) {
-        print_special(ctx->ctrlreg, "cr", 0x1d, 4);
-        print_special(ctx->debugreg, "dr", 0xcf, 4);
+        uint32_t tmp_regs[8];
+        int i;
+
+        for (i = 0; i < 5; i++)
+            tmp_regs[i] = ctx->ctrlreg[i];
+        print_special(tmp_regs, "cr", 0x1d, cr_reg_mask, 4);
+        for (i = 0; i < 8; i++)
+            tmp_regs[i] = ctx->debugreg[i];
+        print_special(tmp_regs, "dr", 0xcf, dr_reg_mask, 4);
     }
 }
 
@@ -357,8 +435,8 @@ static void print_ctx_64(vcpu_guest_context_x86_64_t *ctx)
 {
     struct cpu_user_regs_x86_64 *regs = &ctx->user_regs;
 
-    printf("rip: %016"PRIx64" ", regs->rip);
-    print_symbol(regs->rip);
+    printf("rip: %016"PRIx64, regs->rip);
+    print_symbol(regs->rip, KERNEL_TEXT_ADDR);
     print_flags(regs->rflags);
     printf("rsp: %016"PRIx64"\n", regs->rsp);
 
@@ -387,13 +465,22 @@ static void print_ctx_64(vcpu_guest_context_x86_64_t *ctx)
     printf(" ds: %04x\t", regs->ds);
     printf(" es: %04x\n", regs->es);
 
-    printf(" fs: %04x @ %016"PRIx64"\n", regs->fs, ctx->fs_base);
-    printf(" gs: %04x @ %016"PRIx64"/%016"PRIx64"\n", regs->gs,
+    printf(" fs: %04x @ %016"PRIx64, regs->fs, ctx->fs_base);
+    print_symbol(ctx->fs_base, KERNEL_DATA_ADDR);
+    printf("\n");
+    printf(" gs: %04x @ %016"PRIx64"/%016"PRIx64, regs->gs,
            ctx->gs_base_kernel, ctx->gs_base_user);
+    if ( symbol_table )
+    {
+        print_symbol(ctx->gs_base_kernel, KERNEL_DATA_ADDR);
+        printf("/");
+        print_symbol(ctx->gs_base_user, KERNEL_DATA_ADDR);
+    }
+    printf("\n");
 
     if (xenctx.disp_all) {
-        print_special(ctx->ctrlreg, "cr", 0x1d, 8);
-        print_special(ctx->debugreg, "dr", 0xcf, 8);
+        print_special(ctx->ctrlreg, "cr", 0x1d, cr_reg_mask, 8);
+        print_special(ctx->debugreg, "dr", 0xcf, dr_reg_mask, 8);
     }
 }
 
@@ -401,7 +488,7 @@ static void print_ctx(vcpu_guest_context_any_t *ctx)
 {
     if (ctxt_word_size == 4)
         print_ctx_32(&ctx->x32);
-    else if (guest_word_size == 4)
+    else if (guest_word_size != 8)
         print_ctx_32on64(&ctx->x64);
     else
         print_ctx_64(&ctx->x64);
@@ -420,7 +507,12 @@ static guest_word_t instr_pointer(vcpu_guest_context_any_t *ctx)
             r += ctx->x32.user_regs.cs << NONPROT_MODE_SEGMENT_SHIFT;
     }
     else
+    {
         r = ctx->x64.user_regs.rip;
+
+        if ( !guest_protected_mode )
+            r += ctx->x64.user_regs.cs << NONPROT_MODE_SEGMENT_SHIFT;
+    }
 
     return r;
 }
@@ -436,7 +528,12 @@ static guest_word_t stack_pointer(vcpu_guest_context_any_t *ctx)
             r += ctx->x32.user_regs.ss << NONPROT_MODE_SEGMENT_SHIFT;
     }
     else
+    {
         r = ctx->x64.user_regs.rsp;
+
+        if ( !guest_protected_mode )
+            r += ctx->x64.user_regs.ss << NONPROT_MODE_SEGMENT_SHIFT;
+    }
 
     return r;
 }
@@ -455,8 +552,8 @@ static void print_ctx_32(vcpu_guest_context_t *ctx)
 {
     vcpu_guest_core_regs_t *regs = &ctx->user_regs;
 
-    printf("PC:       %08"PRIx32" ", regs->pc32);
-    print_symbol(regs->pc32);
+    printf("PC:       %08"PRIx32, regs->pc32);
+    print_symbol(regs->pc32, KERNEL_TEXT_ADDR);
     printf("\n");
     printf("CPSR:     %08"PRIx32"\n", regs->cpsr);
     printf("USR:               SP:%08"PRIx32" LR:%08"PRIx32"\n",
@@ -507,8 +604,8 @@ static void print_ctx_64(vcpu_guest_context_t *ctx)
 {
     vcpu_guest_core_regs_t *regs = &ctx->user_regs;
 
-    printf("PC:       %016"PRIx64" ", regs->pc64);
-    print_symbol(regs->pc64);
+    printf("PC:       %016"PRIx64, regs->pc64);
+    print_symbol(regs->pc64, KERNEL_TEXT_ADDR);
     printf("\n");
 
     printf("LR:       %016"PRIx64"\n", regs->x30);
@@ -605,7 +702,7 @@ static void *map_page(vcpu_guest_context_any_t *ctx, int vcpu, guest_word_t virt
     mapped = xc_map_foreign_range(xenctx.xc_handle, xenctx.domid, XC_PAGE_SIZE, PROT_READ, mfn);
 
     if (mapped == NULL) {
-        fprintf(stderr, "failed to map page.\n");
+        fprintf(stderr, "\nfailed to map page for "FMT_32B_WORD".\n", virt);
         return NULL;
     }
 
@@ -621,12 +718,123 @@ static guest_word_t read_stack_word(guest_word_t *src, int width)
     return word;
 }
 
+static guest_word_t read_mem_word(vcpu_guest_context_any_t *ctx, int vcpu,
+                                  guest_word_t virt, int width)
+{
+    if ( (virt & 7) == 0 )
+    {
+        guest_word_t *p = map_page(ctx, vcpu, virt);
+
+        if ( p )
+            return read_stack_word(p, width);
+        else
+            return -1;
+    }
+    else
+    {
+        guest_word_t word = 0;
+        char *src, *dst;
+        int i;
+
+        /* Little-endian only */
+        dst = (char *)&word;
+        for (i = 0; i < width; i++)
+        {
+            src = map_page(ctx, vcpu, virt + i);
+            if ( src )
+                *dst++ = *src;
+            else
+            {
+                guest_word_t missing = -1LL;
+
+                /* Return all ones for missing memory */
+                memcpy(dst, &missing, width - i);
+                return word;
+            }
+        }
+        return word;
+    }
+}
+
 static void print_stack_word(guest_word_t word, int width)
 {
-    if (width == 4)
+    if (width == 2)
+        printf(FMT_16B_WORD, word);
+    else if (width == 4)
         printf(FMT_32B_WORD, word);
     else
         printf(FMT_64B_WORD, word);
+}
+
+static int print_lines(vcpu_guest_context_any_t *ctx, int vcpu, int width,
+                       guest_word_t mem_addr, guest_word_t mem_limit)
+{
+    guest_word_t mem_start = mem_addr;
+    guest_word_t word;
+    guest_word_t ascii[MAX_BYTES_PER_LINE/4];
+    int i;
+
+    for (i = 1; i < xenctx.lines + 1 && mem_addr < mem_limit; i++)
+    {
+        int j = 0;
+        int k;
+
+        if ( xenctx.tag_stack_dump )
+        {
+            print_stack_word(mem_addr, width);
+            printf(":");
+        }
+        while ( mem_addr < mem_limit &&
+                mem_addr < mem_start + i * xenctx.bytes_per_line )
+        {
+            void *p = map_page(ctx, vcpu, mem_addr);
+            if ( !p )
+                return -1;
+            word = read_mem_word(ctx, vcpu, mem_addr, width);
+            if ( xenctx.decode_as_ascii )
+                ascii[j++] = word;
+            printf(" ");
+            print_stack_word(word, width);
+            mem_addr += width;
+        }
+        if ( xenctx.decode_as_ascii )
+        {
+            /*
+             * Line up ascii output if less than bytes_per_line
+             * were printed.
+             */
+            for (k = j; k < xenctx.bytes_per_line / width; k++)
+                printf(" %*s", width * 2, "");
+            printf("  ");
+            for (k = 0; k < j; k++)
+            {
+                int l;
+                unsigned char *bytep = (unsigned char *)&ascii[k];
+
+                for (l = 0; l < width; l++)
+                {
+                    if (isprint(*bytep))
+                        printf("%c", *bytep);
+                    else
+                        printf(".");
+                    bytep++;
+                }
+            }
+        }
+        printf("\n");
+    }
+    printf("\n");
+    return 0;
+}
+
+static void print_mem(vcpu_guest_context_any_t *ctx, int vcpu, int width,
+                          guest_word_t mem_addr)
+{
+    printf("Memory (address ");
+    print_stack_word(mem_addr, width);
+    printf("):\n");
+    print_lines(ctx, vcpu, width, mem_addr,
+                mem_addr + xenctx.lines * xenctx.bytes_per_line);
 }
 
 static int print_code(vcpu_guest_context_any_t *ctx, int vcpu)
@@ -646,49 +854,54 @@ static int print_code(vcpu_guest_context_any_t *ctx, int vcpu)
         else
             printf("%02x ", *c);
     }
-    printf("\n");
-
-    printf("\n");
+    printf("\n\n\n");
     return 0;
 }
 
-static int print_stack(vcpu_guest_context_any_t *ctx, int vcpu, int width)
+static void print_stack_addr(guest_word_t addr, int width)
 {
-    guest_word_t stack = stack_pointer(ctx);
+    print_stack_word(addr, width);
+    printf(": ");
+}
+
+static int print_stack(vcpu_guest_context_any_t *ctx, int vcpu, int width,
+                       guest_word_t stk_addr_start)
+{
+    guest_word_t stack = stk_addr_start;
     guest_word_t stack_limit;
     guest_word_t frame;
     guest_word_t word;
     guest_word_t *p;
-    int i;
 
+    if ( width )
+        xenctx.bytes_per_line =
+            ((xenctx.bytes_per_line + width - 1) / width) * width;
     stack_limit = ((stack_pointer(ctx) + XC_PAGE_SIZE)
-                   & ~((guest_word_t) XC_PAGE_SIZE - 1));
-    printf("\n");
-    printf("Stack:\n");
-    for (i=1; i<5 && stack < stack_limit; i++) {
-        while(stack < stack_limit && stack < stack_pointer(ctx) + i*32) {
-            p = map_page(ctx, vcpu, stack);
-            if (!p)
-                return -1;
-            word = read_stack_word(p, width);
-            printf(" ");
-            print_stack_word(word, width);
-            stack += width;
-        }
-        printf("\n");
+                   & ~((guest_word_t) XC_PAGE_SIZE - 1))
+                   + (xenctx.nr_stack_pages - 1) * XC_PAGE_SIZE;
+    if ( xenctx.lines )
+    {
+        printf("Stack:\n");
+        if ( print_lines(ctx, vcpu, width, stack, stack_limit) )
+            return -1;
     }
-    printf("\n");
+
+    if ( !guest_protected_mode )
+        return 0;
 
     if(xenctx.stack_trace)
         printf("Stack Trace:\n");
     else
         printf("Call Trace:\n");
-    printf("%c [<", xenctx.stack_trace ? '*' : ' ');
-    print_stack_word(instr_pointer(ctx), width);
-    printf(">] ");
+    if ( !xenctx.do_stack )
+    {
+        printf("%*s  %c [<", width*2, "", xenctx.stack_trace ? '*' : ' ');
+        print_stack_word(instr_pointer(ctx), width);
+        printf(">]");
 
-    print_symbol(instr_pointer(ctx));
-    printf(" <--\n");
+        print_symbol(instr_pointer(ctx), KERNEL_TEXT_ADDR);
+        printf(" <--\n");
+    }
     if (xenctx.frame_ptrs) {
         stack = stack_pointer(ctx);
         frame = frame_pointer(ctx);
@@ -698,9 +911,10 @@ static int print_stack(vcpu_guest_context_any_t *ctx, int vcpu, int width)
                     p = map_page(ctx, vcpu, stack);
                     if (!p)
                         return -1;
+                    print_stack_addr(stack, width);
                     printf("|   ");
                     print_stack_word(read_stack_word(p, width), width);
-                    printf("   \n");
+                    printf("\n");
                     stack += width;
                 }
             } else {
@@ -712,6 +926,7 @@ static int print_stack(vcpu_guest_context_any_t *ctx, int vcpu, int width)
                 return -1;
             frame = read_stack_word(p, width);
             if (xenctx.stack_trace) {
+                print_stack_addr(stack, width);
                 printf("|-- ");
                 print_stack_word(read_stack_word(p, width), width);
                 printf("\n");
@@ -723,28 +938,32 @@ static int print_stack(vcpu_guest_context_any_t *ctx, int vcpu, int width)
                 if (!p)
                     return -1;
                 word = read_stack_word(p, width);
+                print_stack_addr(stack, width);
                 printf("%c [<", xenctx.stack_trace ? '|' : ' ');
                 print_stack_word(word, width);
-                printf(">] ");
-                print_symbol(word);
+                printf(">]");
+                print_symbol(word, KERNEL_TEXT_ADDR);
                 printf("\n");
                 stack += width;
             }
         }
     } else {
-        stack = stack_pointer(ctx);
+        stack = stk_addr_start;
         while(stack < stack_limit) {
             p = map_page(ctx, vcpu, stack);
             if (!p)
                 return -1;
-            word = read_stack_word(p, width);
-            if (is_kernel_text(word)) {
+            word = read_mem_word(ctx, vcpu, stack, width);
+            if ( kernel_addr(word) >= KERNEL_TEXT_ADDR )
+            {
+                print_stack_addr(stack, width);
                 printf("  [<");
                 print_stack_word(word, width);
-                printf(">] ");
-                print_symbol(word);
+                printf(">]");
+                print_symbol(word, KERNEL_TEXT_ADDR);
                 printf("\n");
             } else if (xenctx.stack_trace) {
+                print_stack_addr(stack, width);
                 printf("    ");
                 print_stack_word(word, width);
                 printf("\n");
@@ -776,8 +995,9 @@ static void dump_ctx(int vcpu)
                 perror("xc_domain_hvm_getcontext_partial");
                 return;
             }
-            guest_word_size = (cpuctx.msr_efer & 0x400) ? 8 : 4;
             guest_protected_mode = (cpuctx.cr0 & CR0_PE);
+            guest_word_size = (cpuctx.msr_efer & 0x400) ? 8 :
+                guest_protected_mode ? 4 : 2;
             /* HVM guest context records are always host-sized */
             if (xc_version(xenctx.xc_handle, XENVER_capabilities, &xen_caps) != 0) {
                 perror("xc_version");
@@ -792,12 +1012,26 @@ static void dump_ctx(int vcpu)
     }
 #endif
 
+#ifndef NO_TRANSLATION
+    if ( xenctx.do_memory )
+    {
+        print_mem(&ctx, vcpu, guest_word_size, xenctx.mem_addr);
+        return;
+    }
+    if ( xenctx.do_stack )
+    {
+        print_stack(&ctx, vcpu, guest_word_size, xenctx.stk_addr);
+        return;
+    }
+#endif
     print_ctx(&ctx);
 #ifndef NO_TRANSLATION
     if (print_code(&ctx, vcpu))
         return;
-    if (is_kernel_text(instr_pointer(&ctx)))
-        if (print_stack(&ctx, vcpu, guest_word_size))
+    if ( !guest_protected_mode ||
+         kernel_addr(instr_pointer(&ctx)) >= KERNEL_TEXT_ADDR )
+        if ( print_stack(&ctx, vcpu, guest_word_size,
+                         stack_pointer(&ctx)) )
             return;
 #endif
 }
@@ -811,7 +1045,13 @@ static void dump_all_vcpus(void)
         if ( xc_vcpu_getinfo(xenctx.xc_handle, xenctx.domid, vcpu, &vinfo) )
             continue;
         if ( vinfo.online )
+        {
+            printf("vcpu%d:\n", vcpu);
             dump_ctx(vcpu);
+            printf("\n");
+        }
+        else
+            printf("vcpu%d offline\n\n", vcpu);
     }
 }
 
@@ -823,27 +1063,66 @@ static void usage(void)
 
     printf("options:\n");
     printf("  -f, --frame-pointers\n");
-    printf("                    assume the kernel was compiled with\n");
-    printf("                    frame pointers.\n");
+    printf("                     assume the kernel was compiled with\n");
+    printf("                     frame pointers.\n");
     printf("  -s SYMTAB, --symbol-table=SYMTAB\n");
-    printf("                    read symbol table from SYMTAB.\n");
-    printf("  -S --stack-trace  print a complete stack trace.\n");
-    printf("  -k, --kernel-start\n");
-    printf("                    set user/kernel split. (default 0xc0000000)\n");
-    printf("  -a --all          display more registers\n");
-    printf("  -C --all-vcpus    print info for all vcpus\n");
+    printf("                     read symbol table from SYMTAB.\n");
+    printf("  -S, --stack-trace  print a complete stack trace.\n");
+    printf("  -k KADDR, --kernel-start=KADDR\n");
+    printf("                     set user/kernel split. (default 0x"FMT_32B_WORD")\n",
+        kernel_start);
+    printf("  -a, --all          display more registers\n");
+    printf("  -C, --all-vcpus    print info for all vcpus\n");
+    printf("  -n PAGES, --display-stack-pages=PAGES\n");
+    printf("                     Display N pages from the stack pointer. (default %d)\n",
+           DEFAULT_NR_STACK_PAGES);
+    printf("                     Changes stack limit.  Note: use with caution (easy\n");
+    printf("                     to get garbage).\n");
+    printf("  -b <bytes>, --bytes-per-line <bytes>\n");
+    printf("                     change the number of bytes per line output for Stack.\n");
+    printf("                     (default %d) Note: rounded to native size (4 or 8 bytes).\n",
+           DEFAULT_BYTES_PER_LINE);
+    printf("  -l <lines>, --lines <lines>\n");
+    printf("                     change the number of lines output for Stack. (default %d)\n",
+           DEFAULT_LINES);
+    printf("                     Can be specified as MAX.  Note: Fewer lines will be output\n");
+    printf("                     if stack limit reached.\n");
+    printf("  -D, --decode-as-ascii\n");
+    printf("                     add a decode of Stack dump as ascii.\n");
+    printf("  -t, --tag-stack-dump\n");
+    printf("                     add address on each line of Stack dump.\n");
+#ifndef NO_TRANSLATION
+    printf("  -m maddr, --memory=maddr\n");
+    printf("                     dump memory at maddr.\n");
+    printf("  -d daddr, --dump-as-stack=daddr\n");
+    printf("                     dump memory as a stack at daddr.\n");
+#endif
 }
 
 int main(int argc, char **argv)
 {
     int ch;
     int ret;
-    static const char *sopts = "fs:hak:SC";
+    const char *prog = argv[0];
+    static const char *sopts = "fs:hak:SCn:b:l:Dt"
+#ifndef NO_TRANSLATION
+        "m:d:"
+#endif
+        ;
     static const struct option lopts[] = {
         {"stack-trace", 0, NULL, 'S'},
         {"symbol-table", 1, NULL, 's'},
         {"frame-pointers", 0, NULL, 'f'},
         {"kernel-start", 1, NULL, 'k'},
+        {"display-stack-pages", 0, NULL, 'n'},
+        {"decode-as-ascii", 0, NULL, 'D'},
+        {"tag-stack-dump", 0, NULL, 't'},
+#ifndef NO_TRANSLATION
+        {"memory", 1, NULL, 'm'},
+        {"dump-as-stack", 1, NULL, 'd'},
+#endif
+        {"bytes-per-line", 1, NULL, 'b'},
+        {"lines", 1, NULL, 'l'},
         {"all", 0, NULL, 'a'},
         {"all-vcpus", 0, NULL, 'C'},
         {"help", 0, NULL, 'h'},
@@ -852,6 +1131,11 @@ int main(int argc, char **argv)
     const char *symbol_table = NULL;
 
     int vcpu = 0;
+    int do_default = 1;
+
+    xenctx.bytes_per_line = DEFAULT_BYTES_PER_LINE;
+    xenctx.lines = DEFAULT_LINES;
+    xenctx.nr_stack_pages = DEFAULT_NR_STACK_PAGES;
 
     while ((ch = getopt_long(argc, argv, sopts, lopts, NULL)) != -1) {
         switch(ch) {
@@ -867,17 +1151,73 @@ int main(int argc, char **argv)
         case 'a':
             xenctx.disp_all = 1;
             break;
+        case 'n':
+            xenctx.nr_stack_pages = strtol(optarg, NULL, 0);
+            if ( xenctx.nr_stack_pages < 1)
+            {
+                fprintf(stderr,
+                        "%s: Unsupported value(%d) for --display-stack-pages '%s'. Needs to be >= 1\n",
+                        prog, xenctx.nr_stack_pages, optarg);
+                exit(-1);
+            }
+            break;
+        case 'D':
+            xenctx.decode_as_ascii = 1;
+            break;
+        case 't':
+            xenctx.tag_stack_dump = 1;
+            break;
+        case 'b':
+            xenctx.bytes_per_line = strtol(optarg, NULL, 0);
+            if ( xenctx.bytes_per_line < 4 ||
+                 xenctx.bytes_per_line > MAX_BYTES_PER_LINE )
+            {
+                fprintf(stderr,
+                        "%s: Unsupported value for --bytes-per-line '%s'. Needs to be 4 <= %d <= %d\n",
+                        prog, optarg, xenctx.bytes_per_line,
+                        MAX_BYTES_PER_LINE);
+                exit(-1);
+            }
+            break;
+        case 'l':
+            if ( !strcmp(optarg, "all") || !strcmp(optarg, "ALL") ||
+                 !strcmp(optarg, "max") || !strcmp(optarg, "MAX") )
+                xenctx.lines = INT_MAX - 1;
+            else
+                xenctx.lines = strtol(optarg, NULL, 0);
+            if ( xenctx.lines < 0 || xenctx.lines == INT_MAX)
+            {
+                fprintf(stderr,
+                        "%s: Unsupported value(%d) for --lines '%s'. Needs to be >= 0, < %d\n",
+                        prog, xenctx.lines, optarg, INT_MAX);
+                exit(-1);
+            }
+            break;
         case 'C':
             xenctx.all_vcpus = 1;
+            do_default = 0;
             break;
         case 'k':
             kernel_start = strtoull(optarg, NULL, 0);
+            xenctx.kernel_start_set = 1;
             break;
+#ifndef NO_TRANSLATION
+        case 'm':
+            xenctx.mem_addr = strtoull(optarg, NULL, 0);
+            xenctx.do_memory = 1;
+            do_default = 0;
+            break;
+        case 'd':
+            xenctx.stk_addr = strtoull(optarg, NULL, 0);
+            xenctx.do_stack = 1;
+            do_default = 0;
+            break;
+#endif
         case 'h':
             usage();
             exit(-1);
         case '?':
-            fprintf(stderr, "%s --help for more options\n", argv[0]);
+            fprintf(stderr, "%s --help for more options\n", prog);
             exit(-1);
         }
     }
@@ -889,14 +1229,33 @@ int main(int argc, char **argv)
         exit(-1);
     }
 
+#ifndef NO_TRANSLATION
+    if ( xenctx.frame_ptrs && xenctx.do_stack )
+    {
+        fprintf(stderr,
+                "%s: both --frame-pointers and --dump-as-stack is not supported\n",
+                prog);
+        exit(-1);
+    }
+#endif
+
     xenctx.domid = atoi(argv[0]);
     if (xenctx.domid==0) {
             fprintf(stderr, "cannot trace dom0\n");
             exit(-1);
     }
 
-    if (argc == 2)
+    if ( argc == 2 )
+    {
+        if ( xenctx.all_vcpus )
+        {
+            fprintf(stderr,
+                    "%s: both --all-vcpus and [VCPU] is not supported\n",
+                    prog);
+            exit(-1);
+        }
         vcpu = atoi(argv[1]);
+    }
 
     if (symbol_table)
         read_symbol_table(symbol_table);
@@ -913,26 +1272,37 @@ int main(int argc, char **argv)
         exit(-1);
     }
 
-    if (!xenctx.dominfo.paused) {
-        ret = xc_domain_pause(xenctx.xc_handle, xenctx.domid);
-        if (ret < 0) {
-            perror("xc_domain_pause");
-            exit(-1);
-        }
-        xenctx.self_paused = 1;
+    ret = xc_domain_pause(xenctx.xc_handle, xenctx.domid);
+    if (ret < 0) {
+        perror("xc_domain_pause");
+        exit(-1);
     }
 
+#ifndef NO_TRANSLATION
+    if ( xenctx.do_memory )
+    {
+        dump_ctx(vcpu);
+        if ( xenctx.do_stack || xenctx.all_vcpus )
+            printf("\n");
+    }
+    xenctx.do_memory = 0;
+    if ( xenctx.do_stack )
+    {
+        dump_ctx(vcpu);
+        if ( xenctx.all_vcpus )
+            printf("\n");
+    }
+    xenctx.do_stack = 0;
+#endif
     if (xenctx.all_vcpus)
         dump_all_vcpus();
-    else
+    if ( do_default )
         dump_ctx(vcpu);
 
-    if (xenctx.self_paused) {
-        ret = xc_domain_unpause(xenctx.xc_handle, xenctx.domid);
-        if (ret < 0) {
-            perror("xc_domain_unpause");
-            exit(-1);
-        }
+    ret = xc_domain_unpause(xenctx.xc_handle, xenctx.domid);
+    if (ret < 0) {
+        perror("xc_domain_unpause");
+        exit(-1);
     }
 
     ret = xc_interface_close(xenctx.xc_handle);

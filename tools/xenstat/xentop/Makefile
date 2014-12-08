@@ -18,12 +18,13 @@ ifneq ($(XENSTAT_XENTOP),y)
 all install xentop:
 else
 
-CFLAGS += -DGCC_PRINTF -Wall -Werror $(CFLAGS_libxenstat)
-LDLIBS += $(LDLIBS_libxenstat) $(CURSES_LIBS) $(SOCKET_LIBS)
+CFLAGS += -DGCC_PRINTF -Werror $(CFLAGS_libxenstat)
+LDLIBS += $(LDLIBS_libxenstat) $(CURSES_LIBS) $(SOCKET_LIBS) -lm
 CFLAGS += -DHOST_$(XEN_OS)
 
 # Include configure output (config.h) to headers search path
 CFLAGS += -I$(XEN_ROOT)/tools
+LDFLAGS += $(APPEND_LDFLAGS)
 
 .PHONY: all
 all: xentop

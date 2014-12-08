@@ -40,16 +40,31 @@
 #include <xsm/xsm.h>
 #include <asm/flushtlb.h>
 
-#ifndef max_nr_grant_frames
-unsigned int max_nr_grant_frames = DEFAULT_MAX_NR_GRANT_FRAMES;
+/* 
+ * This option is deprecated, use gnttab_max_frames and
+ * gnttab_max_maptrack_frames instead.
+ */
+static unsigned int __initdata max_nr_grant_frames;
 integer_param("gnttab_max_nr_frames", max_nr_grant_frames);
-#endif
+
+unsigned int __read_mostly max_grant_frames;
+integer_param("gnttab_max_frames", max_grant_frames);
 
 /* The maximum number of grant mappings is defined as a multiplier of the
  * maximum number of grant table entries. This defines the multiplier used.
  * Pretty arbitrary. [POLICY]
+ * As gnttab_max_nr_frames has been deprecated, this multiplier is deprecated too.
+ * New options allow to set max_maptrack_frames and
+ * map_grant_table_frames independently.
  */
-#define MAX_MAPTRACK_TO_GRANTS_RATIO 8
+#define DEFAULT_MAX_MAPTRACK_FRAMES 256
+
+static unsigned int __read_mostly max_maptrack_frames;
+integer_param("gnttab_max_maptrack_frames", max_maptrack_frames);
+
+#define GNTTABOP_CONTINUATION_ARG_SHIFT 12
+#define GNTTABOP_CMD_MASK               ((1<<GNTTABOP_CONTINUATION_ARG_SHIFT)-1)
+#define GNTTABOP_ARG_MASK               (~GNTTABOP_CMD_MASK)
 
 /*
  * The first two members of a grant entry are updated as a combined pair.
@@ -102,11 +117,6 @@ nr_maptrack_frames(struct grant_table *t)
     return t->maptrack_limit / MAPTRACK_PER_PAGE;
 }
 
-static unsigned inline int max_nr_maptrack_frames(void)
-{
-    return (max_nr_grant_frames * MAX_MAPTRACK_TO_GRANTS_RATIO);
-}
-
 #define MAPTRACK_TAIL (~0u)
 
 #define SHGNT_PER_PAGE_V1 (PAGE_SIZE / sizeof(grant_entry_v1_t))
@@ -147,6 +157,12 @@ struct active_grant_entry {
 #define active_entry(t, e) \
     ((t)->active[(e)/ACGNT_PER_PAGE][(e)%ACGNT_PER_PAGE])
 
+static inline void gnttab_flush_tlb(const struct domain *d)
+{
+    if ( !paging_mode_external(d) )
+        flush_tlb_mask(d->domain_dirty_cpumask);
+}
+
 static inline unsigned int
 num_act_frames_from_sha_frames(const unsigned int num)
 {
@@ -158,7 +174,7 @@ num_act_frames_from_sha_frames(const unsigned int num)
 }
 
 #define max_nr_active_grant_frames \
-    num_act_frames_from_sha_frames(max_nr_grant_frames)
+    num_act_frames_from_sha_frames(max_grant_frames)
 
 static inline unsigned int
 nr_active_grant_frames(struct grant_table *gt)
@@ -265,7 +281,7 @@ get_maptrack_handle(
     while ( unlikely((handle = __get_maptrack_handle(lgt)) == -1) )
     {
         nr_frames = nr_maptrack_frames(lgt);
-        if ( nr_frames >= max_nr_maptrack_frames() )
+        if ( nr_frames >= max_maptrack_frames )
             break;
 
         new_mt = alloc_xenheap_page();
@@ -478,6 +494,43 @@ static int _set_status(unsigned gt_version,
         return _set_status_v2(domid, readonly, mapflag, shah, act, status);
 }
 
+static int grant_map_exists(const struct domain *ld,
+                            struct grant_table *rgt,
+                            unsigned long mfn,
+                            unsigned int *ref_count)
+{
+    const struct active_grant_entry *act;
+    unsigned int ref, max_iter;
+    
+    ASSERT(spin_is_locked(&rgt->lock));
+
+    max_iter = min(*ref_count + (1 << GNTTABOP_CONTINUATION_ARG_SHIFT),
+                   nr_grant_entries(rgt));
+    for ( ref = *ref_count; ref < max_iter; ref++ )
+    {
+        act = &active_entry(rgt, ref);
+
+        if ( !act->pin )
+            continue;
+
+        if ( act->domid != ld->domain_id )
+            continue;
+
+        if ( act->frame != mfn )
+            continue;
+
+        return 0;
+    }
+
+    if ( ref < nr_grant_entries(rgt) )
+    {
+        *ref_count = ref;
+        return 1;
+    }
+
+    return -EINVAL;
+}
+
 static void mapcount(
     struct grant_table *lgt, struct domain *rd, unsigned long mfn,
     unsigned int *wrc, unsigned int *rdc)
@@ -574,7 +627,7 @@ __gnttab_map_grant_ref(
 
     if ( rgt->gt_version == 0 )
         PIN_FAIL(unlock_out, GNTST_general_error,
-                 "remote grant table not yet set up");
+                 "remote grant table not yet set up\n");
 
     /* Bounds check on the grant ref */
     if ( unlikely(op->ref >= nr_grant_entries(rgt)))
@@ -721,12 +774,10 @@ __gnttab_map_grant_ref(
 
     double_gt_lock(lgt, rgt);
 
-    if ( is_pv_domain(ld) && need_iommu(ld) )
+    if ( gnttab_need_iommu_mapping(ld) )
     {
         unsigned int wrc, rdc;
         int err = 0;
-        /* Shouldn't happen, because you can't use iommu in a HVM domain. */
-        BUG_ON(paging_mode_translate(ld));
         /* We're not translated, so we know that gmfns and mfns are
            the same things, so the IOMMU entry is always 1-to-1. */
         mapcount(lgt, rd, frame, &wrc, &rdc);
@@ -931,11 +982,10 @@ __gnttab_unmap_common(
             act->pin -= GNTPIN_hstw_inc;
     }
 
-    if ( is_pv_domain(ld) && need_iommu(ld) )
+    if ( gnttab_need_iommu_mapping(ld) )
     {
         unsigned int wrc, rdc;
         int err = 0;
-        BUG_ON(paging_mode_translate(ld));
         mapcount(lgt, rd, op->frame, &wrc, &rdc);
         if ( (wrc + rdc) == 0 )
             err = iommu_unmap_page(ld, op->frame);
@@ -1099,7 +1149,7 @@ gnttab_unmap_grant_ref(
             guest_handle_add_offset(uop, 1);
         }
 
-        flush_tlb_mask(current->domain->domain_dirty_cpumask);
+        gnttab_flush_tlb(current->domain);
 
         for ( i = 0; i < partial_done; i++ )
             __gnttab_unmap_common_complete(&(common[i]));
@@ -1114,7 +1164,7 @@ gnttab_unmap_grant_ref(
     return 0;
 
 fault:
-    flush_tlb_mask(current->domain->domain_dirty_cpumask);
+    gnttab_flush_tlb(current->domain);
 
     for ( i = 0; i < partial_done; i++ )
         __gnttab_unmap_common_complete(&(common[i]));
@@ -1162,7 +1212,7 @@ gnttab_unmap_and_replace(
             guest_handle_add_offset(uop, 1);
         }
         
-        flush_tlb_mask(current->domain->domain_dirty_cpumask);
+        gnttab_flush_tlb(current->domain);
         
         for ( i = 0; i < partial_done; i++ )
             __gnttab_unmap_common_complete(&(common[i]));
@@ -1177,7 +1227,7 @@ gnttab_unmap_and_replace(
     return 0;
 
 fault:
-    flush_tlb_mask(current->domain->domain_dirty_cpumask);
+    gnttab_flush_tlb(current->domain);
 
     for ( i = 0; i < partial_done; i++ )
         __gnttab_unmap_common_complete(&(common[i]));
@@ -1242,7 +1292,7 @@ gnttab_grow_table(struct domain *d, unsigned int req_nr_frames)
     struct grant_table *gt = d->grant_table;
     unsigned int i;
 
-    ASSERT(req_nr_frames <= max_nr_grant_frames);
+    ASSERT(req_nr_frames <= max_grant_frames);
 
     gdprintk(XENLOG_INFO,
             "Expanding dom (%d) grant table from (%d) to (%d) frames.\n",
@@ -1315,11 +1365,11 @@ gnttab_setup_table(
         return -EFAULT;
     }
 
-    if ( unlikely(op.nr_frames > max_nr_grant_frames) )
+    if ( unlikely(op.nr_frames > max_grant_frames) )
     {
         gdprintk(XENLOG_INFO, "Xen only supports up to %d grant-table frames"
                 " per domain.\n",
-                max_nr_grant_frames);
+                max_grant_frames);
         op.status = GNTST_general_error;
         goto out1;
     }
@@ -1354,7 +1404,7 @@ gnttab_setup_table(
     {
         gdprintk(XENLOG_INFO,
                  "Expand grant table to %u failed. Current: %u Max: %u\n",
-                 op.nr_frames, nr_grant_frames(gt), max_nr_grant_frames);
+                 op.nr_frames, nr_grant_frames(gt), max_grant_frames);
         op.status = GNTST_general_error;
         goto out3;
     }
@@ -1415,7 +1465,7 @@ gnttab_query_size(
     spin_lock(&d->grant_table->lock);
 
     op.nr_frames     = nr_grant_frames(d->grant_table);
-    op.max_nr_frames = max_nr_grant_frames;
+    op.max_nr_frames = max_grant_frames;
     op.status        = GNTST_okay;
 
     spin_unlock(&d->grant_table->lock);
@@ -1569,7 +1619,7 @@ gnttab_transfer(
         }
 
         guest_physmap_remove_page(d, gop.mfn, mfn, 0);
-        flush_tlb_mask(d->domain_dirty_cpumask);
+        gnttab_flush_tlb(d);
 
         /* Find the target domain. */
         if ( unlikely((e = rcu_lock_domain_by_id(gop.domid)) == NULL) )
@@ -2459,17 +2509,124 @@ gnttab_swap_grant_ref(XEN_GUEST_HANDLE_PARAM(gnttab_swap_grant_ref_t) uop,
     return 0;
 }
 
+static int __gnttab_cache_flush(gnttab_cache_flush_t *cflush,
+                                unsigned int *ref_count)
+{
+    struct domain *d, *owner;
+    struct page_info *page;
+    unsigned long mfn;
+    void *v;
+    int ret;
+
+    if ( (cflush->offset >= PAGE_SIZE) ||
+         (cflush->length > PAGE_SIZE) ||
+         (cflush->offset + cflush->length > PAGE_SIZE) )
+        return -EINVAL;
+
+    if ( cflush->length == 0 || cflush->op == 0 )
+        return 0;
+
+    /* currently unimplemented */
+    if ( cflush->op & GNTTAB_CACHE_SOURCE_GREF )
+        return -EOPNOTSUPP;
+
+    if ( cflush->op & ~(GNTTAB_CACHE_INVAL|GNTTAB_CACHE_CLEAN) )
+        return -EINVAL;
+
+    d = rcu_lock_current_domain();
+    mfn = cflush->a.dev_bus_addr >> PAGE_SHIFT;
+
+    if ( !mfn_valid(mfn) )
+    {
+        rcu_unlock_domain(d);
+        return -EINVAL;
+    }
+
+    page = mfn_to_page(mfn);
+    owner = page_get_owner_and_reference(page);
+    if ( !owner )
+    {
+        rcu_unlock_domain(d);
+        return -EPERM;
+    }
+
+    if ( d != owner )
+    {
+        spin_lock(&owner->grant_table->lock);
+
+        ret = grant_map_exists(d, owner->grant_table, mfn, ref_count);
+        if ( ret != 0 )
+        {
+            spin_unlock(&owner->grant_table->lock);
+            rcu_unlock_domain(d);
+            put_page(page);
+            return ret;
+        }
+    }
+
+    v = map_domain_page(mfn);
+    v += cflush->offset;
+
+    if ( (cflush->op & GNTTAB_CACHE_INVAL) && (cflush->op & GNTTAB_CACHE_CLEAN) )
+        ret = clean_and_invalidate_dcache_va_range(v, cflush->length);
+    else if ( cflush->op & GNTTAB_CACHE_INVAL )
+        ret = invalidate_dcache_va_range(v, cflush->length);
+    else if ( cflush->op & GNTTAB_CACHE_CLEAN )
+        ret = clean_dcache_va_range(v, cflush->length);
+    else
+        ret = 0;
+
+    if ( d != owner )
+        spin_unlock(&owner->grant_table->lock);
+    unmap_domain_page(v);
+    put_page(page);
+
+    return ret;
+}
+
+static long
+gnttab_cache_flush(XEN_GUEST_HANDLE_PARAM(gnttab_cache_flush_t) uop,
+                      unsigned int *ref_count,
+                      unsigned int count)
+{
+    unsigned int i;
+    gnttab_cache_flush_t op;
+
+    for ( i = 0; i < count; i++ )
+    {
+        if ( i && hypercall_preempt_check() )
+            return i;
+        if ( unlikely(__copy_from_guest(&op, uop, 1)) )
+            return -EFAULT;
+        for ( ; ; )
+        {
+            int ret = __gnttab_cache_flush(&op, ref_count);
+
+            if ( ret < 0 )
+                return ret;
+            if ( ret == 0 )
+                break;
+            if ( hypercall_preempt_check() )
+                return i;
+        }
+        *ref_count = 0;
+        guest_handle_add_offset(uop, 1);
+    }
+    return 0;
+}
+
 long
 do_grant_table_op(
     unsigned int cmd, XEN_GUEST_HANDLE_PARAM(void) uop, unsigned int count)
 {
     long rc;
+    unsigned int opaque_in = cmd & GNTTABOP_ARG_MASK, opaque_out = 0;
     
     if ( (int)count < 0 )
         return -EINVAL;
     
     rc = -EFAULT;
-    switch ( cmd )
+    switch ( cmd &= GNTTABOP_CMD_MASK )
     {
     case GNTTABOP_map_grant_ref:
     {
@@ -2588,17 +2745,34 @@ do_grant_table_op(
         }
         break;
     }
+    case GNTTABOP_cache_flush:
+    {
+        XEN_GUEST_HANDLE_PARAM(gnttab_cache_flush_t) cflush =
+            guest_handle_cast(uop, gnttab_cache_flush_t);
+
+        if ( unlikely(!guest_handle_okay(cflush, count)) )
+            goto out;
+        rc = gnttab_cache_flush(cflush, &opaque_in, count);
+        if ( rc > 0 )
+        {
+            guest_handle_add_offset(cflush, rc);
+            uop = guest_handle_cast(cflush, void);
+        }
+        opaque_out = opaque_in;
+        break;
+    }
     default:
         rc = -ENOSYS;
         break;
     }
     
   out:
-    if ( rc > 0 )
+    if ( rc > 0 || opaque_out != 0 )
     {
         ASSERT(rc < count);
-        rc = hypercall_create_continuation(__HYPERVISOR_grant_table_op,
-                                           "ihi", cmd, uop, count - rc);
+        ASSERT((opaque_out & GNTTABOP_CMD_MASK) == 0);
+        rc = hypercall_create_continuation(__HYPERVISOR_grant_table_op, "ihi",
+                                           opaque_out | cmd, uop, count - rc);
     }
     
     return rc;
@@ -2636,7 +2810,7 @@ grant_table_create(
 
     /* Tracking of mapped foreign frames table */
     if ( (t->maptrack = xzalloc_array(struct grant_mapping *,
-                                      max_nr_maptrack_frames())) == NULL )
+                                      max_maptrack_frames)) == NULL )
         goto no_mem_2;
     if ( (t->maptrack[0] = alloc_xenheap_page()) == NULL )
         goto no_mem_3;
@@ -2647,7 +2821,7 @@ grant_table_create(
     t->maptrack[0][i - 1].ref = MAPTRACK_TAIL;
 
     /* Shared grant table. */
-    if ( (t->shared_raw = xzalloc_array(void *, max_nr_grant_frames)) == NULL )
+    if ( (t->shared_raw = xzalloc_array(void *, max_grant_frames)) == NULL )
         goto no_mem_3;
     for ( i = 0; i < INITIAL_NR_GRANT_FRAMES; i++ )
     {
@@ -2658,7 +2832,7 @@ grant_table_create(
     
     /* Status pages for grant table - for version 2 */
     t->status = xzalloc_array(grant_status_t *,
-                              grant_to_status_frames(max_nr_grant_frames));
+                              grant_to_status_frames(max_grant_frames));
     if ( t->status == NULL )
         goto no_mem_4;
 
@@ -2907,6 +3081,24 @@ static struct keyhandler gnttab_usage_print_all_keyhandler = {
 
 static int __init gnttab_usage_init(void)
 {
+    if ( max_nr_grant_frames )
+    {
+        printk(XENLOG_WARNING
+               "gnttab_max_nr_frames is deprecated, use gnttab_max_frames instead\n");
+        if ( !max_grant_frames )
+            max_grant_frames = max_nr_grant_frames;
+        BUILD_BUG_ON(DEFAULT_MAX_MAPTRACK_FRAMES < DEFAULT_MAX_NR_GRANT_FRAMES);
+        if ( !max_maptrack_frames )
+            max_maptrack_frames = max_nr_grant_frames *
+                (DEFAULT_MAX_MAPTRACK_FRAMES / DEFAULT_MAX_NR_GRANT_FRAMES);
+    }
+
+    if ( !max_grant_frames )
+        max_grant_frames = DEFAULT_MAX_NR_GRANT_FRAMES;
+
+    if ( !max_maptrack_frames )
+        max_maptrack_frames = DEFAULT_MAX_MAPTRACK_FRAMES;
+
     register_keyhandler('g', &gnttab_usage_print_all_keyhandler);
     return 0;
 }

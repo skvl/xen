@@ -78,10 +78,19 @@ void libxl__free_all(libxl__gc *gc)
     gc->alloc_maxsize = 0;
 }
 
-void *libxl__zalloc(libxl__gc *gc, int bytes)
+void *libxl__malloc(libxl__gc *gc, size_t size)
 {
-    void *ptr = calloc(bytes, 1);
-    if (!ptr) libxl__alloc_failed(CTX, __func__, bytes, 1);
+    void *ptr = malloc(size);
+    if (!ptr) libxl__alloc_failed(CTX, __func__, size, 1);
+
+    libxl__ptr_add(gc, ptr);
+    return ptr;
+}
+
+void *libxl__zalloc(libxl__gc *gc, size_t size)
+{
+    void *ptr = calloc(size, 1);
+    if (!ptr) libxl__alloc_failed(CTX, __func__, size, 1);
 
     libxl__ptr_add(gc, ptr);
     return ptr;
@@ -155,19 +164,19 @@ char *libxl__strndup(libxl__gc *gc, const char *c, size_t n)
 
     if (!s) libxl__alloc_failed(CTX, __func__, n, 1);
 
+    libxl__ptr_add(gc, s);
+
     return s;
 }
 
 char *libxl__dirname(libxl__gc *gc, const char *s)
 {
-    char *c;
-    char *ptr = libxl__strdup(gc, s);
+    char *c = strrchr(s, '/');
 
-    c = strrchr(ptr, '/');
     if (!c)
         return NULL;
-    *c = '\0';
-    return ptr;
+
+    return libxl__strndup(gc, s, c - s);
 }
 
 void libxl__logv(libxl_ctx *ctx, xentoollog_level msglevel, int errnoval,
@@ -237,7 +246,7 @@ int libxl__file_reference_map(libxl__file_reference *f)
 
     ret = -1;
     data = mmap(NULL, st_buf.st_size, PROT_READ, MAP_PRIVATE, fd, 0);
-    if (data == NULL)
+    if (data == MAP_FAILED)
         goto out;
 
     f->mapped = 1;
@@ -275,10 +284,12 @@ _hidden int libxl__parse_mac(const char *s, libxl_mac mac)
     char *endptr;
     int i;
 
-    for (i = 0, tok = s; *tok && (i < 6); ++i, tok += 3) {
+    for (i = 0, tok = s; *tok && (i < 6); ++i, tok = endptr) {
         mac[i] = strtol(tok, &endptr, 16);
         if (endptr != (tok + 2) || (*endptr != '\0' && *endptr != ':') )
             return ERROR_INVAL;
+        if (*endptr == ':')
+            endptr++;
     }
     if ( i != 6 )
         return ERROR_INVAL;
@@ -296,6 +307,12 @@ _hidden int libxl__compare_macs(libxl_mac *a, libxl_mac *b)
     }
 
     return 0;
+}
+
+_hidden int libxl__mac_is_default(libxl_mac *mac)
+{
+    return (!(*mac)[0] && !(*mac)[1] && !(*mac)[2] &&
+            !(*mac)[3] && !(*mac)[4] && !(*mac)[5]);
 }
 
 _hidden int libxl__init_recursive_mutex(libxl_ctx *ctx, pthread_mutex_t *lock)
@@ -364,6 +381,164 @@ int libxl__hotplug_settings(libxl__gc *gc, xs_transaction_t t)
 
 out:
     return rc;
+}
+
+/* Portability note: this lock utilises flock(2) so a proper implementation of
+ * flock(2) is required.
+ */
+libxl__domain_userdata_lock *libxl__lock_domain_userdata(libxl__gc *gc,
+                                                         uint32_t domid)
+{
+    libxl__domain_userdata_lock *lock = NULL;
+    const char *lockfile;
+    int fd;
+    struct stat stab, fstab;
+
+    lockfile = libxl__userdata_path(gc, domid, "domain-userdata-lock", "l");
+    if (!lockfile) goto out;
+
+    lock = libxl__zalloc(NOGC, sizeof(libxl__domain_userdata_lock));
+    lock->path = libxl__strdup(NOGC, lockfile);
+
+    while (true) {
+        libxl__carefd_begin();
+        fd = open(lockfile, O_RDWR|O_CREAT, 0666);
+        if (fd < 0)
+            LOGE(ERROR, "cannot open lockfile %s, errno=%d", lockfile, errno);
+        lock->lock_carefd = libxl__carefd_opened(CTX, fd);
+        if (fd < 0) goto out;
+
+        /* Lock the file in exclusive mode, wait indefinitely to
+         * acquire the lock
+         */
+        while (flock(fd, LOCK_EX)) {
+            switch (errno) {
+            case EINTR:
+                /* Signal received, retry */
+                continue;
+            default:
+                /* All other errno: EBADF, EINVAL, ENOLCK, EWOULDBLOCK */
+                LOGE(ERROR,
+                     "unexpected error while trying to lock %s, fd=%d, errno=%d",
+                     lockfile, fd, errno);
+                goto out;
+            }
+        }
+
+        if (fstat(fd, &fstab)) {
+            LOGE(ERROR, "cannot fstat %s, fd=%d, errno=%d",
+                 lockfile, fd, errno);
+            goto out;
+        }
+        if (stat(lockfile, &stab)) {
+            if (errno != ENOENT) {
+                LOGE(ERROR, "cannot stat %s, errno=%d", lockfile, errno);
+                goto out;
+            }
+        } else {
+            if (stab.st_dev == fstab.st_dev && stab.st_ino == fstab.st_ino)
+                break;
+        }
+
+        libxl__carefd_close(lock->lock_carefd);
+    }
+
+    /* Check the domain is still there, if not we should release the
+     * lock and clean up.
+     */
+    if (libxl_domain_info(CTX, NULL, domid))
+        goto out;
+
+    return lock;
+
+out:
+    if (lock) libxl__unlock_domain_userdata(lock);
+    return NULL;
+}
+
+void libxl__unlock_domain_userdata(libxl__domain_userdata_lock *lock)
+{
+    if (lock->path) unlink(lock->path);
+    if (lock->lock_carefd) libxl__carefd_close(lock->lock_carefd);
+    free(lock->path);
+    free(lock);
+}
+
+int libxl__get_domain_configuration(libxl__gc *gc, uint32_t domid,
+                                    libxl_domain_config *d_config)
+{
+    uint8_t *data = NULL;
+    int rc, len;
+
+    rc = libxl__userdata_retrieve(gc, domid, "libxl-json", &data, &len);
+    if (rc) {
+        LOGEV(ERROR, rc,
+              "failed to retrieve domain configuration for domain %d", domid);
+        rc = ERROR_FAIL;
+        goto out;
+    }
+
+    if (len == 0) {
+        /* No logging, not necessary an error from caller's PoV. */
+        rc = ERROR_JSON_CONFIG_EMPTY;
+        goto out;
+    }
+    rc = libxl_domain_config_from_json(CTX, d_config, (const char *)data);
+
+out:
+    free(data);
+    return rc;
+}
+
+int libxl__set_domain_configuration(libxl__gc *gc, uint32_t domid,
+                                    libxl_domain_config *d_config)
+{
+    char *d_config_json;
+    int rc;
+
+    d_config_json = libxl_domain_config_to_json(CTX, d_config);
+    if (!d_config_json) {
+        LOGE(ERROR,
+             "failed to convert domain configuration to JSON for domain %d",
+             domid);
+        rc = ERROR_FAIL;
+        goto out;
+    }
+
+    rc = libxl__userdata_store(gc, domid, "libxl-json",
+                               (const uint8_t *)d_config_json,
+                               strlen(d_config_json) + 1 /* include '\0' */);
+    if (rc) {
+        LOGEV(ERROR, rc, "failed to store domain configuration for domain %d",
+              domid);
+        rc = ERROR_FAIL;
+        goto out;
+    }
+
+out:
+    free(d_config_json);
+    return rc;
+}
+
+void libxl__update_domain_configuration(libxl__gc *gc,
+                                        libxl_domain_config *dst,
+                                        const libxl_domain_config *src)
+{
+    int i;
+
+    /* update network interface information */
+    for (i = 0; i < src->num_nics; i++)
+        libxl__update_config_nic(gc, &dst->nics[i], &src->nics[i]);
+
+    /* update vtpm information */
+    for (i = 0; i < src->num_vtpms; i++)
+        libxl__update_config_vtpm(gc, &dst->vtpms[i], &src->vtpms[i]);
+
+    /* update guest UUID */
+    libxl_uuid_copy(CTX, &dst->c_info.uuid, &src->c_info.uuid);
+
+    /* video ram */
+    dst->b_info.video_memkb = src->b_info.video_memkb;
 }
 
 /*

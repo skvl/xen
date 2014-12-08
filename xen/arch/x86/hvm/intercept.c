@@ -163,17 +163,42 @@ static int hvm_mmio_access(struct vcpu *v,
     return rc;
 }
 
+bool_t hvm_mmio_internal(paddr_t gpa)
+{
+    struct vcpu *curr = current;
+    unsigned int i;
+
+    for ( i = 0; i < HVM_MMIO_HANDLER_NR; ++i )
+        if ( hvm_mmio_handlers[i]->check_handler(curr, gpa) )
+            return 1;
+
+    return 0;
+}
+
 int hvm_mmio_intercept(ioreq_t *p)
 {
     struct vcpu *v = current;
     int i;
 
     for ( i = 0; i < HVM_MMIO_HANDLER_NR; i++ )
-        if ( hvm_mmio_handlers[i]->check_handler(v, p->addr) )
+    {
+        hvm_mmio_check_t check_handler =
+            hvm_mmio_handlers[i]->check_handler;
+
+        if ( check_handler(v, p->addr) )
+        {
+            if ( unlikely(p->count > 1) &&
+                 !check_handler(v, unlikely(p->df)
+                                   ? p->addr - (p->count - 1L) * p->size
+                                   : p->addr + (p->count - 1L) * p->size) )
+                p->count = 1;
+
             return hvm_mmio_access(
                 v, p,
                 hvm_mmio_handlers[i]->read_handler,
                 hvm_mmio_handlers[i]->write_handler);
+        }
+    }
 
     return X86EMUL_UNHANDLEABLE;
 }
@@ -330,6 +355,13 @@ int hvm_io_intercept(ioreq_t *p, int type)
             if ( type == HVM_PORTIO )
                 return process_portio_intercept(
                     handler->hdl_list[i].action.portio, p);
+
+            if ( unlikely(p->count > 1) &&
+                 (unlikely(p->df)
+                  ? p->addr - (p->count - 1L) * p->size < addr
+                  : p->addr + p->count * 1L * p->size - 1 >= addr + size) )
+                p->count = 1;
+
             return handler->hdl_list[i].action.mmio(p);
         }
     }

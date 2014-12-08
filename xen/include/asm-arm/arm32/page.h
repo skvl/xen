@@ -19,62 +19,62 @@ static inline void write_pte(lpae_t *p, lpae_t pte)
         : : "r" (pte.bits), "r" (p) : "memory");
 }
 
+/* Inline ASM to invalidate dcache on register R (may be an inline asm operand) */
+#define __invalidate_dcache_one(R) STORE_CP32(R, DCIMVAC)
+
 /* Inline ASM to flush dcache on register R (may be an inline asm operand) */
-#define __clean_xen_dcache_one(R) STORE_CP32(R, DCCMVAC)
+#define __clean_dcache_one(R) STORE_CP32(R, DCCMVAC)
 
 /* Inline ASM to clean and invalidate dcache on register R (may be an
  * inline asm operand) */
-#define __clean_and_invalidate_xen_dcache_one(R) STORE_CP32(R, DCCIMVAC)
+#define __clean_and_invalidate_dcache_one(R) STORE_CP32(R, DCCIMVAC)
 
 /*
- * Flush all hypervisor mappings from the TLB and branch predictor.
+ * Flush all hypervisor mappings from the TLB and branch predictor of
+ * the local processor.
+ *
  * This is needed after changing Xen code mappings.
  *
  * The caller needs to issue the necessary DSB and D-cache flushes
  * before calling flush_xen_text_tlb.
  */
-static inline void flush_xen_text_tlb(void)
+static inline void flush_xen_text_tlb_local(void)
 {
-    register unsigned long r0 asm ("r0");
     asm volatile (
         "isb;"                        /* Ensure synchronization with previous changes to text */
-        STORE_CP32(0, TLBIALLH)       /* Flush hypervisor TLB */
-        STORE_CP32(0, ICIALLU)        /* Flush I-cache */
-        STORE_CP32(0, BPIALL)         /* Flush branch predictor */
+        CMD_CP32(TLBIALLH)            /* Flush hypervisor TLB */
+        CMD_CP32(ICIALLU)             /* Flush I-cache */
+        CMD_CP32(BPIALL)              /* Flush branch predictor */
         "dsb;"                        /* Ensure completion of TLB+BP flush */
         "isb;"
-        : : "r" (r0) /*dummy*/ : "memory");
+        : : : "memory");
 }
 
 /*
- * Flush all hypervisor mappings from the data TLB. This is not
- * sufficient when changing code mappings or for self modifying code.
+ * Flush all hypervisor mappings from the data TLB of the local
+ * processor. This is not sufficient when changing code mappings or
+ * for self modifying code.
  */
-static inline void flush_xen_data_tlb(void)
+static inline void flush_xen_data_tlb_local(void)
 {
-    register unsigned long r0 asm ("r0");
     asm volatile("dsb;" /* Ensure preceding are visible */
-                 STORE_CP32(0, TLBIALLH)
+                 CMD_CP32(TLBIALLH)
                  "dsb;" /* Ensure completion of the TLB flush */
                  "isb;"
-                 : : "r" (r0) /* dummy */: "memory");
+                 : : : "memory");
 }
 
-/*
- * Flush a range of VA's hypervisor mappings from the data TLB. This is not
- * sufficient when changing code mappings or for self modifying code.
- */
-static inline void flush_xen_data_tlb_range_va(unsigned long va, unsigned long size)
+/* Flush TLB of local processor for address va. */
+static inline void __flush_xen_data_tlb_one_local(vaddr_t va)
 {
-    unsigned long end = va + size;
-    dsb(); /* Ensure preceding are visible */
-    while ( va < end ) {
-        asm volatile(STORE_CP32(0, TLBIMVAH)
-                     : : "r" (va) : "memory");
-        va += PAGE_SIZE;
-    }
-    dsb(); /* Ensure completion of the TLB flush */
-    isb();
+    asm volatile(STORE_CP32(0, TLBIMVAH) : : "r" (va) : "memory");
+}
+
+/* Flush TLB of all processors in the inner-shareable domain for
+ * address va. */
+static inline void __flush_xen_data_tlb_one(vaddr_t va)
+{
+    asm volatile(STORE_CP32(0, TLBIMVAHIS) : : "r" (va) : "memory");
 }
 
 /* Ask the MMU to translate a VA for us */
@@ -113,6 +113,8 @@ static inline uint64_t gva_to_ipa_par(vaddr_t va)
     WRITE_CP64(tmp, PAR);
     return par;
 }
+
+#define clear_page(page) memset((void *)(page), 0, PAGE_SIZE)
 
 #endif /* __ASSEMBLY__ */
 

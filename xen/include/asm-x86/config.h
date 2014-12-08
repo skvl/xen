@@ -17,7 +17,6 @@
 #define BITS_PER_XEN_ULONG BITS_PER_LONG
 
 #define CONFIG_X86 1
-#define CONFIG_X86_HT 1
 #define CONFIG_PAGING_ASSISTANCE 1
 #define CONFIG_X86_LOCAL_APIC 1
 #define CONFIG_X86_GOOD_APIC 1
@@ -51,6 +50,12 @@
 #define CONFIG_XENOPROF 1
 #define CONFIG_KEXEC 1
 #define CONFIG_WATCHDOG 1
+
+#define CONFIG_MULTIBOOT 1
+
+#ifdef XSM_ENABLE
+#define CONFIG_LATE_HWDOM 1
+#endif
 
 #define HZ 100
 
@@ -100,6 +105,10 @@
 
 /* Return value for zero-size _xmalloc(), distinguished from NULL. */
 #define ZERO_BLOCK_PTR ((void *)0xBAD0BAD0BAD0BAD0UL)
+
+/* Override include/xen/list.h to make these non-canonical addresses. */
+#define LIST_POISON1  ((void *)0x0100100100100100UL)
+#define LIST_POISON2  ((void *)0x0200200200200200UL)
 
 #ifndef __ASSEMBLY__
 extern unsigned long trampoline_phys;

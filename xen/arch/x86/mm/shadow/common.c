@@ -366,6 +366,7 @@ const struct x86_emulate_ops *shadow_init_emulation(
 
     sh_ctxt->ctxt.regs = regs;
     sh_ctxt->ctxt.force_writeback = 0;
+    sh_ctxt->ctxt.swint_emulate = x86_swint_emulate_none;
 
     if ( is_pv_vcpu(v) )
     {
@@ -786,8 +787,7 @@ static void oos_hash_remove(struct vcpu *v, mfn_t gmfn)
     mfn_t *oos;
     struct domain *d = v->domain;
 
-    SHADOW_PRINTK("D%dV%d gmfn %lx\n",
-                  v->domain->domain_id, v->vcpu_id, mfn_x(gmfn)); 
+    SHADOW_PRINTK("%pv gmfn %lx\n", v, mfn_x(gmfn));
 
     for_each_vcpu(d, v) 
     {
@@ -875,7 +875,6 @@ static int sh_skip_sync(struct vcpu *v, mfn_t gl1mfn)
     SHADOW_ERROR("gmfn %#lx was OOS but not shadowed as an l1.\n",
                  mfn_x(gl1mfn));
     BUG();
-    return 0; /* BUG() is no longer __attribute__((noreturn)). */
 }
 
 
@@ -3312,11 +3311,14 @@ static int shadow_test_disable(struct domain *d)
  * shadow processing jobs.
  */
 
-static void sh_unshadow_for_p2m_change(struct vcpu *v, unsigned long gfn, 
-                                       l1_pgentry_t *p, mfn_t table_mfn, 
-                                       l1_pgentry_t new, unsigned int level)
+static void sh_unshadow_for_p2m_change(struct domain *d, unsigned long gfn,
+                                       l1_pgentry_t *p, l1_pgentry_t new,
+                                       unsigned int level)
 {
-    struct domain *d = v->domain;
+    struct vcpu *v = current;
+
+    if ( v->domain != d )
+        v = d->vcpu ? d->vcpu[0] : NULL;
 
     /* The following assertion is to make sure we don't step on 1GB host
      * page support of HVM guest. */
@@ -3381,18 +3383,16 @@ static void sh_unshadow_for_p2m_change(struct vcpu *v, unsigned long gfn,
 }
 
 void
-shadow_write_p2m_entry(struct vcpu *v, unsigned long gfn, 
-                       l1_pgentry_t *p, mfn_t table_mfn, 
-                       l1_pgentry_t new, unsigned int level)
+shadow_write_p2m_entry(struct domain *d, unsigned long gfn,
+                       l1_pgentry_t *p, l1_pgentry_t new,
+                       unsigned int level)
 {
-    struct domain *d = v->domain;
-    
     paging_lock(d);
 
     /* If there are any shadows, update them.  But if shadow_teardown()
      * has already been called then it's not safe to try. */ 
     if ( likely(d->arch.paging.shadow.total_pages != 0) )
-         sh_unshadow_for_p2m_change(v, gfn, p, table_mfn, new, level);
+         sh_unshadow_for_p2m_change(d, gfn, p, new, level);
 
     /* Update the entry with new content */
     safe_write_pte(p, new);
@@ -3486,7 +3486,7 @@ int shadow_track_dirty_vram(struct domain *d,
     int flush_tlb = 0;
     unsigned long i;
     p2m_type_t t;
-    struct sh_dirty_vram *dirty_vram = d->arch.hvm_domain.dirty_vram;
+    struct sh_dirty_vram *dirty_vram;
     struct p2m_domain *p2m = p2m_get_hostp2m(d);
 
     if ( end_pfn < begin_pfn || end_pfn > p2m->max_mapped_pfn + 1 )
@@ -3495,6 +3495,8 @@ int shadow_track_dirty_vram(struct domain *d,
     /* We perform p2m lookups, so lock the p2m upfront to avoid deadlock */
     p2m_lock(p2m_get_hostp2m(d));
     paging_lock(d);
+
+    dirty_vram = d->arch.hvm_domain.dirty_vram;
 
     if ( dirty_vram && (!nr ||
              ( begin_pfn != dirty_vram->begin_pfn

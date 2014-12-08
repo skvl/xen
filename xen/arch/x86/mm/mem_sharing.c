@@ -27,12 +27,12 @@
 #include <xen/mm.h>
 #include <xen/grant_table.h>
 #include <xen/sched.h>
+#include <xen/rcupdate.h>
+#include <xen/mem_event.h>
 #include <asm/page.h>
 #include <asm/string.h>
 #include <asm/p2m.h>
-#include <asm/mem_event.h>
 #include <asm/atomic.h>
-#include <xen/rcupdate.h>
 #include <asm/event.h>
 #include <xsm/xsm.h>
 
@@ -855,7 +855,6 @@ int mem_sharing_nominate_page(struct domain *d,
     mfn_t mfn;
     struct page_info *page = NULL; /* gcc... */
     int ret;
-    struct gfn_info *gfn_info;
 
     *phandle = 0UL;
 
@@ -914,7 +913,7 @@ int mem_sharing_nominate_page(struct domain *d,
     page->sharing->handle = get_next_handle();  
 
     /* Create the local gfn info */
-    if ( (gfn_info = mem_sharing_gfn_alloc(page, d, gfn)) == NULL )
+    if ( mem_sharing_gfn_alloc(page, d, gfn) == NULL )
     {
         xfree(page->sharing);
         page->sharing = NULL;
@@ -923,7 +922,7 @@ int mem_sharing_nominate_page(struct domain *d,
     }
 
     /* Change the p2m type, should never fail with p2m locked. */
-    BUG_ON(p2m_change_type(d, gfn, p2mt, p2m_ram_shared) != p2mt);
+    BUG_ON(p2m_change_type_one(d, gfn, p2mt, p2m_ram_shared));
 
     /* Account for this page. */
     atomic_inc(&nr_shared_mfns);
@@ -1031,7 +1030,7 @@ int mem_sharing_share_pages(struct domain *sd, unsigned long sgfn, shr_handle_t 
         put_page_and_type(cpage);
         d = get_domain_by_id(gfn->domain);
         BUG_ON(!d);
-        BUG_ON(set_shared_p2m_entry(d, gfn->gfn, smfn) == 0);
+        BUG_ON(set_shared_p2m_entry(d, gfn->gfn, smfn));
         put_domain(d);
     }
     ASSERT(list_empty(&cpage->sharing->gfns));
@@ -1102,16 +1101,14 @@ int mem_sharing_add_to_physmap(struct domain *sd, unsigned long sgfn, shr_handle
         goto err_unlock;
     }
 
-    ret = set_p2m_entry(p2m, cgfn, smfn, PAGE_ORDER_4K, p2m_ram_shared, a);
+    ret = p2m_set_entry(p2m, cgfn, smfn, PAGE_ORDER_4K, p2m_ram_shared, a);
 
     /* Tempted to turn this into an assert */
-    if ( !ret )
+    if ( ret )
     {
-        ret = -ENOENT;
         mem_sharing_gfn_destroy(spage, cd, gfn_info);
         put_page_and_type(spage);
     } else {
-        ret = 0;
         /* There is a chance we're plugging a hole where a paged out page was */
         if ( p2m_is_paging(cmfn_type) && (cmfn_type != p2m_ram_paging_out) )
         {
@@ -1242,14 +1239,13 @@ int __mem_sharing_unshare_page(struct domain *d,
     unmap_domain_page(s);
     unmap_domain_page(t);
 
-    BUG_ON(set_shared_p2m_entry(d, gfn, page_to_mfn(page)) == 0);
+    BUG_ON(set_shared_p2m_entry(d, gfn, page_to_mfn(page)));
     mem_sharing_gfn_destroy(old_page, d, gfn_info);
     mem_sharing_page_unlock(old_page);
     put_page_and_type(old_page);
 
 private_page_found:    
-    if ( p2m_change_type(d, gfn, p2m_ram_shared, p2m_ram_rw) != 
-                                                p2m_ram_shared ) 
+    if ( p2m_change_type_one(d, gfn, p2m_ram_shared, p2m_ram_rw) )
     {
         gdprintk(XENLOG_ERR, "Could not change p2m type d %hu gfn %lx.\n", 
                                 d->domain_id, gfn);
@@ -1298,7 +1294,7 @@ int relinquish_shared_pages(struct domain *d)
              * we hold the p2m lock. */
             set_rc = p2m->set_entry(p2m, gfn, _mfn(0), PAGE_ORDER_4K,
                                     p2m_invalid, p2m_access_rwx);
-            ASSERT(set_rc != 0);
+            ASSERT(set_rc == 0);
             count += 0x10;
         }
         else
@@ -1310,7 +1306,7 @@ int relinquish_shared_pages(struct domain *d)
             if ( hypercall_preempt_check() )
             {
                 p2m->next_shared_gfn_to_relinquish = gfn + 1;
-                rc = -EAGAIN;
+                rc = -ERESTART;
                 break;
             }
             count = 0;
@@ -1371,7 +1367,7 @@ int mem_sharing_memop(struct domain *d, xen_mem_sharing_op_t *mec)
             if ( rc )
                 return rc;
 
-            rc = xsm_mem_sharing_op(XSM_TARGET, d, cd, mec->op);
+            rc = xsm_mem_sharing_op(XSM_DM_PRIV, d, cd, mec->op);
             if ( rc )
             {
                 rcu_unlock_domain(cd);
@@ -1435,7 +1431,7 @@ int mem_sharing_memop(struct domain *d, xen_mem_sharing_op_t *mec)
             if ( rc )
                 return rc;
 
-            rc = xsm_mem_sharing_op(XSM_TARGET, d, cd, mec->op);
+            rc = xsm_mem_sharing_op(XSM_DM_PRIV, d, cd, mec->op);
             if ( rc )
             {
                 rcu_unlock_domain(cd);
