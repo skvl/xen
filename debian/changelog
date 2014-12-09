@@ -1,3 +1,10 @@
+xen (4.4.1-6) UNRELEASED; urgency=medium
+
+  * Fix starvation of writers in locks.
+    CVE-2014-9065
+
+ -- Bastian Blank <waldi@debian.org>  Tue, 09 Dec 2014 20:06:48 +0100
+
 xen (4.4.1-5) unstable; urgency=medium
 
   * Fix excessive checks of hypercall arguments.
