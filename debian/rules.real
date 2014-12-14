@@ -92,7 +92,6 @@ $(STAMPS_DIR)/install-utils_$(ARCH): CONFIG = \
 		debug=n \
 		XEN_COMPILE_ARCH=$(XEN_ARCH) \
 		XEN_TARGET_ARCH=$(XEN_ARCH) \
-		XEN_VERSION=$(VERSION) \
 		EXTRA_CFLAGS_XEN_TOOLS="$(CFLAGS)" \
 		APPEND_CPPFLAGS="$(CPPFLAGS)" \
 		APPEND_LDFLAGS="$(LDFLAGS)" \
@@ -118,7 +117,6 @@ endif
 
 $(STAMPS_DIR)/install-utils-common: DIR = $(BUILD_DIR)/build-docs
 $(STAMPS_DIR)/install-utils-common: INSTALL_DIR = $(BUILD_DIR)/install-utils-common
-$(STAMPS_DIR)/install-utils-common: export XEN_VERSION = common
 $(STAMPS_DIR)/install-utils-common: export DESTDIR = $(CURDIR)/$(INSTALL_DIR)
 $(STAMPS_DIR)/install-utils-common: $(STAMPS_DIR)/build-docs
 	@rm -rf $(INSTALL_DIR)
