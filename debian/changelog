@@ -1,6 +1,7 @@
 xen (4.5.0~rc3-1) UNRELEASED; urgency=medium
 
   * New upstream release candidate.
+  * Re-add xend config.
 
  -- Bastian Blank <waldi@debian.org>  Sun, 14 Dec 2014 18:58:02 +0100
 
