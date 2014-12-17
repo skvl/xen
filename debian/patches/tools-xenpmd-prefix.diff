@@ -1,0 +1,25 @@
+From 9dee08b274bc47c6df2706f06a7985a976358aa4 Mon Sep 17 00:00:00 2001
+From: Bastian Blank <waldi@debian.org>
+Date: Sat, 13 Dec 2014 19:37:02 +0100
+Subject: tools-xenpmd-prefix.diff
+
+Patch-Name: tools-xenpmd-prefix.diff
+---
+ tools/xenpmd/Makefile | 4 ++--
+ 1 file changed, 2 insertions(+), 2 deletions(-)
+
+diff --git a/tools/xenpmd/Makefile b/tools/xenpmd/Makefile
+index 2d925df..d7c0b6c 100644
+--- a/tools/xenpmd/Makefile
++++ b/tools/xenpmd/Makefile
+@@ -11,8 +11,8 @@ all: xenpmd
+ 
+ .PHONY: install
+ install: all
+-	$(INSTALL_DIR) $(DESTDIR)$(SBINDIR)
+-	$(INSTALL_PROG) xenpmd $(DESTDIR)$(SBINDIR)
++	$(INSTALL_DIR) $(DESTDIR)$(LIBEXEC_BIN)
++	$(INSTALL_PROG) xenpmd $(DESTDIR)$(LIBEXEC_BIN)
+ 
+ .PHONY: clean
+ clean:

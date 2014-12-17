@@ -35,8 +35,9 @@
 #include "xen.h"
 #include "grant_table.h"
 #include "hvm/save.h"
+#include "memory.h"
 
-#define XEN_DOMCTL_INTERFACE_VERSION 0x00000009
+#define XEN_DOMCTL_INTERFACE_VERSION 0x0000000a
 
 /*
  * NB. xen_domctl.domain is an IN/OUT parameter for this operation.
@@ -66,6 +67,19 @@ struct xen_domctl_createdomain {
 };
 typedef struct xen_domctl_createdomain xen_domctl_createdomain_t;
 DEFINE_XEN_GUEST_HANDLE(xen_domctl_createdomain_t);
+
+#if defined(__arm__) || defined(__aarch64__)
+#define XEN_DOMCTL_CONFIG_GIC_DEFAULT   0
+#define XEN_DOMCTL_CONFIG_GIC_V2        1
+#define XEN_DOMCTL_CONFIG_GIC_V3        2
+/* XEN_DOMCTL_configure_domain */
+struct xen_domctl_arm_configuredomain {
+    /* IN/OUT parameters */
+    uint8_t gic_version;
+};
+typedef struct xen_domctl_arm_configuredomain xen_domctl_arm_configuredomain_t;
+DEFINE_XEN_GUEST_HANDLE(xen_domctl_arm_configuredomain_t);
+#endif
 
 /* XEN_DOMCTL_getdomaininfo */
 struct xen_domctl_getdomaininfo {
@@ -107,6 +121,7 @@ struct xen_domctl_getdomaininfo {
     uint64_aligned_t shared_info_frame; /* GMFN of shared_info struct */
     uint64_aligned_t cpu_time;
     uint32_t nr_online_vcpus;    /* Number of VCPUs currently online. */
+#define XEN_INVALID_MAX_VCPU_ID (~0U) /* Domain has no vcpus? */
     uint32_t max_vcpu_id;        /* Maximum VCPUID in use by this domain. */
     uint32_t ssidref;
     xen_domain_handle_t handle;
@@ -300,8 +315,33 @@ DEFINE_XEN_GUEST_HANDLE(xen_domctl_nodeaffinity_t);
 /* XEN_DOMCTL_setvcpuaffinity */
 /* XEN_DOMCTL_getvcpuaffinity */
 struct xen_domctl_vcpuaffinity {
-    uint32_t  vcpu;              /* IN */
-    struct xenctl_bitmap cpumap; /* IN/OUT */
+    /* IN variables. */
+    uint32_t  vcpu;
+ /* Set/get the hard affinity for vcpu */
+#define _XEN_VCPUAFFINITY_HARD  0
+#define XEN_VCPUAFFINITY_HARD   (1U<<_XEN_VCPUAFFINITY_HARD)
+ /* Set/get the soft affinity for vcpu */
+#define _XEN_VCPUAFFINITY_SOFT  1
+#define XEN_VCPUAFFINITY_SOFT   (1U<<_XEN_VCPUAFFINITY_SOFT)
+    uint32_t flags;
+    /*
+     * IN/OUT variables.
+     *
+     * Both are IN/OUT for XEN_DOMCTL_setvcpuaffinity, in which case they
+     * contain effective hard or/and soft affinity. That is, upon successful
+     * return, cpumap_soft, contains the intersection of the soft affinity,
+     * hard affinity and the cpupool's online CPUs for the domain (if
+     * XEN_VCPUAFFINITY_SOFT was set in flags). cpumap_hard contains the
+     * intersection between hard affinity and the cpupool's online CPUs (if
+     * XEN_VCPUAFFINITY_HARD was set in flags).
+     *
+     * Both are OUT-only for XEN_DOMCTL_getvcpuaffinity, in which case they
+     * contain the plain hard and/or soft affinity masks that were set during
+     * previous successful calls to XEN_DOMCTL_setvcpuaffinity (or the
+     * default values), without intersecting or altering them in any way.
+     */
+    struct xenctl_bitmap cpumap_hard;
+    struct xenctl_bitmap cpumap_soft;
 };
 typedef struct xen_domctl_vcpuaffinity xen_domctl_vcpuaffinity_t;
 DEFINE_XEN_GUEST_HANDLE(xen_domctl_vcpuaffinity_t);
@@ -321,6 +361,8 @@ DEFINE_XEN_GUEST_HANDLE(xen_domctl_max_vcpus_t);
 #define XEN_SCHEDULER_CREDIT   5
 #define XEN_SCHEDULER_CREDIT2  6
 #define XEN_SCHEDULER_ARINC653 7
+#define XEN_SCHEDULER_RTDS     8
+
 /* Set or get info? */
 #define XEN_DOMCTL_SCHEDOP_putinfo 0
 #define XEN_DOMCTL_SCHEDOP_getinfo 1
@@ -342,6 +384,10 @@ struct xen_domctl_scheduler_op {
         struct xen_domctl_sched_credit2 {
             uint16_t weight;
         } credit2;
+        struct xen_domctl_sched_rtds {
+            uint32_t period;
+            uint32_t budget;
+        } rtds;
     } u;
 };
 typedef struct xen_domctl_scheduler_op xen_domctl_scheduler_op_t;
@@ -401,19 +447,6 @@ typedef struct xen_domctl_hypercall_init xen_domctl_hypercall_init_t;
 DEFINE_XEN_GUEST_HANDLE(xen_domctl_hypercall_init_t);
 
 
-/* XEN_DOMCTL_arch_setup */
-#define _XEN_DOMAINSETUP_hvm_guest 0
-#define XEN_DOMAINSETUP_hvm_guest  (1UL<<_XEN_DOMAINSETUP_hvm_guest)
-#define _XEN_DOMAINSETUP_query 1 /* Get parameters (for save)  */
-#define XEN_DOMAINSETUP_query  (1UL<<_XEN_DOMAINSETUP_query)
-#define _XEN_DOMAINSETUP_sioemu_guest 2
-#define XEN_DOMAINSETUP_sioemu_guest  (1UL<<_XEN_DOMAINSETUP_sioemu_guest)
-typedef struct xen_domctl_arch_setup {
-    uint64_aligned_t flags;  /* XEN_DOMAINSETUP_* */
-} xen_domctl_arch_setup_t;
-DEFINE_XEN_GUEST_HANDLE(xen_domctl_arch_setup_t);
-
-
 /* XEN_DOMCTL_settimeoffset */
 struct xen_domctl_settimeoffset {
     int32_t  time_offset_seconds; /* applied to domain wallclock time */
@@ -438,14 +471,6 @@ typedef struct xen_domctl_address_size {
     uint32_t size;
 } xen_domctl_address_size_t;
 DEFINE_XEN_GUEST_HANDLE(xen_domctl_address_size_t);
-
-
-/* XEN_DOMCTL_real_mode_area */
-struct xen_domctl_real_mode_area {
-    uint32_t log; /* log2 of Real Mode Area size */
-};
-typedef struct xen_domctl_real_mode_area xen_domctl_real_mode_area_t;
-DEFINE_XEN_GUEST_HANDLE(xen_domctl_real_mode_area_t);
 
 
 /* XEN_DOMCTL_sendtrigger */
@@ -555,6 +580,7 @@ DEFINE_XEN_GUEST_HANDLE(xen_domctl_ioport_mapping_t);
 #define XEN_DOMCTL_MEM_CACHEATTR_WP  5
 #define XEN_DOMCTL_MEM_CACHEATTR_WB  6
 #define XEN_DOMCTL_MEM_CACHEATTR_UCM 7
+#define XEN_DOMCTL_DELETE_MEM_CACHEATTR (~(uint32_t)0)
 struct xen_domctl_pin_mem_cacheattr {
     uint64_aligned_t start, end;
     uint32_t type; /* XEN_DOMCTL_MEM_CACHEATTR_* */
@@ -767,10 +793,11 @@ struct xen_domctl_gdbsx_domstatus {
  * ENODEV - host lacks HAP support (EPT/NPT) or HAP is disabled in guest
  * EBUSY  - guest has or had access enabled, ring buffer still active
  */
-#define XEN_DOMCTL_MEM_EVENT_OP_ACCESS            2
+#define XEN_DOMCTL_MEM_EVENT_OP_ACCESS                        2
 
-#define XEN_DOMCTL_MEM_EVENT_OP_ACCESS_ENABLE     0
-#define XEN_DOMCTL_MEM_EVENT_OP_ACCESS_DISABLE    1
+#define XEN_DOMCTL_MEM_EVENT_OP_ACCESS_ENABLE                 0
+#define XEN_DOMCTL_MEM_EVENT_OP_ACCESS_DISABLE                1
+#define XEN_DOMCTL_MEM_EVENT_OP_ACCESS_ENABLE_INTROSPECTION   2
 
 /*
  * Sharing ENOMEM helper.
@@ -840,7 +867,7 @@ struct xen_domctl_vcpuextstate {
     /* IN: VCPU that this call applies to. */
     uint32_t         vcpu;
     /*
-     * SET: xfeature support mask of struct (IN)
+     * SET: Ignored.
      * GET: xfeature support mask of struct (IN/OUT)
      * xfeature mask is served as identifications of the saving format
      * so that compatible CPUs can have a check on format to decide
@@ -896,6 +923,78 @@ struct xen_domctl_cacheflush {
 typedef struct xen_domctl_cacheflush xen_domctl_cacheflush_t;
 DEFINE_XEN_GUEST_HANDLE(xen_domctl_cacheflush_t);
 
+#if defined(__i386__) || defined(__x86_64__)
+struct xen_domctl_vcpu_msr {
+    uint32_t         index;
+    uint32_t         reserved;
+    uint64_aligned_t value;
+};
+typedef struct xen_domctl_vcpu_msr xen_domctl_vcpu_msr_t;
+DEFINE_XEN_GUEST_HANDLE(xen_domctl_vcpu_msr_t);
+
+/*
+ * XEN_DOMCTL_set_vcpu_msrs / XEN_DOMCTL_get_vcpu_msrs.
+ *
+ * Input:
+ * - A NULL 'msrs' guest handle is a request for the maximum 'msr_count'.
+ * - Otherwise, 'msr_count' is the number of entries in 'msrs'.
+ *
+ * Output for get:
+ * - If 'msr_count' is less than the number Xen needs to write, -ENOBUFS shall
+ *   be returned and 'msr_count' updated to reflect the intended number.
+ * - On success, 'msr_count' shall indicate the number of MSRs written, which
+ *   may be less than the maximum if some are not currently used by the vcpu.
+ *
+ * Output for set:
+ * - If Xen encounters an error with a specific MSR, -EINVAL shall be returned
+ *   and 'msr_count' shall be set to the offending index, to aid debugging.
+ */
+struct xen_domctl_vcpu_msrs {
+    uint32_t vcpu;                                   /* IN     */
+    uint32_t msr_count;                              /* IN/OUT */
+    XEN_GUEST_HANDLE_64(xen_domctl_vcpu_msr_t) msrs; /* IN/OUT */
+};
+typedef struct xen_domctl_vcpu_msrs xen_domctl_vcpu_msrs_t;
+DEFINE_XEN_GUEST_HANDLE(xen_domctl_vcpu_msrs_t);
+#endif
+
+/*
+ * Use in XEN_DOMCTL_setvnumainfo to set
+ * vNUMA domain topology.
+ */
+struct xen_domctl_vnuma {
+    uint32_t nr_vnodes;
+    uint32_t nr_vmemranges;
+    uint32_t nr_vcpus;
+    uint32_t pad;
+    XEN_GUEST_HANDLE_64(uint) vdistance;
+    XEN_GUEST_HANDLE_64(uint) vcpu_to_vnode;
+
+    /*
+     * vnodes to physical NUMA nodes mask.
+     * This kept on per-domain basis for
+     * interested consumers, such as numa aware ballooning.
+     */
+    XEN_GUEST_HANDLE_64(uint) vnode_to_pnode;
+
+    /*
+     * memory rages for each vNUMA node
+     */
+    XEN_GUEST_HANDLE_64(xen_vmemrange_t) vmemrange;
+};
+typedef struct xen_domctl_vnuma xen_domctl_vnuma_t;
+DEFINE_XEN_GUEST_HANDLE(xen_domctl_vnuma_t);
+
+struct xen_domctl_psr_cmt_op {
+#define XEN_DOMCTL_PSR_CMT_OP_DETACH         0
+#define XEN_DOMCTL_PSR_CMT_OP_ATTACH         1
+#define XEN_DOMCTL_PSR_CMT_OP_QUERY_RMID     2
+    uint32_t cmd;
+    uint32_t data;
+};
+typedef struct xen_domctl_psr_cmt_op xen_domctl_psr_cmt_op_t;
+DEFINE_XEN_GUEST_HANDLE(xen_domctl_psr_cmt_op_t);
+
 struct xen_domctl {
     uint32_t cmd;
 #define XEN_DOMCTL_createdomain                   1
@@ -920,10 +1019,10 @@ struct xen_domctl {
 #define XEN_DOMCTL_iomem_permission              20
 #define XEN_DOMCTL_ioport_permission             21
 #define XEN_DOMCTL_hypercall_init                22
-#define XEN_DOMCTL_arch_setup                    23
+#define XEN_DOMCTL_arch_setup                    23 /* Obsolete IA64 only */
 #define XEN_DOMCTL_settimeoffset                 24
 #define XEN_DOMCTL_getvcpuaffinity               25
-#define XEN_DOMCTL_real_mode_area                26
+#define XEN_DOMCTL_real_mode_area                26 /* Obsolete PPC only */
 #define XEN_DOMCTL_resumedomain                  27
 #define XEN_DOMCTL_sendtrigger                   28
 #define XEN_DOMCTL_subscribe                     29
@@ -966,6 +1065,11 @@ struct xen_domctl {
 #define XEN_DOMCTL_getnodeaffinity               69
 #define XEN_DOMCTL_set_max_evtchn                70
 #define XEN_DOMCTL_cacheflush                    71
+#define XEN_DOMCTL_get_vcpu_msrs                 72
+#define XEN_DOMCTL_set_vcpu_msrs                 73
+#define XEN_DOMCTL_setvnumainfo                  74
+#define XEN_DOMCTL_psr_cmt_op                    75
+#define XEN_DOMCTL_arm_configure_domain          76
 #define XEN_DOMCTL_gdbsx_guestmemio            1000
 #define XEN_DOMCTL_gdbsx_pausevcpu             1001
 #define XEN_DOMCTL_gdbsx_unpausevcpu           1002
@@ -974,6 +1078,9 @@ struct xen_domctl {
     domid_t  domain;
     union {
         struct xen_domctl_createdomain      createdomain;
+#if defined(__arm__) || defined(__aarch64__)
+        struct xen_domctl_arm_configuredomain configuredomain;
+#endif
         struct xen_domctl_getdomaininfo     getdomaininfo;
         struct xen_domctl_getmemlist        getmemlist;
         struct xen_domctl_getpageframeinfo  getpageframeinfo;
@@ -993,11 +1100,9 @@ struct xen_domctl {
         struct xen_domctl_iomem_permission  iomem_permission;
         struct xen_domctl_ioport_permission ioport_permission;
         struct xen_domctl_hypercall_init    hypercall_init;
-        struct xen_domctl_arch_setup        arch_setup;
         struct xen_domctl_settimeoffset     settimeoffset;
         struct xen_domctl_disable_migrate   disable_migrate;
         struct xen_domctl_tsc_info          tsc_info;
-        struct xen_domctl_real_mode_area    real_mode_area;
         struct xen_domctl_hvmcontext        hvmcontext;
         struct xen_domctl_hvmcontext_partial hvmcontext_partial;
         struct xen_domctl_address_size      address_size;
@@ -1017,6 +1122,7 @@ struct xen_domctl {
 #if defined(__i386__) || defined(__x86_64__)
         struct xen_domctl_cpuid             cpuid;
         struct xen_domctl_vcpuextstate      vcpuextstate;
+        struct xen_domctl_vcpu_msrs         vcpu_msrs;
 #endif
         struct xen_domctl_set_access_required access_required;
         struct xen_domctl_audit_p2m         audit_p2m;
@@ -1027,6 +1133,8 @@ struct xen_domctl {
         struct xen_domctl_cacheflush        cacheflush;
         struct xen_domctl_gdbsx_pauseunp_vcpu gdbsx_pauseunp_vcpu;
         struct xen_domctl_gdbsx_domstatus   gdbsx_domstatus;
+        struct xen_domctl_vnuma             vnuma;
+        struct xen_domctl_psr_cmt_op        psr_cmt_op;
         uint8_t                             pad[128];
     } u;
 };

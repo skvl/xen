@@ -145,13 +145,9 @@ int get_physical_broadcast(void)
 
 int get_maxlvt(void)
 {
-    unsigned int v, ver, maxlvt;
+    unsigned int v = apic_read(APIC_LVR);
 
-    v = apic_read(APIC_LVR);
-    ver = GET_APIC_VERSION(v);
-    /* 82489DXs do not report # of LVT entries. */
-    maxlvt = APIC_INTEGRATED(ver) ? GET_APIC_MAXLVT(v) : 2;
-    return maxlvt;
+    return GET_APIC_MAXLVT(v);
 }
 
 void clear_local_APIC(void)
@@ -217,12 +213,9 @@ void clear_local_APIC(void)
     if (maxlvt >= 6)
         apic_write_around(APIC_CMCI, APIC_LVT_MASKED);
 
-    v = GET_APIC_VERSION(apic_read(APIC_LVR));
-    if (APIC_INTEGRATED(v)) {  /* !82489DX */
-        if (maxlvt > 3)        /* Due to Pentium errata 3AP and 11AP. */
-            apic_write(APIC_ESR, 0);
-        apic_read(APIC_ESR);
-    }
+    if (maxlvt > 3)        /* Due to Pentium errata 3AP and 11AP. */
+        apic_write(APIC_ESR, 0);
+    apic_read(APIC_ESR);
 }
 
 void __init connect_bsp_APIC(void)
@@ -314,7 +307,7 @@ void disable_local_APIC(void)
                ~(MSR_IA32_APICBASE_ENABLE|MSR_IA32_APICBASE_EXTD));
     }
 
-    if ( kexecing )
+    if ( kexecing && (current_local_apic_mode() != apic_boot_mode) )
     {
         uint64_t msr_content;
         rdmsrl(MSR_IA32_APICBASE, msr_content);
@@ -330,7 +323,9 @@ void disable_local_APIC(void)
             wrmsrl(MSR_IA32_APICBASE, msr_content);
             break;
         case APIC_MODE_X2APIC:
-            msr_content |= (MSR_IA32_APICBASE_ENABLE|MSR_IA32_APICBASE_EXTD);
+            msr_content |= MSR_IA32_APICBASE_ENABLE;
+            wrmsrl(MSR_IA32_APICBASE, msr_content);
+            msr_content |= MSR_IA32_APICBASE_EXTD;
             wrmsrl(MSR_IA32_APICBASE, msr_content);
             break;
         default:
@@ -475,10 +470,7 @@ void __init init_bsp_APIC(void)
      * Set up the virtual wire mode.
      */
     apic_write_around(APIC_LVT0, APIC_DM_EXTINT);
-    value = APIC_DM_NMI;
-    if (!APIC_INTEGRATED(ver))              /* 82489DX */
-        value |= APIC_LVT_LEVEL_TRIGGER;
-    apic_write_around(APIC_LVT1, value);
+    apic_write_around(APIC_LVT1, APIC_DM_NMI);
 }
 
 static void apic_pm_activate(void)
@@ -553,7 +545,7 @@ void __devinit setup_local_APIC(void)
     /*
      * Double-check whether this APIC is really registered.
      */
-    if (!apic_id_registered())
+    if (!APIC_INTEGRATED(ver) || !apic_id_registered())
         BUG();
 
     /*
@@ -669,11 +661,9 @@ void __devinit setup_local_APIC(void)
         value = APIC_DM_NMI;
     else
         value = APIC_DM_NMI | APIC_LVT_MASKED;
-    if (!APIC_INTEGRATED(ver))      /* 82489DX */
-        value |= APIC_LVT_LEVEL_TRIGGER;
     apic_write_around(APIC_LVT1, value);
 
-    if (APIC_INTEGRATED(ver) && !esr_disable) {        /* !82489DX */
+    if (!esr_disable) {
         maxlvt = get_maxlvt();
         if (maxlvt > 3)     /* Due to the Pentium erratum 3AP. */
             apic_write(APIC_ESR, 0);
@@ -692,16 +682,13 @@ void __devinit setup_local_APIC(void)
                         "vector: %#lx  after: %#lx\n",
                         oldvalue, value);
     } else {
-        if (esr_disable)    
-            /* 
-             * Something untraceble is creating bad interrupts on 
-             * secondary quads ... for the moment, just leave the
-             * ESR disabled - we can't do anything useful with the
-             * errors anyway - mbligh
-             */
-            printk("Leaving ESR disabled.\n");
-        else
-            printk("No ESR for 82489DX.\n");
+        /*
+         * Something untraceble is creating bad interrupts on
+         * secondary quads ... for the moment, just leave the
+         * ESR disabled - we can't do anything useful with the
+         * errors anyway - mbligh
+         */
+        printk("Leaving ESR disabled.\n");
     }
 
     if (nmi_watchdog == NMI_LOCAL_APIC)
@@ -813,12 +800,7 @@ static void __init lapic_disable(char *str)
     setup_clear_cpu_cap(X86_FEATURE_APIC);
 }
 custom_param("nolapic", lapic_disable);
-
-static void __init lapic_enable(char *str)
-{
-    enable_local_apic = 1;
-}
-custom_param("lapic", lapic_enable);
+boolean_param("lapic", enable_local_apic);
 
 static void __init apic_set_verbosity(char *str)
 {
@@ -1099,13 +1081,10 @@ static void __init wait_8254_wraparound(void)
 
 static void __setup_APIC_LVTT(unsigned int clocks)
 {
-    unsigned int lvtt_value, tmp_value, ver;
+    unsigned int lvtt_value, tmp_value;
 
-    ver = GET_APIC_VERSION(apic_read(APIC_LVR));
     /* NB. Xen uses local APIC timer in one-shot mode. */
     lvtt_value = /*APIC_TIMER_MODE_PERIODIC |*/ LOCAL_TIMER_VECTOR;
-    if (!APIC_INTEGRATED(ver))
-        lvtt_value |= SET_APIC_TIMER_BASE(APIC_TIMER_BASE_DIV);
 
     if ( tdt_enabled )
     {

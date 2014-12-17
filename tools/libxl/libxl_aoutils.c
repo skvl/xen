@@ -16,6 +16,87 @@
 
 #include "libxl_internal.h"
 
+/*----- xswait -----*/
+
+static libxl__ev_xswatch_callback xswait_xswatch_callback;
+static libxl__ev_time_callback xswait_timeout_callback;
+static void xswait_report_error(libxl__egc*, libxl__xswait_state*, int rc);
+
+void libxl__xswait_init(libxl__xswait_state *xswa)
+{
+    libxl__ev_time_init(&xswa->time_ev);
+    libxl__ev_xswatch_init(&xswa->watch_ev);
+}
+
+void libxl__xswait_stop(libxl__gc *gc, libxl__xswait_state *xswa)
+{
+    libxl__ev_time_deregister(gc, &xswa->time_ev);
+    libxl__ev_xswatch_deregister(gc, &xswa->watch_ev);
+}
+
+bool libxl__xswait_inuse(const libxl__xswait_state *xswa)
+{
+    bool time_inuse = libxl__ev_time_isregistered(&xswa->time_ev);
+    bool watch_inuse = libxl__ev_xswatch_isregistered(&xswa->watch_ev);
+    assert(time_inuse == watch_inuse);
+    return time_inuse;
+}
+
+int libxl__xswait_start(libxl__gc *gc, libxl__xswait_state *xswa)
+{
+    int rc;
+
+    rc = libxl__ev_time_register_rel(gc, &xswa->time_ev,
+                                     xswait_timeout_callback, xswa->timeout_ms);
+    if (rc) goto err;
+
+    rc = libxl__ev_xswatch_register(gc, &xswa->watch_ev,
+                                    xswait_xswatch_callback, xswa->path);
+    if (rc) goto err;
+
+    return 0;
+
+ err:
+    libxl__xswait_stop(gc, xswa);
+    return rc;
+}
+
+void xswait_xswatch_callback(libxl__egc *egc, libxl__ev_xswatch *xsw,
+                             const char *watch_path, const char *event_path)
+{
+    EGC_GC;
+    libxl__xswait_state *xswa = CONTAINER_OF(xsw, *xswa, watch_ev);
+    int rc;
+    const char *data;
+
+    if (xswa->path[0] == '@') {
+        data = 0;
+    } else {
+        rc = libxl__xs_read_checked(gc, XBT_NULL, xswa->path, &data);
+        if (rc) { xswait_report_error(egc, xswa, rc); return; }
+    }
+
+    xswa->callback(egc, xswa, 0, data);
+}
+
+void xswait_timeout_callback(libxl__egc *egc, libxl__ev_time *ev,
+                             const struct timeval *requested_abs)
+{
+    EGC_GC;
+    libxl__xswait_state *xswa = CONTAINER_OF(ev, *xswa, time_ev);
+    LOG(DEBUG, "%s: xswait timeout (path=%s)", xswa->what, xswa->path);
+    xswait_report_error(egc, xswa, ERROR_TIMEDOUT);
+}
+
+static void xswait_report_error(libxl__egc *egc, libxl__xswait_state *xswa,
+                                int rc)
+{
+    EGC_GC;
+    libxl__xswait_stop(gc, xswa);
+    xswa->callback(egc, xswa, rc, 0);
+}
+
+
 /*----- data copier -----*/
 
 void libxl__datacopier_init(libxl__datacopier_state *dc)
@@ -370,3 +451,92 @@ int libxl__openptys(libxl__openpty_state *op,
     return rc;
 }
 
+static void async_exec_timeout(libxl__egc *egc,
+                               libxl__ev_time *ev,
+                               const struct timeval *requested_abs)
+{
+    libxl__async_exec_state *aes = CONTAINER_OF(ev, *aes, time);
+    STATE_AO_GC(aes->ao);
+
+    libxl__ev_time_deregister(gc, &aes->time);
+
+    assert(libxl__ev_child_inuse(&aes->child));
+    LOG(ERROR, "killing execution of %s because of timeout", aes->what);
+
+    if (kill(aes->child.pid, SIGKILL)) {
+        LOGEV(ERROR, errno, "unable to kill %s [%ld]",
+              aes->what, (unsigned long)aes->child.pid);
+    }
+
+    return;
+}
+
+static void async_exec_done(libxl__egc *egc,
+                            libxl__ev_child *child,
+                            pid_t pid, int status)
+{
+    libxl__async_exec_state *aes = CONTAINER_OF(child, *aes, child);
+    STATE_AO_GC(aes->ao);
+
+    libxl__ev_time_deregister(gc, &aes->time);
+
+    if (status) {
+        libxl_report_child_exitstatus(CTX, LIBXL__LOG_ERROR,
+                                      aes->what, pid, status);
+    }
+
+    aes->callback(egc, aes, status);
+}
+
+void libxl__async_exec_init(libxl__async_exec_state *aes)
+{
+    libxl__ev_time_init(&aes->time);
+    libxl__ev_child_init(&aes->child);
+}
+
+int libxl__async_exec_start(libxl__gc *gc, libxl__async_exec_state *aes)
+{
+    pid_t pid;
+
+    /* Convenience aliases */
+    libxl__ev_child *const child = &aes->child;
+    char ** const args = aes->args;
+
+    /* Set execution timeout */
+    if (libxl__ev_time_register_rel(gc, &aes->time,
+                                    async_exec_timeout,
+                                    aes->timeout_ms)) {
+        LOG(ERROR, "unable to register timeout for executing: %s", aes->what);
+        goto out;
+    }
+
+    LOG(DEBUG, "forking to execute: %s ", aes->what);
+
+    /* Fork and exec */
+    pid = libxl__ev_child_fork(gc, child, async_exec_done);
+    if (pid == -1) {
+        LOG(ERROR, "unable to fork");
+        goto out;
+    }
+
+    if (!pid) {
+        /* child */
+        libxl__exec(gc, aes->stdfds[0], aes->stdfds[1],
+                    aes->stdfds[2], args[0], args, aes->env);
+        /* notreached */
+        abort();
+    }
+
+    return 0;
+
+out:
+    return ERROR_FAIL;
+}
+
+bool libxl__async_exec_inuse(const libxl__async_exec_state *aes)
+{
+    bool time_inuse = libxl__ev_time_isregistered(&aes->time);
+    bool child_inuse = libxl__ev_child_inuse(&aes->child);
+    assert(time_inuse == child_inuse);
+    return child_inuse;
+}

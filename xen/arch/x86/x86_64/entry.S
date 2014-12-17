@@ -273,6 +273,7 @@ ENTRY(sysenter_entry)
         pushq $0
         pushfq
 GLOBAL(sysenter_eflags_saved)
+        ASM_CLAC
         pushq $3 /* ring 3 null cs */
         pushq $0 /* null rip */
         pushq $0
@@ -309,6 +310,7 @@ UNLIKELY_END(sysenter_gpf)
         jmp   .Lbounce_exception
 
 ENTRY(int80_direct_trap)
+        ASM_CLAC
         pushq $0
         SAVE_VOLATILE 0x80
 
@@ -377,6 +379,7 @@ __UNLIKELY_END(create_bounce_frame_bad_sp)
         movb  TRAPBOUNCE_flags(%rdx),%cl
         subq  $40,%rsi
         movq  UREGS_ss+8(%rsp),%rax
+        ASM_STAC
 .Lft2:  movq  %rax,32(%rsi)             # SS
         movq  UREGS_rsp+8(%rsp),%rax
 .Lft3:  movq  %rax,24(%rsi)             # RSP
@@ -421,6 +424,7 @@ UNLIKELY_END(bounce_failsafe)
 .Lft12: movq  %rax,8(%rsi)              # R11
         movq  UREGS_rcx+8(%rsp),%rax
 .Lft13: movq  %rax,(%rsi)               # RCX
+        ASM_CLAC
         /* Rewrite our stack frame and return to guest-OS mode. */
         /* IA32 Ref. Vol. 3: TF, VM, RF and NT flags are cleared on trap. */
         /* Also clear AC: alignment checks shouldn't trigger in kernel mode. */
@@ -438,19 +442,30 @@ UNLIKELY_START(z, create_bounce_frame_bad_bounce_ip)
 __UNLIKELY_END(create_bounce_frame_bad_bounce_ip)
         movq  %rax,UREGS_rip+8(%rsp)
         ret
-        _ASM_EXTABLE(.Lft2,  dom_crash_sync_extable)
-        _ASM_EXTABLE(.Lft3,  dom_crash_sync_extable)
-        _ASM_EXTABLE(.Lft4,  dom_crash_sync_extable)
-        _ASM_EXTABLE(.Lft5,  dom_crash_sync_extable)
-        _ASM_EXTABLE(.Lft6,  dom_crash_sync_extable)
-        _ASM_EXTABLE(.Lft7,  dom_crash_sync_extable)
-        _ASM_EXTABLE(.Lft8,  dom_crash_sync_extable)
-        _ASM_EXTABLE(.Lft9,  dom_crash_sync_extable)
-        _ASM_EXTABLE(.Lft10, dom_crash_sync_extable)
-        _ASM_EXTABLE(.Lft11, dom_crash_sync_extable)
-        _ASM_EXTABLE(.Lft12, dom_crash_sync_extable)
-        _ASM_EXTABLE(.Lft13, dom_crash_sync_extable)
+        _ASM_EXTABLE(.Lft2,  domain_crash_page_fault_32)
+        _ASM_EXTABLE(.Lft3,  domain_crash_page_fault_24)
+        _ASM_EXTABLE(.Lft4,  domain_crash_page_fault_8)
+        _ASM_EXTABLE(.Lft5,  domain_crash_page_fault_16)
+        _ASM_EXTABLE(.Lft6,  domain_crash_page_fault)
+        _ASM_EXTABLE(.Lft7,  domain_crash_page_fault)
+        _ASM_EXTABLE(.Lft8,  domain_crash_page_fault_24)
+        _ASM_EXTABLE(.Lft9,  domain_crash_page_fault_16)
+        _ASM_EXTABLE(.Lft10, domain_crash_page_fault_8)
+        _ASM_EXTABLE(.Lft11, domain_crash_page_fault)
+        _ASM_EXTABLE(.Lft12, domain_crash_page_fault_8)
+        _ASM_EXTABLE(.Lft13, domain_crash_page_fault)
 
+domain_crash_page_fault_32:
+        addq  $8,%rsi
+domain_crash_page_fault_24:
+        addq  $8,%rsi
+domain_crash_page_fault_16:
+        addq  $8,%rsi
+domain_crash_page_fault_8:
+        addq  $8,%rsi
+domain_crash_page_fault:
+        movq  %rsi,%rdi
+        call  show_page_walk
 ENTRY(dom_crash_sync_extable)
         # Get out of the guest-save area of the stack.
         GET_STACK_BASE(%rax)
@@ -464,6 +479,12 @@ ENTRY(dom_crash_sync_extable)
         orb   %al,UREGS_cs(%rsp)
         xorl  %edi,%edi
         jmp   asm_domain_crash_synchronous /* Does not return */
+
+ENTRY(common_interrupt)
+        SAVE_ALL CLAC
+        movq %rsp,%rdi
+        callq do_IRQ
+        jmp ret_from_intr
 
 /* No special register assumptions. */
 ENTRY(ret_from_intr)
@@ -479,7 +500,7 @@ ENTRY(page_fault)
         movl  $TRAP_page_fault,4(%rsp)
 /* No special register assumptions. */
 GLOBAL(handle_exception)
-        SAVE_ALL
+        SAVE_ALL CLAC
 handle_exception_saved:
         testb $X86_EFLAGS_IF>>8,UREGS_eflags+1(%rsp)
         jz    exception_with_ints_disabled
@@ -526,8 +547,7 @@ exception_with_ints_disabled:
 
 /* No special register assumptions. */
 FATAL_exception_with_ints_disabled:
-        movzbl UREGS_entry_vector(%rsp),%edi
-        movq  %rsp,%rsi
+        movq  %rsp,%rdi
         call  fatal_trap
         ud2
 
@@ -576,11 +596,6 @@ ENTRY(invalid_op)
         movl  $TRAP_invalid_op,4(%rsp)
         jmp   handle_exception
 
-ENTRY(coprocessor_segment_overrun)
-        pushq $0
-        movl  $TRAP_copro_seg,4(%rsp)
-        jmp   handle_exception
-
 ENTRY(invalid_TSS)
         movl  $TRAP_invalid_tss,4(%rsp)
         jmp   handle_exception
@@ -601,14 +616,10 @@ ENTRY(alignment_check)
         movl  $TRAP_alignment_check,4(%rsp)
         jmp   handle_exception
 
-ENTRY(spurious_interrupt_bug)
-        pushq $0
-        movl  $TRAP_spurious_int,4(%rsp)
-        jmp   handle_exception
-
 ENTRY(double_fault)
         movl  $TRAP_double_fault,4(%rsp)
-        SAVE_ALL
+        /* Set AC to reduce chance of further SMAP faults */
+        SAVE_ALL STAC
         movq  %rsp,%rdi
         call  do_double_fault
         ud2
@@ -625,7 +636,7 @@ ENTRY(nmi)
         pushq $0
         movl  $TRAP_nmi,4(%rsp)
 handle_ist_exception:
-        SAVE_ALL
+        SAVE_ALL CLAC
         testb $3,UREGS_cs(%rsp)
         jz    1f
         /* Interrupted guest context. Copy the context to stack bottom. */
@@ -661,7 +672,8 @@ handle_ist_exception:
 ENTRY(nmi_crash)
         pushq $0
         movl $TRAP_nmi,4(%rsp)
-        SAVE_ALL
+        /* Set AC to reduce chance of further SMAP faults */
+        SAVE_ALL STAC
         movq %rsp,%rdi
         callq do_nmi_crash /* Does not return */
         ud2
@@ -704,18 +716,21 @@ ENTRY(exception_table)
         .quad do_bounds
         .quad do_invalid_op
         .quad do_device_not_available
-        .quad 0 # double_fault
-        .quad do_coprocessor_segment_overrun
+        .quad do_reserved_trap /* double_fault - has its own entry. */
+        .quad do_reserved_trap /* coproc_seg_overrun - Intel 387 only. */
         .quad do_invalid_TSS
         .quad do_segment_not_present
         .quad do_stack_segment
         .quad do_general_protection
         .quad do_page_fault
-        .quad do_spurious_interrupt_bug
+        .quad do_reserved_trap /* Default PIC spurious irq - architecturally reserved. */
         .quad do_coprocessor_error
         .quad do_alignment_check
         .quad do_machine_check
         .quad do_simd_coprocessor_error
+        .rept TRAP_last_reserved + 1 - ((. - exception_table) / 8)
+        .quad do_reserved_trap /* Architecturally reserved exceptions. */
+        .endr
 
 ENTRY(hypercall_table)
         .quad do_set_trap_table     /*  0 */
@@ -814,3 +829,51 @@ ENTRY(hypercall_args_table)
         .rept NR_hypercalls-(.-hypercall_args_table)
         .byte 0 /* do_ni_hypercall      */
         .endr
+
+/* Table of automatically generated entry points.  One per vector. */
+        .section .init.rodata, "a", @progbits
+GLOBAL(autogen_entrypoints)
+        /* pop into the .init.rodata section and record an entry point. */
+        .macro entrypoint ent
+        .pushsection .init.rodata
+        .quad \ent
+        .popsection
+        .endm
+
+        .text
+autogen_stubs: /* Automatically generated stubs. */
+
+        vec = 0
+        .rept NR_VECTORS
+        ALIGN
+
+        /* Common interrupts, heading towards do_IRQ(). */
+        .if vec >= FIRST_DYNAMIC_VECTOR && vec != HYPERCALL_VECTOR && vec != LEGACY_SYSCALL_VECTOR
+
+1:      pushq $0
+        movb  $vec,4(%rsp)
+        jmp   common_interrupt
+
+        entrypoint 1b
+
+        /* Reserved exceptions, heading towards do_reserved_trap(). */
+        .elseif vec == TRAP_copro_seg || vec == TRAP_spurious_int || (vec > TRAP_simd_error && vec <= TRAP_last_reserved)
+
+1:      test  $8,%spl        /* 64bit exception frames are 16 byte aligned, but the word */
+        jz    2f             /* size is 8 bytes.  Check whether the processor gave us an */
+        pushq $0             /* error code, and insert an empty one if not.              */
+2:      movb  $vec,4(%rsp)
+        jmp   handle_exception
+
+        entrypoint 1b
+
+        /* Hand crafted entry points above. */
+        .else
+        entrypoint 0
+        .endif
+
+        vec = vec + 1
+        .endr
+
+        .section .init.rodata
+        .size autogen_entrypoints, . - autogen_entrypoints

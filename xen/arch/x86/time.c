@@ -85,6 +85,9 @@ static u16 pit_stamp16;
 static u32 pit_stamp32;
 static bool_t __read_mostly using_pit;
 
+/* Boot timestamp, filled in head.S */
+u64 __initdata boot_tsc_stamp;
+
 /*
  * 32-bit division of integer dividend and integer divisor yielding
  * 32-bit fractional quotient.
@@ -118,7 +121,7 @@ static inline u32 mul_frac(u32 multiplicand, u32 multiplier)
  * Scale a 64-bit delta by scaling and multiplying by a 32-bit fraction,
  * yielding a 64-bit result.
  */
-static inline u64 scale_delta(u64 delta, struct time_scale *scale)
+u64 scale_delta(u64 delta, struct time_scale *scale)
 {
     u64 product;
 
@@ -269,7 +272,7 @@ static u64 init_pit_and_calibrate_tsc(void)
     return ((end - start) * (u64)CALIBRATE_FRAC);
 }
 
-static void set_time_scale(struct time_scale *ts, u64 ticks_per_sec)
+void set_time_scale(struct time_scale *ts, u64 ticks_per_sec)
 {
     u64 tps64 = ticks_per_sec;
     u32 tps32;
@@ -651,37 +654,40 @@ mktime (unsigned int year, unsigned int mon,
         )*60 + sec; /* finally seconds */
 }
 
-static unsigned long __get_cmos_time(void)
-{
+struct rtc_time {
     unsigned int year, mon, day, hour, min, sec;
+};
 
-    sec  = CMOS_READ(RTC_SECONDS);
-    min  = CMOS_READ(RTC_MINUTES);
-    hour = CMOS_READ(RTC_HOURS);
-    day  = CMOS_READ(RTC_DAY_OF_MONTH);
-    mon  = CMOS_READ(RTC_MONTH);
-    year = CMOS_READ(RTC_YEAR);
+static void __get_cmos_time(struct rtc_time *rtc)
+{
+    rtc->sec  = CMOS_READ(RTC_SECONDS);
+    rtc->min  = CMOS_READ(RTC_MINUTES);
+    rtc->hour = CMOS_READ(RTC_HOURS);
+    rtc->day  = CMOS_READ(RTC_DAY_OF_MONTH);
+    rtc->mon  = CMOS_READ(RTC_MONTH);
+    rtc->year = CMOS_READ(RTC_YEAR);
     
-    if ( !(CMOS_READ(RTC_CONTROL) & RTC_DM_BINARY) || RTC_ALWAYS_BCD )
+    if ( RTC_ALWAYS_BCD || !(CMOS_READ(RTC_CONTROL) & RTC_DM_BINARY) )
     {
-        BCD_TO_BIN(sec);
-        BCD_TO_BIN(min);
-        BCD_TO_BIN(hour);
-        BCD_TO_BIN(day);
-        BCD_TO_BIN(mon);
-        BCD_TO_BIN(year);
+        BCD_TO_BIN(rtc->sec);
+        BCD_TO_BIN(rtc->min);
+        BCD_TO_BIN(rtc->hour);
+        BCD_TO_BIN(rtc->day);
+        BCD_TO_BIN(rtc->mon);
+        BCD_TO_BIN(rtc->year);
     }
 
-    if ( (year += 1900) < 1970 )
-        year += 100;
-
-    return mktime(year, mon, day, hour, min, sec);
+    if ( (rtc->year += 1900) < 1970 )
+        rtc->year += 100;
 }
 
 static unsigned long get_cmos_time(void)
 {
     unsigned long res, flags;
-    int i;
+    struct rtc_time rtc;
+    unsigned int seconds = 60;
+    static bool_t __read_mostly cmos_rtc_probe;
+    boolean_param("cmos-rtc-probe", cmos_rtc_probe);
 
     if ( efi_enabled )
     {
@@ -690,40 +696,83 @@ static unsigned long get_cmos_time(void)
             return res;
     }
 
-    if ( unlikely(acpi_gbl_FADT.boot_flags & ACPI_FADT_NO_CMOS_RTC) )
-        panic("System without CMOS RTC must be booted from EFI");
+    if ( likely(!(acpi_gbl_FADT.boot_flags & ACPI_FADT_NO_CMOS_RTC)) )
+        cmos_rtc_probe = 0;
+    else if ( system_state < SYS_STATE_smp_boot && !cmos_rtc_probe )
+        panic("System with no CMOS RTC advertised must be booted from EFI"
+              " (or with command line option \"cmos-rtc-probe\")");
 
-    spin_lock_irqsave(&rtc_lock, flags);
+    for ( ; ; )
+    {
+        s_time_t start, t1, t2;
 
-    /* read RTC exactly on falling edge of update flag */
-    for ( i = 0 ; i < 1000000 ; i++ ) /* may take up to 1 second... */
-        if ( (CMOS_READ(RTC_FREQ_SELECT) & RTC_UIP) )
+        spin_lock_irqsave(&rtc_lock, flags);
+
+        /* read RTC exactly on falling edge of update flag */
+        start = NOW();
+        do { /* may take up to 1 second... */
+            t1 = NOW() - start;
+        } while ( !(CMOS_READ(RTC_FREQ_SELECT) & RTC_UIP) &&
+                  t1 <= SECONDS(1) );
+
+        start = NOW();
+        do { /* must try at least 2.228 ms */
+            t2 = NOW() - start;
+        } while ( (CMOS_READ(RTC_FREQ_SELECT) & RTC_UIP) &&
+                  t2 < MILLISECS(3) );
+
+        __get_cmos_time(&rtc);
+
+        spin_unlock_irqrestore(&rtc_lock, flags);
+
+        if ( likely(!cmos_rtc_probe) ||
+             t1 > SECONDS(1) || t2 >= MILLISECS(3) ||
+             rtc.sec >= 60 || rtc.min >= 60 || rtc.hour >= 24 ||
+             !rtc.day || rtc.day > 31 ||
+             !rtc.mon || rtc.mon > 12 )
             break;
-    for ( i = 0 ; i < 1000000 ; i++ ) /* must try at least 2.228 ms */
-        if ( !(CMOS_READ(RTC_FREQ_SELECT) & RTC_UIP) )
+
+        if ( seconds < 60 )
+        {
+            if ( rtc.sec != seconds )
+                cmos_rtc_probe = 0;
             break;
+        }
 
-    res = __get_cmos_time();
+        process_pending_softirqs();
 
-    spin_unlock_irqrestore(&rtc_lock, flags);
-    return res;
+        seconds = rtc.sec;
+    }
+
+    if ( unlikely(cmos_rtc_probe) )
+        panic("No CMOS RTC found - system must be booted from EFI");
+
+    return mktime(rtc.year, rtc.mon, rtc.day, rtc.hour, rtc.min, rtc.sec);
 }
 
 /***************************************************************************
  * System Time
  ***************************************************************************/
 
-s_time_t get_s_time(void)
+s_time_t get_s_time_fixed(u64 at_tsc)
 {
     struct cpu_time *t = &this_cpu(cpu_time);
     u64 tsc, delta;
     s_time_t now;
 
-    rdtscll(tsc);
+    if ( at_tsc )
+        tsc = at_tsc;
+    else
+        rdtscll(tsc);
     delta = tsc - t->local_tsc_stamp;
     now = t->stime_local_stamp + scale_delta(delta, &t->tsc_scale);
 
     return now;
+}
+
+s_time_t get_s_time()
+{
+    return get_s_time_fixed(0);
 }
 
 uint64_t tsc_ticks2ns(uint64_t ticks)
@@ -810,17 +859,23 @@ static void __update_vcpu_system_time(struct vcpu *v, int force)
         v->arch.pv_vcpu.pending_system_time = _u;
 }
 
-bool_t update_secondary_system_time(const struct vcpu *v,
+bool_t update_secondary_system_time(struct vcpu *v,
                                     struct vcpu_time_info *u)
 {
     XEN_GUEST_HANDLE(vcpu_time_info_t) user_u = v->arch.time_info_guest;
+    smap_check_policy_t saved_policy;
 
     if ( guest_handle_is_null(user_u) )
         return 1;
 
+    saved_policy = smap_policy_change(v, SMAP_CHECK_ENABLED);
+
     /* 1. Update userspace version. */
     if ( __copy_field_to_guest(user_u, u, version) == sizeof(u->version) )
+    {
+        smap_policy_change(v, saved_policy);
         return 0;
+    }
     wmb();
     /* 2. Update all other userspace fields. */
     __copy_to_guest(user_u, u, 1);
@@ -828,6 +883,8 @@ bool_t update_secondary_system_time(const struct vcpu *v,
     /* 3. Update userspace version. */
     u->version = version_update_end(u->version);
     __copy_field_to_guest(user_u, u, version);
+
+    smap_policy_change(v, saved_policy);
 
     return 1;
 }
@@ -922,15 +979,15 @@ int cpu_frequency_change(u64 freq)
 void do_settime(unsigned long secs, unsigned long nsecs, u64 system_time_base)
 {
     u64 x;
-    u32 y, _wc_sec, _wc_nsec;
+    u32 y;
     struct domain *d;
 
-    x = (secs * 1000000000ULL) + (u64)nsecs - system_time_base;
+    x = SECONDS(secs) + (u64)nsecs - system_time_base;
     y = do_div(x, 1000000000);
 
     spin_lock(&wc_lock);
-    wc_sec  = _wc_sec  = (u32)x;
-    wc_nsec = _wc_nsec = (u32)y;
+    wc_sec  = x;
+    wc_nsec = y;
     spin_unlock(&wc_lock);
 
     rcu_read_lock(&domlist_read_lock);
@@ -1324,7 +1381,7 @@ void init_percpu_time(void)
     s_time_t now;
 
     /* Initial estimate for TSC rate. */
-    this_cpu(cpu_time).tsc_scale = per_cpu(cpu_time, 0).tsc_scale;
+    t->tsc_scale = per_cpu(cpu_time, 0).tsc_scale;
 
     local_irq_save(flags);
     rdtscll(t->local_tsc_stamp);
@@ -1434,9 +1491,6 @@ int __init init_xen_time(void)
 
     open_softirq(TIME_CALIBRATE_SOFTIRQ, local_time_calibration);
 
-    /* System time (get_s_time()) starts ticking from now. */
-    rdtscll(this_cpu(cpu_time).local_tsc_stamp);
-
     /* NB. get_cmos_time() can take over one second to execute. */
     do_settime(get_cmos_time(), 0, NOW());
 
@@ -1454,16 +1508,18 @@ int __init init_xen_time(void)
 /* Early init function. */
 void __init early_time_init(void)
 {
+    struct cpu_time *t = &this_cpu(cpu_time);
     u64 tmp = init_pit_and_calibrate_tsc();
 
-    set_time_scale(&this_cpu(cpu_time).tsc_scale, tmp);
+    set_time_scale(&t->tsc_scale, tmp);
+    t->local_tsc_stamp = boot_tsc_stamp;
 
     do_div(tmp, 1000);
     cpu_khz = (unsigned long)tmp;
     printk("Detected %lu.%03lu MHz processor.\n", 
            cpu_khz / 1000, cpu_khz % 1000);
 
-    setup_irq(0, &irq0);
+    setup_irq(0, 0, &irq0);
 }
 
 /* keep pit enabled for pit_broadcast working while cpuidle enabled */
@@ -1549,8 +1605,8 @@ unsigned long get_localtime(struct domain *d)
 /* Return microsecs after 00:00:00 localtime, 1 January, 1970. */
 uint64_t get_localtime_us(struct domain *d)
 {
-    return ((wc_sec + d->time_offset_seconds) * 1000000000ULL
-        + wc_nsec + NOW()) / 1000UL;
+    return (SECONDS(wc_sec + d->time_offset_seconds) + wc_nsec + NOW())
+           / 1000UL;
 }
 
 unsigned long get_sec(void)
@@ -1601,7 +1657,7 @@ int time_resume(void)
     return 0;
 }
 
-int dom0_pit_access(struct ioreq *ioreq)
+int hwdom_pit_access(struct ioreq *ioreq)
 {
     /* Is Xen using Channel 2? Then disallow direct dom0 access. */
     if ( using_pit )
@@ -1646,15 +1702,19 @@ int dom0_pit_access(struct ioreq *ioreq)
     return 0;
 }
 
-struct tm wallclock_time(void)
+struct tm wallclock_time(uint64_t *ns)
 {
-    uint64_t seconds;
+    uint64_t seconds, nsec;
 
     if ( !wc_sec )
         return (struct tm) { 0 };
 
-    seconds = NOW() + (wc_sec * 1000000000ull) + wc_nsec;
-    do_div(seconds, 1000000000);
+    seconds = NOW() + SECONDS(wc_sec) + wc_nsec;
+    nsec = do_div(seconds, 1000000000);
+
+    if ( ns )
+        *ns = nsec;
+
     return gmtime(seconds);
 }
 
@@ -1740,10 +1800,9 @@ void cpuid_time_leaf(uint32_t sub_idx, uint32_t *eax, uint32_t *ebx,
     switch ( sub_idx )
     {
     case 0: /* features */
-        *eax = ( ( (!!d->arch.vtsc) << 0 ) |
-                 ( (!!host_tsc_is_safe()) << 1 ) |
-                 ( (!!boot_cpu_has(X86_FEATURE_RDTSCP)) << 2 ) |
-               0 );
+        *eax = (!!d->arch.vtsc << 0) |
+               (!!host_tsc_is_safe() << 1) |
+               (!!boot_cpu_has(X86_FEATURE_RDTSCP) << 2);
         *ebx = d->arch.tsc_mode;
         *ecx = d->arch.tsc_khz;
         *edx = d->arch.incarnation;
@@ -1781,39 +1840,34 @@ void tsc_get_info(struct domain *d, uint32_t *tsc_mode,
 
     switch ( *tsc_mode )
     {
+        uint64_t tsc;
+
     case TSC_MODE_NEVER_EMULATE:
-        *elapsed_nsec =  *gtsc_khz = 0;
+        *elapsed_nsec = *gtsc_khz = 0;
         break;
-    case TSC_MODE_ALWAYS_EMULATE:
-        *elapsed_nsec = get_s_time() - d->arch.vtsc_offset;
-        *gtsc_khz =  d->arch.tsc_khz;
-         break;
     case TSC_MODE_DEFAULT:
         if ( d->arch.vtsc )
         {
+    case TSC_MODE_ALWAYS_EMULATE:
             *elapsed_nsec = get_s_time() - d->arch.vtsc_offset;
-            *gtsc_khz =  d->arch.tsc_khz;
+            *gtsc_khz = d->arch.tsc_khz;
+            break;
         }
-        else
-        {
-            uint64_t tsc = 0;
-            rdtscll(tsc);
-            *elapsed_nsec = scale_delta(tsc,&d->arch.vtsc_to_ns);
-            *gtsc_khz =  cpu_khz;
-        }
+        rdtscll(tsc);
+        *elapsed_nsec = scale_delta(tsc, &d->arch.vtsc_to_ns);
+        *gtsc_khz = cpu_khz;
         break;
     case TSC_MODE_PVRDTSCP:
         if ( d->arch.vtsc )
         {
             *elapsed_nsec = get_s_time() - d->arch.vtsc_offset;
-            *gtsc_khz =  cpu_khz;
+            *gtsc_khz = cpu_khz;
         }
         else
         {
-            uint64_t tsc = 0;
             rdtscll(tsc);
-            *elapsed_nsec = (scale_delta(tsc,&d->arch.vtsc_to_ns) -
-                             d->arch.vtsc_offset);
+            *elapsed_nsec = scale_delta(tsc, &d->arch.vtsc_to_ns) -
+                            d->arch.vtsc_offset;
             *gtsc_khz = 0; /* ignored by tsc_set_info */
         }
         break;
@@ -1835,7 +1889,7 @@ void tsc_set_info(struct domain *d,
                   uint32_t tsc_mode, uint64_t elapsed_nsec,
                   uint32_t gtsc_khz, uint32_t incarnation)
 {
-    if ( is_idle_domain(d) || (d->domain_id == 0) )
+    if ( is_idle_domain(d) || is_hardware_domain(d) )
     {
         d->arch.vtsc = 0;
         return;
@@ -1870,38 +1924,32 @@ void tsc_set_info(struct domain *d,
 
     switch ( d->arch.tsc_mode = tsc_mode )
     {
-    case TSC_MODE_NEVER_EMULATE:
-        d->arch.vtsc = 0;
-        break;
-    case TSC_MODE_ALWAYS_EMULATE:
-        d->arch.vtsc = 1;
-        d->arch.vtsc_offset = get_s_time() - elapsed_nsec;
-        d->arch.tsc_khz = gtsc_khz ? gtsc_khz : cpu_khz;
-        set_time_scale(&d->arch.vtsc_to_ns, d->arch.tsc_khz * 1000 );
-        d->arch.ns_to_vtsc = scale_reciprocal(d->arch.vtsc_to_ns);
-        break;
     case TSC_MODE_DEFAULT:
-        d->arch.vtsc = 1;
+    case TSC_MODE_ALWAYS_EMULATE:
         d->arch.vtsc_offset = get_s_time() - elapsed_nsec;
-        d->arch.tsc_khz = gtsc_khz ? gtsc_khz : cpu_khz;
-        set_time_scale(&d->arch.vtsc_to_ns, d->arch.tsc_khz * 1000 );
+        d->arch.tsc_khz = gtsc_khz ?: cpu_khz;
+        set_time_scale(&d->arch.vtsc_to_ns, d->arch.tsc_khz * 1000);
         /*
-         * Use native TSC if the host has safe TSC and:
+         * In default mode use native TSC if the host has safe TSC and:
          *  HVM/PVH: host and guest frequencies are the same (either
          *           "naturally" or via TSC scaling)
          *  PV: guest has not migrated yet (and thus arch.tsc_khz == cpu_khz)
          */
-        if ( host_tsc_is_safe() &&
-             ((has_hvm_container_domain(d) &&
-               (d->arch.tsc_khz == cpu_khz || cpu_has_tsc_ratio)) ||
+        if ( tsc_mode == TSC_MODE_DEFAULT && host_tsc_is_safe() &&
+             (has_hvm_container_domain(d) ?
+              d->arch.tsc_khz == cpu_khz || cpu_has_tsc_ratio :
               incarnation == 0) )
+        {
+    case TSC_MODE_NEVER_EMULATE:
             d->arch.vtsc = 0;
-        else 
-            d->arch.ns_to_vtsc = scale_reciprocal(d->arch.vtsc_to_ns);
+            break;
+        }
+        d->arch.vtsc = 1;
+        d->arch.ns_to_vtsc = scale_reciprocal(d->arch.vtsc_to_ns);
         break;
     case TSC_MODE_PVRDTSCP:
-        d->arch.vtsc =  boot_cpu_has(X86_FEATURE_RDTSCP) &&
-                        host_tsc_is_safe() ?  0 : 1;
+        d->arch.vtsc = !boot_cpu_has(X86_FEATURE_RDTSCP) ||
+                       !host_tsc_is_safe();
         d->arch.tsc_khz = cpu_khz;
         set_time_scale(&d->arch.vtsc_to_ns, d->arch.tsc_khz * 1000 );
         d->arch.ns_to_vtsc = scale_reciprocal(d->arch.vtsc_to_ns);
@@ -1919,7 +1967,24 @@ void tsc_set_info(struct domain *d,
     }
     d->arch.incarnation = incarnation + 1;
     if ( is_hvm_domain(d) )
+    {
         hvm_set_rdtsc_exiting(d, d->arch.vtsc);
+        if ( d->vcpu && d->vcpu[0] && incarnation == 0 )
+        {
+            /*
+             * set_tsc_offset() is called from hvm_vcpu_initialise() before
+             * tsc_set_info(). New vtsc mode may require recomputing TSC
+             * offset.
+             * We only need to do this for BSP during initial boot. APs will
+             * call set_tsc_offset() later from hvm_vcpu_reset_state() and they
+             * will sync their TSC to BSP's sync_tsc.
+             */
+            rdtscll(d->arch.hvm_domain.sync_tsc);
+            hvm_funcs.set_tsc_offset(d->vcpu[0],
+                                     d->vcpu[0]->arch.hvm_vcpu.cache_tsc_offset,
+                                     d->arch.hvm_domain.sync_tsc);
+        }
+    }
 }
 
 /* vtsc may incur measurable performance degradation, diagnose with this */
@@ -1945,7 +2010,7 @@ static void dump_softtsc(unsigned char key)
                "warp=%lu (count=%lu)\n", tsc_max_warp, tsc_check_count);
     for_each_domain ( d )
     {
-        if ( d->domain_id == 0 && d->arch.tsc_mode == TSC_MODE_DEFAULT )
+        if ( is_hardware_domain(d) && d->arch.tsc_mode == TSC_MODE_DEFAULT )
             continue;
         printk("dom%u%s: mode=%d",d->domain_id,
                 is_hvm_domain(d) ? "(hvm)" : "", d->arch.tsc_mode);

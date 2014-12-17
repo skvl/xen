@@ -26,6 +26,7 @@ obj-y += sched_credit.o
 obj-y += sched_credit2.o
 obj-y += sched_sedf.o
 obj-y += sched_arinc653.o
+obj-y += sched_rt.o
 obj-y += schedule.o
 obj-y += shutdown.o
 obj-y += softirq.o
@@ -51,6 +52,9 @@ obj-y += tmem_xen.o
 obj-y += radix-tree.o
 obj-y += rbtree.o
 obj-y += lzo.o
+obj-$(HAS_PDX) += pdx.o
+obj-$(HAS_MEM_ACCESS) += mem_access.o
+obj-$(HAS_MEM_ACCESS) += mem_event.o
 
 obj-bin-$(CONFIG_X86) += $(foreach n,decompress bunzip2 unxz unlzma unlzo unlz4 earlycpio,$(n).init.o)
 

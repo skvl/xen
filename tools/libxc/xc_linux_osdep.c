@@ -92,14 +92,32 @@ static void *linux_privcmd_alloc_hypercall_buffer(xc_interface *xch, xc_osdep_ha
 {
     size_t size = npages * XC_PAGE_SIZE;
     void *p;
+    int rc, saved_errno;
 
     /* Address returned by mmap is page aligned. */
     p = mmap(NULL, size, PROT_READ|PROT_WRITE, MAP_PRIVATE|MAP_ANONYMOUS|MAP_LOCKED, -1, 0);
+    if ( p == MAP_FAILED )
+    {
+        PERROR("xc_alloc_hypercall_buffer: mmap failed");
+        return NULL;
+    }
 
     /* Do not copy the VMA to child process on fork. Avoid the page being COW
         on hypercall. */
-    madvise(p, npages * XC_PAGE_SIZE, MADV_DONTFORK);
+    rc = madvise(p, npages * XC_PAGE_SIZE, MADV_DONTFORK);
+    if ( rc < 0 )
+    {
+        PERROR("xc_alloc_hypercall_buffer: madvise failed");
+        goto out;
+    }
+
     return p;
+
+out:
+    saved_errno = errno;
+    (void)munmap(p, size);
+    errno = saved_errno;
+    return NULL;
 }
 
 static void linux_privcmd_free_hypercall_buffer(xc_interface *xch, xc_osdep_handle h, void *ptr, int npages)
@@ -829,7 +847,7 @@ static void *linux_gntshr_share_pages(xc_gntshr *xch, xc_osdep_handle h,
 static int linux_gntshr_munmap(xc_gntshr *xcg, xc_osdep_handle h,
                                void *start_address, uint32_t count)
 {
-    return munmap(start_address, count);
+    return munmap(start_address, count * XC_PAGE_SIZE);
 }
 
 static struct xc_osdep_ops linux_gntshr_ops = {

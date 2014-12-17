@@ -30,10 +30,9 @@
 
 struct dev_intx_gsi_link {
     struct list_head list;
+    uint8_t bus;
     uint8_t device;
     uint8_t intx;
-    uint8_t gsi;
-    uint8_t link;
 };
 
 #define _HVM_IRQ_DPCI_MACH_PCI_SHIFT            0
@@ -69,6 +68,7 @@ struct hvm_gmsi_info {
 
 struct hvm_girq_dpci_mapping {
     struct list_head list;
+    uint8_t bus;
     uint8_t device;
     uint8_t intx;
     uint8_t machine_gsi;
@@ -88,18 +88,19 @@ struct hvm_irq_dpci {
     DECLARE_BITMAP(isairq_map, NR_ISAIRQS);
     /* Record of mapped Links */
     uint8_t link_cnt[NR_LINK];
-    struct tasklet dirq_tasklet;
 };
 
 /* Machine IRQ to guest device/intx mapping. */
 struct hvm_pirq_dpci {
     uint32_t flags;
+    unsigned int state;
     bool_t masked;
     uint16_t pending;
     struct list_head digl_list;
     struct domain *dom;
     struct hvm_gmsi_info gmsi;
     struct timer timer;
+    struct list_head softirq_list;
 };
 
 void pt_pirq_init(struct domain *, struct hvm_pirq_dpci *);
@@ -109,6 +110,7 @@ int pt_pirq_iterate(struct domain *d,
                               struct hvm_pirq_dpci *, void *arg),
                     void *arg);
 
+bool_t pt_pirq_softirq_active(struct hvm_pirq_dpci *);
 /* Modify state of a PCI INTx wire. */
 void hvm_pci_intx_assert(
     struct domain *d, unsigned int device, unsigned int intx);
@@ -123,7 +125,7 @@ void hvm_isa_irq_deassert(
 
 void hvm_set_pci_link_route(struct domain *d, u8 link, u8 isa_irq);
 
-void hvm_inject_msi(struct domain *d, uint64_t addr, uint32_t data);
+int hvm_inject_msi(struct domain *d, uint64_t addr, uint32_t data);
 
 void hvm_maybe_deassert_evtchn_irq(void);
 void hvm_assert_evtchn_irq(struct vcpu *v);

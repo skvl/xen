@@ -1,4 +1,4 @@
-From 5870bdab405f9d52009dde6e9c18c00566274ebb Mon Sep 17 00:00:00 2001
+From a86b5a90f4008e6704167c63535a49a8977f77f8 Mon Sep 17 00:00:00 2001
 From: Bastian Blank <waldi@debian.org>
 Date: Sat, 5 Jul 2014 11:47:14 +0200
 Subject: tools-xentrace-prefix.diff
@@ -9,7 +9,7 @@ Patch-Name: tools-xentrace-prefix.diff
  1 file changed, 4 insertions(+), 5 deletions(-)
 
 diff --git a/tools/xentrace/Makefile b/tools/xentrace/Makefile
-index 63b09c0..fcc578a 100644
+index b821952..ffe2f0d 100644
 --- a/tools/xentrace/Makefile
 +++ b/tools/xentrace/Makefile
 @@ -5,6 +5,7 @@ CFLAGS += -Werror
@@ -25,15 +25,15 @@ index 63b09c0..fcc578a 100644
  .PHONY: install
  install: build
 -	$(INSTALL_DIR) $(DESTDIR)$(BINDIR)
--	[ -z "$(LIBBIN)" ] || $(INSTALL_DIR) $(DESTDIR)$(PRIVATE_BINDIR)
-+	$(INSTALL_DIR) $(DESTDIR)$(PRIVATE_BINDIR)
+-	[ -z "$(LIBBIN)" ] || $(INSTALL_DIR) $(DESTDIR)$(LIBEXEC_BIN)
++	$(INSTALL_DIR) $(DESTDIR)$(LIBEXEC_BIN)
  	$(INSTALL_DIR) $(DESTDIR)$(MAN1DIR)
  	$(INSTALL_DIR) $(DESTDIR)$(MAN8DIR)
 -	$(INSTALL_PROG) $(BIN) $(DESTDIR)$(BINDIR)
 -	$(INSTALL_PYTHON_PROG) $(SCRIPTS) $(DESTDIR)$(BINDIR)
--	[ -z "$(LIBBIN)" ] || $(INSTALL_PROG) $(LIBBIN) $(DESTDIR)$(PRIVATE_BINDIR)
-+	$(INSTALL_PROG) $(BIN) $(LIBBIN) $(DESTDIR)$(PRIVATE_BINDIR)
-+	$(INSTALL_PYTHON_PROG) $(SCRIPTS) $(DESTDIR)$(PRIVATE_BINDIR)
+-	[ -z "$(LIBBIN)" ] || $(INSTALL_PROG) $(LIBBIN) $(DESTDIR)$(LIBEXEC_BIN)
++	$(INSTALL_PROG) $(BIN) $(LIBBIN) $(DESTDIR)$(LIBEXEC_BIN)
++	$(INSTALL_PYTHON_PROG) $(SCRIPTS) $(DESTDIR)$(LIBEXEC_BIN)
  	$(INSTALL_DATA) $(MAN1) $(DESTDIR)$(MAN1DIR)
  	$(INSTALL_DATA) $(MAN8) $(DESTDIR)$(MAN8DIR)
  

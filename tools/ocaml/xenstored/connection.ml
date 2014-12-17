@@ -45,6 +45,20 @@ let mark_as_bad con =
 	|None -> ()
 	| Some domain -> Domain.mark_as_bad domain
 
+let initial_next_tid = 1
+
+let reconnect con =
+	Xenbus.Xb.reconnect con.xb;
+	(* dom is the same *)
+	Hashtbl.clear con.transactions;
+	con.next_tid <- initial_next_tid;
+	Hashtbl.clear con.watches;
+	(* anonid is the same *)
+	con.nb_watches <- 0;
+	con.stat_nb_ops <- 0;
+	(* perm is the same *)
+	()
+
 let get_path con =
 Printf.sprintf "/local/domain/%i/" (match con.dom with None -> 0 | Some d -> Domain.get_id d)
 
@@ -89,7 +103,7 @@ let create xbcon dom =
 	xb = xbcon;
 	dom = dom;
 	transactions = Hashtbl.create 5;
-	next_tid = 1;
+	next_tid = initial_next_tid;
 	watches = Hashtbl.create 8;
 	nb_watches = 0;
 	anonid = id;
@@ -223,9 +237,13 @@ let pop_in con = Xenbus.Xb.get_in_packet con.xb
 let has_more_input con = Xenbus.Xb.has_more_input con.xb
 
 let has_output con = Xenbus.Xb.has_output con.xb
+let has_old_output con = Xenbus.Xb.has_old_output con.xb
 let has_new_output con = Xenbus.Xb.has_new_output con.xb
 let peek_output con = Xenbus.Xb.peek_output con.xb
 let do_output con = Xenbus.Xb.output con.xb
+
+let has_more_work con =
+	has_more_input con || not (has_old_output con) && has_new_output con
 
 let incr_ops con = con.stat_nb_ops <- con.stat_nb_ops + 1
 

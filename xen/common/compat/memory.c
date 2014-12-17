@@ -4,6 +4,7 @@
 #include <xen/guest_access.h>
 #include <xen/sched.h>
 #include <xen/event.h>
+#include <xen/mem_access.h>
 #include <asm/current.h>
 #include <compat/memory.h>
 
@@ -12,6 +13,8 @@
 CHECK_TYPE(domid);
 #undef compat_domid_t
 #undef xen_domid_t
+
+CHECK_mem_access_op;
 
 int compat_memory_op(unsigned int cmd, XEN_GUEST_HANDLE_PARAM(void) compat)
 {
@@ -378,6 +381,10 @@ int compat_memory_op(unsigned int cmd, XEN_GUEST_HANDLE_PARAM(void) compat)
             }
             break;
         }
+
+        case XENMEM_access_op:
+            rc = mem_access_memop(cmd, guest_handle_cast(compat, xen_mem_access_op_t));
+            break;
 
         case XENMEM_add_to_physmap_batch:
             start_extent = end_extent;

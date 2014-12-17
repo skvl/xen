@@ -1058,7 +1058,7 @@ static void load_shadow_guest_state(struct vcpu *v)
     if ( control & VM_ENTRY_LOAD_PERF_GLOBAL_CTRL )
         hvm_msr_write_intercept(MSR_CORE_PERF_GLOBAL_CTRL, __get_vvmcs(vvmcs, GUEST_PERF_GLOBAL_CTRL));
 
-    hvm_funcs.set_tsc_offset(v, v->arch.hvm_vcpu.cache_tsc_offset);
+    hvm_funcs.set_tsc_offset(v, v->arch.hvm_vcpu.cache_tsc_offset, 0);
 
     vvmcs_to_shadow_bulk(v, ARRAY_SIZE(vmentry_fields), vmentry_fields);
 
@@ -1259,7 +1259,7 @@ static void load_vvmcs_host_state(struct vcpu *v)
     if ( control & VM_EXIT_LOAD_PERF_GLOBAL_CTRL )
         hvm_msr_write_intercept(MSR_CORE_PERF_GLOBAL_CTRL, __get_vvmcs(vvmcs, HOST_PERF_GLOBAL_CTRL));
 
-    hvm_funcs.set_tsc_offset(v, v->arch.hvm_vcpu.cache_tsc_offset);
+    hvm_funcs.set_tsc_offset(v, v->arch.hvm_vcpu.cache_tsc_offset, 0);
 
     __set_vvmcs(vvmcs, VM_ENTRY_INTR_INFO, 0);
 }
@@ -1394,7 +1394,6 @@ void nvmx_switch_guest(void)
     struct vcpu *v = current;
     struct nestedvcpu *nvcpu = &vcpu_nestedhvm(v);
     struct cpu_user_regs *regs = guest_cpu_user_regs();
-    const ioreq_t *ioreq = get_ioreq(v);
 
     /*
      * A pending IO emulation may still be not finished. In this case, no
@@ -1404,7 +1403,7 @@ void nvmx_switch_guest(void)
      * don't want to continue as this setup is not implemented nor supported
      * as of right now.
      */
-    if ( !ioreq || ioreq->state != STATE_IOREQ_NONE )
+    if ( hvm_io_pending(v) )
         return;
     /*
      * a softirq may interrupt us between a virtual vmentry is
@@ -2522,3 +2521,13 @@ void nvmx_set_cr_read_shadow(struct vcpu *v, unsigned int cr)
     /* nvcpu.guest_cr is what L2 write to cr actually. */
     __vmwrite(read_shadow_field, v->arch.hvm_vcpu.nvcpu.guest_cr[cr]);
 }
+
+/*
+ * Local variables:
+ * mode: C
+ * c-file-style: "BSD"
+ * c-basic-offset: 4
+ * tab-width: 4
+ * indent-tabs-mode: nil
+ * End:
+ */

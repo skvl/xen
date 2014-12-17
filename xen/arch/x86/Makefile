@@ -7,6 +7,7 @@ subdir-y += oprofile
 
 subdir-$(x86_64) += x86_64
 
+obj-bin-y += alternative.init.o
 obj-y += apic.o
 obj-y += bitops.o
 obj-bin-y += bzimage.init.o
@@ -41,6 +42,7 @@ obj-y += numa.o
 obj-y += pci.o
 obj-y += percpu.o
 obj-y += physdev.o
+obj-y += psr.o
 obj-y += setup.o
 obj-y += shutdown.o
 obj-y += smp.o

@@ -1,21 +1,21 @@
-From 9424935f25e6fc0e081ac5e6048cc388a21b1000 Mon Sep 17 00:00:00 2001
+From 6a25f6302e0d60cd4d67968e80407ff88869d508 Mon Sep 17 00:00:00 2001
 From: Bastian Blank <waldi@debian.org>
 Date: Sat, 5 Jul 2014 11:47:32 +0200
 Subject: tools-hotplug-udevrules.diff
 
 Patch-Name: tools-hotplug-udevrules.diff
 ---
- tools/hotplug/Linux/xen-backend.rules | 7 -------
- 1 file changed, 7 deletions(-)
+ tools/hotplug/Linux/xen-backend.rules.in | 9 ++-------
+ 1 file changed, 2 insertions(+), 7 deletions(-)
 
-diff --git a/tools/hotplug/Linux/xen-backend.rules b/tools/hotplug/Linux/xen-backend.rules
-index a0d409e..f0d9901 100644
---- a/tools/hotplug/Linux/xen-backend.rules
-+++ b/tools/hotplug/Linux/xen-backend.rules
-@@ -5,11 +5,4 @@ SUBSYSTEM=="xen-backend", KERNEL=="vif-*", ENV{UDEV_CALL}="1", ACTION=="online",
- SUBSYSTEM=="xen-backend", KERNEL=="vif-*", ENV{UDEV_CALL}="1", ACTION=="offline", RUN+="/etc/xen/scripts/vif-setup offline type_if=vif"
- SUBSYSTEM=="xen-backend", KERNEL=="vscsi*", RUN+="/etc/xen/scripts/vscsi $env{ACTION}"
- SUBSYSTEM=="xen-backend", ACTION=="remove", ENV{UDEV_CALL}="1", RUN+="/etc/xen/scripts/xen-hotplug-cleanup"
+diff --git a/tools/hotplug/Linux/xen-backend.rules.in b/tools/hotplug/Linux/xen-backend.rules.in
+index 7d2f914..87dacf9 100644
+--- a/tools/hotplug/Linux/xen-backend.rules.in
++++ b/tools/hotplug/Linux/xen-backend.rules.in
+@@ -5,11 +5,6 @@ SUBSYSTEM=="xen-backend", KERNEL=="vif-*", ENV{UDEV_CALL}="1", ACTION=="online",
+ SUBSYSTEM=="xen-backend", KERNEL=="vif-*", ENV{UDEV_CALL}="1", ACTION=="offline", RUN+="@XEN_SCRIPT_DIR@/vif-setup offline type_if=vif"
+ SUBSYSTEM=="xen-backend", KERNEL=="vscsi*", RUN+="@XEN_SCRIPT_DIR@/vscsi $env{ACTION}"
+ SUBSYSTEM=="xen-backend", ACTION=="remove", ENV{UDEV_CALL}="1", RUN+="@XEN_SCRIPT_DIR@/xen-hotplug-cleanup"
 -KERNEL=="evtchn", NAME="xen/%k"
 -SUBSYSTEM=="xen", KERNEL=="blktap[0-9]*", NAME="xen/%k", MODE="0600"
 -SUBSYSTEM=="blktap2", KERNEL=="blktap[0-9]*", NAME="xen/blktap-2/%k", MODE="0600"
@@ -23,4 +23,6 @@ index a0d409e..f0d9901 100644
 -KERNEL=="gntdev", NAME="xen/%k", MODE="0600"
 -KERNEL=="pci_iomul", NAME="xen/%k", MODE="0600"
 -KERNEL=="tapdev[a-z]*", NAME="xen/blktap-2/tapdev%m", MODE="0600"
- SUBSYSTEM=="net", KERNEL=="vif*-emu", ACTION=="add", ENV{UDEV_CALL}="1", RUN+="/etc/xen/scripts/vif-setup $env{ACTION} type_if=tap"
++SUBSYSTEM=="xen", KERNEL=="blktap[0-9]*", MODE="0600"
++SUBSYSTEM=="blktap2", KERNEL=="blktap[0-9]*", MODE="0600"
+ SUBSYSTEM=="net", KERNEL=="vif*-emu", ACTION=="add", ENV{UDEV_CALL}="1", RUN+="@XEN_SCRIPT_DIR@/vif-setup $env{ACTION} type_if=tap"

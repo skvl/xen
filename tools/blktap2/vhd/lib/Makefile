@@ -9,8 +9,7 @@ CFLAGS          += -Wno-unused
 CFLAGS          += -I../../include
 CFLAGS          += -D_GNU_SOURCE
 CFLAGS          += -fPIC
-CFLAGS          += -g
-CFLAGS  += $(CFLAGS_libxenctrl)
+CFLAGS		+= $(CFLAGS_libxenctrl)
 
 ifeq ($(CONFIG_Linux),y)
 LIBS            := -luuid

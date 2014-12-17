@@ -18,7 +18,6 @@
  */
 
 #include "xc_private.h"
-#include <errno.h>
 
 int xc_gnttab_op(xc_interface *xch, int cmd, void * op, int op_size, int count)
 {
@@ -76,7 +75,7 @@ static void *_gnttab_map_table(xc_interface *xch, int domid, int *gnt_num)
 
     if ( rc || (query.status != GNTST_okay) )
     {
-        ERROR("Could not query dom's grant size\n", domid);
+        ERROR("Could not query dom%d's grant size\n", domid);
         return NULL;
     }
 

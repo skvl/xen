@@ -1,27 +1,27 @@
-From dfef5e187690887a937be5fe34770b599067070f Mon Sep 17 00:00:00 2001
+From c06d96cdbe650d2f7d2ed23fccba59bf8d0f3d34 Mon Sep 17 00:00:00 2001
 From: Bastian Blank <waldi@debian.org>
 Date: Sat, 5 Jul 2014 11:47:12 +0200
 Subject: tools-xenstore-prefix.diff
 
 Patch-Name: tools-xenstore-prefix.diff
 ---
- tools/xenstore/Makefile | 16 +++++++++-------
- 1 file changed, 9 insertions(+), 7 deletions(-)
+ tools/xenstore/Makefile | 18 ++++++++++--------
+ 1 file changed, 10 insertions(+), 8 deletions(-)
 
 diff --git a/tools/xenstore/Makefile b/tools/xenstore/Makefile
-index 262f401..153c36f 100644
+index bff9b25..f0a0b14 100644
 --- a/tools/xenstore/Makefile
 +++ b/tools/xenstore/Makefile
-@@ -8,6 +8,8 @@ CFLAGS += -Werror
- CFLAGS += -I.
- CFLAGS += $(CFLAGS_libxenctrl)
+@@ -17,6 +17,8 @@ LDFLAGS-$(CONFIG_SYSTEMD) += $(SYSTEMD_LIBS)
+ CFLAGS  += $(CFLAGS-y)
+ LDFLAGS += $(LDFLAGS-y)
  
 +LDFLAGS_libxenctrl += $(call LDFLAGS_RPATH,../lib)
 +
  CLIENTS := xenstore-exists xenstore-list xenstore-read xenstore-rm xenstore-chmod
  CLIENTS += xenstore-write xenstore-ls xenstore-watch
  
-@@ -58,10 +60,10 @@ endif
+@@ -74,10 +76,10 @@ endif
  init-xenstore-domain.o: CFLAGS += $(CFLAGS_libxenguest)
  
  init-xenstore-domain: init-xenstore-domain.o $(LIBXENSTORE)
@@ -34,26 +34,28 @@ index 262f401..153c36f 100644
  
  xenstored.a: $(XENSTORED_OBJS)
  	$(AR) cr $@ $^
-@@ -109,17 +111,17 @@ tarball: clean
+@@ -125,18 +127,18 @@ tarball: clean
  
  .PHONY: install
  install: all
 -	$(INSTALL_DIR) $(DESTDIR)$(BINDIR)
-+	$(INSTALL_DIR) $(DESTDIR)$(PRIVATE_BINDIR)
- 	$(INSTALL_DIR) $(DESTDIR)$(SBINDIR)
++	$(INSTALL_DIR) $(DESTDIR)$(LIBEXEC_BIN)
++	$(INSTALL_DIR) $(DESTDIR)$(SBINDIR)
  	$(INSTALL_DIR) $(DESTDIR)$(INCLUDEDIR)
  	$(INSTALL_DIR) $(DESTDIR)$(INCLUDEDIR)/xenstore-compat
- 	$(INSTALL_DIR) $(DESTDIR)/var/run/xenstored
- 	$(INSTALL_DIR) $(DESTDIR)/var/lib/xenstored
+ ifeq ($(XENSTORE_XENSTORED),y)
+-	$(INSTALL_DIR) $(DESTDIR)$(SBINDIR)
+ 	$(INSTALL_DIR) $(DESTDIR)$(XEN_LIB_STORED)
 -	$(INSTALL_PROG) xenstored $(DESTDIR)$(SBINDIR)
++	$(INSTALL_PROG) xenstored $(DESTDIR)$(LIBEXEC_BIN)
+ endif
 -	$(INSTALL_PROG) xenstore-control $(DESTDIR)$(BINDIR)
 -	$(INSTALL_PROG) xenstore $(DESTDIR)$(BINDIR)
-+	$(INSTALL_PROG) xenstored $(DESTDIR)$(PRIVATE_BINDIR)
-+	$(INSTALL_PROG) xenstore-control $(DESTDIR)$(PRIVATE_BINDIR)
++	$(INSTALL_PROG) xenstore-control $(DESTDIR)$(LIBEXEC_BIN)
 +	$(INSTALL_PROG) xenstore $(DESTDIR)$(SBINDIR)
  	set -e ; for c in $(CLIENTS) ; do \
 -		ln -f $(DESTDIR)$(BINDIR)/xenstore $(DESTDIR)$(BINDIR)/$${c} ; \
-+		ln -f xenstore $(DESTDIR)$(SBINDIR)/$${c} ; \
++		ln -f $(DESTDIR)$(SBINDIR)/xenstore $(DESTDIR)$(SBINDIR)/$${c} ; \
  	done
  	$(INSTALL_DIR) $(DESTDIR)$(LIBDIR)
- 	$(INSTALL_PROG) libxenstore.so.$(MAJOR).$(MINOR) $(DESTDIR)$(LIBDIR)
+ 	$(INSTALL_SHLIB) libxenstore.so.$(MAJOR).$(MINOR) $(DESTDIR)$(LIBDIR)

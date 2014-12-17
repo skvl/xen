@@ -1,5 +1,3 @@
-include /usr/share/dpkg/architecture.mk
-
 AS         = $(CROSS_COMPILE)as
 LD         = $(CROSS_COMPILE)ld
 ifeq ($(clang),y)
@@ -18,9 +16,6 @@ OBJCOPY    = $(CROSS_COMPILE)objcopy
 OBJDUMP    = $(CROSS_COMPILE)objdump
 SIZEUTIL   = $(CROSS_COMPILE)size
 
-MSGFMT     = msgfmt
-MSGMERGE   = msgmerge
-
 # Allow git to be wrappered in the environment
 GIT        ?= git
 
@@ -29,32 +24,7 @@ INSTALL_DIR  = $(INSTALL) -d -m0755 -p
 INSTALL_DATA = $(INSTALL) -m0644 -p
 INSTALL_PROG = $(INSTALL) -m0755 -p
 
-PREFIX ?= /usr
-BINDIR = $(PREFIX)/bin
-INCLUDEDIR = $(PREFIX)/include
-LIBDIR = $(PREFIX)/lib/$(DEB_HOST_MULTIARCH)
-SHAREDIR = $(PREFIX)/share
-MANDIR = $(SHAREDIR)/man
-MAN1DIR = $(MANDIR)/man1
-MAN8DIR = $(MANDIR)/man8
-SBINDIR = $(PREFIX)/sbin
-
-PRIVATE_PREFIX = $(PREFIX)/lib/xen-$(XEN_VERSION)
-PRIVATE_BINDIR = $(PRIVATE_PREFIX)/bin
-PRIVATE_LIBDIR = $(PRIVATE_PREFIX)/lib
-
-LIBEXEC = $(PRIVATE_BINDIR)
-XENFIRMWAREDIR = $(PRIVATE_PREFIX)/boot
-
-CONFIG_DIR = /etc
-XEN_LOCK_DIR = /var/lock
-XEN_RUN_DIR = /var/run/xen
-XEN_PAGING_DIR = /var/lib/xen/xenpaging
-
-SYSCONFIG_DIR = $(CONFIG_DIR)/$(CONFIG_LEAF_DIR)
-
-XEN_CONFIG_DIR = $(CONFIG_DIR)/xen
-XEN_SCRIPT_DIR = $(XEN_CONFIG_DIR)/scripts
+BOOT_DIR ?= /boot
 
 SOCKET_LIBS =
 UTIL_LIBS = -lutil

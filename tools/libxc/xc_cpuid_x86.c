@@ -21,6 +21,7 @@
  */
 
 #include <stdlib.h>
+#include <stdbool.h>
 #include "xc_private.h"
 #include "xc_cpufeature.h"
 #include <xen/hvm/params.h>
@@ -32,13 +33,6 @@
 #define DEF_MAX_BASE 0x0000000du
 #define DEF_MAX_INTELEXT  0x80000008u
 #define DEF_MAX_AMDEXT    0x8000001cu
-
-static int hypervisor_is_64bit(xc_interface *xch)
-{
-    xen_capabilities_info_t xen_caps = "";
-    return ((xc_version(xch, XENVER_capabilities, &xen_caps) == 0) &&
-            (strstr(xen_caps, "x86_64") != NULL));
-}
 
 static void cpuid(const unsigned int *input, unsigned int *regs)
 {
@@ -94,13 +88,11 @@ static void amd_xc_cpuid_policy(
         break;
 
     case 0x80000001: {
-        int is_64bit = hypervisor_is_64bit(xch) && is_pae;
-
         if ( !is_pae )
             clear_bit(X86_FEATURE_PAE, regs[3]);
 
         /* Filter all other features according to a whitelist. */
-        regs[2] &= ((is_64bit ? bitmaskof(X86_FEATURE_LAHF_LM) : 0) |
+        regs[2] &= (bitmaskof(X86_FEATURE_LAHF_LM) |
                     bitmaskof(X86_FEATURE_CMP_LEGACY) |
                     (is_nestedhvm ? bitmaskof(X86_FEATURE_SVM) : 0) |
                     bitmaskof(X86_FEATURE_CR8_LEGACY) |
@@ -110,12 +102,13 @@ static void amd_xc_cpuid_policy(
                     bitmaskof(X86_FEATURE_3DNOWPREFETCH) |
                     bitmaskof(X86_FEATURE_OSVW) |
                     bitmaskof(X86_FEATURE_XOP) |
+                    bitmaskof(X86_FEATURE_LWP) |
                     bitmaskof(X86_FEATURE_FMA4) |
                     bitmaskof(X86_FEATURE_TBM) |
-                    bitmaskof(X86_FEATURE_LWP));
+                    bitmaskof(X86_FEATURE_DBEXT));
         regs[3] &= (0x0183f3ff | /* features shared with 0x00000001:EDX */
-                    (is_pae ? bitmaskof(X86_FEATURE_NX) : 0) |
-                    (is_64bit ? bitmaskof(X86_FEATURE_LM) : 0) |
+                    bitmaskof(X86_FEATURE_NX) |
+                    bitmaskof(X86_FEATURE_LM) |
                     bitmaskof(X86_FEATURE_SYSCALL) |
                     bitmaskof(X86_FEATURE_MP) |
                     bitmaskof(X86_FEATURE_MMXEXT) |
@@ -193,15 +186,14 @@ static void intel_xc_cpuid_policy(
         break;
 
     case 0x80000001: {
-        int is_64bit = hypervisor_is_64bit(xch) && is_pae;
-
         /* Only a few features are advertised in Intel's 0x80000001. */
-        regs[2] &= (is_64bit ? bitmaskof(X86_FEATURE_LAHF_LM) : 0) |
-                               bitmaskof(X86_FEATURE_ABM);
-        regs[3] &= ((is_pae ? bitmaskof(X86_FEATURE_NX) : 0) |
-                    (is_64bit ? bitmaskof(X86_FEATURE_LM) : 0) |
-                    (is_64bit ? bitmaskof(X86_FEATURE_SYSCALL) : 0) |
-                    (is_64bit ? bitmaskof(X86_FEATURE_RDTSCP) : 0));
+        regs[2] &= (bitmaskof(X86_FEATURE_LAHF_LM) |
+                    bitmaskof(X86_FEATURE_3DNOWPREFETCH) |
+                    bitmaskof(X86_FEATURE_ABM));
+        regs[3] &= (bitmaskof(X86_FEATURE_NX) |
+                    bitmaskof(X86_FEATURE_LM) |
+                    bitmaskof(X86_FEATURE_SYSCALL) |
+                    bitmaskof(X86_FEATURE_RDTSCP));
         break;
     }
 
@@ -274,13 +266,12 @@ static void xc_cpuid_hvm_policy(
 {
     DECLARE_DOMCTL;
     char brand[13];
-    unsigned long nestedhvm;
-    unsigned long pae;
+    uint64_t val;
     int is_pae, is_nestedhvm;
     uint64_t xfeature_mask;
 
-    xc_get_hvm_param(xch, domid, HVM_PARAM_PAE_ENABLED, &pae);
-    is_pae = !!pae;
+    xc_hvm_param_get(xch, domid, HVM_PARAM_PAE_ENABLED, &val);
+    is_pae = !!val;
 
     /* Detecting Xen's atitude towards XSAVE */
     memset(&domctl, 0, sizeof(domctl));
@@ -289,8 +280,8 @@ static void xc_cpuid_hvm_policy(
     do_domctl(xch, &domctl);
     xfeature_mask = domctl.u.vcpuextstate.xfeature_mask;
 
-    xc_get_hvm_param(xch, domid, HVM_PARAM_NESTEDHVM, &nestedhvm);
-    is_nestedhvm = !!nestedhvm;
+    xc_hvm_param_get(xch, domid, HVM_PARAM_NESTEDHVM, &val);
+    is_nestedhvm = !!val;
 
     switch ( input[0] )
     {
@@ -371,6 +362,9 @@ static void xc_cpuid_hvm_policy(
                         bitmaskof(X86_FEATURE_ERMS) |
                         bitmaskof(X86_FEATURE_INVPCID) |
                         bitmaskof(X86_FEATURE_RTM)  |
+                        bitmaskof(X86_FEATURE_RDSEED)  |
+                        bitmaskof(X86_FEATURE_ADX)  |
+                        bitmaskof(X86_FEATURE_SMAP) |
                         bitmaskof(X86_FEATURE_FSGSBASE));
         } else
             regs[1] = 0;
@@ -386,7 +380,10 @@ static void xc_cpuid_hvm_policy(
         break;
 
     case 0x80000001:
-        if ( !is_pae ) {
+        if ( !is_pae )
+        {
+            clear_bit(X86_FEATURE_LAHF_LM, regs[2]);
+            clear_bit(X86_FEATURE_LM, regs[3]);
             clear_bit(X86_FEATURE_NX, regs[3]);
             clear_bit(X86_FEATURE_PSE36, regs[3]);
         }
@@ -433,11 +430,11 @@ static void xc_cpuid_hvm_policy(
 
 static void xc_cpuid_pv_policy(
     xc_interface *xch, domid_t domid,
-    const unsigned int *input, unsigned int *regs)
+    const unsigned int *input, unsigned int *regs, bool pvh)
 {
     DECLARE_DOMCTL;
     unsigned int guest_width;
-    int guest_64bit, xen_64bit = hypervisor_is_64bit(xch);
+    int guest_64bit;
     char brand[13];
     uint64_t xfeature_mask;
 
@@ -456,8 +453,10 @@ static void xc_cpuid_pv_policy(
     if ( (input[0] & 0x7fffffff) == 0x00000001 )
     {
         clear_bit(X86_FEATURE_VME, regs[3]);
-        clear_bit(X86_FEATURE_PSE, regs[3]);
-        clear_bit(X86_FEATURE_PGE, regs[3]);
+        if ( !pvh ) {
+            clear_bit(X86_FEATURE_PSE, regs[3]);
+            clear_bit(X86_FEATURE_PGE, regs[3]);
+        }
         clear_bit(X86_FEATURE_MCE, regs[3]);
         clear_bit(X86_FEATURE_MCA, regs[3]);
         clear_bit(X86_FEATURE_MTRR, regs[3]);
@@ -467,7 +466,7 @@ static void xc_cpuid_pv_policy(
     switch ( input[0] )
     {
     case 0x00000001:
-        if ( !xen_64bit || strstr(brand, "AMD") )
+        if ( strstr(brand, "AMD") )
             clear_bit(X86_FEATURE_SEP, regs[3]);
         clear_bit(X86_FEATURE_DS, regs[3]);
         clear_bit(X86_FEATURE_ACC, regs[3]);
@@ -502,6 +501,8 @@ static void xc_cpuid_pv_policy(
                         bitmaskof(X86_FEATURE_BMI2) |
                         bitmaskof(X86_FEATURE_ERMS) |
                         bitmaskof(X86_FEATURE_RTM)  |
+                        bitmaskof(X86_FEATURE_RDSEED)  |
+                        bitmaskof(X86_FEATURE_ADX)  |
                         bitmaskof(X86_FEATURE_FSGSBASE));
         else
             regs[1] = 0;
@@ -524,7 +525,8 @@ static void xc_cpuid_pv_policy(
         {
             set_bit(X86_FEATURE_SYSCALL, regs[3]);
         }
-        clear_bit(X86_FEATURE_PAGE1GB, regs[3]);
+        if ( !pvh )
+            clear_bit(X86_FEATURE_PAGE1GB, regs[3]);
         clear_bit(X86_FEATURE_RDTSCP, regs[3]);
 
         clear_bit(X86_FEATURE_SVM, regs[2]);
@@ -555,13 +557,24 @@ static int xc_cpuid_policy(
 {
     xc_dominfo_t        info;
 
+    /*
+     * For hypervisor leaves (0x4000XXXX) only 0x4000xx00.EAX[7:0] bits (max
+     * number of leaves) can be set by user. Hypervisor will enforce this so
+     * all other bits are don't-care and we can set them to zero.
+     */
+    if ( (input[0] & 0xffff0000) == 0x40000000 )
+    {
+        regs[0] = regs[1] = regs[2] = regs[3] = 0;
+        return 0;
+    }
+
     if ( xc_domain_getinfo(xch, domid, 1, &info) == 0 )
         return -EINVAL;
 
     if ( info.hvm )
         xc_cpuid_hvm_policy(xch, domid, input, regs);
     else
-        xc_cpuid_pv_policy(xch, domid, input, regs);
+        xc_cpuid_pv_policy(xch, domid, input, regs, info.pvh);
 
     return 0;
 }

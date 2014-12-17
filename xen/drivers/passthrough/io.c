@@ -20,14 +20,123 @@
 
 #include <xen/event.h>
 #include <xen/iommu.h>
+#include <xen/cpu.h>
 #include <xen/irq.h>
 #include <asm/hvm/irq.h>
 #include <asm/hvm/iommu.h>
 #include <asm/hvm/support.h>
 #include <xen/hvm/irq.h>
-#include <xen/tasklet.h>
 
-static void hvm_dirq_assist(unsigned long _d);
+static DEFINE_PER_CPU(struct list_head, dpci_list);
+
+/*
+ * These two bit states help to safely schedule, deschedule, and wait until
+ * the softirq has finished.
+ *
+ * The semantics behind these two bits is as follow:
+ *  - STATE_SCHED - whoever modifies it has to ref-count the domain (->dom).
+ *  - STATE_RUN - only softirq is allowed to set and clear it. If it has
+ *      been set hvm_dirq_assist will RUN with a saved value of the
+ *      'struct domain' copied from 'pirq_dpci->dom' before STATE_RUN was set.
+ *
+ * The usual states are: STATE_SCHED(set) -> STATE_RUN(set) ->
+ * STATE_SCHED(unset) -> STATE_RUN(unset).
+ *
+ * However the states can also diverge such as: STATE_SCHED(set) ->
+ * STATE_SCHED(unset) -> STATE_RUN(set) -> STATE_RUN(unset). That means
+ * the 'hvm_dirq_assist' never run and that the softirq did not do any
+ * ref-counting.
+ */
+
+enum {
+    STATE_SCHED,
+    STATE_RUN
+};
+
+/*
+ * This can be called multiple times, but the softirq is only raised once.
+ * That is until the STATE_SCHED state has been cleared. The state can be
+ * cleared by: the 'dpci_softirq' (when it has executed 'hvm_dirq_assist'),
+ * or by 'pt_pirq_softirq_reset' (which will try to clear the state before
+ * the softirq had a chance to run).
+ */
+static void raise_softirq_for(struct hvm_pirq_dpci *pirq_dpci)
+{
+    unsigned long flags;
+
+    if ( test_and_set_bit(STATE_SCHED, &pirq_dpci->state) )
+        return;
+
+    get_knownalive_domain(pirq_dpci->dom);
+
+    local_irq_save(flags);
+    list_add_tail(&pirq_dpci->softirq_list, &this_cpu(dpci_list));
+    local_irq_restore(flags);
+
+    raise_softirq(HVM_DPCI_SOFTIRQ);
+}
+
+/*
+ * If we are racing with softirq_dpci (STATE_SCHED) we return
+ * true. Otherwise we return false.
+ *
+ * If it is false, it is the callers responsibility to make sure
+ * that the softirq (with the event_lock dropped) has ran.
+ */
+bool_t pt_pirq_softirq_active(struct hvm_pirq_dpci *pirq_dpci)
+{
+    if ( pirq_dpci->state & ((1 << STATE_RUN) | (1 << STATE_SCHED)) )
+        return 1;
+
+    /*
+     * If in the future we would call 'raise_softirq_for' right away
+     * after 'pt_pirq_softirq_active' we MUST reset the list (otherwise it
+     * might have stale data).
+     */
+    return 0;
+}
+
+/*
+ * Reset the pirq_dpci->dom parameter to NULL.
+ *
+ * This function checks the different states to make sure it can do it
+ * at the right time. If it unschedules the 'hvm_dirq_assist' from running
+ * it also refcounts (which is what the softirq would have done) properly.
+ */
+static void pt_pirq_softirq_reset(struct hvm_pirq_dpci *pirq_dpci)
+{
+    struct domain *d = pirq_dpci->dom;
+
+    ASSERT(spin_is_locked(&d->event_lock));
+
+    switch ( cmpxchg(&pirq_dpci->state, 1 << STATE_SCHED, 0) )
+    {
+    case (1 << STATE_SCHED):
+        /*
+         * We are going to try to de-schedule the softirq before it goes in
+         * STATE_RUN. Whoever clears STATE_SCHED MUST refcount the 'dom'.
+         */
+        put_domain(d);
+        /* fallthrough. */
+    case (1 << STATE_RUN):
+    case (1 << STATE_RUN) | (1 << STATE_SCHED):
+        /*
+         * The reason it is OK to reset 'dom' when STATE_RUN bit is set is due
+         * to a shortcut the 'dpci_softirq' implements. It stashes the 'dom'
+         * in local variable before it sets STATE_RUN - and therefore will not
+         * dereference '->dom' which would crash.
+         */
+        pirq_dpci->dom = NULL;
+        break;
+    }
+    /*
+     * Inhibit 'hvm_dirq_assist' from doing anything useful and at worst
+     * calling 'set_timer' which will blow up (as we have called kill_timer
+     * or never initialized it). Note that we hold the lock that
+     * 'hvm_dirq_assist' could be spinning on.
+     */
+    pirq_dpci->masked = 0;
+}
 
 bool_t pt_irq_need_timer(uint32_t flags)
 {
@@ -51,11 +160,8 @@ static int pt_irq_guest_eoi(struct domain *d, struct hvm_pirq_dpci *pirq_dpci,
 static void pt_irq_time_out(void *data)
 {
     struct hvm_pirq_dpci *irq_map = data;
-    unsigned int guest_gsi;
-    struct hvm_irq_dpci *dpci = NULL;
-    struct dev_intx_gsi_link *digl;
-    struct hvm_girq_dpci_mapping *girq;
-    uint32_t device, intx;
+    const struct hvm_irq_dpci *dpci;
+    const struct dev_intx_gsi_link *digl;
 
     spin_lock(&irq_map->dom->event_lock);
 
@@ -63,16 +169,16 @@ static void pt_irq_time_out(void *data)
     ASSERT(dpci);
     list_for_each_entry ( digl, &irq_map->digl_list, list )
     {
-        guest_gsi = digl->gsi;
+        unsigned int guest_gsi = hvm_pci_intx_gsi(digl->device, digl->intx);
+        const struct hvm_girq_dpci_mapping *girq;
+
         list_for_each_entry ( girq, &dpci->girq[guest_gsi], list )
         {
             struct pirq *pirq = pirq_info(irq_map->dom, girq->machine_gsi);
 
             pirq_dpci(pirq)->flags |= HVM_IRQ_DPCI_EOI_LATCH;
         }
-        device = digl->device;
-        intx = digl->intx;
-        hvm_pci_intx_deassert(irq_map->dom, device, intx);
+        hvm_pci_intx_deassert(irq_map->dom, digl->device, digl->intx);
     }
 
     pt_pirq_iterate(irq_map->dom, pt_irq_guest_eoi, NULL);
@@ -96,33 +202,29 @@ void free_hvm_irq_dpci(struct hvm_irq_dpci *dpci)
 int pt_irq_create_bind(
     struct domain *d, xen_domctl_bind_pt_irq_t *pt_irq_bind)
 {
-    struct hvm_irq_dpci *hvm_irq_dpci = NULL;
+    struct hvm_irq_dpci *hvm_irq_dpci;
     struct hvm_pirq_dpci *pirq_dpci;
     struct pirq *info;
-    uint32_t guest_gsi;
-    uint32_t device, intx, link;
-    struct dev_intx_gsi_link *digl;
-    struct hvm_girq_dpci_mapping *girq;
     int rc, pirq = pt_irq_bind->machine_irq;
 
     if ( pirq < 0 || pirq >= d->nr_pirqs )
         return -EINVAL;
 
+ restart:
     spin_lock(&d->event_lock);
 
     hvm_irq_dpci = domain_get_irq_dpci(d);
     if ( hvm_irq_dpci == NULL )
     {
+        unsigned int i;
+
         hvm_irq_dpci = xzalloc(struct hvm_irq_dpci);
         if ( hvm_irq_dpci == NULL )
         {
             spin_unlock(&d->event_lock);
             return -ENOMEM;
         }
-        softirq_tasklet_init(
-            &hvm_irq_dpci->dirq_tasklet,
-            hvm_dirq_assist, (unsigned long)d);
-        for ( int i = 0; i < NR_HVM_IRQS; i++ )
+        for ( i = 0; i < NR_HVM_IRQS; i++ )
             INIT_LIST_HEAD(&hvm_irq_dpci->girq[i]);
 
         d->arch.hvm_domain.irq.dpci = hvm_irq_dpci;
@@ -136,7 +238,24 @@ int pt_irq_create_bind(
     }
     pirq_dpci = pirq_dpci(info);
 
-    if ( pt_irq_bind->irq_type == PT_IRQ_TYPE_MSI )
+    /*
+     * A crude 'while' loop with us dropping the spinlock and giving
+     * the softirq_dpci a chance to run.
+     * We MUST check for this condition as the softirq could be scheduled
+     * and hasn't run yet. Note that this code replaced tasklet_kill which
+     * would have spun forever and would do the same thing (wait to flush out
+     * outstanding hvm_dirq_assist calls.
+     */
+    if ( pt_pirq_softirq_active(pirq_dpci) )
+    {
+        spin_unlock(&d->event_lock);
+        cpu_relax();
+        goto restart;
+    }
+
+    switch ( pt_irq_bind->irq_type )
+    {
+    case PT_IRQ_TYPE_MSI:
     {
         uint8_t dest, dest_mode;
         int dest_vcpu_id;
@@ -147,18 +266,40 @@ int pt_irq_create_bind(
                                HVM_IRQ_DPCI_GUEST_MSI;
             pirq_dpci->gmsi.gvec = pt_irq_bind->u.msi.gvec;
             pirq_dpci->gmsi.gflags = pt_irq_bind->u.msi.gflags;
+            /*
+             * 'pt_irq_create_bind' can be called after 'pt_irq_destroy_bind'.
+             * The 'pirq_cleanup_check' which would free the structure is only
+             * called if the event channel for the PIRQ is active. However
+             * OS-es that use event channels usually bind PIRQs to eventds
+             * and unbind them before calling 'pt_irq_destroy_bind' - with the
+             * result that we re-use the 'dpci' structure. This can be
+             * reproduced with unloading and loading the driver for a device.
+             *
+             * As such on every 'pt_irq_create_bind' call we MUST set it.
+             */
+            pirq_dpci->dom = d;
             /* bind after hvm_irq_dpci is setup to avoid race with irq handler*/
             rc = pirq_guest_bind(d->vcpu[0], info, 0);
             if ( rc == 0 && pt_irq_bind->u.msi.gtable )
             {
                 rc = msixtbl_pt_register(d, info, pt_irq_bind->u.msi.gtable);
                 if ( unlikely(rc) )
+                {
                     pirq_guest_unbind(d, info);
+                    /*
+                     * Between 'pirq_guest_bind' and before 'pirq_guest_unbind'
+                     * an interrupt can be scheduled. No more of them are going
+                     * to be scheduled but we must deal with the one that may be
+                     * in the queue.
+                     */
+                    pt_pirq_softirq_reset(pirq_dpci);
+                }
             }
             if ( unlikely(rc) )
             {
                 pirq_dpci->gmsi.gflags = 0;
                 pirq_dpci->gmsi.gvec = 0;
+                pirq_dpci->dom = NULL;
                 pirq_dpci->flags = 0;
                 pirq_cleanup_check(info, d);
                 spin_unlock(&d->event_lock);
@@ -169,15 +310,16 @@ int pt_irq_create_bind(
         {
             uint32_t mask = HVM_IRQ_DPCI_MACH_MSI | HVM_IRQ_DPCI_GUEST_MSI;
 
-            if ( (pirq_dpci->flags & mask) != mask)
+            if ( (pirq_dpci->flags & mask) != mask )
             {
-	            spin_unlock(&d->event_lock);
-        	    return -EBUSY;
+                spin_unlock(&d->event_lock);
+                return -EBUSY;
             }
 
-            /* if pirq is already mapped as vmsi, update the guest data/addr */
+            /* If pirq is already mapped as vmsi, update guest data/addr. */
             if ( pirq_dpci->gmsi.gvec != pt_irq_bind->u.msi.gvec ||
-                 pirq_dpci->gmsi.gflags != pt_irq_bind->u.msi.gflags) {
+                 pirq_dpci->gmsi.gflags != pt_irq_bind->u.msi.gflags )
+            {
                 /* Directly clear pending EOIs before enabling new MSI info. */
                 pirq_guest_eoi(info);
 
@@ -185,7 +327,7 @@ int pt_irq_create_bind(
                 pirq_dpci->gmsi.gflags = pt_irq_bind->u.msi.gflags;
             }
         }
-        /* Caculate dest_vcpu_id for MSI-type pirq migration */
+        /* Calculate dest_vcpu_id for MSI-type pirq migration. */
         dest = pirq_dpci->gmsi.gflags & VMSI_DEST_ID_MASK;
         dest_mode = !!(pirq_dpci->gmsi.gflags & VMSI_DM_MASK);
         dest_vcpu_id = hvm_girq_dest_2_vcpu_id(d, dest, dest_mode);
@@ -193,36 +335,37 @@ int pt_irq_create_bind(
         spin_unlock(&d->event_lock);
         if ( dest_vcpu_id >= 0 )
             hvm_migrate_pirqs(d->vcpu[dest_vcpu_id]);
+        break;
     }
-    else
+
+    case PT_IRQ_TYPE_PCI:
+    case PT_IRQ_TYPE_MSI_TRANSLATE:
     {
-        device = pt_irq_bind->u.pci.device;
-        intx = pt_irq_bind->u.pci.intx;
-        guest_gsi = hvm_pci_intx_gsi(device, intx);
-        link = hvm_pci_intx_link(device, intx);
+        unsigned int bus = pt_irq_bind->u.pci.bus;
+        unsigned int device = pt_irq_bind->u.pci.device;
+        unsigned int intx = pt_irq_bind->u.pci.intx;
+        unsigned int guest_gsi = hvm_pci_intx_gsi(device, intx);
+        unsigned int link = hvm_pci_intx_link(device, intx);
+        struct dev_intx_gsi_link *digl = xmalloc(struct dev_intx_gsi_link);
+        struct hvm_girq_dpci_mapping *girq =
+            xmalloc(struct hvm_girq_dpci_mapping);
+
+        if ( !digl || !girq )
+        {
+            spin_unlock(&d->event_lock);
+            xfree(girq);
+            xfree(digl);
+            return -ENOMEM;
+        }
+
         hvm_irq_dpci->link_cnt[link]++;
 
-        digl = xmalloc(struct dev_intx_gsi_link);
-        if ( !digl )
-        {
-            spin_unlock(&d->event_lock);
-            return -ENOMEM;
-        }
-
-        girq = xmalloc(struct hvm_girq_dpci_mapping);
-        if ( !girq )
-        {
-            xfree(digl);
-            spin_unlock(&d->event_lock);
-            return -ENOMEM;
-        }
-
+        digl->bus = bus;
         digl->device = device;
         digl->intx = intx;
-        digl->gsi = guest_gsi;
-        digl->link = link;
         list_add_tail(&digl->list, &pirq_dpci->digl_list);
 
+        girq->bus = bus;
         girq->device = device;
         girq->intx = intx;
         girq->machine_gsi = pirq;
@@ -233,6 +376,7 @@ int pt_irq_create_bind(
         {
             unsigned int share;
 
+            /* MUST be set, as the pirq_dpci can be re-used. */
             pirq_dpci->dom = d;
             if ( pt_irq_bind->irq_type == PT_IRQ_TYPE_MSI_TRANSLATE )
             {
@@ -259,14 +403,18 @@ int pt_irq_create_bind(
             {
                 if ( pt_irq_need_timer(pirq_dpci->flags) )
                     kill_timer(&pirq_dpci->timer);
+                /*
+                 * There is no path for __do_IRQ to schedule softirq as
+                 * IRQ_GUEST is not set. As such we can reset 'dom' directly.
+                 */
                 pirq_dpci->dom = NULL;
                 list_del(&girq->list);
-                xfree(girq);
                 list_del(&digl->list);
                 hvm_irq_dpci->link_cnt[link]--;
                 pirq_dpci->flags = 0;
                 pirq_cleanup_check(info, d);
                 spin_unlock(&d->event_lock);
+                xfree(girq);
                 xfree(digl);
                 return rc;
             }
@@ -276,33 +424,50 @@ int pt_irq_create_bind(
 
         if ( iommu_verbose )
             dprintk(XENLOG_G_INFO,
-                    "d%d: bind: m_gsi=%u g_gsi=%u device=%u intx=%u\n",
-                    d->domain_id, pirq, guest_gsi, device, intx);
+                    "d%d: bind: m_gsi=%u g_gsi=%u dev=%02x.%02x.%u intx=%u\n",
+                    d->domain_id, pirq, guest_gsi, bus,
+                    PCI_SLOT(device), PCI_FUNC(device), intx);
+        break;
     }
+
+    default:
+        spin_unlock(&d->event_lock);
+        return -EOPNOTSUPP;
+    }
+
     return 0;
 }
 
 int pt_irq_destroy_bind(
     struct domain *d, xen_domctl_bind_pt_irq_t *pt_irq_bind)
 {
-    struct hvm_irq_dpci *hvm_irq_dpci = NULL;
+    struct hvm_irq_dpci *hvm_irq_dpci;
     struct hvm_pirq_dpci *pirq_dpci;
-    uint32_t machine_gsi, guest_gsi;
-    uint32_t device, intx, link;
-    struct dev_intx_gsi_link *digl, *tmp;
-    struct hvm_girq_dpci_mapping *girq;
+    unsigned int machine_gsi = pt_irq_bind->machine_irq;
     struct pirq *pirq;
+    const char *what = NULL;
 
-    machine_gsi = pt_irq_bind->machine_irq;
-    device = pt_irq_bind->u.pci.device;
-    intx = pt_irq_bind->u.pci.intx;
-    guest_gsi = hvm_pci_intx_gsi(device, intx);
-    link = hvm_pci_intx_link(device, intx);
+    switch ( pt_irq_bind->irq_type )
+    {
+    case PT_IRQ_TYPE_PCI:
+    case PT_IRQ_TYPE_MSI_TRANSLATE:
+        if ( iommu_verbose )
+        {
+            unsigned int device = pt_irq_bind->u.pci.device;
+            unsigned int intx = pt_irq_bind->u.pci.intx;
 
-    if ( iommu_verbose )
-        dprintk(XENLOG_G_INFO,
-                "d%d: unbind: m_gsi=%u g_gsi=%u device=%u intx=%u\n",
-                d->domain_id, machine_gsi, guest_gsi, device, intx);
+            dprintk(XENLOG_G_INFO,
+                    "d%d: unbind: m_gsi=%u g_gsi=%u dev=%02x:%02x.%u intx=%u\n",
+                    d->domain_id, machine_gsi, hvm_pci_intx_gsi(device, intx),
+                    pt_irq_bind->u.pci.bus,
+                    PCI_SLOT(device), PCI_FUNC(device), intx);
+        }
+        break;
+    case PT_IRQ_TYPE_MSI:
+        break;
+    default:
+        return -EOPNOTSUPP;
+    }
 
     spin_lock(&d->event_lock);
 
@@ -314,53 +479,88 @@ int pt_irq_destroy_bind(
         return -EINVAL;
     }
 
-    hvm_irq_dpci->link_cnt[link]--;
-
-    list_for_each_entry ( girq, &hvm_irq_dpci->girq[guest_gsi], list )
-    {
-        if ( girq->machine_gsi == machine_gsi )
-        {
-                list_del(&girq->list);
-                xfree(girq);
-                break;
-        }
-    }
-
     pirq = pirq_info(d, machine_gsi);
     pirq_dpci = pirq_dpci(pirq);
 
-    /* clear the mirq info */
-    if ( pirq_dpci && (pirq_dpci->flags & HVM_IRQ_DPCI_MAPPED) )
+    if ( pt_irq_bind->irq_type != PT_IRQ_TYPE_MSI )
     {
-        list_for_each_entry_safe ( digl, tmp, &pirq_dpci->digl_list, list )
+        unsigned int bus = pt_irq_bind->u.pci.bus;
+        unsigned int device = pt_irq_bind->u.pci.device;
+        unsigned int intx = pt_irq_bind->u.pci.intx;
+        unsigned int guest_gsi = hvm_pci_intx_gsi(device, intx);
+        unsigned int link = hvm_pci_intx_link(device, intx);
+        struct hvm_girq_dpci_mapping *girq;
+        struct dev_intx_gsi_link *digl, *tmp;
+
+        list_for_each_entry ( girq, &hvm_irq_dpci->girq[guest_gsi], list )
         {
-            if ( digl->device == device &&
-                 digl->intx   == intx &&
-                 digl->link   == link &&
-                 digl->gsi    == guest_gsi )
+            if ( girq->bus         == bus &&
+                 girq->device      == device &&
+                 girq->intx        == intx &&
+                 girq->machine_gsi == machine_gsi )
             {
-                list_del(&digl->list);
-                xfree(digl);
+                list_del(&girq->list);
+                xfree(girq);
+                girq = NULL;
+                break;
             }
         }
 
-        if ( list_empty(&pirq_dpci->digl_list) )
+        if ( girq )
         {
-            pirq_guest_unbind(d, pirq);
-            msixtbl_pt_unregister(d, pirq);
-            if ( pt_irq_need_timer(pirq_dpci->flags) )
-                kill_timer(&pirq_dpci->timer);
-            pirq_dpci->dom   = NULL;
-            pirq_dpci->flags = 0;
-            pirq_cleanup_check(pirq, d);
+            spin_unlock(&d->event_lock);
+            return -EINVAL;
         }
+
+        hvm_irq_dpci->link_cnt[link]--;
+
+        /* clear the mirq info */
+        if ( pirq_dpci && (pirq_dpci->flags & HVM_IRQ_DPCI_MAPPED) )
+        {
+            list_for_each_entry_safe ( digl, tmp, &pirq_dpci->digl_list, list )
+            {
+                if ( digl->bus    == bus &&
+                     digl->device == device &&
+                     digl->intx   == intx )
+                {
+                    list_del(&digl->list);
+                    xfree(digl);
+                }
+            }
+            what = list_empty(&pirq_dpci->digl_list) ? "final" : "partial";
+        }
+        else
+            what = "bogus";
     }
+
+    if ( pirq_dpci && (pirq_dpci->flags & HVM_IRQ_DPCI_MAPPED) &&
+         list_empty(&pirq_dpci->digl_list) )
+    {
+        pirq_guest_unbind(d, pirq);
+        msixtbl_pt_unregister(d, pirq);
+        if ( pt_irq_need_timer(pirq_dpci->flags) )
+            kill_timer(&pirq_dpci->timer);
+        pirq_dpci->flags = 0;
+        /*
+         * See comment in pt_irq_create_bind's PT_IRQ_TYPE_MSI before the
+         * call to pt_pirq_softirq_reset.
+         */
+        pt_pirq_softirq_reset(pirq_dpci);
+
+        pirq_cleanup_check(pirq, d);
+    }
+
     spin_unlock(&d->event_lock);
 
-    if ( iommu_verbose )
+    if ( what && iommu_verbose )
+    {
+        unsigned int device = pt_irq_bind->u.pci.device;
+
         dprintk(XENLOG_G_INFO,
-                "d%d unmap: m_irq=%u device=%u intx=%u\n",
-                d->domain_id, machine_gsi, device, intx);
+                "d%d %s unmap: m_irq=%u dev=%02x:%02x.%u intx=%u\n",
+                d->domain_id, what, machine_gsi, pt_irq_bind->u.pci.bus,
+                PCI_SLOT(device), PCI_FUNC(device), pt_irq_bind->u.pci.intx);
+    }
 
     return 0;
 }
@@ -373,7 +573,12 @@ void pt_pirq_init(struct domain *d, struct hvm_pirq_dpci *dpci)
 
 bool_t pt_pirq_cleanup_check(struct hvm_pirq_dpci *dpci)
 {
-    return !dpci->flags;
+    if ( !dpci->flags && !pt_pirq_softirq_active(dpci) )
+    {
+        dpci->dom = NULL;
+        return 1;
+    }
+    return 0;
 }
 
 int pt_pirq_iterate(struct domain *d,
@@ -413,7 +618,7 @@ int hvm_do_IRQ_dpci(struct domain *d, struct pirq *pirq)
         return 0;
 
     pirq_dpci->masked = 1;
-    tasklet_schedule(&dpci->dirq_tasklet);
+    raise_softirq_for(pirq_dpci);
     return 1;
 }
 
@@ -467,48 +672,46 @@ void hvm_dpci_msi_eoi(struct domain *d, int vector)
     spin_unlock(&d->event_lock);
 }
 
-static void hvm_pci_msi_assert(
-    struct domain *d, struct hvm_pirq_dpci *pirq_dpci)
+static void hvm_dirq_assist(struct domain *d, struct hvm_pirq_dpci *pirq_dpci)
 {
-    struct pirq *pirq = dpci_pirq(pirq_dpci);
+    ASSERT(d->arch.hvm_domain.irq.dpci);
 
-    if ( hvm_domain_use_pirq(d, pirq) )
-        send_guest_pirq(d, pirq);
-    else
-        vmsi_deliver_pirq(d, pirq_dpci);
-}
-
-static int _hvm_dirq_assist(struct domain *d, struct hvm_pirq_dpci *pirq_dpci,
-                            void *arg)
-{
-    uint32_t device, intx;
-    struct dev_intx_gsi_link *digl;
-
+    spin_lock(&d->event_lock);
     if ( test_and_clear_bool(pirq_dpci->masked) )
     {
+        struct pirq *pirq = dpci_pirq(pirq_dpci);
+        const struct dev_intx_gsi_link *digl;
+
+        if ( hvm_domain_use_pirq(d, pirq) )
+        {
+            send_guest_pirq(d, pirq);
+
+            if ( pirq_dpci->flags & HVM_IRQ_DPCI_GUEST_MSI )
+            {
+                spin_unlock(&d->event_lock);
+                return;
+            }
+        }
+
         if ( pirq_dpci->flags & HVM_IRQ_DPCI_GUEST_MSI )
         {
-            hvm_pci_msi_assert(d, pirq_dpci);
-            return 0;
+            vmsi_deliver_pirq(d, pirq_dpci);
+            spin_unlock(&d->event_lock);
+            return;
         }
 
         list_for_each_entry ( digl, &pirq_dpci->digl_list, list )
         {
-            struct pirq *info = dpci_pirq(pirq_dpci);
-
-            device = digl->device;
-            intx = digl->intx;
-            if ( hvm_domain_use_pirq(d, info) )
-                send_guest_pirq(d, info);
-            else
-                hvm_pci_intx_assert(d, device, intx);
+            hvm_pci_intx_assert(d, digl->device, digl->intx);
             pirq_dpci->pending++;
+        }
 
-            if ( pirq_dpci->flags & HVM_IRQ_DPCI_TRANSLATE )
-            {
-                /* for translated MSI to INTx interrupt, eoi as early as possible */
-                __msi_pirq_eoi(pirq_dpci);
-            }
+        if ( pirq_dpci->flags & HVM_IRQ_DPCI_TRANSLATE )
+        {
+            /* for translated MSI to INTx interrupt, eoi as early as possible */
+            __msi_pirq_eoi(pirq_dpci);
+            spin_unlock(&d->event_lock);
+            return;
         }
 
         /*
@@ -518,37 +721,22 @@ static int _hvm_dirq_assist(struct domain *d, struct hvm_pirq_dpci *pirq_dpci,
          * guest will never deal with the irq, then the physical interrupt line
          * will never be deasserted.
          */
-        if ( pt_irq_need_timer(pirq_dpci->flags) )
-            set_timer(&pirq_dpci->timer, NOW() + PT_IRQ_TIME_OUT);
+        ASSERT(pt_irq_need_timer(pirq_dpci->flags));
+        set_timer(&pirq_dpci->timer, NOW() + PT_IRQ_TIME_OUT);
     }
-
-    return 0;
-}
-
-static void hvm_dirq_assist(unsigned long _d)
-{
-    struct domain *d = (struct domain *)_d;
-
-    ASSERT(d->arch.hvm_domain.irq.dpci);
-
-    spin_lock(&d->event_lock);
-    pt_pirq_iterate(d, _hvm_dirq_assist, NULL);
     spin_unlock(&d->event_lock);
 }
 
 static void __hvm_dpci_eoi(struct domain *d,
-                           struct hvm_girq_dpci_mapping *girq,
-                           union vioapic_redir_entry *ent)
+                           const struct hvm_girq_dpci_mapping *girq,
+                           const union vioapic_redir_entry *ent)
 {
-    uint32_t device, intx;
-    struct pirq *pirq;
+    struct pirq *pirq = pirq_info(d, girq->machine_gsi);
     struct hvm_pirq_dpci *pirq_dpci;
 
-    device = girq->device;
-    intx = girq->intx;
-    hvm_pci_intx_deassert(d, device, intx);
+    if ( !hvm_domain_use_pirq(d, pirq) )
+        hvm_pci_intx_deassert(d, girq->device, girq->intx);
 
-    pirq = pirq_info(d, girq->machine_gsi);
     pirq_dpci = pirq_dpci(pirq);
 
     /*
@@ -556,8 +744,8 @@ static void __hvm_dpci_eoi(struct domain *d,
      * since interrupt is still not EOIed
      */
     if ( --pirq_dpci->pending ||
-         ( ent && ent->fields.mask ) ||
-         ! pt_irq_need_timer(pirq_dpci->flags) )
+         (ent && ent->fields.mask) ||
+         !pt_irq_need_timer(pirq_dpci->flags) )
         return;
 
     stop_timer(&pirq_dpci->timer);
@@ -565,10 +753,10 @@ static void __hvm_dpci_eoi(struct domain *d,
 }
 
 void hvm_dpci_eoi(struct domain *d, unsigned int guest_gsi,
-                  union vioapic_redir_entry *ent)
+                  const union vioapic_redir_entry *ent)
 {
-    struct hvm_irq_dpci *hvm_irq_dpci;
-    struct hvm_girq_dpci_mapping *girq;
+    const struct hvm_irq_dpci *hvm_irq_dpci;
+    const struct hvm_girq_dpci_mapping *girq;
 
     if ( !iommu_enabled )
         return;
@@ -591,3 +779,83 @@ void hvm_dpci_eoi(struct domain *d, unsigned int guest_gsi,
 unlock:
     spin_unlock(&d->event_lock);
 }
+
+/*
+ * Note: 'pt_pirq_softirq_reset' can clear the STATE_SCHED before we get to
+ * doing it. If that is the case we let 'pt_pirq_softirq_reset' do ref-counting.
+ */
+static void dpci_softirq(void)
+{
+    unsigned int cpu = smp_processor_id();
+    LIST_HEAD(our_list);
+
+    local_irq_disable();
+    list_splice_init(&per_cpu(dpci_list, cpu), &our_list);
+    local_irq_enable();
+
+    while ( !list_empty(&our_list) )
+    {
+        struct hvm_pirq_dpci *pirq_dpci;
+        struct domain *d;
+
+        pirq_dpci = list_entry(our_list.next, struct hvm_pirq_dpci, softirq_list);
+        list_del(&pirq_dpci->softirq_list);
+
+        d = pirq_dpci->dom;
+        smp_mb(); /* 'd' MUST be saved before we set/clear the bits. */
+        if ( test_and_set_bit(STATE_RUN, &pirq_dpci->state) )
+            BUG();
+        /*
+         * The one who clears STATE_SCHED MUST refcount the domain.
+         */
+        if ( test_and_clear_bit(STATE_SCHED, &pirq_dpci->state) )
+        {
+            hvm_dirq_assist(d, pirq_dpci);
+            put_domain(d);
+        }
+        clear_bit(STATE_RUN, &pirq_dpci->state);
+    }
+}
+
+static int cpu_callback(
+    struct notifier_block *nfb, unsigned long action, void *hcpu)
+{
+    unsigned int cpu = (unsigned long)hcpu;
+
+    switch ( action )
+    {
+    case CPU_UP_PREPARE:
+        INIT_LIST_HEAD(&per_cpu(dpci_list, cpu));
+        break;
+    case CPU_UP_CANCELED:
+    case CPU_DEAD:
+        /*
+         * On CPU_DYING this callback is called (on the CPU that is dying)
+         * with an possible HVM_DPIC_SOFTIRQ pending - at which point we can
+         * clear out any outstanding domains (by the virtue of the idle loop
+         * calling the softirq later). In CPU_DEAD case the CPU is deaf and
+         * there are no pending softirqs for us to handle so we can chill.
+         */
+        ASSERT(list_empty(&per_cpu(dpci_list, cpu)));
+        break;
+    }
+
+    return NOTIFY_DONE;
+}
+
+static struct notifier_block cpu_nfb = {
+    .notifier_call = cpu_callback,
+};
+
+static int __init setup_dpci_softirq(void)
+{
+    unsigned int cpu;
+
+    for_each_online_cpu(cpu)
+        INIT_LIST_HEAD(&per_cpu(dpci_list, cpu));
+
+    open_softirq(HVM_DPCI_SOFTIRQ, dpci_softirq);
+    register_cpu_notifier(&cpu_nfb);
+    return 0;
+}
+__initcall(setup_dpci_softirq);

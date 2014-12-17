@@ -6,7 +6,11 @@
 #include <public/xen.h>
 #include <asm/processor.h>
 
+#ifdef CONFIG_ARM_64
+#define PADDR_BITS              48
+#else
 #define PADDR_BITS              40
+#endif
 #define PADDR_MASK              ((1ULL << PADDR_BITS)-1)
 
 #define VADDR_BITS              32
@@ -98,7 +102,7 @@
  * bits that's not in use in a given node type can be used as
  * extra software-defined bits. */
 
-typedef struct {
+typedef struct __packed {
     /* These are used in all kinds of entry. */
     unsigned long valid:1;      /* Valid mapping */
     unsigned long table:1;      /* == 1 in 4k map entries too */
@@ -114,8 +118,8 @@ typedef struct {
     unsigned long ng:1;         /* Not-Global */
 
     /* The base address must be appropriately aligned for Block entries */
-    unsigned long base:28;      /* Base address of block or next table */
-    unsigned long sbz:12;       /* Must be zero */
+    unsigned long long base:36; /* Base address of block or next table */
+    unsigned long sbz:4;        /* Must be zero */
 
     /* These seven bits are only used in Block entries and are ignored
      * in Table entries. */
@@ -130,11 +134,11 @@ typedef struct {
     unsigned long xnt:1;        /* eXecute-Never */
     unsigned long apt:2;        /* Access Permissions */
     unsigned long nst:1;        /* Not-Secure */
-} __attribute__((__packed__)) lpae_pt_t;
+} lpae_pt_t;
 
 /* The p2m tables have almost the same layout, but some of the permission
  * and cache-control bits are laid out differently (or missing) */
-typedef struct {
+typedef struct __packed {
     /* These are used in all kinds of entry. */
     unsigned long valid:1;      /* Valid mapping */
     unsigned long table:1;      /* == 1 in 4k map entries too */
@@ -149,8 +153,8 @@ typedef struct {
     unsigned long sbz4:1;
 
     /* The base address must be appropriately aligned for Block entries */
-    unsigned long base:28;      /* Base address of block or next table */
-    unsigned long sbz3:12;
+    unsigned long long base:36; /* Base address of block or next table */
+    unsigned long sbz3:4;
 
     /* These seven bits are only used in Block entries and are ignored
      * in Table entries. */
@@ -160,13 +164,13 @@ typedef struct {
     unsigned long type:4;       /* Ignore by hardware. Used to store p2m types */
 
     unsigned long sbz1:5;
-} __attribute__((__packed__)) lpae_p2m_t;
+} lpae_p2m_t;
 
 /*
  * Walk is the common bits of p2m and pt entries which are needed to
  * simply walk the table (e.g. for debug).
  */
-typedef struct {
+typedef struct __packed {
     /* These are used in all kinds of entry. */
     unsigned long valid:1;      /* Valid mapping */
     unsigned long table:1;      /* == 1 in 4k map entries too */
@@ -174,10 +178,10 @@ typedef struct {
     unsigned long pad2:10;
 
     /* The base address must be appropriately aligned for Block entries */
-    unsigned long base:28;      /* Base address of block or next table */
+    unsigned long long base:36; /* Base address of block or next table */
 
-    unsigned long pad1:24;
-} __attribute__((__packed__)) lpae_walk_t;
+    unsigned long pad1:16;
+} lpae_walk_t;
 
 typedef union {
     uint64_t bits;
@@ -189,7 +193,7 @@ typedef union {
 /* Standard entry type that we'll use to build Xen's own pagetables.
  * We put the same permissions at every level, because they're ignored
  * by the walker in non-leaf entries. */
-static inline lpae_t mfn_to_xen_entry(unsigned long mfn)
+static inline lpae_t mfn_to_xen_entry(unsigned long mfn, unsigned attr)
 {
     paddr_t pa = ((paddr_t) mfn) << PAGE_SHIFT;
     lpae_t e = (lpae_t) {
@@ -197,10 +201,9 @@ static inline lpae_t mfn_to_xen_entry(unsigned long mfn)
             .xn = 1,              /* No need to execute outside .text */
             .ng = 1,              /* Makes TLB flushes easier */
             .af = 1,              /* No need for access tracking */
-            .sh = LPAE_SH_OUTER,  /* Xen mappings are globally coherent */
             .ns = 1,              /* Hyp mode is in the non-secure world */
             .user = 1,            /* See below */
-            .ai = WRITEALLOC,
+            .ai = attr,
             .table = 0,           /* Set to 1 for links and 4k maps */
             .valid = 1,           /* Mappings are present */
         }};;
@@ -208,6 +211,38 @@ static inline lpae_t mfn_to_xen_entry(unsigned long mfn)
      * don't seem to work otherwise, and since we never run on Xen
      * pagetables un User mode it's OK.  If this changes, remember
      * to update the hard-coded values in head.S too */
+
+    switch ( attr )
+    {
+    case BUFFERABLE:
+        /*
+         * ARM ARM: Overlaying the shareability attribute (DDI
+         * 0406C.b B3-1376 to 1377)
+         *
+         * A memory region with a resultant memory type attribute of Normal,
+         * and a resultant cacheability attribute of Inner Non-cacheable,
+         * Outer Non-cacheable, must have a resultant shareability attribute
+         * of Outer Shareable, otherwise shareability is UNPREDICTABLE.
+         *
+         * On ARMv8 sharability is ignored and explicitly treated as Outer
+         * Shareable for Normal Inner Non_cacheable, Outer Non-cacheable.
+         */
+        e.pt.sh = LPAE_SH_OUTER;
+        break;
+    case UNCACHED:
+    case DEV_SHARED:
+        /* Shareability is ignored for non-Normal memory, Outer is as
+         * good as anything.
+         *
+         * On ARMv8 sharability is ignored and explicitly treated as Outer
+         * Shareable for any device memory type.
+         */
+        e.pt.sh = LPAE_SH_OUTER;
+        break;
+    default:
+        e.pt.sh = LPAE_SH_INNER;  /* Xen mappings are SMP coherent */
+        break;
+    }
 
     ASSERT(!(pa & ~PAGE_MASK));
     ASSERT(!(pa & ~PADDR_MASK));
@@ -230,38 +265,146 @@ static inline lpae_t mfn_to_xen_entry(unsigned long mfn)
 /* Actual cacheline size on the boot CPU. */
 extern size_t cacheline_bytes;
 
-/* Function for flushing medium-sized areas.
+/* Functions for flushing medium-sized areas.
  * if 'range' is large enough we might want to use model-specific
  * full-cache flushes. */
-static inline void clean_xen_dcache_va_range(void *p, unsigned long size)
+
+static inline int invalidate_dcache_va_range(const void *p, unsigned long size)
 {
-    void *end;
-    dsb();           /* So the CPU issues all writes to the range */
-    for ( end = p + size; p < end; p += cacheline_bytes )
-        asm volatile (__clean_xen_dcache_one(0) : : "r" (p));
-    dsb();           /* So we know the flushes happen before continuing */
+    size_t off;
+    const void *end = p + size;
+
+    dsb(sy);           /* So the CPU issues all writes to the range */
+
+    off = (unsigned long)p % cacheline_bytes;
+    if ( off )
+    {
+        p -= off;
+        asm volatile (__clean_and_invalidate_dcache_one(0) : : "r" (p));
+        p += cacheline_bytes;
+        size -= cacheline_bytes - off;
+    }
+    off = (unsigned long)end % cacheline_bytes;
+    if ( off )
+    {
+        end -= off;
+        size -= off;
+        asm volatile (__clean_and_invalidate_dcache_one(0) : : "r" (end));
+    }
+
+    for ( ; p < end; p += cacheline_bytes )
+        asm volatile (__invalidate_dcache_one(0) : : "r" (p));
+
+    dsb(sy);           /* So we know the flushes happen before continuing */
+
+    return 0;
 }
 
-/* Macro for flushing a single small item.  The predicate is always
+static inline int clean_dcache_va_range(const void *p, unsigned long size)
+{
+    const void *end;
+    dsb(sy);           /* So the CPU issues all writes to the range */
+    for ( end = p + size; p < end; p += cacheline_bytes )
+        asm volatile (__clean_dcache_one(0) : : "r" (p));
+    dsb(sy);           /* So we know the flushes happen before continuing */
+    /* ARM callers assume that dcache_* functions cannot fail. */
+    return 0;
+}
+
+static inline int clean_and_invalidate_dcache_va_range
+    (const void *p, unsigned long size)
+{
+    const void *end;
+    dsb(sy);         /* So the CPU issues all writes to the range */
+    for ( end = p + size; p < end; p += cacheline_bytes )
+        asm volatile (__clean_and_invalidate_dcache_one(0) : : "r" (p));
+    dsb(sy);         /* So we know the flushes happen before continuing */
+    /* ARM callers assume that dcache_* functions cannot fail. */
+    return 0;
+}
+
+/* Macros for flushing a single small item.  The predicate is always
  * compile-time constant so this will compile down to 3 instructions in
  * the common case. */
-#define clean_xen_dcache(x) do {                                        \
+#define clean_dcache(x) do {                                            \
     typeof(x) *_p = &(x);                                               \
     if ( sizeof(x) > MIN_CACHELINE_BYTES || sizeof(x) > alignof(x) )    \
-        clean_xen_dcache_va_range(_p, sizeof(x));                       \
+        clean_dcache_va_range(_p, sizeof(x));                           \
     else                                                                \
         asm volatile (                                                  \
             "dsb sy;"   /* Finish all earlier writes */                 \
-            __clean_xen_dcache_one(0)                                   \
+            __clean_dcache_one(0)                                       \
             "dsb sy;"   /* Finish flush before continuing */            \
             : : "r" (_p), "m" (*_p));                                   \
 } while (0)
 
+#define clean_and_invalidate_dcache(x) do {                             \
+    typeof(x) *_p = &(x);                                               \
+    if ( sizeof(x) > MIN_CACHELINE_BYTES || sizeof(x) > alignof(x) )    \
+        clean_and_invalidate_dcache_va_range(_p, sizeof(x));            \
+    else                                                                \
+        asm volatile (                                                  \
+            "dsb sy;"   /* Finish all earlier writes */                 \
+            __clean_and_invalidate_dcache_one(0)                        \
+            "dsb sy;"   /* Finish flush before continuing */            \
+            : : "r" (_p), "m" (*_p));                                   \
+} while (0)
+
+/*
+ * Flush a range of VA's hypervisor mappings from the data TLB of the
+ * local processor. This is not sufficient when changing code mappings
+ * or for self modifying code.
+ */
+static inline void flush_xen_data_tlb_range_va_local(unsigned long va,
+                                                     unsigned long size)
+{
+    unsigned long end = va + size;
+    dsb(sy); /* Ensure preceding are visible */
+    while ( va < end )
+    {
+        __flush_xen_data_tlb_one_local(va);
+        va += PAGE_SIZE;
+    }
+    dsb(sy); /* Ensure completion of the TLB flush */
+    isb();
+}
+
+/*
+ * Flush a range of VA's hypervisor mappings from the data TLB of all
+ * processors in the inner-shareable domain. This is not sufficient
+ * when changing code mappings or for self modifying code.
+ */
+static inline void flush_xen_data_tlb_range_va(unsigned long va,
+                                               unsigned long size)
+{
+    unsigned long end = va + size;
+    dsb(sy); /* Ensure preceding are visible */
+    while ( va < end )
+    {
+        __flush_xen_data_tlb_one(va);
+        va += PAGE_SIZE;
+    }
+    dsb(sy); /* Ensure completion of the TLB flush */
+    isb();
+}
+
 /* Flush the dcache for an entire page. */
 void flush_page_to_ram(unsigned long mfn);
 
-/* Print a walk of an arbitrary page table */
-void dump_pt_walk(lpae_t *table, paddr_t addr);
+/*
+ * Print a walk of a page table or p2m
+ *
+ * ttbr is the base address register (TTBR0_EL2 or VTTBR_EL2)
+ * addr is the PA or IPA to translate
+ * root_level is the starting level of the page table
+ *   (e.g. TCR_EL2.SL0 or VTCR_EL2.SL0 )
+ * nr_root_tables is the number of concatenated tables at the root.
+ *   this can only be != 1 for P2M walks starting at the first or
+ *   subsequent level.
+ */
+void dump_pt_walk(paddr_t ttbr, paddr_t addr,
+                  unsigned int root_level,
+                  unsigned int nr_root_tables);
 
 /* Print a walk of the hypervisor's page tables for a virtual addr. */
 extern void dump_hyp_walk(vaddr_t addr);
@@ -305,7 +448,7 @@ static inline int gva_to_ipa(vaddr_t va, paddr_t *paddr)
  */
 
 #define LPAE_SHIFT      9
-#define LPAE_ENTRIES    (1u << LPAE_SHIFT)
+#define LPAE_ENTRIES    (_AC(1,U) << LPAE_SHIFT)
 #define LPAE_ENTRY_MASK (LPAE_ENTRIES - 1)
 
 #define THIRD_SHIFT    (PAGE_SHIFT)
@@ -332,8 +475,6 @@ static inline int gva_to_ipa(vaddr_t va, paddr_t *paddr)
 #define second_table_offset(va) TABLE_OFFSET(second_linear_offset(va))
 #define third_table_offset(va)  TABLE_OFFSET(third_linear_offset(va))
 #define zeroeth_table_offset(va)  TABLE_OFFSET(zeroeth_linear_offset(va))
-
-#define clear_page(page) memset((void *)(page), 0, PAGE_SIZE)
 
 #define PAGE_ALIGN(x) (((x) + PAGE_SIZE - 1) & PAGE_MASK)
 

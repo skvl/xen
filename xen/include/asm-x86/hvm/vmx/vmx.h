@@ -38,14 +38,14 @@ typedef union {
         ipat        :   1,  /* bit 6 - Ignore PAT memory type */
         sp          :   1,  /* bit 7 - Is this a superpage? */
         rsvd1       :   2,  /* bits 9:8 - Reserved for future use */
-        avail1      :   1,  /* bit 10 - Software available 1 */
-        rsvd2_snp   :   1,  /* bit 11 - Used for VT-d snoop control
-                               in shared EPT/VT-d usage */
+        recalc      :   1,  /* bit 10 - Software available 1 */
+        snp         :   1,  /* bit 11 - VT-d snoop control in shared
+                               EPT/VT-d usage */
         mfn         :   40, /* bits 51:12 - Machine physical frame number */
         sa_p2mt     :   6,  /* bits 57:52 - Software available 2 */
         access      :   4,  /* bits 61:58 - p2m_access_t */
-        rsvd3_tm    :   1,  /* bit 62 - Used for VT-d transient-mapping
-                               hint in shared EPT/VT-d usage */
+        tm          :   1,  /* bit 62 - VT-d transient-mapping hint in
+                               shared EPT/VT-d usage */
         avail3      :   1;  /* bit 63 - Software available 3 */
     };
     u64 epte;
@@ -91,7 +91,7 @@ typedef enum {
 void vmx_asm_vmexit_handler(struct cpu_user_regs);
 void vmx_asm_do_vmentry(void);
 void vmx_intr_assist(void);
-void vmx_do_resume(struct vcpu *);
+void noreturn vmx_do_resume(struct vcpu *);
 void vmx_vlapic_msr_changed(struct vcpu *v);
 void vmx_realmode(struct cpu_user_regs *regs);
 void vmx_update_debug_state(struct vcpu *v);
@@ -421,11 +421,11 @@ static inline void __invept(unsigned long type, u64 eptp, u64 gpa)
 
 static inline void __invvpid(unsigned long type, u16 vpid, u64 gva)
 {
-    struct {
+    struct __packed {
         u64 vpid:16;
         u64 rsvd:48;
         u64 gva;
-    } __attribute__ ((packed)) operand = {vpid, 0, gva};
+    }  operand = {vpid, 0, gva};
 
     /* Fix up #UD exceptions which occur when TLBs are flushed before VMXON. */
     asm volatile ( "1: "
@@ -520,6 +520,7 @@ int ept_p2m_init(struct p2m_domain *p2m);
 void ept_p2m_uninit(struct p2m_domain *p2m);
 
 void ept_walk_table(struct domain *d, unsigned long gfn);
+bool_t ept_handle_misconfig(uint64_t gpa);
 void setup_ept_dump(void);
 
 void update_guest_eip(void);

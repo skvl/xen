@@ -175,7 +175,7 @@ static int paging_free_log_dirty_bitmap(struct domain *d, int rc)
             {
                 d->arch.paging.preempt.log_dirty.i3 = i3 + 1;
                 d->arch.paging.preempt.log_dirty.i4 = i4;
-                rc = -EAGAIN;
+                rc = -ERESTART;
                 break;
             }
         }
@@ -190,7 +190,7 @@ static int paging_free_log_dirty_bitmap(struct domain *d, int rc)
         {
             d->arch.paging.preempt.log_dirty.i3 = 0;
             d->arch.paging.preempt.log_dirty.i4 = i4 + 1;
-            rc = -EAGAIN;
+            rc = -ERESTART;
             break;
         }
     }
@@ -223,6 +223,15 @@ int paging_log_dirty_enable(struct domain *d, bool_t log_global)
 {
     int ret;
 
+    if ( need_iommu(d) && log_global )
+    {
+        /*
+         * Refuse to turn on global log-dirty mode
+         * if the domain is using the IOMMU.
+         */
+        return -EINVAL;
+    }
+
     if ( paging_mode_log_dirty(d) )
         return -EINVAL;
 
@@ -249,7 +258,7 @@ static int paging_log_dirty_disable(struct domain *d, bool_t resuming)
     }
 
     ret = paging_free_log_dirty_bitmap(d, ret);
-    if ( ret == -EAGAIN )
+    if ( ret == -ERESTART )
         return ret;
 
     domain_unpause(d);
@@ -487,7 +496,7 @@ static int paging_log_dirty_op(struct domain *d,
             {
                 d->arch.paging.preempt.log_dirty.i4 = i4;
                 d->arch.paging.preempt.log_dirty.i3 = i3 + 1;
-                rv = -EAGAIN;
+                rv = -ERESTART;
                 break;
             }
         }
@@ -499,7 +508,7 @@ static int paging_log_dirty_op(struct domain *d,
         {
             d->arch.paging.preempt.log_dirty.i4 = i4 + 1;
             d->arch.paging.preempt.log_dirty.i3 = 0;
-            rv = -EAGAIN;
+            rv = -ERESTART;
         }
         if ( rv )
             break;
@@ -528,7 +537,7 @@ static int paging_log_dirty_op(struct domain *d,
     if ( rv )
     {
         /* Never leave the domain paused on real errors. */
-        ASSERT(rv == -EAGAIN);
+        ASSERT(rv == -ERESTART);
         return rv;
     }
 
@@ -582,12 +591,8 @@ void paging_log_dirty_range(struct domain *d,
     p2m_lock(p2m);
 
     for ( i = 0, pfn = begin_pfn; pfn < begin_pfn + nr; i++, pfn++ )
-    {
-        p2m_type_t pt;
-        pt = p2m_change_type(d, pfn, p2m_ram_rw, p2m_ram_logdirty);
-        if ( pt == p2m_ram_rw )
+        if ( !p2m_change_type_one(d, pfn, p2m_ram_rw, p2m_ram_logdirty) )
             dirty_bitmap[i >> 3] |= (1 << (i & 7));
-    }
 
     p2m_unlock(p2m);
 
@@ -684,9 +689,8 @@ int paging_domctl(struct domain *d, xen_domctl_shadow_op_t *sc,
             sc->op != XEN_DOMCTL_SHADOW_OP_GET_ALLOCATION) )
     {
         printk(XENLOG_G_DEBUG
-               "d%d:v%d: Paging op %#x on Dom%u with unfinished prior op %#x by Dom%u\n",
-               current->domain->domain_id, current->vcpu_id,
-               sc->op, d->domain_id, d->arch.paging.preempt.op,
+               "%pv: Paging op %#x on Dom%u with unfinished prior op %#x by Dom%u\n",
+               current, sc->op, d->domain_id, d->arch.paging.preempt.op,
                d->arch.paging.preempt.dom
                ? d->arch.paging.preempt.dom->domain_id : DOMID_INVALID);
         return -EBUSY;
@@ -711,8 +715,6 @@ int paging_domctl(struct domain *d, xen_domctl_shadow_op_t *sc,
             break;
         /* Else fall through... */
     case XEN_DOMCTL_SHADOW_OP_ENABLE_LOGDIRTY:
-        if ( hap_enabled(d) )
-            hap_logdirty_init(d);
         return paging_log_dirty_enable(d, 1);
 
     case XEN_DOMCTL_SHADOW_OP_OFF:
@@ -760,12 +762,12 @@ long paging_domctl_continuation(XEN_GUEST_HANDLE_PARAM(xen_domctl_t) u_domctl)
             domctl_lock_release();
         }
         else
-            ret = -EAGAIN;
+            ret = -ERESTART;
     }
 
     rcu_unlock_domain(d);
 
-    if ( ret == -EAGAIN )
+    if ( ret == -ERESTART )
         ret = hypercall_create_continuation(__HYPERVISOR_arch_1,
                                             "h", u_domctl);
     else if ( __copy_field_to_guest(u_domctl, &op, u.shadow_op) )
@@ -786,7 +788,7 @@ int paging_teardown(struct domain *d)
 
     /* clean up log dirty resources. */
     rc = paging_free_log_dirty_bitmap(d, 0);
-    if ( rc == -EAGAIN )
+    if ( rc == -ERESTART )
         return rc;
 
     /* Move populate-on-demand cache back to domain_list for destruction */
@@ -893,18 +895,15 @@ void paging_update_nestedmode(struct vcpu *v)
 }
 
 void paging_write_p2m_entry(struct p2m_domain *p2m, unsigned long gfn,
-                            l1_pgentry_t *p, mfn_t table_mfn,
-                            l1_pgentry_t new, unsigned int level)
+                            l1_pgentry_t *p, l1_pgentry_t new,
+                            unsigned int level)
 {
     struct domain *d = p2m->domain;
     struct vcpu *v = current;
     if ( v->domain != d )
         v = d->vcpu ? d->vcpu[0] : NULL;
     if ( likely(v && paging_mode_enabled(d) && paging_get_hostmode(v) != NULL) )
-    {
-        return paging_get_hostmode(v)->write_p2m_entry(v, gfn, p, table_mfn,
-                                                       new, level);
-    }
+        paging_get_hostmode(v)->write_p2m_entry(d, gfn, p, new, level);
     else
         safe_write_pte(p, new);
 }

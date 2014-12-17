@@ -29,7 +29,6 @@
 #include <mini-os/events.h>
 #include <mini-os/wait.h>
 #include <sys/mman.h>
-#include <errno.h>
 
 #include <xen/memory.h>
 #include <unistd.h>
@@ -88,7 +87,7 @@ static int minios_privcmd_hypercall(xc_interface *xch, xc_osdep_handle h, privcm
     int i, ret;
 
     call.op = hypercall->op;
-    for (i = 0; i < sizeof(hypercall->arg) / sizeof(*hypercall->arg); i++)
+    for (i = 0; i < ARRAY_SIZE(hypercall->arg); i++)
 	call.args[i] = hypercall->arg[i];
 
     ret = HYPERVISOR_multicall(&call, 1);
@@ -350,7 +349,7 @@ static int minios_evtchn_unbind(xc_evtchn *xce, xc_osdep_handle h, evtchn_port_t
         }
     }
     printf("Warning: couldn't find port %"PRId32" for xc handle %x\n", port, fd);
-    errno = -EINVAL;
+    errno = EINVAL;
     return -1;
 }
 

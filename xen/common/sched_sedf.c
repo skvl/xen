@@ -138,18 +138,6 @@ static inline int extraq_on(struct vcpu *d, int i)
             (EXTRALIST(d,i)->next != EXTRALIST(d,i)));
 }
 
-static inline void extraq_add_head(struct vcpu *d, int i)
-{
-    list_add(EXTRALIST(d,i), EXTRAQ(d->processor,i));
-    ASSERT(extraq_on(d, i));
-}
-
-static inline void extraq_add_tail(struct vcpu *d, int i)
-{
-    list_add_tail(EXTRALIST(d,i), EXTRAQ(d->processor,i));
-    ASSERT(extraq_on(d, i));
-}
-
 static inline void extraq_del(struct vcpu *d, int i)
 {
     struct list_head *list = EXTRALIST(d,i);
@@ -396,7 +384,7 @@ static int sedf_pick_cpu(const struct scheduler *ops, struct vcpu *v)
     cpumask_t *online;
 
     online = cpupool_scheduler_cpumask(v->domain->cpupool);
-    cpumask_and(&online_affinity, v->cpu_affinity, online);
+    cpumask_and(&online_affinity, v->cpu_hard_affinity, online);
     return cpumask_cycle(v->vcpu_id % cpumask_weight(&online_affinity) - 1,
                          &online_affinity);
 }

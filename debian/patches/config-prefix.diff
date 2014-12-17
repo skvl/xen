@@ -1,57 +1,47 @@
-From ec5aa476dc815f4716f55dd0573d5821edc9647d Mon Sep 17 00:00:00 2001
+From 8a804fe6b91d895d043656a0737f1debfe9819f8 Mon Sep 17 00:00:00 2001
 From: Bastian Blank <waldi@debian.org>
 Date: Sat, 5 Jul 2014 11:46:45 +0200
 Subject: config-prefix.diff
 
 Patch-Name: config-prefix.diff
 ---
- Config.mk        |  2 +-
- config/StdGNU.mk | 11 ++++++++---
- 2 files changed, 9 insertions(+), 4 deletions(-)
+ Config.mk          | 2 +-
+ config/Paths.mk.in | 5 +++--
+ 2 files changed, 4 insertions(+), 3 deletions(-)
 
 diff --git a/Config.mk b/Config.mk
-index c44853f..df3a853 100644
+index a53cfb5..2e84ee1 100644
 --- a/Config.mk
 +++ b/Config.mk
-@@ -84,7 +84,7 @@ EXTRA_LIB += $(EXTRA_PREFIX)/lib
+@@ -75,7 +75,7 @@ EXTRA_LIB += $(EXTRA_PREFIX)/lib
  endif
  
  PYTHON      ?= python
 -PYTHON_PREFIX_ARG ?= --prefix="$(PREFIX)"
-+PYTHON_PREFIX_ARG ?= --home="$(PRIVATE_PREFIX)"
++PYTHON_PREFIX_ARG ?= --home="$(LIBEXEC)"
  # The above requires that PREFIX contains *no spaces*. This variable is here
  # to permit the user to set PYTHON_PREFIX_ARG to '' to workaround this bug:
  #  https://bugs.launchpad.net/ubuntu/+bug/362570
-diff --git a/config/StdGNU.mk b/config/StdGNU.mk
-index 25fc594..0f1776d 100644
---- a/config/StdGNU.mk
-+++ b/config/StdGNU.mk
-@@ -1,3 +1,5 @@
-+include /usr/share/dpkg/architecture.mk
-+
- AS         = $(CROSS_COMPILE)as
- LD         = $(CROSS_COMPILE)ld
- ifeq ($(clang),y)
-@@ -30,16 +32,19 @@ INSTALL_PROG = $(INSTALL) -m0755 -p
- PREFIX ?= /usr
- BINDIR = $(PREFIX)/bin
- INCLUDEDIR = $(PREFIX)/include
--LIBEXEC = $(PREFIX)/lib/xen/bin
-+LIBDIR = $(PREFIX)/lib/$(DEB_HOST_MULTIARCH)
- SHAREDIR = $(PREFIX)/share
- MANDIR = $(SHAREDIR)/man
- MAN1DIR = $(MANDIR)/man1
- MAN8DIR = $(MANDIR)/man8
- SBINDIR = $(PREFIX)/sbin
--XENFIRMWAREDIR = $(PREFIX)/lib/xen/boot
+diff --git a/config/Paths.mk.in b/config/Paths.mk.in
+index fe10f76..c3b9200 100644
+--- a/config/Paths.mk.in
++++ b/config/Paths.mk.in
+@@ -13,6 +13,7 @@
+ # http://wiki.xen.org/wiki/Category:Host_Configuration#System_wide_xen_configuration
  
--PRIVATE_PREFIX = $(LIBDIR)/xen
-+PRIVATE_PREFIX = $(PREFIX)/lib/xen-$(XEN_VERSION)
- PRIVATE_BINDIR = $(PRIVATE_PREFIX)/bin
-+PRIVATE_LIBDIR = $(PRIVATE_PREFIX)/lib
-+
-+LIBEXEC = $(PRIVATE_BINDIR)
-+XENFIRMWAREDIR = $(PRIVATE_PREFIX)/boot
+ PACKAGE_TARNAME          := @PACKAGE_TARNAME@
++PACKAGE_VERSION          := @PACKAGE_VERSION@
+ prefix                   := @prefix@
+ bindir                   := @bindir@
+ sbindir                  := @sbindir@
+@@ -33,8 +34,8 @@ PREFIX                   := $(prefix)
  
- CONFIG_DIR = /etc
- XEN_LOCK_DIR = /var/lock
+ SBINDIR                  := $(sbindir)
+ BINDIR                   := $(bindir)
+-LIBEXEC                  := $(libexecdir)/$(PACKAGE_TARNAME)
+-LIBEXEC_BIN              := @LIBEXEC_BIN@
++LIBEXEC                  := $(libexecdir)/$(PACKAGE_TARNAME)-$(PACKAGE_VERSION)
++LIBEXEC_BIN              := $(LIBEXEC)/bin
+ LIBEXEC_LIB              := $(LIBEXEC)/lib
+ LIBEXEC_INC              := $(LIBEXEC)/include
+ 

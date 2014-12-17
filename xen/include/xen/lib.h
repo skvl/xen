@@ -8,7 +8,7 @@
 #include <xen/string.h>
 #include <asm/bug.h>
 
-void __bug(char *file, int line) __attribute__((noreturn));
+void noreturn __bug(char *file, int line);
 void __warn(char *file, int line);
 
 #define BUG_ON(p)  do { if (unlikely(p)) BUG();  } while (0)
@@ -75,7 +75,8 @@ int parse_bool(const char *s);
 /*#define DEBUG_TRACE_DUMP*/
 #ifdef DEBUG_TRACE_DUMP
 extern void debugtrace_dump(void);
-extern void debugtrace_printk(const char *fmt, ...);
+extern void debugtrace_printk(const char *fmt, ...)
+    __attribute__ ((format (printf, 1, 2)));
 #else
 #define debugtrace_dump()          ((void)0)
 #define debugtrace_printk(_f, ...) ((void)0)
@@ -87,7 +88,7 @@ extern void printk(const char *format, ...)
     __attribute__ ((format (printf, 1, 2)));
 extern void guest_printk(const struct domain *d, const char *format, ...)
     __attribute__ ((format (printf, 2, 3)));
-extern void panic(const char *format, ...)
+extern void noreturn panic(const char *format, ...)
     __attribute__ ((format (printf, 1, 2)));
 extern long vm_assist(struct domain *, unsigned int, unsigned int);
 extern int __printk_ratelimit(int ratelimit_ms, int ratelimit_burst);
@@ -104,6 +105,10 @@ extern int scnprintf(char * buf, size_t size, const char * fmt, ...)
     __attribute__ ((format (printf, 3, 4)));
 extern int vscnprintf(char *buf, size_t size, const char *fmt, va_list args)
     __attribute__ ((format (printf, 3, 0)));
+extern int asprintf(char ** bufp, const char * fmt, ...)
+    __attribute__ ((format (printf, 2, 3)));
+extern int vasprintf(char ** bufp, const char * fmt, va_list args)
+    __attribute__ ((format (printf, 2, 0)));
 
 long simple_strtol(
     const char *cp,const char **endp, unsigned int base);

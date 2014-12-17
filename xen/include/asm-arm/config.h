@@ -37,6 +37,8 @@
 
 #define CONFIG_VIDEO 1
 
+#define CONFIG_IRQ_HAS_MULTIPLE_ACTION 1
+
 #define OPT_CONSOLE_STR "dtuart"
 
 #ifdef MAX_PHYS_CPUS
@@ -124,7 +126,12 @@
 #define CONFIG_SEPARATE_XENHEAP 1
 
 #define FRAMETABLE_VIRT_START  _AT(vaddr_t,0x02000000)
-#define VMAP_VIRT_START  _AT(vaddr_t,0x10000000)
+#define FRAMETABLE_SIZE        MB(128-32)
+#define FRAMETABLE_NR          (FRAMETABLE_SIZE / sizeof(*frame_table))
+#define FRAMETABLE_VIRT_END    (FRAMETABLE_VIRT_START + FRAMETABLE_SIZE - 1)
+
+#define VMAP_VIRT_START        _AT(vaddr_t,0x10000000)
+
 #define XENHEAP_VIRT_START     _AT(vaddr_t,0x40000000)
 #define XENHEAP_VIRT_END       _AT(vaddr_t,0x7fffffff)
 #define DOMHEAP_VIRT_START     _AT(vaddr_t,0x80000000)
@@ -147,13 +154,15 @@
 #define VMAP_VIRT_END    (VMAP_VIRT_START + GB(1) - 1)
 
 #define FRAMETABLE_VIRT_START  GB(32)
-#define FRAMETABLE_VIRT_END    (FRAMETABLE_VIRT_START + GB(32) - 1)
+#define FRAMETABLE_SIZE        GB(32)
+#define FRAMETABLE_NR          (FRAMETABLE_SIZE / sizeof(*frame_table))
+#define FRAMETABLE_VIRT_END    (FRAMETABLE_VIRT_START + FRAMETABLE_SIZE - 1)
 
 #define DIRECTMAP_VIRT_START   SLOT0(256)
 #define DIRECTMAP_SIZE         (SLOT0_ENTRY_SIZE * (265-256))
 #define DIRECTMAP_VIRT_END     (DIRECTMAP_VIRT_START + DIRECTMAP_SIZE - 1)
 
-#define XENHEAP_VIRT_START     DIRECTMAP_VIRT_START
+#define XENHEAP_VIRT_START     xenheap_virt_start
 
 #define HYPERVISOR_VIRT_END    DIRECTMAP_VIRT_END
 
@@ -191,17 +200,6 @@ extern unsigned long frametable_virt_end;
 
 #define watchdog_disable() ((void)0)
 #define watchdog_enable()  ((void)0)
-
-#ifdef __ASSEMBLY__
-/* Board-specific: regs base address for the GIC
- * Theses constants are only intend to be used in assembly file
- * because the DT is not yet parsed.
- */
-#define GIC_DR_OFFSET 0x1000
-#define GIC_CR_OFFSET 0x2000
-#define GIC_HR_OFFSET 0x4000 /* Guess work http://lists.infradead.org/pipermail/linux-arm-kernel/2011-September/064219.html */
-#define GIC_VR_OFFSET 0x6000 /* Virtual Machine CPU interface) */
-#endif /* __ASSEMBLY__ */
 
 #endif /* __ARM_CONFIG_H__ */
 /*

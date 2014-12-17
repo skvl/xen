@@ -19,6 +19,7 @@
 #define is_hvm_pv_evtchn_domain(d) (has_hvm_container_domain(d) && \
         d->arch.hvm_domain.irq.callback_via_type == HVMIRQ_callback_vector)
 #define is_hvm_pv_evtchn_vcpu(v) (is_hvm_pv_evtchn_domain(v->domain))
+#define is_domain_direct_mapped(d) ((void)(d), 0)
 
 #define VCPU_TRAP_NMI          1
 #define VCPU_TRAP_MCE          2
@@ -239,13 +240,6 @@ struct pv_domain
 {
     l1_pgentry_t **gdt_ldt_l1tab;
 
-    /* Shared page for notifying that explicit PIRQ EOI is required. */
-    unsigned long *pirq_eoi_map;
-    unsigned long pirq_eoi_map_mfn;
-    /* set auto_unmask to 1 if you want PHYSDEVOP_eoi to automatically
-     * unmask the event channel */
-    bool_t auto_unmask;
-
     /* map_domain_page() mapping cache. */
     struct mapcache_domain mapcache;
 };
@@ -327,6 +321,15 @@ struct arch_domain
     spinlock_t e820_lock;
     struct e820entry *e820;
     unsigned int nr_e820;
+
+    /* set auto_unmask to 1 if you want PHYSDEVOP_eoi to automatically
+     * unmask the event channel */
+    bool_t auto_unmask;
+    /* Shared page for notifying that explicit PIRQ EOI is required. */
+    unsigned long *pirq_eoi_map;
+    unsigned long pirq_eoi_map_mfn;
+
+    unsigned int psr_rmid; /* RMID assigned to the domain for CMT */
 } __cacheline_aligned;
 
 #define has_arch_pdevs(d)    (!list_empty(&(d)->arch.pdev_list))
@@ -388,10 +391,19 @@ struct pv_vcpu
     unsigned long shadow_ldt_mapcnt;
     spinlock_t shadow_ldt_lock;
 
+    /* data breakpoint extension MSRs */
+    uint32_t dr_mask[4];
+
     /* Deferred VA-based update state. */
     bool_t need_update_runstate_area;
     struct vcpu_time_info pending_system_time;
 };
+
+typedef enum __packed {
+    SMAP_CHECK_HONOR_CPL_AC,    /* honor the guest's CPL and AC */
+    SMAP_CHECK_ENABLED,         /* enable the check */
+    SMAP_CHECK_DISABLED,        /* disable the check */
+} smap_check_policy_t;
 
 struct arch_vcpu
 {
@@ -449,6 +461,12 @@ struct arch_vcpu
      * and thus should be saved/restored. */
     bool_t nonlazy_xstate_used;
 
+    /*
+     * The SMAP check policy when updating runstate_guest(v) and the
+     * secondary system time.
+     */
+    smap_check_policy_t smap_check_policy;
+
     struct vmce vmce;
 
     struct paging_vcpu paging;
@@ -457,14 +475,28 @@ struct arch_vcpu
 
     /* A secondary copy of the vcpu time info. */
     XEN_GUEST_HANDLE(vcpu_time_info_t) time_info_guest;
+
+    /*
+     * Should we emulate the next matching instruction on VCPU resume
+     * after a mem_event?
+     */
+    struct {
+        uint32_t emulate_flags;
+        unsigned long gpa;
+        unsigned long eip;
+    } mem_event;
+
 } __cacheline_aligned;
+
+smap_check_policy_t smap_policy_change(struct vcpu *v,
+                                       smap_check_policy_t new_policy);
 
 /* Shorthands to improve code legibility. */
 #define hvm_vmx         hvm_vcpu.u.vmx
 #define hvm_svm         hvm_vcpu.u.svm
 
-bool_t update_runstate_area(const struct vcpu *);
-bool_t update_secondary_system_time(const struct vcpu *,
+bool_t update_runstate_area(struct vcpu *);
+bool_t update_secondary_system_time(struct vcpu *,
                                     struct vcpu_time_info *);
 
 void vcpu_show_execution_state(struct vcpu *);
@@ -478,12 +510,14 @@ unsigned long pv_guest_cr4_fixup(const struct vcpu *, unsigned long guest_cr4);
     (((v)->arch.pv_vcpu.ctrlreg[4]                          \
       | (mmu_cr4_features                                   \
          & (X86_CR4_PGE | X86_CR4_PSE | X86_CR4_SMEP |      \
-            X86_CR4_OSXSAVE | X86_CR4_FSGSBASE))            \
+            X86_CR4_SMAP | X86_CR4_OSXSAVE |                \
+            X86_CR4_FSGSBASE))                              \
       | ((v)->domain->arch.vtsc ? X86_CR4_TSD : 0))         \
      & ~X86_CR4_DE)
 #define real_cr4_to_pv_guest_cr4(c)                         \
     ((c) & ~(X86_CR4_PGE | X86_CR4_PSE | X86_CR4_TSD |      \
-             X86_CR4_OSXSAVE | X86_CR4_SMEP | X86_CR4_FSGSBASE))
+             X86_CR4_OSXSAVE | X86_CR4_SMEP |               \
+             X86_CR4_FSGSBASE | X86_CR4_SMAP))
 
 void domain_cpuid(struct domain *d,
                   unsigned int  input,

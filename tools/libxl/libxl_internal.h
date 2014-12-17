@@ -43,6 +43,8 @@
 #include <sys/types.h>
 #include <sys/wait.h>
 #include <sys/socket.h>
+#include <sys/file.h>
+#include <sys/ioctl.h>
 
 #include <xenstore.h>
 #include <xenctrl.h>
@@ -91,6 +93,7 @@
 #define LIBXL_PV_EXTRA_MEMORY 1024
 #define LIBXL_HVM_EXTRA_MEMORY 2048
 #define LIBXL_MIN_DOM0_MEM (128*1024)
+#define LIBXL_INVALID_GFN (~(uint64_t)0)
 /* use 0 as the domid of the toolstack domain for now */
 #define LIBXL_TOOLSTACK_DOMID 0
 #define QEMU_SIGNATURE "DeviceModelRecord0002"
@@ -195,6 +198,17 @@ struct libxl__ev_xswatch {
     /* remainder is private for libxl__ev_xswatch... */
     int slotnum; /* registered iff slotnum >= 0 */
     uint32_t counterval;
+};
+
+typedef struct libxl__ev_evtchn libxl__ev_evtchn;
+typedef void libxl__ev_evtchn_callback(libxl__egc *egc, libxl__ev_evtchn*);
+struct libxl__ev_evtchn {
+    /* caller must fill these in, and they must all remain valid */
+    libxl__ev_evtchn_callback *callback;
+    int port;
+    /* remainder is private for libxl__ev_evtchn_... */
+    bool waiting;
+    LIBXL_LIST_ENTRY(libxl__ev_evtchn) entry;
 };
 
 /*
@@ -343,6 +357,10 @@ struct libxl__ctx {
     uint32_t watch_counter; /* helps disambiguate slot reuse */
     libxl__ev_fd watch_efd;
 
+    xc_evtchn *xce; /* waiting must be done only with libxl__ev_evtchn* */
+    LIBXL_LIST_HEAD(, libxl__ev_evtchn) evtchns_waiting;
+    libxl__ev_fd evtchn_efd;
+
     LIBXL_TAILQ_HEAD(libxl__evgen_domain_death_list, libxl_evgen_domain_death)
         death_list /* sorted by domid */,
         death_reported;
@@ -489,8 +507,10 @@ static inline int libxl__gc_is_real(const libxl__gc *gc)
 _hidden void libxl__ptr_add(libxl__gc *gc_opt, void *ptr /* may be NULL */) NN1;
 /* if this is the outermost libxl callframe then free all pointers in @gc */
 _hidden void libxl__free_all(libxl__gc *gc);
-/* allocate and zero @bytes. (similar to a gc'd malloc(3)+memzero()) */
-_hidden void *libxl__zalloc(libxl__gc *gc_opt, int bytes) NN1;
+/* allocate @size bytes. (a gc'd malloc(3)) */
+_hidden void *libxl__malloc(libxl__gc *gc_opt, size_t size) NN1;
+/* allocate and zero @size. (similar to a gc'd malloc(3)+memzero()) */
+_hidden void *libxl__zalloc(libxl__gc *gc_opt, size_t size) NN1;
 /* allocate and zero memory for an array of @nmemb members of @size each.
  * (similar to a gc'd calloc(3)). */
 _hidden void *libxl__calloc(libxl__gc *gc_opt, size_t nmemb, size_t size) NN1;
@@ -626,6 +646,26 @@ int libxl__xs_rm_checked(libxl__gc *gc, xs_transaction_t t, const char *path);
  *        // other cleanups
  *        return rc;
  *    }
+ *
+ * Formally the states of *t are:
+ *
+ *  name     value of *t  description
+ *   Idle         0         no transaction exists
+ *   Ready        non-0     ready for work, nothing done yet
+ *   Busy         non-0     writes have been made but we are not finished
+ *   Uncommitted  non-0     writes have been made and should be committed
+ *
+ * libxl__xs_transaction_start:  Idle -> Ready (on error: Idle)
+ *
+ * The transaction goes from Ready to Busy, and from Busy to
+ * Uncommitted, by the use of xenstore read and write operations
+ * (libxl__xs_..., xs_...) made by libxl__xs_transaction's caller.
+ *
+ * libxl__xs_transaction_commit:  Ready/Uncommitted -> Idle
+ *     on success (returns 0): xenstore has been updated
+ *     on error (<0) or conflict (+1): updates discarded
+ *
+ * libxl__xs_transaction_abort:  Any -> Idle  (any updates discarded)
  */
 int libxl__xs_transaction_start(libxl__gc *gc, xs_transaction_t *t);
 int libxl__xs_transaction_commit(libxl__gc *gc, xs_transaction_t *t);
@@ -727,7 +767,7 @@ _hidden int libxl__ev_fd_modify(libxl__gc*, libxl__ev_fd *ev,
 _hidden void libxl__ev_fd_deregister(libxl__gc*, libxl__ev_fd *ev);
 static inline void libxl__ev_fd_init(libxl__ev_fd *efd)
                     { efd->fd = -1; }
-static inline int libxl__ev_fd_isregistered(libxl__ev_fd *efd)
+static inline int libxl__ev_fd_isregistered(const libxl__ev_fd *efd)
                     { return efd->fd >= 0; }
 
 _hidden int libxl__ev_time_register_rel(libxl__gc*, libxl__ev_time *ev_out,
@@ -743,7 +783,7 @@ _hidden int libxl__ev_time_modify_abs(libxl__gc*, libxl__ev_time *ev,
 _hidden void libxl__ev_time_deregister(libxl__gc*, libxl__ev_time *ev);
 static inline void libxl__ev_time_init(libxl__ev_time *ev)
                 { ev->func = 0; }
-static inline int libxl__ev_time_isregistered(libxl__ev_time *ev)
+static inline int libxl__ev_time_isregistered(const libxl__ev_time *ev)
                 { return !!ev->func; }
 
 
@@ -757,6 +797,39 @@ static inline void libxl__ev_xswatch_init(libxl__ev_xswatch *xswatch_out)
 static inline int libxl__ev_xswatch_isregistered(const libxl__ev_xswatch *xw)
                 { return xw->slotnum >= 0; }
 
+
+/*
+ * The evtchn facility is one-shot per call to libxl__ev_evtchn_wait.
+ * You should call some suitable xc bind function on (or to obtain)
+ * the port, then libxl__ev_evtchn_wait.
+ *
+ * When the event is signaled then the callback will be made, once.
+ * Then you must call libxl__ev_evtchn_wait again, if desired.
+ *
+ * You must NOT call xc_evtchn_unmask.  wait will do that for you.
+ *
+ * Calling libxl__ev_evtchn_cancel will arrange for libxl to disregard
+ * future occurrences of event.  Both libxl__ev_evtchn_wait and
+ * libxl__ev_evtchn_cancel are idempotent.
+ *
+ * (Note of course that an event channel becomes signaled when it is
+ * first bound, so you will get one call to libxl__ev_evtchn_wait
+ * "right away"; unless you have won a very fast race, the condition
+ * you were waiting for won't exist yet so when you check for it
+ * you'll find you need to call wait again.)
+ *
+ * You must not wait on the same port twice at once (that is, with
+ * two separate libxl__ev_evtchn's).
+ */
+_hidden int libxl__ev_evtchn_wait(libxl__gc*, libxl__ev_evtchn *evev);
+_hidden void libxl__ev_evtchn_cancel(libxl__gc *gc, libxl__ev_evtchn *evev);
+
+static inline void libxl__ev_evtchn_init(libxl__ev_evtchn *evev)
+                { evev->waiting = 0; }
+static inline bool libxl__ev_evtchn_iswaiting(const libxl__ev_evtchn *evev)
+                { return evev->waiting; }
+
+_hidden int libxl__ctx_evtchn_init(libxl__gc *gc); /* for libxl_ctx_alloc */
 
 /*
  * For making subprocesses.  This is the only permitted mechanism for
@@ -783,7 +856,7 @@ _hidden pid_t libxl__ev_child_fork(libxl__gc *gc, libxl__ev_child *childw_out,
                                  libxl__ev_child_callback *death);
 static inline void libxl__ev_child_init(libxl__ev_child *childw_out)
                 { childw_out->pid = -1; }
-static inline int libxl__ev_child_inuse(libxl__ev_child *childw_out)
+static inline int libxl__ev_child_inuse(const libxl__ev_child *childw_out)
                 { return childw_out->pid >= 0; }
 
 /* Useable (only) in the child to once more make the ctx useable for
@@ -834,13 +907,13 @@ _hidden void libxl__event_disaster(libxl__egc*, const char *msg, int errnoval,
 
 /* Fills in, or disposes of, the resources held by, a poller whose
  * space the caller has allocated.  ctx must be locked. */
-_hidden int libxl__poller_init(libxl_ctx *ctx, libxl__poller *p);
+_hidden int libxl__poller_init(libxl__gc *gc, libxl__poller *p);
 _hidden void libxl__poller_dispose(libxl__poller *p);
 
 /* Obtain a fresh poller from malloc or the idle list, and put it
  * away again afterwards.  _get can fail, returning NULL.
  * ctx must be locked. */
-_hidden libxl__poller *libxl__poller_get(libxl_ctx *ctx);
+_hidden libxl__poller *libxl__poller_get(libxl__gc *gc);
 _hidden void libxl__poller_put(libxl_ctx*, libxl__poller *p /* may be NULL */);
 
 /* Notifies whoever is polling using p that they should wake up.
@@ -880,6 +953,8 @@ _hidden int libxl__domain_cpupool(libxl__gc *gc, uint32_t domid);
 _hidden libxl_scheduler libxl__domain_scheduler(libxl__gc *gc, uint32_t domid);
 _hidden int libxl__sched_set_params(libxl__gc *gc, uint32_t domid,
                                     libxl_domain_sched_params *scparams);
+_hidden int libxl__grant_vga_iomem_permission(libxl__gc *gc, const uint32_t domid,
+                                              libxl_domain_config *const d_config);
 
 typedef struct {
     uint32_t store_port;
@@ -889,8 +964,6 @@ typedef struct {
     uint32_t console_port;
     uint32_t console_domid;
     unsigned long console_mfn;
-
-    unsigned long vm_generationid_addr;
 
     char *saved_state;
 
@@ -923,7 +996,20 @@ _hidden int libxl__toolstack_restore(uint32_t domid, const uint8_t *buf,
                                      uint32_t size, void *data);
 _hidden int libxl__domain_resume_device_model(libxl__gc *gc, uint32_t domid);
 
+_hidden const char *libxl__userdata_path(libxl__gc *gc, uint32_t domid,
+                                         const char *userdata_userid,
+                                         const char *wh);
 _hidden void libxl__userdata_destroyall(libxl__gc *gc, uint32_t domid);
+/* Caller must hold userdata store lock before calling
+ * libxl__userdata_{retrieve,store}
+ * See libxl__{un,}lock_domain_userdata.
+ */
+_hidden int libxl__userdata_retrieve(libxl__gc *gc, uint32_t domid,
+                                     const char *userdata_userid,
+                                     uint8_t **data_r, int *datalen_r);
+_hidden int libxl__userdata_store(libxl__gc *gc, uint32_t domid,
+                                  const char *userdata_userid,
+                                  const uint8_t *data, int datalen);
 
 _hidden int libxl__domain_resume(libxl__gc *gc, uint32_t domid,
                                  int suspend_cancel);
@@ -931,6 +1017,7 @@ _hidden int libxl__domain_resume(libxl__gc *gc, uint32_t domid,
 /* returns 0 or 1, or a libxl error code */
 _hidden int libxl__domain_pvcontrol_available(libxl__gc *gc, uint32_t domid);
 
+_hidden const char *libxl__domain_pvcontrol_xspath(libxl__gc*, uint32_t domid);
 _hidden char * libxl__domain_pvcontrol_read(libxl__gc *gc,
                                             xs_transaction_t t, uint32_t domid);
 _hidden int libxl__domain_pvcontrol_write(libxl__gc *gc, xs_transaction_t t,
@@ -947,8 +1034,12 @@ _hidden int libxl__device_disk_dev_number(const char *virtpath,
 
 _hidden int libxl__device_console_add(libxl__gc *gc, uint32_t domid,
                                       libxl__device_console *console,
-                                      libxl__domain_build_state *state);
+                                      libxl__domain_build_state *state,
+                                      libxl__device *device);
 
+/* Returns 1 if device exists, 0 if not, ERROR_* (<0) on error. */
+_hidden int libxl__device_exists(libxl__gc *gc, xs_transaction_t t,
+                                 libxl__device *device);
 _hidden int libxl__device_generic_add(libxl__gc *gc, xs_transaction_t t,
         libxl__device *device, char **bents, char **fents, char **ro_fents);
 _hidden char *libxl__device_backend_path(libxl__gc *gc, libxl__device *device);
@@ -960,6 +1051,10 @@ _hidden int libxl__wait_for_backend(libxl__gc *gc, const char *be_path,
                                     const char *state);
 _hidden int libxl__nic_type(libxl__gc *gc, libxl__device *dev,
                             libxl_nic_type *nictype);
+_hidden int libxl__init_console_from_channel(libxl__gc *gc,
+                                             libxl__device_console *console,
+                                             int dev_num,
+                                             libxl_device_channel *channel);
 
 /*
  * For each aggregate type which can be used as an input we provide:
@@ -1079,6 +1174,60 @@ _hidden int libxl__device_pci_add(libxl__gc *gc, uint32_t domid, libxl_device_pc
 _hidden int libxl__create_pci_backend(libxl__gc *gc, uint32_t domid,
                                       libxl_device_pci *pcidev, int num);
 _hidden int libxl__device_pci_destroy_all(libxl__gc *gc, uint32_t domid);
+
+/*----- xswait: wait for a xenstore node to be suitable -----*/
+
+typedef struct libxl__xswait_state libxl__xswait_state;
+
+/*
+ * rc describes the circumstances of this callback:
+ *
+ * rc==0
+ *
+ *     The xenstore path (may have) changed.  It has been read for
+ *     you.  The result is in data (allocated from the ao gc).
+ *     data may be NULL, which means that the xenstore read gave
+ *     ENOENT.
+ *
+ *     If you are satisfied, you MUST call libxl__xswait_stop.
+ *     Otherwise, xswait will continue waiting and watching and
+ *     will call you back later.
+ *
+ * rc==ERROR_TIMEDOUT
+ *
+ *     The specified timeout was reached.
+ *     This has NOT been logged (except to the debug log).
+ *     xswait will not continue (but calling libxl__xswait_stop is OK).
+ *
+ * rc!=0, !=ERROR_TIMEDOUT
+ *
+ *     Some other error occurred.
+ *     This HAS been logged.
+ *     xswait will not continue (but calling libxl__xswait_stop is OK).
+ *
+ * xswait.path may start with with '@', in which case no read is done
+ * and the callback will always get data==0.
+ */
+typedef void libxl__xswait_callback(libxl__egc *egc,
+      libxl__xswait_state *xswa, int rc, const char *data);
+
+struct libxl__xswait_state {
+    /* caller must fill these in, and they must all remain valid */
+    libxl__ao *ao;
+    const char *what; /* for error msgs: noun phrase, what we're waiting for */
+    const char *path;
+    int timeout_ms; /* as for poll(2) */
+    libxl__xswait_callback *callback;
+    /* remaining fields are private to xswait */
+    libxl__ev_time time_ev;
+    libxl__ev_xswatch watch_ev;
+};
+
+void libxl__xswait_init(libxl__xswait_state*);
+void libxl__xswait_stop(libxl__gc*, libxl__xswait_state*); /*idempotent*/
+bool libxl__xswait_inuse(const libxl__xswait_state *ss);
+
+int libxl__xswait_start(libxl__gc*, libxl__xswait_state*);
 
 /*
  *----- spawn -----
@@ -1221,11 +1370,10 @@ struct libxl__spawn_state {
     int detaching; /* we are in Detaching */
     int failed; /* might be true whenever we are not Idle */
     libxl__ev_child mid; /* always in use whenever we are not Idle */
-    libxl__ev_time timeout;
-    libxl__ev_xswatch xswatch;
+    libxl__xswait_state xswait;
 };
 
-static inline int libxl__spawn_inuse(libxl__spawn_state *ss)
+static inline int libxl__spawn_inuse(const libxl__spawn_state *ss)
     { return libxl__ev_child_inuse(&ss->mid); }
 
 /*
@@ -1296,6 +1444,11 @@ _hidden int libxl__xenstore_child_wait_deprecated(libxl__gc *gc,
  *
  * The last entry of the array always has to be NULL.
  *
+ * stdinfd, stdoutfd, stderrfd will be dup2'd onto the corresponding
+ * fd in the child, if they are not -1.  The original copy of the
+ * descriptor will be closed in the child (unless it's 0, 1 or 2
+ * ie the source descriptor is itself stdin, stdout or stderr).
+ *
  * Logs errors, never returns.
  */
 _hidden  void libxl__exec(libxl__gc *gc, int stdinfd, int stdoutfd,
@@ -1321,7 +1474,8 @@ _hidden const char *libxl__domain_device_model(libxl__gc *gc,
 _hidden int libxl__need_xenpv_qemu(libxl__gc *gc,
         int nr_consoles, libxl__device_console *consoles,
         int nr_vfbs, libxl_device_vfb *vfbs,
-        int nr_disks, libxl_device_disk *disks);
+        int nr_disks, libxl_device_disk *disks,
+        int nr_channels, libxl_device_channel *channels);
 
 /*
  * This function will cause the whole libxl process to hang
@@ -1422,6 +1576,8 @@ struct libxl__xen_console_reader {
 _hidden int libxl__parse_mac(const char *s, libxl_mac mac);
 /* compare mac address @a and @b. 0 if the same, -ve if a<b and +ve if a>b */
 _hidden int libxl__compare_macs(libxl_mac *a, libxl_mac *b);
+/* return true if mac address is all zero (the default value) */
+_hidden int libxl__mac_is_default(libxl_mac *mac);
 /* init a recursive mutex */
 _hidden int libxl__init_recursive_mutex(libxl_ctx *ctx, pthread_mutex_t *lock);
 
@@ -1484,16 +1640,16 @@ _hidden yajl_gen_status libxl__yajl_gen_asciiz(yajl_gen hand, const char *str);
 _hidden yajl_gen_status libxl__yajl_gen_enum(yajl_gen hand, const char *str);
 
 typedef enum {
-    JSON_NULL,
-    JSON_BOOL,
-    JSON_INTEGER,
-    JSON_DOUBLE,
+    JSON_NULL    = (1 << 0),
+    JSON_BOOL    = (1 << 1),
+    JSON_INTEGER = (1 << 2),
+    JSON_DOUBLE  = (1 << 3),
     /* number is store in string, it's too big to be a long long or a double */
-    JSON_NUMBER,
-    JSON_STRING,
-    JSON_MAP,
-    JSON_ARRAY,
-    JSON_ANY
+    JSON_NUMBER  = (1 << 4),
+    JSON_STRING  = (1 << 5),
+    JSON_MAP     = (1 << 6),
+    JSON_ARRAY   = (1 << 7),
+    JSON_ANY     = 255 /* this is a mask of all values above, adjust as needed */
 } libxl__json_node_type;
 
 typedef struct libxl__json_object {
@@ -1511,6 +1667,14 @@ typedef struct libxl__json_object {
     struct libxl__json_object *parent;
 } libxl__json_object;
 
+typedef int (*libxl__json_parse_callback)(libxl__gc *gc,
+                                          libxl__json_object *o,
+                                          void *p);
+_hidden int libxl__object_from_json(libxl_ctx *ctx, const char *type,
+                                    libxl__json_parse_callback parse,
+                                    void *p,
+                                    const char *s);
+
 typedef struct {
     char *map_key;
     libxl__json_object *obj;
@@ -1518,6 +1682,10 @@ typedef struct {
 
 typedef struct libxl__yajl_ctx libxl__yajl_ctx;
 
+static inline bool libxl__json_object_is_null(const libxl__json_object *o)
+{
+    return o != NULL && o->type == JSON_NULL;
+}
 static inline bool libxl__json_object_is_bool(const libxl__json_object *o)
 {
     return o != NULL && o->type == JSON_BOOL;
@@ -1529,6 +1697,14 @@ static inline bool libxl__json_object_is_string(const libxl__json_object *o)
 static inline bool libxl__json_object_is_integer(const libxl__json_object *o)
 {
     return o != NULL && o->type == JSON_INTEGER;
+}
+static inline bool libxl__json_object_is_double(const libxl__json_object *o)
+{
+    return o != NULL && o->type == JSON_DOUBLE;
+}
+static inline bool libxl__json_object_is_number(const libxl__json_object *o)
+{
+    return o != NULL && o->type == JSON_NUMBER;
 }
 static inline bool libxl__json_object_is_map(const libxl__json_object *o)
 {
@@ -1550,6 +1726,14 @@ static inline
 const char *libxl__json_object_get_string(const libxl__json_object *o)
 {
     if (libxl__json_object_is_string(o))
+        return o->u.string;
+    else
+        return NULL;
+}
+static inline
+const char *libxl__json_object_get_number(const libxl__json_object *o)
+{
+    if (libxl__json_object_is_number(o))
         return o->u.string;
     else
         return NULL;
@@ -1586,7 +1770,7 @@ _hidden libxl__json_object *libxl__json_object_alloc(libxl__gc *gc_opt,
                                                      libxl__json_node_type type);
 _hidden int libxl__json_object_append_to(libxl__gc *gc_opt,
                                          libxl__json_object *obj,
-                                         libxl__json_object *dst);
+                                         libxl__yajl_ctx *ctx);
 _hidden libxl__json_object *libxl__json_array_get(const libxl__json_object *o,
                                                   int i);
 _hidden
@@ -1893,13 +2077,39 @@ _hidden int libxl__carefd_close(libxl__carefd*);
 _hidden int libxl__carefd_fd(const libxl__carefd*);
 
 /* common paths */
-_hidden const char *libxl__libexec_path(void);
 _hidden const char *libxl__private_bindir_path(void);
 _hidden const char *libxl__xenfirmwaredir_path(void);
 _hidden const char *libxl__xen_config_dir_path(void);
 _hidden const char *libxl__xen_script_dir_path(void);
 _hidden const char *libxl__lock_dir_path(void);
 _hidden const char *libxl__run_dir_path(void);
+
+/*----- subprocess execution with timeout -----*/
+
+typedef struct libxl__async_exec_state libxl__async_exec_state;
+
+typedef void libxl__async_exec_callback(libxl__egc *egc,
+                        libxl__async_exec_state *aes, int status);
+
+struct libxl__async_exec_state {
+    /* caller must fill these in */
+    libxl__ao *ao;
+    const char *what; /* for error msgs, what we're executing */
+    int timeout_ms;
+    libxl__async_exec_callback *callback;
+    /* caller must fill in; as for libxl__exec */
+    int stdfds[3];
+    char **args; /* execution arguments */
+    char **env; /* execution environment */
+
+    /* private */
+    libxl__ev_time time;
+    libxl__ev_child child;
+};
+
+void libxl__async_exec_init(libxl__async_exec_state *aes);
+int libxl__async_exec_start(libxl__gc *gc, libxl__async_exec_state *aes);
+bool libxl__async_exec_inuse(const libxl__async_exec_state *aes);
 
 /*----- device addition/removal -----*/
 
@@ -1937,13 +2147,16 @@ struct libxl__ao_device {
     libxl__multidev *multidev; /* reference to the containing multidev */
     /* private for add/remove implementation */
     libxl__ev_devstate backend_ds;
-    /* Bodge for Qemu devices, also used for timeout of hotplug execution */
+    /* Bodge for Qemu devices */
     libxl__ev_time timeout;
     /* xenstore watch for backend path of driver domains */
     libxl__ev_xswatch xs_watch;
-    /* device hotplug execution */
-    const char *what;
     int num_exec;
+    /* for calling hotplug scripts */
+    libxl__async_exec_state aes;
+    /* If we need to update JSON config */
+    bool update_json;
+    /* for asynchronous execution of synchronous-only syscalls etc. */
     libxl__ev_child child;
 };
 
@@ -1955,19 +2168,41 @@ struct libxl__ao_device {
  *    multidev->callback = ...
  * Then zero or more times
  *    libxl__multidev_prepare
- *    libal__initiate_device_{remove/addition}.
+ *    libxl__initiate_device_{remove/addition}
+ *       (or some other thing which will eventually call
+ *        aodev->callback or libxl__multidev_one_callback)
  * Finally, once
  *    libxl__multidev_prepared
- * which will result (perhaps reentrantly) in one call to callback().
+ * which will result (perhaps reentrantly) in one call to
+ * multidev->callback().
  */
 
 /* Starts preparing to add/remove a bunch of devices. */
 _hidden void libxl__multidev_begin(libxl__ao *ao, libxl__multidev*);
 
-/* Prepares to add/remove one of many devices.  Returns a libxl__ao_device
- * which has had libxl__prepare_ao_device called, and which has also
- * had ->callback set.  The user should not mess with aodev->callback. */
+/* Prepares to add/remove one of many devices.
+ * Calls libxl__prepare_ao_device on libxl__ao_device argument provided and
+ * also sets the aodev->callback (to libxl__multidev_one_callback)
+ * The user should not mess with aodev->callback.
+ */
+_hidden void libxl__multidev_prepare_with_aodev(libxl__multidev*,
+                                                libxl__ao_device*);
+
+/* A wrapper function around libxl__multidev_prepare_with_aodev.
+ * Allocates a libxl__ao_device and prepares it for addition/removal.
+ * Returns the newly allocated libxl__ao_dev.
+ */
 _hidden libxl__ao_device *libxl__multidev_prepare(libxl__multidev*);
+
+/* Indicates to multidev that this one device has been processed.
+ * Normally the multidev user does not need to touch this function, as
+ * multidev_prepare will name it in aodev->callback.  However, if you
+ * want to do something more complicated you can set aodev->callback
+ * yourself to something else, so long as you eventually call
+ * libxl__multidev_one_callback.
+ */
+_hidden void libxl__multidev_one_callback(libxl__egc *egc,
+                                          libxl__ao_device *aodev);
 
 /* Notifies the multidev machinery that we have now finished preparing
  * and initiating devices.  multidev->callback may then be called as
@@ -2068,6 +2303,77 @@ struct libxl__multidev {
  * finish the connection (might involve executing hotplug scripts).
  *
  * Once finished, aodev->callback will be executed.
+ */
+/*
+ * As of Xen 4.5 we maintain various infomation, including hotplug
+ * device information, in JSON files, so that we can use this JSON
+ * file as a template to reconstruct domain configuration.
+ *
+ * In essense there are now two views of device state, one is xenstore,
+ * the other is JSON file. We use xenstore as primary reference.
+ *
+ * Here we maintain one invariant: every device in xenstore must have
+ * an entry in JSON file.
+ *
+ * All device hotplug routines should comply to following pattern:
+ *   lock json config (json_lock)
+ *       read json config
+ *       update in-memory json config with new entry, replacing
+ *          any stale entry
+ *       for loop -- xs transaction
+ *           open xs transaction
+ *           check device existence, abort if it exists
+ *           write in-memory json config to disk
+ *           commit xs transaction
+ *       end for loop
+ *   unlock json config
+ *
+ * Device removal routines are not touched.
+ *
+ * Here is the proof that we always maintain that invariant and we
+ * don't leak files during interaction of hotplug thread and other
+ * threads / processes.
+ *
+ * # Safe against parallel add
+ *
+ * When another thread / process tries to add same device, it's
+ * blocked by json_lock. The loser of two threads will bail at
+ * existence check, so that we don't overwrite anything.
+ *
+ * # Safe against domain destruction
+ *
+ * If the thread / process trying to destroy domain loses the race, it's
+ * blocked by json_lock. If the hotplug thread is loser, it bails at
+ * acquiring lock because lock acquisition function checks existence of
+ * the domain.
+ *
+ * # Safe against parallel removal
+ *
+ * When another thread / process tries to remove a device, it's _NOT_
+ * blocked by json_lock, but xenstore transaction can help maintain
+ * invariant. The removal threads either a) sees that device in
+ * xenstore, b) doesn't see that device in xenstore.
+ *
+ * In a), it sees that device in xenstore. At that point hotplug is
+ * already finished (both JSON and xenstore changes committed). So that
+ * device can be safely removed. JSON entry is left untouched and
+ * becomes stale, but this is a valid state -- next time when a
+ * device with same identifier gets added, the stale entry gets
+ * overwritten.
+ *
+ * In b), it doesn't see that device in xenstore, but it will commence
+ * anyway. Eventually a forcibly removal is initiated, which will forcely
+ * remove xenstore entry.
+ *
+ * If hotplug threads creates xenstore entry (therefore JSON entry as
+ * well) before force removal, that xenstore entry is removed. We're
+ * left with JSON stale entry but not xenstore entry, which is a valid
+ * state.
+ *
+ * If hotplug thread has not created xenstore entry when the removal
+ * is committed, we're obviously safe. Hotplug thread will add in
+ * xenstore entry afterwards. We have both JSON and xenstore entry,
+ * it's a valid state.
  */
 _hidden void libxl__device_disk_add(libxl__egc *egc, uint32_t domid,
                                     libxl_device_disk *disk,
@@ -2286,6 +2592,182 @@ typedef struct libxl__save_helper_state {
                       * marshalling and xc callback functions */
 } libxl__save_helper_state;
 
+/*----- remus device related state structure -----*/
+/*
+ * The abstract Remus device layer exposes a common
+ * set of API to [external] libxl for manipulating devices attached to
+ * a guest protected by Remus. The device layer also exposes a set of
+ * [internal] interfaces that every device type must implement.
+ *
+ * The following API are exposed to libxl:
+ *
+ * One-time configuration operations:
+ *  +libxl__remus_devices_setup
+ *    > Enable output buffering for NICs, setup disk replication, etc.
+ *  +libxl__remus_devices_teardown
+ *    > Disable output buffering and disk replication; teardown any
+ *       associated external setups like qdiscs for NICs.
+ *
+ * Operations executed every checkpoint (in order of invocation):
+ *  +libxl__remus_devices_postsuspend
+ *  +libxl__remus_devices_preresume
+ *  +libxl__remus_devices_commit
+ *
+ * Each device type needs to implement the interfaces specified in
+ * the libxl__remus_device_instance_ops if it wishes to support Remus.
+ *
+ * The high-level control flow through the Remus device layer is shown below:
+ *
+ * xl remus
+ *  |->  libxl_domain_remus_start
+ *    |-> libxl__remus_devices_setup
+ *      |-> Per-checkpoint libxl__remus_devices_[postsuspend,preresume,commit]
+ *        ...
+ *        |-> On backup failure, network error or other internal errors:
+ *            libxl__remus_devices_teardown
+ */
+
+typedef struct libxl__remus_device libxl__remus_device;
+typedef struct libxl__remus_devices_state libxl__remus_devices_state;
+typedef struct libxl__remus_device_instance_ops libxl__remus_device_instance_ops;
+
+/*
+ * Interfaces to be implemented by every device subkind that wishes to
+ * support Remus. Functions must be implemented unless otherwise
+ * stated. Many of these functions are asynchronous. They call
+ * dev->aodev.callback when done.  The actual implementations may be
+ * synchronous and call dev->aodev.callback directly (as the last
+ * thing they do).
+ */
+struct libxl__remus_device_instance_ops {
+    /* the device kind this ops belongs to... */
+    libxl__device_kind kind;
+
+    /*
+     * Checkpoint operations. May be NULL, meaning the op is not
+     * implemented and the caller should treat them as a no-op (and do
+     * nothing when checkpointing).
+     * Asynchronous.
+     */
+
+    void (*postsuspend)(libxl__egc *egc, libxl__remus_device *dev);
+    void (*preresume)(libxl__egc *egc, libxl__remus_device *dev);
+    void (*commit)(libxl__egc *egc, libxl__remus_device *dev);
+
+    /*
+     * setup() and teardown() are refer to the actual remus device.
+     * Asynchronous.
+     * teardown is called even if setup fails.
+     */
+    /*
+     * setup() should first determines whether the subkind matches the specific
+     * device. If matched, the device will then be managed with this set of
+     * subkind operations.
+     * Yields 0 if the device successfully set up.
+     * REMUS_DEVOPS_DOES_NOT_MATCH if the ops does not match the device.
+     * any other rc indicates failure.
+     */
+    void (*setup)(libxl__egc *egc, libxl__remus_device *dev);
+    void (*teardown)(libxl__egc *egc, libxl__remus_device *dev);
+};
+
+int init_subkind_nic(libxl__remus_devices_state *rds);
+void cleanup_subkind_nic(libxl__remus_devices_state *rds);
+int init_subkind_drbd_disk(libxl__remus_devices_state *rds);
+void cleanup_subkind_drbd_disk(libxl__remus_devices_state *rds);
+
+typedef void libxl__remus_callback(libxl__egc *,
+                                   libxl__remus_devices_state *, int rc);
+
+/*
+ * State associated with a remus invocation, including parameters
+ * passed to the remus abstract device layer by the remus
+ * save/restore machinery.
+ */
+struct libxl__remus_devices_state {
+    /*---- must be set by caller of libxl__remus_device_(setup|teardown) ----*/
+
+    libxl__ao *ao;
+    uint32_t domid;
+    libxl__remus_callback *callback;
+    int device_kind_flags;
+
+    /*----- private for abstract layer only -----*/
+
+    int num_devices;
+    /*
+     * this array is allocated before setup the remus devices by the
+     * remus abstract layer.
+     * devs may be NULL, means there's no remus devices that has been set up.
+     * the size of this array is 'num_devices', which is the total number
+     * of libxl nic devices and disk devices(num_nics + num_disks).
+     */
+    libxl__remus_device **devs;
+
+    libxl_device_nic *nics;
+    int num_nics;
+    libxl_device_disk *disks;
+    int num_disks;
+
+    libxl__multidev multidev;
+
+    /*----- private for concrete (device-specific) layer only -----*/
+
+    /* private for nic device subkind ops */
+    char *netbufscript;
+    struct nl_sock *nlsock;
+    struct nl_cache *qdisc_cache;
+
+    /* private for drbd disk subkind ops */
+    char *drbd_probe_script;
+};
+
+/*
+ * Information about a single device being handled by remus.
+ * Allocated by the remus abstract layer.
+ */
+struct libxl__remus_device {
+    /*----- shared between abstract and concrete layers -----*/
+    /*
+     * if this is true, that means the subkind ops match the device
+     */
+    bool matched;
+
+    /*----- set by remus device abstruct layer -----*/
+    /* libxl__device_* which this remus device related to */
+    const void *backend_dev;
+    libxl__device_kind kind;
+    libxl__remus_devices_state *rds;
+    libxl__ao_device aodev;
+
+    /*----- private for abstract layer only -----*/
+
+    /*
+     * Control and state variables for the asynchronous callback
+     * based loops which iterate over device subkinds, and over
+     * individual devices.
+     */
+    int ops_index;
+    const libxl__remus_device_instance_ops *ops;
+
+    /*----- private for concrete (device-specific) layer -----*/
+
+    /* concrete device's private data */
+    void *concrete_data;
+};
+
+/* the following 5 APIs are async ops, call rds->callback when done */
+_hidden void libxl__remus_devices_setup(libxl__egc *egc,
+                                        libxl__remus_devices_state *rds);
+_hidden void libxl__remus_devices_teardown(libxl__egc *egc,
+                                           libxl__remus_devices_state *rds);
+_hidden void libxl__remus_devices_postsuspend(libxl__egc *egc,
+                                              libxl__remus_devices_state *rds);
+_hidden void libxl__remus_devices_preresume(libxl__egc *egc,
+                                            libxl__remus_devices_state *rds);
+_hidden void libxl__remus_devices_commit(libxl__egc *egc,
+                                         libxl__remus_devices_state *rds);
+_hidden int libxl__netbuffer_enabled(libxl__gc *gc);
 
 /*----- Domain suspend (save) state structure -----*/
 
@@ -2316,15 +2798,22 @@ struct libxl__domain_suspend_state {
     int debug;
     const libxl_domain_remus_info *remus;
     /* private */
-    xc_evtchn *xce; /* event channel handle */
-    int suspend_eventchn;
+    libxl__ev_evtchn guest_evtchn;
+    int guest_evtchn_lockfd;
     int hvm;
     int xcflags;
     int guest_responded;
+    libxl__xswait_state pvcontrol;
+    libxl__ev_xswatch guest_watch;
+    libxl__ev_time guest_timeout;
     const char *dm_savefile;
+    libxl__remus_devices_state rds;
+    libxl__ev_time checkpoint_timeout; /* used for Remus checkpoint */
     int interval; /* checkpoint interval (for Remus) */
     libxl__save_helper_state shs;
     libxl__logdirty_switch logdirty;
+    void (*callback_common_done)(libxl__egc*,
+                                 struct libxl__domain_suspend_state*, int ok);
     /* private for libxl__domain_save_device_model */
     libxl__save_device_model_cb *save_dm_callback;
     libxl__datacopier_state save_dm_datacopier;
@@ -2577,6 +3066,7 @@ struct libxl__domain_create_state {
     /* filled in by user */
     libxl__ao *ao;
     libxl_domain_config *guest_config;
+    libxl_domain_config guest_config_saved; /* vanilla config */
     int restore_fd;
     libxl__domain_create_cb *callback;
     libxl_asyncprogress_how aop_console_how;
@@ -2602,8 +3092,7 @@ _hidden void libxl__domain_suspend(libxl__egc *egc,
 
 
 /* calls libxl__xc_domain_suspend_done when done */
-_hidden void libxl__xc_domain_save(libxl__egc*, libxl__domain_suspend_state*,
-                                   unsigned long vm_generationid_addr);
+_hidden void libxl__xc_domain_save(libxl__egc*, libxl__domain_suspend_state*);
 /* If rc==0 then retval is the return value from xc_domain_save
  * and errnoval is the errno value it provided.
  * If rc!=0, retval and errnoval are undefined. */
@@ -2617,7 +3106,7 @@ _hidden void libxl__xc_domain_save_done(libxl__egc*, void *dss_void,
 void libxl__xc_domain_saverestore_async_callback_done(libxl__egc *egc,
                            libxl__save_helper_state *shs, int return_value);
 
-_hidden int libxl__domain_suspend_common_callback(void *data);
+
 _hidden void libxl__domain_suspend_common_switch_qemu_logdirty
                                (int domid, unsigned int enable, void *data);
 _hidden int libxl__toolstack_save(uint32_t domid, uint8_t **buf,
@@ -2627,8 +3116,7 @@ _hidden int libxl__toolstack_save(uint32_t domid, uint8_t **buf,
 /* calls libxl__xc_domain_restore_done when done */
 _hidden void libxl__xc_domain_restore(libxl__egc *egc,
                                       libxl__domain_create_state *dcs,
-                                      int hvm, int pae, int superpages,
-                                      int no_incr_generationid);
+                                      int hvm, int pae, int superpages);
 /* If rc==0 then retval is the return value from xc_domain_save
  * and errnoval is the errno value it provided.
  * If rc!=0, retval and errnoval are undefined. */
@@ -2901,6 +3389,22 @@ void libxl__numa_candidate_put_nodemap(libxl__gc *gc,
     libxl_bitmap_copy(CTX, &cndt->nodemap, nodemap);
 }
 
+_hidden int libxl__ms_vm_genid_set(libxl__gc *gc, uint32_t domid,
+                                   const libxl_ms_vm_genid *id);
+
+
+/* Som handy macros for defbool type. */
+#define LIBXL__DEFBOOL_DEFAULT     (0)
+#define LIBXL__DEFBOOL_FALSE       (-1)
+#define LIBXL__DEFBOOL_TRUE        (1)
+#define LIBXL__DEFBOOL_STR_DEFAULT "<default>"
+#define LIBXL__DEFBOOL_STR_FALSE   "False"
+#define LIBXL__DEFBOOL_STR_TRUE    "True"
+static inline int libxl__defbool_is_default(libxl_defbool *db)
+{
+    return !db->val;
+}
+
 /*
  * Inserts "elm_new" into the sorted list "head".
  *
@@ -2950,7 +3454,180 @@ void libxl__numa_candidate_put_nodemap(libxl__gc *gc,
  */
 #define CTYPE(isfoo,c) (isfoo((unsigned char)(c)))
 
+int libxl__defbool_parse_json(libxl__gc *gc, const libxl__json_object *o,
+                              libxl_defbool *p);
+int libxl__bool_parse_json(libxl__gc *gc, const libxl__json_object *o,
+                           bool *p);
+int libxl__mac_parse_json(libxl__gc *gc, const libxl__json_object *o,
+                          libxl_mac *p);
+int libxl__bitmap_parse_json(libxl__gc *gc, const libxl__json_object *o,
+                             libxl_bitmap *p);
+int libxl__uuid_parse_json(libxl__gc *gc, const libxl__json_object *o,
+                           libxl_uuid *p);
+int libxl__cpuid_policy_list_parse_json(libxl__gc *gc,
+                                        const libxl__json_object *o,
+                                        libxl_cpuid_policy_list *p);
+int libxl__string_list_parse_json(libxl__gc *gc, const libxl__json_object *o,
+                                  libxl_string_list *p);
+int libxl__key_value_list_parse_json(libxl__gc *gc,
+                                     const libxl__json_object *o,
+                                     libxl_key_value_list *p);
+int libxl__hwcap_parse_json(libxl__gc *gc, const libxl__json_object *o,
+                            libxl_hwcap *p);
+int libxl__ms_vm_genid_parse_json(libxl__gc *gc, const libxl__json_object *o,
+                                  libxl_ms_vm_genid *p);
+int libxl__int_parse_json(libxl__gc *gc, const libxl__json_object *o,
+                          void *p);
+int libxl__uint8_parse_json(libxl__gc *gc, const libxl__json_object *o,
+                            void *p);
+int libxl__uint16_parse_json(libxl__gc *gc, const libxl__json_object *o,
+                             void *p);
+int libxl__uint32_parse_json(libxl__gc *gc, const libxl__json_object *o,
+                             void *p);
+int libxl__uint64_parse_json(libxl__gc *gc, const libxl__json_object *o,
+                             void *p);
+int libxl__string_parse_json(libxl__gc *gc, const libxl__json_object *o,
+                             char **p);
 
+int libxl__random_bytes(libxl__gc *gc, uint8_t *buf, size_t len);
+
+/*
+ * Compile time assertion
+ */
+#if __GNUC__ > 4 || (__GNUC__ == 4 && __GNUC_MINOR__ >= 6)
+#define BUILD_BUG_ON(p) ({ _Static_assert(!(p), "!(" #p ")"); })
+#else
+#define BUILD_BUG_ON(p) ((void)sizeof(char[1 - 2 * !!(p)]))
+#endif
+#include "_libxl_types_private.h"
+#include "_libxl_types_internal_private.h"
+
+/* This always return false, there's no "default value" for hw cap */
+static inline int libxl__hwcap_is_default(libxl_hwcap *hwcap)
+{
+    return 0;
+}
+
+static inline int libxl__string_list_is_empty(libxl_string_list *psl)
+{
+    return !libxl_string_list_length(psl);
+}
+
+static inline int libxl__key_value_list_is_empty(libxl_key_value_list *pkvl)
+{
+    return !libxl_key_value_list_length(pkvl);
+}
+
+int libxl__cpuid_policy_is_empty(libxl_cpuid_policy_list *pl);
+
+/* Portability note: a proper flock(2) implementation is required */
+typedef struct {
+    libxl__carefd *lock_carefd;
+    char *path; /* path of the lock file itself */
+} libxl__domain_userdata_lock;
+libxl__domain_userdata_lock *libxl__lock_domain_userdata(libxl__gc *gc,
+                                                         uint32_t domid);
+void libxl__unlock_domain_userdata(libxl__domain_userdata_lock *lock);
+
+/*
+ * Retrieve / store domain configuration from / to libxl private
+ * data store. The registry entry in libxl private data store
+ * is "libxl-json".
+ * Caller must hold user data lock.
+ */
+int libxl__get_domain_configuration(libxl__gc *gc, uint32_t domid,
+                                    libxl_domain_config *d_config);
+int libxl__set_domain_configuration(libxl__gc *gc, uint32_t domid,
+                                    libxl_domain_config *d_config);
+
+/* ------ Things related to updating domain configurations ----- */
+void libxl__update_domain_configuration(libxl__gc *gc,
+                                        libxl_domain_config *dst,
+                                        const libxl_domain_config *src);
+static inline void libxl__update_config_nic(libxl__gc *gc,
+                                            libxl_device_nic *dst,
+                                            libxl_device_nic *src)
+{
+    dst->devid = src->devid;
+    libxl_mac_copy(CTX, &dst->mac, &src->mac);
+}
+
+static inline void libxl__update_config_vtpm(libxl__gc *gc,
+                                             libxl_device_vtpm *dst,
+                                             libxl_device_vtpm *src)
+{
+    dst->devid = src->devid;
+    libxl_uuid_copy(CTX, &dst->uuid, &src->uuid);
+}
+
+/* Macros used to compare device identifier. Returns true if the two
+ * devices have same identifier. */
+#define COMPARE_DEVID(a, b) ((a)->devid == (b)->devid)
+#define COMPARE_DISK(a, b) (!strcmp((a)->vdev, (b)->vdev))
+#define COMPARE_PCI(a, b) ((a)->func == (b)->func &&    \
+                           (a)->bus == (b)->bus &&      \
+                           (a)->dev == (b)->dev)
+
+/* DEVICE_ADD
+ *
+ * Add a device in libxl_domain_config structure
+ *
+ * It takes 6 parameters:
+ *  type:     the type of the device, say nic, vtpm, disk, pci etc
+ *  ptr:      pointer to the start of the array, the array must be
+ *            of type libxl_device_#type
+ *  domid:    domain id of target domain
+ *  dev:      the device that is to be added / removed / updated
+ *  compare:  the COMPARE_* macro used to compare @dev's identifier to
+ *            those in the array pointed to by @ptr
+ *  d_config: pointer to template domain config
+ *
+ * For most device types (nic, vtpm), the array pointer @ptr can be
+ * derived from @type, pci device being the exception, hence we need
+ * to have @ptr.
+ *
+ * If there is already a device with the same identifier in d_config,
+ * that entry is updated.
+ */
+#define DEVICE_ADD(type, ptr, domid, dev, compare, d_config)    \
+    ({                                                          \
+        int DA_x;                                               \
+        libxl_device_##type *DA_p = NULL;                       \
+                                                                \
+        /* Check for existing device */                         \
+        for (DA_x = 0; DA_x < (d_config)->num_##ptr; DA_x++) {  \
+            if (compare(&(d_config)->ptr[DA_x], (dev))) {       \
+                DA_p = &(d_config)->ptr[DA_x];                  \
+                break;                                          \
+            }                                                   \
+        }                                                       \
+                                                                \
+        if (!DA_p) {                                            \
+            (d_config)->ptr =                                   \
+                libxl__realloc(NOGC, (d_config)->ptr,           \
+                               ((d_config)->num_##ptr + 1) *    \
+                               sizeof(libxl_device_##type));    \
+            DA_p = &(d_config)->ptr[(d_config)->num_##ptr];     \
+            (d_config)->num_##ptr++;                            \
+        } else {                                                \
+            libxl_device_##type##_dispose(DA_p);                \
+        }                                                       \
+                                                                \
+        libxl_device_##type##_init(DA_p);                       \
+        libxl_device_##type##_copy(CTX, DA_p, (dev));           \
+    })
+
+/* This function copies X bytes from source to destination bitmap,
+ * where X is the smaller of the two sizes.
+ *
+ * If destination's size is larger than source, the extra bytes are
+ * untouched.
+ *
+ * XXX This is introduced to fix a regression for 4.5. It shall
+ * be revisited in 4.6 time frame.
+ */
+void libxl__bitmap_copy_best_effort(libxl__gc *gc, libxl_bitmap *dptr,
+                                    const libxl_bitmap *sptr);
 #endif
 
 /*

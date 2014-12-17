@@ -125,7 +125,7 @@ struct page_info
          * PGT_partial gets set, and it must be dropped when the flag gets
          * cleared. This is so that a get() leaving a page in partially
          * validated state (where the caller would drop the reference acquired
-         * due to the getting of the type [apparently] failing [-EAGAIN])
+         * due to the getting of the type [apparently] failing [-ERESTART])
          * would not accidentally result in a page left with zero general
          * reference count, but non-zero type reference count (possible when
          * the partial get() is followed immediately by domain destruction).
@@ -280,9 +280,7 @@ extern unsigned long max_page;
 extern unsigned long total_pages;
 void init_frametable(void);
 
-#define PDX_GROUP_COUNT ((1 << L2_PAGETABLE_SHIFT) / \
-                         (sizeof(*frame_table) & -sizeof(*frame_table)))
-extern unsigned long pdx_group_valid[];
+#define PDX_GROUP_SHIFT L2_PAGETABLE_SHIFT
 
 /* Convert between Xen-heap virtual addresses and page-info structures. */
 static inline struct page_info *__virt_to_page(const void *v)
@@ -561,9 +559,9 @@ void *do_page_walk(struct vcpu *v, unsigned long addr);
 int __sync_local_execstate(void);
 
 /* Arch-specific portion of memory_op hypercall. */
-long arch_memory_op(int op, XEN_GUEST_HANDLE_PARAM(void) arg);
-long subarch_memory_op(int op, XEN_GUEST_HANDLE_PARAM(void) arg);
-int compat_arch_memory_op(int op, XEN_GUEST_HANDLE_PARAM(void));
+long arch_memory_op(unsigned long cmd, XEN_GUEST_HANDLE_PARAM(void) arg);
+long subarch_memory_op(unsigned long cmd, XEN_GUEST_HANDLE_PARAM(void) arg);
+int compat_arch_memory_op(unsigned long cmd, XEN_GUEST_HANDLE_PARAM(void));
 int compat_subarch_memory_op(int op, XEN_GUEST_HANDLE_PARAM(void));
 
 int steal_page(
@@ -589,8 +587,6 @@ void domain_set_alloc_bitsize(struct domain *d);
 unsigned int domain_clamp_alloc_bitsize(struct domain *d, unsigned int bits);
 
 unsigned long domain_get_maximum_gpfn(struct domain *d);
-
-void mem_event_cleanup(struct domain *d);
 
 extern struct domain *dom_xen, *dom_io, *dom_cow;	/* for vmcoreinfo */
 

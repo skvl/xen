@@ -7,19 +7,15 @@
 #ifndef _OS_H_
 #define _OS_H_
 
-#if __GNUC__ == 2 && __GNUC_MINOR__ < 96
-#define __builtin_expect(x, expected_value) (x)
-#endif
-#define unlikely(x)  __builtin_expect((x),0)
-#define likely(x)  __builtin_expect((x),1)
-
 #define smp_processor_id() 0
 
 
 #ifndef __ASSEMBLY__
+#include <mini-os/compiler.h>
 #include <mini-os/types.h>
 #include <mini-os/hypervisor.h>
 #include <mini-os/kernel.h>
+#include <xen/xsm/flask_op.h>
 
 #define USED    __attribute__ ((used))
 
@@ -64,8 +60,6 @@ extern shared_info_t *HYPERVISOR_shared_info;
 void trap_init(void);
 void trap_fini(void);
 
-void arch_init(start_info_t *si);
-void arch_print_info(void);
 void arch_fini(void);
 
 
@@ -565,6 +559,12 @@ static __inline__ int synch_var_test_bit(int nr, volatile void * addr)
  synch_const_test_bit((nr),(addr)) : \
  synch_var_test_bit((nr),(addr)))
 
+static inline int
+HYPERVISOR_xsm_op(
+        struct xen_flask_op *op)
+{
+    return _hypercall1(int, xsm_op, op);
+}
 
 #undef ADDR
 

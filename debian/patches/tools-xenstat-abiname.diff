@@ -1,4 +1,4 @@
-From 17957eb752727543ff74bb733b9dc653a47b2e38 Mon Sep 17 00:00:00 2001
+From 68ce7e635b54b1b9b2a56328e65ce0f63c8f3c66 Mon Sep 17 00:00:00 2001
 From: Bastian Blank <waldi@debian.org>
 Date: Sat, 5 Jul 2014 11:46:50 +0200
 Subject: tools-xenstat-abiname.diff
@@ -9,10 +9,10 @@ Patch-Name: tools-xenstat-abiname.diff
  1 file changed, 4 insertions(+), 16 deletions(-)
 
 diff --git a/tools/xenstat/libxenstat/Makefile b/tools/xenstat/libxenstat/Makefile
-index 21aad89..669bb1f 100644
+index 86068cb..3469385 100644
 --- a/tools/xenstat/libxenstat/Makefile
 +++ b/tools/xenstat/libxenstat/Makefile
-@@ -22,17 +22,13 @@ libdir=$(prefix)/lib
+@@ -18,18 +18,14 @@ include $(XEN_ROOT)/tools/Rules.mk
  LDCONFIG=ldconfig
  MAKE_LINK=ln -sf
  
@@ -27,12 +27,13 @@ index 21aad89..669bb1f 100644
  OBJECTS-$(CONFIG_Linux) += src/xenstat_linux.o
  OBJECTS-$(CONFIG_SunOS) += src/xenstat_solaris.o
  OBJECTS-$(CONFIG_NetBSD) += src/xenstat_netbsd.o
+ OBJECTS-$(CONFIG_FreeBSD) += src/xenstat_freebsd.o
 -SONAME_FLAGS=-Wl,$(SONAME_LDFLAG) -Wl,libxenstat.so.$(MAJOR)
 +SONAME_FLAGS=-Wl,$(SONAME_LDFLAG),libxenstat.so
  
- WARN_FLAGS=-Wall -Werror
- 
-@@ -43,7 +39,7 @@ LDLIBS-y = $(LDLIBS_libxenstore) $(LDLIBS_libxenctrl)
+ CFLAGS+=-fPIC
+ CFLAGS+=-Isrc $(CFLAGS_libxenctrl) $(CFLAGS_libxenstore) $(CFLAGS_xeninclude)
+@@ -38,7 +34,7 @@ LDLIBS-y = $(LDLIBS_libxenstore) $(LDLIBS_libxenctrl)
  LDLIBS-$(CONFIG_SunOS) += -lkstat
  
  .PHONY: all
@@ -41,7 +42,7 @@ index 21aad89..669bb1f 100644
  
  $(LIB): $(OBJECTS-y)
  	$(AR) rc $@ $^
-@@ -53,19 +49,11 @@ $(SHLIB): $(OBJECTS-y)
+@@ -48,19 +44,11 @@ $(SHLIB): $(OBJECTS-y)
  	$(CC) $(LDFLAGS) $(SONAME_FLAGS) $(SHLIB_LDFLAGS) -o $@ \
  	    $(OBJECTS-y) $(LDLIBS-y) $(APPEND_LDFLAGS)
  

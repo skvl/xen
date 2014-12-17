@@ -40,6 +40,24 @@ char *libxl__device_backend_path(libxl__gc *gc, libxl__device *device)
                      device->domid, device->devid);
 }
 
+/* Returns 1 if device exists, 0 if not, ERROR_* (<0) on error. */
+int libxl__device_exists(libxl__gc *gc, xs_transaction_t t,
+                         libxl__device *device)
+{
+    int rc;
+    char *be_path = libxl__device_backend_path(gc, device);
+    const char *dir;
+
+    rc = libxl__xs_read_checked(gc, t, be_path, &dir);
+
+    if (rc)
+        return rc;
+
+    if (dir)
+        return 1;
+    return 0;
+}
+
 int libxl__parse_backend_path(libxl__gc *gc,
                               const char *path,
                               libxl__device *dev)
@@ -265,12 +283,6 @@ int libxl__device_disk_set_backend(libxl__gc *gc, libxl_device_disk *disk) {
                         disk->vdev, disk->pdev_path);
             return ERROR_INVAL;
         }
-        if (!S_ISBLK(a.stab.st_mode) &
-            !S_ISREG(a.stab.st_mode)) {
-            LOG(ERROR, "Disk vdev=%s phys path is not a block dev or file: %s",
-                       disk->vdev, disk->pdev_path);
-            return ERROR_INVAL;
-        }
     }
 
     if (disk->backend != LIBXL_DISK_BACKEND_UNKNOWN) {
@@ -430,7 +442,7 @@ void libxl__prepare_ao_device(libxl__ao *ao, libxl__ao_device *aodev)
     aodev->rc = 0;
     aodev->dev = NULL;
     aodev->num_exec = 0;
-    /* Initialize timer for QEMU Bodge and hotplug execution */
+    /* Initialize timer for QEMU Bodge */
     libxl__ev_time_init(&aodev->timeout);
     /*
      * Initialize xs_watch, because it's not used on all possible
@@ -440,6 +452,7 @@ void libxl__prepare_ao_device(libxl__ao *ao, libxl__ao_device *aodev)
     aodev->active = 1;
     /* We init this here because we might call device_hotplug_done
      * without actually calling any hotplug script */
+    libxl__async_exec_init(&aodev->aes);
     libxl__ev_child_init(&aodev->child);
 }
 
@@ -467,15 +480,12 @@ void libxl__multidev_begin(libxl__ao *ao, libxl__multidev *multidev)
     multidev->preparation = libxl__multidev_prepare(multidev);
 }
 
-static void multidev_one_callback(libxl__egc *egc, libxl__ao_device *aodev);
-
-libxl__ao_device *libxl__multidev_prepare(libxl__multidev *multidev) {
+void libxl__multidev_prepare_with_aodev(libxl__multidev *multidev,
+                                        libxl__ao_device *aodev) {
     STATE_AO_GC(multidev->ao);
-    libxl__ao_device *aodev;
 
-    GCNEW(aodev);
     aodev->multidev = multidev;
-    aodev->callback = multidev_one_callback;
+    aodev->callback = libxl__multidev_one_callback;
     libxl__prepare_ao_device(ao, aodev);
 
     if (multidev->used >= multidev->allocd) {
@@ -483,11 +493,19 @@ libxl__ao_device *libxl__multidev_prepare(libxl__multidev *multidev) {
         GCREALLOC_ARRAY(multidev->array, multidev->allocd);
     }
     multidev->array[multidev->used++] = aodev;
+}
+
+libxl__ao_device *libxl__multidev_prepare(libxl__multidev *multidev) {
+    STATE_AO_GC(multidev->ao);
+    libxl__ao_device *aodev;
+
+    GCNEW(aodev);
+    libxl__multidev_prepare_with_aodev(multidev, aodev);
 
     return aodev;
 }
 
-static void multidev_one_callback(libxl__egc *egc, libxl__ao_device *aodev)
+void libxl__multidev_one_callback(libxl__egc *egc, libxl__ao_device *aodev)
 {
     STATE_AO_GC(aodev->ao);
     libxl__multidev *multidev = aodev->multidev;
@@ -511,7 +529,7 @@ void libxl__multidev_prepared(libxl__egc *egc,
                               libxl__multidev *multidev, int rc)
 {
     multidev->preparation->rc = rc;
-    multidev_one_callback(egc, multidev->preparation);
+    libxl__multidev_one_callback(egc, multidev->preparation);
 }
 
 /******************************************************************************/
@@ -707,12 +725,9 @@ static void device_backend_cleanup(libxl__gc *gc,
 
 static void device_hotplug(libxl__egc *egc, libxl__ao_device *aodev);
 
-static void device_hotplug_timeout_cb(libxl__egc *egc, libxl__ev_time *ev,
-                                      const struct timeval *requested_abs);
-
 static void device_hotplug_child_death_cb(libxl__egc *egc,
-                                          libxl__ev_child *child,
-                                          pid_t pid, int status);
+                                          libxl__async_exec_state *aes,
+                                          int status);
 
 static void device_destroy_be_timeout_cb(libxl__egc *egc, libxl__ev_time *ev,
                                          const struct timeval *requested_abs);
@@ -954,11 +969,11 @@ static void device_backend_cleanup(libxl__gc *gc, libxl__ao_device *aodev)
 static void device_hotplug(libxl__egc *egc, libxl__ao_device *aodev)
 {
     STATE_AO_GC(aodev->ao);
+    libxl__async_exec_state *aes = &aodev->aes;
     char *be_path = libxl__device_backend_path(gc, aodev->dev);
     char **args = NULL, **env = NULL;
     int rc = 0;
-    int hotplug;
-    pid_t pid;
+    int hotplug, nullfd = -1;
     uint32_t domid;
 
     /*
@@ -1010,66 +1025,46 @@ static void device_hotplug(libxl__egc *egc, libxl__ao_device *aodev)
         goto out;
     }
 
-    /* Set hotplug timeout */
-    rc = libxl__ev_time_register_rel(gc, &aodev->timeout,
-                                     device_hotplug_timeout_cb,
-                                     LIBXL_HOTPLUG_TIMEOUT * 1000);
-    if (rc) {
-        LOG(ERROR, "unable to register timeout for hotplug device %s", be_path);
-        goto out;
-    }
-
-    aodev->what = GCSPRINTF("%s %s", args[0], args[1]);
     LOG(DEBUG, "calling hotplug script: %s %s", args[0], args[1]);
 
-    /* fork and execute hotplug script */
-    pid = libxl__ev_child_fork(gc, &aodev->child, device_hotplug_child_death_cb);
-    if (pid == -1) {
-        LOG(ERROR, "unable to fork");
+    nullfd = open("/dev/null", O_RDONLY);
+    if (nullfd < 0) {
+        LOG(ERROR, "unable to open /dev/null for hotplug script");
         rc = ERROR_FAIL;
         goto out;
     }
 
-    if (!pid) {
-        /* child */
-        libxl__exec(gc, -1, -1, -1, args[0], args, env);
-        /* notreached */
-        abort();
-    }
+    aes->ao = ao;
+    aes->what = GCSPRINTF("%s %s", args[0], args[1]);
+    aes->env = env;
+    aes->args = args;
+    aes->callback = device_hotplug_child_death_cb;
+    aes->timeout_ms = LIBXL_HOTPLUG_TIMEOUT * 1000;
+    aes->stdfds[0] = nullfd;
+    aes->stdfds[1] = 2;
+    aes->stdfds[2] = -1;
 
-    assert(libxl__ev_child_inuse(&aodev->child));
+    rc = libxl__async_exec_start(gc, aes);
+    if (rc)
+        goto out;
+
+    close(nullfd);
+    assert(libxl__async_exec_inuse(&aodev->aes));
 
     return;
 
 out:
+    if (nullfd >= 0) close(nullfd);
     aodev->rc = rc;
     device_hotplug_done(egc, aodev);
     return;
 }
 
-static void device_hotplug_timeout_cb(libxl__egc *egc, libxl__ev_time *ev,
-                                      const struct timeval *requested_abs)
-{
-    libxl__ao_device *aodev = CONTAINER_OF(ev, *aodev, timeout);
-    STATE_AO_GC(aodev->ao);
-
-    libxl__ev_time_deregister(gc, &aodev->timeout);
-
-    assert(libxl__ev_child_inuse(&aodev->child));
-    LOG(DEBUG, "killing hotplug script %s because of timeout", aodev->what);
-    if (kill(aodev->child.pid, SIGKILL)) {
-        LOGEV(ERROR, errno, "unable to kill hotplug script %s [%ld]",
-                            aodev->what, (unsigned long)aodev->child.pid);
-    }
-
-    return;
-}
-
 static void device_hotplug_child_death_cb(libxl__egc *egc,
-                                          libxl__ev_child *child,
-                                          pid_t pid, int status)
+                                          libxl__async_exec_state *aes,
+                                          int status)
 {
-    libxl__ao_device *aodev = CONTAINER_OF(child, *aodev, child);
+    libxl__ao_device *aodev = CONTAINER_OF(aes, *aodev, aes);
     STATE_AO_GC(aodev->ao);
     char *be_path = libxl__device_backend_path(gc, aodev->dev);
     char *hotplug_error;
@@ -1077,8 +1072,6 @@ static void device_hotplug_child_death_cb(libxl__egc *egc,
     device_hotplug_clean(gc, aodev);
 
     if (status) {
-        libxl_report_child_exitstatus(CTX, LIBXL__LOG_ERROR,
-                                      aodev->what, pid, status);
         hotplug_error = libxl__xs_read(gc, XBT_NULL,
                                        GCSPRINTF("%s/hotplug-error", be_path));
         if (hotplug_error)
@@ -1170,7 +1163,7 @@ static void device_hotplug_clean(libxl__gc *gc, libxl__ao_device *aodev)
     /* Clean events and check reentrancy */
     libxl__ev_time_deregister(gc, &aodev->timeout);
     libxl__ev_xswatch_deregister(gc, &aodev->xs_watch);
-    assert(!libxl__ev_child_inuse(&aodev->child));
+    assert(!libxl__async_exec_inuse(&aodev->aes));
 }
 
 static void devices_remove_callback(libxl__egc *egc,

@@ -358,19 +358,14 @@ static int qmp_open(libxl__qmp_handler *qmp, const char *qmp_socket_path,
                     int timeout)
 {
     int ret;
-    int flags = 0;
     int i = 0;
 
     qmp->qmp_fd = socket(AF_UNIX, SOCK_STREAM, 0);
     if (qmp->qmp_fd < 0) {
         return -1;
     }
-    if ((flags = fcntl(qmp->qmp_fd, F_GETFL)) == -1) {
-        flags = 0;
-    }
-    if (fcntl(qmp->qmp_fd, F_SETFL, flags | O_NONBLOCK) == -1) {
-        return -1;
-    }
+    ret = libxl_fd_set_nonblock(qmp->ctx, qmp->qmp_fd, 1);
+    if (ret) return -1;
     ret = libxl_fd_set_cloexec(qmp->ctx, qmp->qmp_fd, 1);
     if (ret) return -1;
 
@@ -456,7 +451,7 @@ static int qmp_next(libxl__gc *gc, libxl__qmp_handler *qmp)
             if (incomplete) {
                 size_t current_pos = s - incomplete;
                 incomplete = libxl__realloc(gc, incomplete,
-                                            incomplete_size + rd);
+                                            incomplete_size + rd + 1);
                 strncat(incomplete + incomplete_size, qmp->buffer, rd);
                 s = incomplete + current_pos;
                 incomplete_size += rd;

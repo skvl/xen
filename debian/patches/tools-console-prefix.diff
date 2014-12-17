@@ -1,4 +1,4 @@
-From 6133fec6e8a95d48c89984b7fa508a2dc545c711 Mon Sep 17 00:00:00 2001
+From 2a567a791e07e168a79559b185aeb9c9dca0e6b1 Mon Sep 17 00:00:00 2001
 From: Bastian Blank <waldi@debian.org>
 Date: Sat, 5 Jul 2014 11:46:54 +0200
 Subject: tools-console-prefix.diff
@@ -9,7 +9,7 @@ Patch-Name: tools-console-prefix.diff
  1 file changed, 2 insertions(+), 3 deletions(-)
 
 diff --git a/tools/console/Makefile b/tools/console/Makefile
-index 3e38252..b69f674 100644
+index 6e55618..3e96550 100644
 --- a/tools/console/Makefile
 +++ b/tools/console/Makefile
 @@ -8,6 +8,7 @@ CFLAGS  += $(CFLAGS_libxenstore)
@@ -26,8 +26,8 @@ index 3e38252..b69f674 100644
  install: $(BIN)
 -	$(INSTALL_DIR) $(DESTDIR)/$(SBINDIR)
 -	$(INSTALL_PROG) xenconsoled $(DESTDIR)/$(SBINDIR)
- 	$(INSTALL_DIR) $(DESTDIR)$(PRIVATE_BINDIR)
--	$(INSTALL_PROG) xenconsole $(DESTDIR)$(PRIVATE_BINDIR)
-+	$(INSTALL_PROG) xenconsole xenconsoled $(DESTDIR)$(PRIVATE_BINDIR)
+ 	$(INSTALL_DIR) $(DESTDIR)$(LIBEXEC_BIN)
+-	$(INSTALL_PROG) xenconsole $(DESTDIR)$(LIBEXEC_BIN)
++	$(INSTALL_PROG) xenconsole xenconsoled $(DESTDIR)$(LIBEXEC_BIN)
  
  -include $(DEPS)

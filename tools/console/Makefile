@@ -31,7 +31,7 @@ xenconsole: $(patsubst %.c,%.o,$(wildcard client/*.c))
 
 .PHONY: install
 install: $(BIN)
-	$(INSTALL_DIR) $(DESTDIR)$(PRIVATE_BINDIR)
-	$(INSTALL_PROG) xenconsole xenconsoled $(DESTDIR)$(PRIVATE_BINDIR)
+	$(INSTALL_DIR) $(DESTDIR)$(LIBEXEC_BIN)
+	$(INSTALL_PROG) xenconsole xenconsoled $(DESTDIR)$(LIBEXEC_BIN)
 
 -include $(DEPS)

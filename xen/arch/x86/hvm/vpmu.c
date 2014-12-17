@@ -64,12 +64,12 @@ static void __init parse_vpmu_param(char *s)
     }
 }
 
-int vpmu_do_wrmsr(unsigned int msr, uint64_t msr_content)
+int vpmu_do_wrmsr(unsigned int msr, uint64_t msr_content, uint64_t supported)
 {
     struct vpmu_struct *vpmu = vcpu_vpmu(current);
 
     if ( vpmu->arch_vpmu_ops && vpmu->arch_vpmu_ops->do_wrmsr )
-        return vpmu->arch_vpmu_ops->do_wrmsr(msr, msr_content);
+        return vpmu->arch_vpmu_ops->do_wrmsr(msr, msr_content, supported);
     return 0;
 }
 
@@ -82,7 +82,7 @@ int vpmu_do_rdmsr(unsigned int msr, uint64_t *msr_content)
     return 0;
 }
 
-int vpmu_do_interrupt(struct cpu_user_regs *regs)
+void vpmu_do_interrupt(struct cpu_user_regs *regs)
 {
     struct vcpu *v = current;
     struct vpmu_struct *vpmu = vcpu_vpmu(v);
@@ -91,25 +91,23 @@ int vpmu_do_interrupt(struct cpu_user_regs *regs)
     {
         struct vlapic *vlapic = vcpu_vlapic(v);
         u32 vlapic_lvtpc;
-        unsigned char int_vec;
 
-        if ( !vpmu->arch_vpmu_ops->do_interrupt(regs) )
-            return 0;
-
-        if ( !is_vlapic_lvtpc_enabled(vlapic) )
-            return 1;
+        if ( !vpmu->arch_vpmu_ops->do_interrupt(regs) ||
+             !is_vlapic_lvtpc_enabled(vlapic) )
+            return;
 
         vlapic_lvtpc = vlapic_get_reg(vlapic, APIC_LVTPC);
-        int_vec = vlapic_lvtpc & APIC_VECTOR_MASK;
 
-        if ( GET_APIC_DELIVERY_MODE(vlapic_lvtpc) == APIC_MODE_FIXED )
-            vlapic_set_irq(vcpu_vlapic(v), int_vec, 0);
-        else
+        switch ( GET_APIC_DELIVERY_MODE(vlapic_lvtpc) )
+        {
+        case APIC_MODE_FIXED:
+            vlapic_set_irq(vlapic, vlapic_lvtpc & APIC_VECTOR_MASK, 0);
+            break;
+        case APIC_MODE_NMI:
             v->nmi_pending = 1;
-        return 1;
+            break;
+        }
     }
-
-    return 0;
 }
 
 void vpmu_do_cpuid(unsigned int input,
@@ -211,16 +209,18 @@ void vpmu_load(struct vcpu *v)
     if ( vpmu->arch_vpmu_ops && vpmu->arch_vpmu_ops->arch_vpmu_load )
     {
         apic_write_around(APIC_LVTPC, vpmu->hw_lapic_lvtpc);
+        /* Arch code needs to set VPMU_CONTEXT_LOADED */
         vpmu->arch_vpmu_ops->arch_vpmu_load(v);
     }
-
-    vpmu_set(vpmu, VPMU_CONTEXT_LOADED);
 }
 
 void vpmu_initialise(struct vcpu *v)
 {
     struct vpmu_struct *vpmu = vcpu_vpmu(v);
     uint8_t vendor = current_cpu_data.x86_vendor;
+
+    if ( is_pvh_vcpu(v) )
+        return;
 
     if ( vpmu_is_set(vpmu, VPMU_CONTEXT_ALLOCATED) )
         vpmu_destroy(v);

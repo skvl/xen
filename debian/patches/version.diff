@@ -1,4 +1,4 @@
-From a56d50ac2bb489b7767b225f994b884c500cd6af Mon Sep 17 00:00:00 2001
+From e3eb13e030e91ed7d3bcd1f15d2c1c66bb51f1c5 Mon Sep 17 00:00:00 2001
 From: Bastian Blank <waldi@debian.org>
 Date: Sat, 5 Jul 2014 11:46:43 +0200
 Subject: version
@@ -14,10 +14,10 @@ Patch-Name: version.diff
  6 files changed, 29 insertions(+), 32 deletions(-)
 
 diff --git a/xen/Makefile b/xen/Makefile
-index 134a8bd..10d1424 100644
+index 72c1313..ca6f0c1 100644
 --- a/xen/Makefile
 +++ b/xen/Makefile
-@@ -122,20 +122,19 @@ delete-unfresh-files:
+@@ -125,20 +125,19 @@ delete-unfresh-files:
  	@mv -f $@.tmp $@
  
  # compile.h contains dynamic build info. Rebuilt on every 'make' invocation.
@@ -44,10 +44,10 @@ index 134a8bd..10d1424 100644
  
  include/asm-$(TARGET_ARCH)/asm-offsets.h: arch/$(TARGET_ARCH)/asm-offsets.s
 diff --git a/xen/common/kernel.c b/xen/common/kernel.c
-index b371f8f..877d461 100644
+index d23c422..0734a50 100644
 --- a/xen/common/kernel.c
 +++ b/xen/common/kernel.c
-@@ -243,8 +243,8 @@ DO(xen_version)(int cmd, XEN_GUEST_HANDLE_PARAM(void) arg)
+@@ -250,8 +250,8 @@ DO(xen_version)(int cmd, XEN_GUEST_HANDLE_PARAM(void) arg)
      {
          struct xen_compile_info info;
          safe_strcpy(info.compiler,       xen_compiler());
@@ -102,10 +102,10 @@ index b152e27..7b5af55 100644
 -    return XEN_BANNER;
 -}
 diff --git a/xen/drivers/char/console.c b/xen/drivers/char/console.c
-index 89ffe64..07af8d6 100644
+index 2f03259..1f5200a 100644
 --- a/xen/drivers/char/console.c
 +++ b/xen/drivers/char/console.c
-@@ -667,14 +667,11 @@ void __init console_init_preirq(void)
+@@ -727,14 +727,11 @@ void __init console_init_preirq(void)
      serial_set_rx_handler(sercon_handle, serial_rx);
  
      /* HELLO WORLD --- start-of-day banner text. */

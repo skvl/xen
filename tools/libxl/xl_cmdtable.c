@@ -38,7 +38,9 @@ struct cmd_spec cmd_table[] = {
     { "config-update",
       &main_config_update, 1, 1,
       "Update a running domain's saved configuration, used when rebuilding "
-      "the domain after reboot",
+      "the domain after reboot.\n"
+      "WARNING: xl now has better capability to manage domain configuration, "
+      "avoid using this command when possible",
       "<Domain> <ConfigFile> [options] [vars]",
       "-h                      Print this help.\n"
       "-f FILE, --defconfig=FILE\n                     Use the given configuration file.\n"
@@ -56,7 +58,10 @@ struct cmd_spec cmd_table[] = {
     { "destroy",
       &main_destroy, 0, 1,
       "Terminate a domain immediately",
-      "<Domain>",
+      "[options] <Domain>\n",
+      "-f                      Permit destroying domain 0, which will only succeed\n"
+      "                        when run from disaggregated toolstack domain with a\n"
+      "                        hardware domain distinct from domain 0."
     },
     { "shutdown",
       &main_shutdown, 0, 1,
@@ -215,7 +220,7 @@ struct cmd_spec cmd_table[] = {
     { "vcpu-pin",
       &main_vcpupin, 1, 1,
       "Set which CPUs a VCPU can use",
-      "<Domain> <VCPU|all> <CPUs|all>",
+      "<Domain> <VCPU|all> <Hard affinity|-|all> <Soft affinity|-|all>",
     },
     { "vcpu-set",
       &main_vcpuset, 0, 1,
@@ -274,6 +279,14 @@ struct cmd_spec cmd_table[] = {
       "                               --period/--slice)\n"
       "-c CPUPOOL, --cpupool=CPUPOOL  Restrict output to CPUPOOL"
     },
+    { "sched-rtds",
+      &main_sched_rtds, 0, 1,
+      "Get/set rtds scheduler parameters",
+      "[-d <Domain> [-p[=PERIOD]] [-b[=BUDGET]]]",
+      "-d DOMAIN, --domain=DOMAIN     Domain to modify\n"
+      "-p PERIOD, --period=PERIOD     Period (us)\n"
+      "-b BUDGET, --budget=BUDGET     Budget (us)\n"
+    },
     { "domid",
       &main_domid, 0, 0,
       "Convert a domain name to domain id",
@@ -331,6 +344,11 @@ struct cmd_spec cmd_table[] = {
       &main_networkdetach, 0, 1,
       "Destroy a domain's virtual network device",
       "<Domain> <DevId|mac>",
+    },
+    { "channel-list",
+      &main_channellist, 0, 0,
+      "List virtual channel devices for a domain",
+      "<Domain(s)>",
     },
     { "block-attach",
       &main_blockattach, 1, 1,
@@ -482,13 +500,20 @@ struct cmd_spec cmd_table[] = {
       "Enable Remus HA for domain",
       "[options] <Domain> [<host>]",
       "-i MS                   Checkpoint domain memory every MS milliseconds (def. 200ms).\n"
-      "-b                      Replicate memory checkpoints to /dev/null (blackhole)\n"
       "-u                      Disable memory checkpoint compression.\n"
       "-s <sshcommand>         Use <sshcommand> instead of ssh.  String will be passed\n"
       "                        to sh. If empty, run <host> instead of \n"
       "                        ssh <host> xl migrate-receive -r [-e]\n"
       "-e                      Do not wait in the background (on <host>) for the death\n"
-      "                        of the domain."
+      "                        of the domain.\n"
+      "-N <netbufscript>       Use netbufscript to setup network buffering instead of the\n"
+      "                        default script (/etc/xen/scripts/remus-netbuf-setup).\n"
+      "-F                      Enable unsafe configurations [-b|-n|-d flags]. Use this option\n"
+      "                        with caution as failover may not work as intended.\n"
+      "-b                      Replicate memory checkpoints to /dev/null (blackhole).\n"
+      "                        Works only in unsafe mode.\n"
+      "-n                      Disable network output buffering. Works only in unsafe mode.\n"
+      "-d                      Disable disk replication. Works only in unsafe mode."
     },
 #endif
     { "devd",
@@ -497,6 +522,25 @@ struct cmd_spec cmd_table[] = {
       "[options]",
       "-F                      Run in the foreground",
     },
+#ifdef LIBXL_HAVE_PSR_CMT
+    { "psr-cmt-attach",
+      &main_psr_cmt_attach, 0, 1,
+      "Attach Cache Monitoring Technology service to a domain",
+      "<Domain>",
+    },
+    { "psr-cmt-detach",
+      &main_psr_cmt_detach, 0, 1,
+      "Detach Cache Monitoring Technology service from a domain",
+      "<Domain>",
+    },
+    { "psr-cmt-show",
+      &main_psr_cmt_show, 0, 1,
+      "Show Cache Monitoring Technology information",
+      "<PSR-CMT-Type> <Domain>",
+      "Available monitor types:\n"
+      "\"cache_occupancy\":         Show L3 cache occupancy\n",
+    },
+#endif
 };
 
 int cmdtable_len = sizeof(cmd_table)/sizeof(struct cmd_spec);
