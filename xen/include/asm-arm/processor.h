@@ -3,6 +3,7 @@
 
 #include <asm/cpregs.h>
 #include <asm/sysregs.h>
+#include <public/arch-arm.h>
 
 /* MIDR Main ID Register */
 #define MIDR_MASK    0xff0ffff0
@@ -16,6 +17,22 @@
 #define MPIDR_AFF0_MASK     (_AC(0xff,U) << MPIDR_AFF0_SHIFT)
 #define MPIDR_HWID_MASK     _AC(0xffffff,U)
 #define MPIDR_INVALID       (~MPIDR_HWID_MASK)
+#define MPIDR_LEVEL_BITS    (8)
+#define AFFINITY_MASK(level)    ~((_AC(0x1,U) << ((level) * MPIDR_LEVEL_BITS)) - 1)
+
+
+/*
+ * Macros to extract affinity level. picked from kernel
+ */
+
+#define MPIDR_LEVEL_BITS_SHIFT  3
+#define MPIDR_LEVEL_MASK        ((1 << MPIDR_LEVEL_BITS) - 1)
+
+#define MPIDR_LEVEL_SHIFT(level) \
+         (((1 << level) >> 1) << MPIDR_LEVEL_BITS_SHIFT)
+
+#define MPIDR_AFFINITY_LEVEL(mpidr, level) \
+         ((mpidr >> MPIDR_LEVEL_SHIFT(level)) & MPIDR_LEVEL_MASK)
 
 /* TTBCR Translation Table Base Control Register */
 #define TTBCR_EAE    _AC(0x80000000,U)
@@ -84,6 +101,73 @@
 #define HCR_SWIO        (_AC(1,UL)<<1) /* Set/Way Invalidation Override */
 #define HCR_VM          (_AC(1,UL)<<0) /* Virtual MMU Enable */
 
+/* TCR: Stage 1 Translation Control */
+
+#define TCR_T0SZ(x)     ((x)<<0)
+
+#define TCR_IRGN0_NC    (_AC(0x0,UL)<<8)
+#define TCR_IRGN0_WBWA  (_AC(0x1,UL)<<8)
+#define TCR_IRGN0_WT    (_AC(0x2,UL)<<8)
+#define TCR_IRGN0_WB    (_AC(0x3,UL)<<8)
+
+#define TCR_ORGN0_NC    (_AC(0x0,UL)<<10)
+#define TCR_ORGN0_WBWA  (_AC(0x1,UL)<<10)
+#define TCR_ORGN0_WT    (_AC(0x2,UL)<<10)
+#define TCR_ORGN0_WB    (_AC(0x3,UL)<<10)
+
+#define TCR_SH0_NS      (_AC(0x0,UL)<<12)
+#define TCR_SH0_OS      (_AC(0x2,UL)<<12)
+#define TCR_SH0_IS      (_AC(0x3,UL)<<12)
+
+#define TCR_TG0_4K      (_AC(0x0,UL)<<14)
+#define TCR_TG0_64K     (_AC(0x1,UL)<<14)
+#define TCR_TG0_16K     (_AC(0x2,UL)<<14)
+
+#ifdef CONFIG_ARM_64
+
+#define TCR_PS(x)       ((x)<<16)
+#define TCR_TBI         (_AC(0x1,UL)<<20)
+
+#define TCR_RES1        (_AC(1,UL)<<31|_AC(1,UL)<<23)
+
+#else
+
+#define TCR_RES1        (_AC(1,UL)<<31)
+
+#endif
+
+/* VTCR: Stage 2 Translation Control */
+
+#define VTCR_T0SZ(x)    ((x)<<0)
+
+#define VTCR_SL0(x)     ((x)<<6)
+
+#define VTCR_IRGN0_NC   (_AC(0x0,UL)<<8)
+#define VTCR_IRGN0_WBWA (_AC(0x1,UL)<<8)
+#define VTCR_IRGN0_WT   (_AC(0x2,UL)<<8)
+#define VTCR_IRGN0_WB   (_AC(0x3,UL)<<8)
+
+#define VTCR_ORGN0_NC   (_AC(0x0,UL)<<10)
+#define VTCR_ORGN0_WBWA (_AC(0x1,UL)<<10)
+#define VTCR_ORGN0_WT   (_AC(0x2,UL)<<10)
+#define VTCR_ORGN0_WB   (_AC(0x3,UL)<<10)
+
+#define VTCR_SH0_NS     (_AC(0x0,UL)<<12)
+#define VTCR_SH0_OS     (_AC(0x2,UL)<<12)
+#define VTCR_SH0_IS     (_AC(0x3,UL)<<12)
+
+#ifdef CONFIG_ARM_64
+
+#define VTCR_TG0_4K     (_AC(0x0,UL)<<14)
+#define VTCR_TG0_64K    (_AC(0x1,UL)<<14)
+#define VTCR_TG0_16K    (_AC(0x2,UL)<<14)
+
+#define VTCR_PS(x)      ((x)<<16)
+
+#endif
+
+#define VTCR_RES1       (_AC(1,UL)<<31)
+
 /* HCPTR Hyp. Coprocessor Trap Register */
 #define HCPTR_TTA       ((_AC(1,U)<<20))        /* Trap trace registers */
 #define HCPTR_CP(x)     ((_AC(1,U)<<(x)))       /* Trap Coprocessor x */
@@ -96,6 +180,7 @@
 #define HDCR_TDRA       (_AC(1,U)<<11)          /* Trap Debug ROM access */
 #define HDCR_TDOSA      (_AC(1,U)<<10)          /* Trap Debug-OS-related register access */
 #define HDCR_TDA        (_AC(1,U)<<9)           /* Trap Debug Access */
+#define HDCR_TDE        (_AC(1,U)<<8)           /* Route Soft Debug exceptions from EL1/EL1 to EL2 */
 #define HDCR_TPM        (_AC(1,U)<<6)           /* Trap Performance Monitors accesses */
 #define HDCR_TPMCR      (_AC(1,U)<<5)           /* Trap PMCR accesses */
 
@@ -122,6 +207,9 @@
 #define HSR_EC_INSTR_ABORT_CURR_EL  0x21
 #define HSR_EC_DATA_ABORT_LOWER_EL  0x24
 #define HSR_EC_DATA_ABORT_CURR_EL   0x25
+#ifdef CONFIG_ARM_64
+#define HSR_EC_BRK                  0x3c
+#endif
 
 /* FSR format, common */
 #define FSR_LPAE                (_AC(1,UL)<<9)
@@ -174,8 +262,8 @@ struct cpuinfo_arm {
             unsigned long el3:4;
             unsigned long fp:4;   /* Floating Point */
             unsigned long simd:4; /* Advanced SIMD */
-            unsigned long __res0:8;
-
+            unsigned long gic:4;  /* GIC support */
+            unsigned long __res0:4;
             unsigned long __res1;
         };
     } pfr64;
@@ -188,8 +276,19 @@ struct cpuinfo_arm {
         uint64_t bits[2];
     } aux64;
 
-    struct {
+    union {
         uint64_t bits[2];
+        struct {
+            unsigned long pa_range:4;
+            unsigned long asid_bits:4;
+            unsigned long bigend:4;
+            unsigned long secure_ns:4;
+            unsigned long bigend_el0:4;
+            unsigned long tgranule_16K:4;
+            unsigned long tgranule_64K:4;
+            unsigned long tgranule_4K:4;
+            unsigned long __res0:32;
+       };
     } mm64;
 
     struct {
@@ -251,6 +350,14 @@ extern struct cpuinfo_arm cpu_data[];
 extern u32 __cpu_logical_map[];
 #define cpu_logical_map(cpu) __cpu_logical_map[cpu]
 
+/* HSR data abort size definition */
+enum dabt_size {
+    DABT_BYTE        = 0,
+    DABT_HALF_WORD   = 1,
+    DABT_WORD        = 2,
+    DABT_DOUBLE_WORD = 3,
+};
+
 union hsr {
     uint32_t bits;
     struct {
@@ -267,6 +374,15 @@ union hsr {
         unsigned long len:1;   /* Instruction length */
         unsigned long ec:6;    /* Exception Class */
     } cond;
+
+    struct hsr_wfi_wfe {
+        unsigned long ti:1;    /* Trapped instruction */
+        unsigned long sbzp:19;
+        unsigned long cc:4;    /* Condition Code */
+        unsigned long ccvalid:1;/* CC Valid */
+        unsigned long len:1;   /* Instruction length */
+        unsigned long ec:6;    /* Exception Class */
+    } wfi_wfe;
 
     /* reg, reg0, reg1 are 4 bits on AArch32, the fifth bit is sbzp. */
     struct hsr_cp32 {
@@ -294,6 +410,17 @@ union hsr {
         unsigned long len:1;    /* Instruction length */
         unsigned long ec:6;     /* Exception Class */
     } cp64; /* HSR_EC_CP15_64, HSR_EC_CP14_64 */
+
+     struct hsr_cp {
+        unsigned long coproc:4; /* Number of coproc accessed */
+        unsigned long sbz0p:1;
+        unsigned long tas:1;    /* Trapped Advanced SIMD */
+        unsigned long res0:14;
+        unsigned long cc:4;     /* Condition Code */
+        unsigned long ccvalid:1;/* CC Valid */
+        unsigned long len:1;    /* Instruction length */
+        unsigned long ec:6;     /* Exception Class */
+    } cp; /* HSR_EC_CP */
 
 #ifdef CONFIG_ARM_64
     struct hsr_sysreg {
@@ -330,6 +457,17 @@ union hsr {
         unsigned long len:1;   /* Instruction length */
         unsigned long ec:6;    /* Exception Class */
     } dabt; /* HSR_EC_DATA_ABORT_* */
+
+#ifdef CONFIG_ARM_64
+    struct hsr_brk {
+        unsigned long comment:16;   /* Comment */
+        unsigned long res0:9;
+        unsigned long len:1;        /* Instruction length */
+        unsigned long ec:6;         /* Exception Class */
+    } brk;
+#endif
+
+
 };
 #endif
 
@@ -461,7 +599,7 @@ void panic_PAR(uint64_t par);
 void show_execution_state(struct cpu_user_regs *regs);
 void show_registers(struct cpu_user_regs *regs);
 //#define dump_execution_state() run_in_exception_handler(show_execution_state)
-#define dump_execution_state() asm volatile (".word 0xe7f000f0\n"); /* XXX */
+#define dump_execution_state() WARN()
 
 #define cpu_relax() barrier() /* Could yield? */
 
@@ -469,16 +607,15 @@ void show_registers(struct cpu_user_regs *regs);
 #define cpu_to_core(_cpu)   (0)
 #define cpu_to_socket(_cpu) (0)
 
-void do_unexpected_trap(const char *msg, struct cpu_user_regs *regs);
+void noreturn do_unexpected_trap(const char *msg, struct cpu_user_regs *regs);
 
 void vcpu_regs_hyp_to_user(const struct vcpu *vcpu,
                            struct vcpu_guest_core_regs *regs);
 void vcpu_regs_user_to_hyp(struct vcpu *vcpu,
                            const struct vcpu_guest_core_regs *regs);
 
-struct cpuinfo_x86 {
-    uint32_t pfr32[2];
-};
+int call_smc(register_t function_id, register_t arg0, register_t arg1,
+             register_t arg2);
 
 #endif /* __ASSEMBLY__ */
 #endif /* __ASM_ARM_PROCESSOR_H */

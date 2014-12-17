@@ -141,13 +141,11 @@ typedef struct spinlock {
 #define spin_lock_init(l) (*(l) = (spinlock_t)SPIN_LOCK_UNLOCKED)
 
 typedef struct {
-    volatile uint32_t lock;
+    raw_rwlock_t raw;
     struct lock_debug debug;
 } rwlock_t;
 
-#define RW_WRITE_FLAG (1u<<31)
-
-#define RW_LOCK_UNLOCKED { 0, _LOCK_DEBUG }
+#define RW_LOCK_UNLOCKED { _RAW_RW_LOCK_UNLOCKED, _LOCK_DEBUG }
 #define DEFINE_RWLOCK(l) rwlock_t l = RW_LOCK_UNLOCKED
 #define rwlock_init(l) (*(l) = (rwlock_t)RW_LOCK_UNLOCKED)
 

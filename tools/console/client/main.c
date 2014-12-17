@@ -33,7 +33,6 @@
 #include <getopt.h>
 #include <sys/select.h>
 #include <err.h>
-#include <errno.h>
 #include <string.h>
 #ifdef __sun__
 #include <sys/stropts.h>
@@ -115,12 +114,12 @@ static int get_pty_fd(struct xs_handle *xs, char *path, int seconds)
 			/* We only watch for one thing, so no need to 
 			 * disambiguate: just read the pty path */
 			pty_path = xs_read(xs, XBT_NULL, path, &len);
-			if (pty_path != NULL) {
+			if (pty_path != NULL && pty_path[0] != '\0') {
 				pty_fd = open(pty_path, O_RDWR | O_NOCTTY);
 				if (pty_fd == -1)
-					err(errno, "Could not open tty `%s'", pty_path);
-				free(pty_path);
+					warn("Could not open tty `%s'", pty_path);
 			}
+			free(pty_path);
 		}
 	} while (pty_fd == -1 && (now = time(NULL)) < start + seconds);
 
@@ -258,6 +257,13 @@ typedef enum {
        CONSOLE_SERIAL,
 } console_type;
 
+static struct termios stdin_old_attr;
+
+static void restore_term_stdin(void)
+{
+	restore_term(STDIN_FILENO, &stdin_old_attr);
+}
+
 int main(int argc, char **argv)
 {
 	struct termios attr;
@@ -384,9 +390,9 @@ int main(int argc, char **argv)
 	}
 
 	init_term(spty, &attr);
-	init_term(STDIN_FILENO, &attr);
+	init_term(STDIN_FILENO, &stdin_old_attr);
+	atexit(restore_term_stdin); /* if this fails, oh dear */
 	console_loop(spty, xs, path);
-	restore_term(STDIN_FILENO, &attr);
 
 	free(path);
 	free(dom_path);

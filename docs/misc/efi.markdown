@@ -1,8 +1,19 @@
-Building xen.efi requires gcc 4.5.x or above (4.6.x or newer recommended, as
-4.5.x was probably never really tested for this purpose) and binutils 2.22 or
-newer. Additionally, the binutils build must be configured to include support
-for the x86_64-pep emulation (i.e. `--enable-targets=x86_64-pep` or an option
-of equivalent effect should be passed to the configure script).
+For x86, building xen.efi requires gcc 4.5.x or above (4.6.x or newer
+recommended, as 4.5.x was probably never really tested for this purpose) and
+binutils 2.22 or newer.  Additionally, the binutils build must be configured to
+include support for the x86_64-pep emulation (i.e.
+`--enable-targets=x86_64-pep` or an option of equivalent effect should be
+passed to the configure script).
+
+For arm64, the PE/COFF header is open-coded in assembly, so no toolchain
+support for PE/COFF is required.  Also, the PE/COFF header co-exists with the
+normal Image format, so a single binary may be booted as an Image file or as an
+EFI application.  When booted as an EFI application, Xen requires a
+configuration file as described below unless a bootloader, such as GRUB, has
+loaded the modules and describes them in the device tree provided to Xen.  If a
+bootloader provides a device tree containing modules then any configuration
+files are ignored, and the bootloader is responsible for populating all
+relevant device tree nodes.
 
 Once built, `make install-xen` will place the resulting binary directly into
 the EFI boot partition, provided `EFI_VENDOR` is set in the environment (and
@@ -18,12 +29,18 @@ separators will be tried) to be present in the same directory as the binary.
 (To illustrate the name handling, a binary named `xen-4.2-unstable.efi` would
 try `xen-4.2-unstable.cfg`, `xen-4.2.cfg`, `xen-4.cfg`, and `xen.cfg` in
 order.) One can override this with a command line option (`-cfg=<filename>`).
+This configuration file and EFI commandline are only used for booting directly
+from EFI firmware, or when using an EFI loader that does not support
+the multiboot2 protocol.  When booting using GRUB or another multiboot aware
+loader the EFI commandline is ignored and all information is passed from
+the loader to Xen using the multiboot protocol.
 
 The configuration file consists of one or more sections headed by a section
 name enclosed in square brackets, with individual values specified in each
 section. A section named `[global]` is treated specially to allow certain
 settings to apply to all other sections (or to provide defaults for certain
-settings in case individual sections don't specify them). A typical file would
+settings in case individual sections don't specify them). This file (for now)
+needs to be of ASCII type and not e.g. UTF-8 or UTF-16. A typical file would
 thus look like this (`#` serving as comment character):
 
     **************************example begin******************************
@@ -73,7 +90,14 @@ Specifies an XSM module to load.
 
 ###`ucode=<filename>`
 
-Specifies a CPU microcode blob to load.
+Specifies a CPU microcode blob to load. (x86 only)
+
+###`dtb=<filename>`
+
+Specifies a device tree file to load.  The platform firmware may provide a
+DTB in an EFI configuration table, so this field is optional in that
+case. A dtb specified in the configuration file will override a device tree
+provided in the EFI configuration table. (ARM only)
 
 ###`chain=<filename>`
 

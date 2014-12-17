@@ -1,4 +1,4 @@
-From 4a4ff09180bf2642429ecafb505b3a04843be52f Mon Sep 17 00:00:00 2001
+From 3f12df5e0d22f2ea95e86726e7f2b2f53932e783 Mon Sep 17 00:00:00 2001
 From: Bastian Blank <waldi@debian.org>
 Date: Sat, 5 Jul 2014 11:46:47 +0200
 Subject: tools-libfsimage-abiname.diff
@@ -9,7 +9,7 @@ Patch-Name: tools-libfsimage-abiname.diff
  1 file changed, 4 insertions(+), 14 deletions(-)
 
 diff --git a/tools/libfsimage/common/Makefile b/tools/libfsimage/common/Makefile
-index cbd60b4..4202cc1 100644
+index fb306f4..0e6c728 100644
 --- a/tools/libfsimage/common/Makefile
 +++ b/tools/libfsimage/common/Makefile
 @@ -1,9 +1,6 @@
@@ -52,9 +52,9 @@ index cbd60b4..4202cc1 100644
 -	ln -sf $< $@
 -
 -libfsimage.so.$(MAJOR).$(MINOR): $(PIC_OBJS)
--	$(CC) $(LDFLAGS) -Wl,$(SONAME_LDFLAG) -Wl,libfsimage.so.$(MAJOR) $(SHLIB_LDFLAGS) -o $@ $^ $(PTHREAD_LIBS)
+-	$(CC) $(LDFLAGS) -Wl,$(SONAME_LDFLAG) -Wl,libfsimage.so.$(MAJOR) $(SHLIB_LDFLAGS) -o $@ $^ $(PTHREAD_LIBS) $(APPEND_LDFLAGS)
 +libfsimage.so: $(PIC_OBJS)
-+	$(CC) $(LDFLAGS) -Wl,$(SONAME_LDFLAG),$@ $(SHLIB_LDFLAGS) -o $@ $^ $(PTHREAD_LIBS)
++	$(CC) $(LDFLAGS) -Wl,$(SONAME_LDFLAG),$@ $(SHLIB_LDFLAGS) -o $@ $^ $(PTHREAD_LIBS) $(APPEND_LDFLAGS)
  
  -include $(DEPS)
  

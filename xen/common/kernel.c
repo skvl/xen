@@ -135,6 +135,13 @@ void __init cmdline_parse(const char *cmdline)
                     parse_size_and_unit(optval, NULL));
                 break;
             case OPT_CUSTOM:
+                if ( !bool_assert )
+                {
+                    if ( *optval )
+                        break;
+                    safe_strcpy(opt, "no");
+                    optval = opt;
+                }
                 ((void (*)(const char *))param->var)(optval);
                 break;
             default:
@@ -303,7 +310,7 @@ DO(xen_version)(int cmd, XEN_GUEST_HANDLE_PARAM(void) arg)
                     (1U << XENFEAT_auto_translated_physmap);
             if ( supervisor_mode_kernel )
                 fi.submap |= 1U << XENFEAT_supervisor_mode_kernel;
-            if ( current->domain == dom0 )
+            if ( is_hardware_domain(current->domain) )
                 fi.submap |= 1U << XENFEAT_dom0;
 #ifdef CONFIG_X86
             switch ( d->guest_type )

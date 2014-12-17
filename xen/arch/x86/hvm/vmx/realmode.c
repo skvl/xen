@@ -129,27 +129,27 @@ static void realmode_emulate_one(struct hvm_emulate_ctxt *hvmemul_ctxt)
                 gdprintk(XENLOG_ERR, "Exception pending but no info.\n");
                 goto fail;
             }
-            hvmemul_ctxt->exn_vector = (uint8_t)intr_info;
-            hvmemul_ctxt->exn_insn_len = 0;
+            hvmemul_ctxt->trap.vector = (uint8_t)intr_info;
+            hvmemul_ctxt->trap.insn_len = 0;
         }
 
         if ( unlikely(curr->domain->debugger_attached) &&
-             ((hvmemul_ctxt->exn_vector == TRAP_debug) ||
-              (hvmemul_ctxt->exn_vector == TRAP_int3)) )
+             ((hvmemul_ctxt->trap.vector == TRAP_debug) ||
+              (hvmemul_ctxt->trap.vector == TRAP_int3)) )
         {
             domain_pause_for_debugger();
         }
         else if ( curr->arch.hvm_vcpu.guest_cr[0] & X86_CR0_PE )
         {
             gdprintk(XENLOG_ERR, "Exception %02x in protected mode.\n",
-                     hvmemul_ctxt->exn_vector);
+                     hvmemul_ctxt->trap.vector);
             goto fail;
         }
         else
         {
             realmode_deliver_exception(
-                hvmemul_ctxt->exn_vector,
-                hvmemul_ctxt->exn_insn_len,
+                hvmemul_ctxt->trap.vector,
+                hvmemul_ctxt->trap.insn_len,
                 hvmemul_ctxt);
         }
     }
@@ -157,14 +157,7 @@ static void realmode_emulate_one(struct hvm_emulate_ctxt *hvmemul_ctxt)
     return;
 
  fail:
-    gdprintk(XENLOG_ERR,
-             "Real-mode emulation failed @ %04x:%08lx: "
-             "%02x %02x %02x %02x %02x %02x\n",
-             hvmemul_get_seg_reg(x86_seg_cs, hvmemul_ctxt)->sel,
-             hvmemul_ctxt->insn_buf_eip,
-             hvmemul_ctxt->insn_buf[0], hvmemul_ctxt->insn_buf[1],
-             hvmemul_ctxt->insn_buf[2], hvmemul_ctxt->insn_buf[3],
-             hvmemul_ctxt->insn_buf[4], hvmemul_ctxt->insn_buf[5]);
+    hvm_dump_emulation_state(XENLOG_G_ERR "Real-mode", hvmemul_ctxt);
     domain_crash(curr->domain);
 }
 

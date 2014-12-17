@@ -15,10 +15,6 @@
 XEN_ROOT=$(CURDIR)/../../..
 include $(XEN_ROOT)/tools/Rules.mk
 
-prefix=$(PREFIX)
-includedir=$(prefix)/include
-libdir=$(prefix)/lib
-
 LDCONFIG=ldconfig
 MAKE_LINK=ln -sf
 
@@ -28,9 +24,8 @@ OBJECTS-y=src/xenstat.o
 OBJECTS-$(CONFIG_Linux) += src/xenstat_linux.o
 OBJECTS-$(CONFIG_SunOS) += src/xenstat_solaris.o
 OBJECTS-$(CONFIG_NetBSD) += src/xenstat_netbsd.o
+OBJECTS-$(CONFIG_FreeBSD) += src/xenstat_freebsd.o
 SONAME_FLAGS=-Wl,$(SONAME_LDFLAG),libxenstat.so
-
-WARN_FLAGS=-Wall -Werror
 
 CFLAGS+=-fPIC
 CFLAGS+=-Isrc $(CFLAGS_libxenctrl) $(CFLAGS_libxenstore) $(CFLAGS_xeninclude)
@@ -51,10 +46,10 @@ $(SHLIB): $(OBJECTS-y)
 
 .PHONY: install
 install: all
-	$(INSTALL_DIR) $(DESTDIR)$(LIBDIR) $(DESTDIR)$(PRIVATE_LIBDIR)
+	$(INSTALL_DIR) $(DESTDIR)$(LIBDIR) $(DESTDIR)$(LIBEXEC_LIB)
 	$(INSTALL_DATA) src/xenstat.h $(DESTDIR)$(INCLUDEDIR)
 	$(INSTALL_DATA) $(LIB) $(DESTDIR)$(LIBDIR)/libxenstat.a
-	$(INSTALL_PROG) src/libxenstat.so $(DESTDIR)$(PRIVATE_LIBDIR)
+	$(INSTALL_PROG) src/libxenstat.so $(DESTDIR)$(LIBEXEC_LIB)
 
 PYLIB=bindings/swig/python/_xenstat.so
 PYMOD=bindings/swig/python/xenstat.py

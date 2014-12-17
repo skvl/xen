@@ -459,6 +459,8 @@ unsigned long long parse_size_and_unit(const char *s, const char **ps)
 
     switch ( *s1 )
     {
+    case 'T': case 't':
+        ret <<= 10;
     case 'G': case 'g':
         ret <<= 10;
     case 'M': case 'm':
@@ -487,6 +489,9 @@ void __init init_constructors(void)
     const ctor_func_t *f;
     for ( f = __ctors_start; f < __ctors_end; ++f )
         (*f)();
+
+    /* Putting this here seems as good (or bad) as any other place. */
+    BUILD_BUG_ON(sizeof(size_t) != sizeof(ssize_t));
 }
 
 /*

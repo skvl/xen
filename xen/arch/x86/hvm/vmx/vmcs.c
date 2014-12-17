@@ -22,6 +22,10 @@
 #include <xen/lib.h>
 #include <xen/errno.h>
 #include <xen/domain_page.h>
+#include <xen/event.h>
+#include <xen/kernel.h>
+#include <xen/keyhandler.h>
+#include <xen/mem_event.h>
 #include <asm/current.h>
 #include <asm/cpufeature.h>
 #include <asm/processor.h>
@@ -34,9 +38,6 @@
 #include <asm/hvm/vmx/vvmx.h>
 #include <asm/hvm/vmx/vmcs.h>
 #include <asm/flushtlb.h>
-#include <xen/event.h>
-#include <xen/kernel.h>
-#include <xen/keyhandler.h>
 #include <asm/shadow.h>
 #include <asm/tboot.h>
 
@@ -70,6 +71,18 @@ u32 vmx_secondary_exec_control __read_mostly;
 u32 vmx_vmexit_control __read_mostly;
 u32 vmx_vmentry_control __read_mostly;
 u64 vmx_ept_vpid_cap __read_mostly;
+
+const u32 vmx_introspection_force_enabled_msrs[] = {
+    MSR_IA32_SYSENTER_EIP,
+    MSR_IA32_SYSENTER_ESP,
+    MSR_IA32_SYSENTER_CS,
+    MSR_IA32_MC0_CTL,
+    MSR_STAR,
+    MSR_LSTAR
+};
+
+const unsigned int vmx_introspection_force_enabled_msrs_size =
+    ARRAY_SIZE(vmx_introspection_force_enabled_msrs);
 
 static DEFINE_PER_CPU_READ_MOSTLY(struct vmcs_struct *, vmxon_region);
 static DEFINE_PER_CPU(struct vmcs_struct *, current_vmcs);
@@ -269,7 +282,8 @@ static int vmx_init_vmcs_config(void)
     }
 
     min = VM_EXIT_ACK_INTR_ON_EXIT;
-    opt = VM_EXIT_SAVE_GUEST_PAT | VM_EXIT_LOAD_HOST_PAT;
+    opt = VM_EXIT_SAVE_GUEST_PAT | VM_EXIT_LOAD_HOST_PAT |
+          VM_EXIT_CLEAR_BNDCFGS;
     min |= VM_EXIT_IA32E_MODE;
     _vmx_vmexit_control = adjust_vmx_controls(
         "VMExit Control", min, opt, MSR_IA32_VMX_EXIT_CTLS, &mismatch);
@@ -283,7 +297,7 @@ static int vmx_init_vmcs_config(void)
         _vmx_pin_based_exec_control  &= ~ PIN_BASED_POSTED_INTERRUPT;
 
     min = 0;
-    opt = VM_ENTRY_LOAD_GUEST_PAT;
+    opt = VM_ENTRY_LOAD_GUEST_PAT | VM_ENTRY_LOAD_BNDCFGS;
     _vmx_vmentry_control = adjust_vmx_controls(
         "VMEntry Control", min, opt, MSR_IA32_VMX_ENTRY_CTLS, &mismatch);
 
@@ -669,11 +683,6 @@ void vmx_vmcs_exit(struct vcpu *v)
     }
 }
 
-struct xgt_desc {
-    unsigned short size;
-    unsigned long address __attribute__((packed));
-};
-
 static void vmx_set_host_env(struct vcpu *v)
 {
     unsigned int cpu = smp_processor_id();
@@ -699,10 +708,22 @@ static void vmx_set_host_env(struct vcpu *v)
 void vmx_disable_intercept_for_msr(struct vcpu *v, u32 msr, int type)
 {
     unsigned long *msr_bitmap = v->arch.hvm_vmx.msr_bitmap;
+    struct domain *d = v->domain;
 
     /* VMX MSR bitmap supported? */
     if ( msr_bitmap == NULL )
         return;
+
+    if ( unlikely(d->arch.hvm_domain.introspection_enabled) &&
+         mem_event_check_ring(&d->mem_event->access) )
+    {
+        unsigned int i;
+
+        /* Filter out MSR-s needed for memory introspection */
+        for ( i = 0; i < vmx_introspection_force_enabled_msrs_size; i++ )
+            if ( msr == vmx_introspection_force_enabled_msrs[i] )
+                return;
+    }
 
     /*
      * See Intel PRM Vol. 3, 20.6.9 (MSR-Bitmap Address). Early manuals
@@ -725,7 +746,7 @@ void vmx_disable_intercept_for_msr(struct vcpu *v, u32 msr, int type)
             clear_bit(msr, msr_bitmap + 0xc00/BYTES_PER_LONG); /* write-high */
     }
     else
-        HVM_DBG_LOG(DBG_LEVEL_0,
+        HVM_DBG_LOG(DBG_LEVEL_MSR,
                    "msr %x is out of the control range"
                    "0x00000000-0x00001fff and 0xc0000000-0xc0001fff"
                    "RDMSR or WRMSR will cause a VM exit", msr); 
@@ -761,7 +782,7 @@ void vmx_enable_intercept_for_msr(struct vcpu *v, u32 msr, int type)
             set_bit(msr, msr_bitmap + 0xc00/BYTES_PER_LONG); /* write-high */
     }
     else
-        HVM_DBG_LOG(DBG_LEVEL_0,
+        HVM_DBG_LOG(DBG_LEVEL_MSR,
                    "msr %x is out of the control range"
                    "0x00000000-0x00001fff and 0xc0000000-0xc0001fff"
                    "RDMSR or WRMSR will cause a VM exit", msr); 
@@ -959,6 +980,9 @@ static int construct_vmcs(struct vcpu *v)
         vmx_disable_intercept_for_msr(v, MSR_IA32_SYSENTER_EIP, MSR_TYPE_R | MSR_TYPE_W);
         if ( paging_mode_hap(d) && (!iommu_enabled || iommu_snoop) )
             vmx_disable_intercept_for_msr(v, MSR_IA32_CR_PAT, MSR_TYPE_R | MSR_TYPE_W);
+        if ( (vmexit_ctl & VM_EXIT_CLEAR_BNDCFGS) &&
+             (vmentry_ctl & VM_ENTRY_LOAD_BNDCFGS) )
+            vmx_disable_intercept_for_msr(v, MSR_IA32_BNDCFGS, MSR_TYPE_R | MSR_TYPE_W);
     }
 
     /* I/O access bitmap. */
@@ -1306,11 +1330,6 @@ void vm_resume_fail(void)
     domain_crash_synchronous();
 }
 
-static void wbinvd_ipi(void *info)
-{
-    wbinvd();
-}
-
 void vmx_do_resume(struct vcpu *v)
 {
     bool_t debug_state;
@@ -1337,7 +1356,7 @@ void vmx_do_resume(struct vcpu *v)
         {
             int cpu = v->arch.hvm_vmx.active_cpu;
             if ( cpu != -1 )
-                on_selected_cpus(cpumask_of(cpu), wbinvd_ipi, NULL, 1);
+                flush_mask(cpumask_of(cpu), FLUSH_CACHE);
         }
 
         vmx_clear_vmcs(v);

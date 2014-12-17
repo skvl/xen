@@ -36,7 +36,7 @@ static unsigned int crashing_cpu;
 static DEFINE_PER_CPU_READ_MOSTLY(bool_t, crash_save_done);
 
 /* This becomes the NMI handler for non-crashing CPUs, when Xen is crashing. */
-void __attribute__((noreturn)) do_nmi_crash(struct cpu_user_regs *regs)
+void do_nmi_crash(struct cpu_user_regs *regs)
 {
     int cpu = smp_processor_id();
 
@@ -113,6 +113,7 @@ void __attribute__((noreturn)) do_nmi_crash(struct cpu_user_regs *regs)
         halt();
 }
 
+void nmi_crash(void);
 static void nmi_shootdown_cpus(void)
 {
     unsigned long msecs;
@@ -148,7 +149,8 @@ static void nmi_shootdown_cpus(void)
              * This update is safe from a security point of view, as this pcpu 
              * is never going to try to sysret back to a PV vcpu.
              */
-            _set_gate_lower(&idt_tables[i][TRAP_nmi], 14, 0, &trap_nop);
+            _set_gate_lower(&idt_tables[i][TRAP_nmi],
+                            SYS_DESC_irq_gate, 0, &trap_nop);
             set_ist(&idt_tables[i][TRAP_machine_check], IST_NONE);
         }
         else
@@ -204,7 +206,7 @@ void machine_crash_shutdown(void)
     info = kexec_crash_save_info();
     info->xen_phys_start = xen_phys_start;
     info->dom0_pfn_to_mfn_frame_list_list =
-        arch_get_pfn_to_mfn_frame_list_list(dom0);
+        arch_get_pfn_to_mfn_frame_list_list(hardware_domain);
 }
 
 /*

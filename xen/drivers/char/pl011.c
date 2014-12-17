@@ -22,7 +22,6 @@
 #include <xen/serial.h>
 #include <xen/init.h>
 #include <xen/irq.h>
-#include <asm/early_printk.h>
 #include <xen/device_tree.h>
 #include <xen/errno.h>
 #include <asm/device.h>
@@ -33,7 +32,7 @@
 
 static struct pl011 {
     unsigned int baud, clock_hz, data_bits, parity, stop_bits;
-    struct dt_irq irq;
+    unsigned int irq;
     void __iomem *regs;
     /* UART with IRQ line: interrupt-driven I/O. */
     struct irqaction irqaction;
@@ -107,7 +106,7 @@ static void __init pl011_init_preirq(struct serial_port *port)
         /* Baud rate already set: read it out from the divisor latch. */
         divisor = (pl011_read(uart, IBRD) << 6) | (pl011_read(uart, FBRD));
         if (!divisor)
-            early_panic("pl011: No Baud rate configured\n");
+            panic("pl011: No Baud rate configured\n");
         uart->baud = (uart->clock_hz << 2) / divisor;
     }
     /* This write must follow FBRD and IBRD writes. */
@@ -133,13 +132,13 @@ static void __init pl011_init_postirq(struct serial_port *port)
     struct pl011 *uart = port->uart;
     int rc;
 
-    if ( uart->irq.irq > 0 )
+    if ( uart->irq > 0 )
     {
         uart->irqaction.handler = pl011_interrupt;
         uart->irqaction.name    = "pl011";
         uart->irqaction.dev_id  = port;
-        if ( (rc = setup_dt_irq(&uart->irq, &uart->irqaction)) != 0 )
-            printk("ERROR: Failed to allocate pl011 IRQ %d\n", uart->irq.irq);
+        if ( (rc = setup_irq(uart->irq, 0, &uart->irqaction)) != 0 )
+            printk("ERROR: Failed to allocate pl011 IRQ %d\n", uart->irq);
     }
 
     /* Clear pending error interrupts */
@@ -187,14 +186,8 @@ static int pl011_getc(struct serial_port *port, char *pc)
 static int __init pl011_irq(struct serial_port *port)
 {
     struct pl011 *uart = port->uart;
-    return ((uart->irq.irq > 0) ? uart->irq.irq : -1);
-}
 
-static const struct dt_irq __init *pl011_dt_irq(struct serial_port *port)
-{
-    struct pl011 *uart = port->uart;
-
-    return &uart->irq;
+    return ((uart->irq > 0) ? uart->irq : -1);
 }
 
 static const struct vuart_info *pl011_vuart(struct serial_port *port)
@@ -214,7 +207,6 @@ static struct uart_driver __read_mostly pl011_driver = {
     .putc         = pl011_putc,
     .getc         = pl011_getc,
     .irq          = pl011_irq,
-    .dt_irq_get   = pl011_dt_irq,
     .vuart_info   = pl011_vuart,
 };
 
@@ -229,7 +221,7 @@ static int __init pl011_uart_init(struct dt_device_node *dev,
 
     if ( strcmp(config, "") )
     {
-        early_printk("WARNING: UART configuration is not supported\n");
+        printk("WARNING: UART configuration is not supported\n");
     }
 
     uart = &pl011_com;
@@ -243,24 +235,24 @@ static int __init pl011_uart_init(struct dt_device_node *dev,
     res = dt_device_get_address(dev, 0, &addr, &size);
     if ( res )
     {
-        early_printk("pl011: Unable to retrieve the base"
-                     " address of the UART\n");
+        printk("pl011: Unable to retrieve the base"
+               " address of the UART\n");
         return res;
     }
 
-    uart->regs = ioremap_attr(addr, size, PAGE_HYPERVISOR_NOCACHE);
+    res = platform_get_irq(dev, 0);
+    if ( res < 0 )
+    {
+        printk("pl011: Unable to retrieve the IRQ\n");
+        return -EINVAL;
+    }
+    uart->irq = res;
+
+    uart->regs = ioremap_nocache(addr, size);
     if ( !uart->regs )
     {
-        early_printk("pl011: Unable to map the UART memory\n");
-
+        printk("pl011: Unable to map the UART memory\n");
         return -ENOMEM;
-    }
-
-    res = dt_device_get_irq(dev, 0, &uart->irq);
-    if ( res )
-    {
-        early_printk("pl011: Unable to retrieve the IRQ\n");
-        return res;
     }
 
     uart->vuart.base_addr = addr;

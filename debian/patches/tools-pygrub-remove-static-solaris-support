@@ -1,7 +1,7 @@
-From b0160947a9e22114aa4b8b3f55ecb10a9c3dcc30 Mon Sep 17 00:00:00 2001
+From a3cd6003c363ef8c12a257ff4a6ae259ad39dc44 Mon Sep 17 00:00:00 2001
 From: Bastian Blank <waldi@debian.org>
 Date: Sat, 5 Jul 2014 11:47:29 +0200
-Subject: tools-pygrub-remove-static-solaris-support
+Subject: Remove static solaris support from pygrub
 
 Patch-Name: tools-pygrub-remove-static-solaris-support
 ---
@@ -9,10 +9,10 @@ Patch-Name: tools-pygrub-remove-static-solaris-support
  1 file changed, 1 insertion(+), 50 deletions(-)
 
 diff --git a/tools/pygrub/src/pygrub b/tools/pygrub/src/pygrub
-index 1e3e3ba..2964140 100644
+index 17f2396..de1086e 100644
 --- a/tools/pygrub/src/pygrub
 +++ b/tools/pygrub/src/pygrub
-@@ -17,7 +17,6 @@ import os, sys, string, struct, tempfile, re, traceback
+@@ -17,7 +17,6 @@ import os, sys, string, struct, tempfile, re, traceback, stat, errno
  import copy
  import logging
  import platform
@@ -20,7 +20,7 @@ index 1e3e3ba..2964140 100644
  
  import curses, _curses, curses.wrapper, curses.textpad, curses.ascii
  import getopt
-@@ -640,51 +639,6 @@ def run_grub(file, entry, fs, cfg_args):
+@@ -662,51 +661,6 @@ def run_grub(file, entry, fs, cfg_args):
  
      return grubcfg
  
@@ -72,7 +72,7 @@ index 1e3e3ba..2964140 100644
  def sniff_netware(fs, cfg):
      if not fs.file_exists("/nwserver/xnloader.sys"):
          return cfg
-@@ -858,10 +812,7 @@ if __name__ == "__main__":
+@@ -892,10 +846,7 @@ if __name__ == "__main__":
          try:
              fs = fsimage.open(file, offset, bootfsoptions)
  

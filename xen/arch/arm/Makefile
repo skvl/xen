@@ -1,6 +1,7 @@
 subdir-$(arm32) += arm32
 subdir-$(arm64) += arm64
 subdir-y += platforms
+subdir-$(arm64) += efi
 
 obj-$(EARLY_PRINTK) += early_printk.o
 obj-y += cpu.o
@@ -10,7 +11,8 @@ obj-y += vpsci.o
 obj-y += domctl.o
 obj-y += sysctl.o
 obj-y += domain_build.o
-obj-y += gic.o
+obj-y += gic.o gic-v2.o
+obj-$(CONFIG_ARM_64) += gic-v3.o
 obj-y += io.o
 obj-y += irq.o
 obj-y += kernel.o
@@ -21,17 +23,21 @@ obj-y += guestcopy.o
 obj-y += physdev.o
 obj-y += platform.o
 obj-y += setup.o
+obj-y += bootfdt.o
 obj-y += time.o
 obj-y += smpboot.o
 obj-y += smp.o
 obj-y += shutdown.o
 obj-y += traps.o
-obj-y += vgic.o
+obj-y += vgic.o vgic-v2.o
+obj-$(CONFIG_ARM_64) += vgic-v3.o
 obj-y += vtimer.o
 obj-y += vuart.o
 obj-y += hvm.o
 obj-y += device.o
 obj-y += decode.o
+obj-y += processor.o
+obj-y += smc.o
 
 #obj-bin-y += ....o
 
@@ -44,6 +50,9 @@ ALL_OBJS := $(TARGET_SUBARCH)/head.o $(ALL_OBJS)
 
 $(TARGET): $(TARGET)-syms $(TARGET).axf
 	$(OBJCOPY) -O binary -S $< $@
+ifeq (arm64,$(XEN_TARGET_ARCH))
+	ln -sf $(notdir $@)  ../../$(notdir $@).efi
+endif
 
 $(TARGET).axf: $(TARGET)-syms
 	# XXX: VE model loads by VMA so instead of
@@ -95,3 +104,4 @@ clean::
 	rm -f asm-offsets.s xen.lds
 	rm -f $(BASEDIR)/.xen-syms.[0-9]*
 	rm -f $(TARGET).axf
+	rm -f $(TARGET).efi

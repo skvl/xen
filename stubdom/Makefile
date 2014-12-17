@@ -23,9 +23,6 @@ TARGET_CFLAGS=-mno-red-zone
 NEWLIB_CFLAGS+=-D_I386MACH_ALLOW_HW_INTERRUPTS
 STUBDOM_SUPPORTED=1
 endif
-ifeq ($(GNU_TARGET_ARCH), ia64)
-TARGET_CFLAGS=-mconstant-gp
-endif
 
 CROSS_ROOT=cross-root-$(GNU_TARGET_ARCH)
 CROSS_PREFIX=$(CURDIR)/$(CROSS_ROOT)
@@ -51,17 +48,17 @@ TARGET_LDFLAGS += -nostdlib -L$(CROSS_PREFIX)/$(GNU_TARGET_ARCH)-xen-elf/lib
 
 TARGETS=$(STUBDOM_TARGETS)
 
-.PHONY: all
-all: build
-ifeq ($(STUBDOM_SUPPORTED),1)
-build: genpath $(STUBDOM_BUILD)
-else
-build: genpath
-endif
-
 STUBDOMPATH="stubdompath.sh"
 genpath-target = $(call buildmakevars2file,$(STUBDOMPATH))
 $(eval $(genpath-target))
+
+.PHONY: all
+all: build
+ifeq ($(STUBDOM_SUPPORTED),1)
+build: $(STUBDOMPATH) $(STUBDOM_BUILD)
+else
+build: $(STUBDOMPATH)
+endif
 
 ##############
 # Cross-newlib
@@ -148,6 +145,7 @@ lwip-$(XEN_TARGET_ARCH): lwip-$(LWIP_VERSION).tar.gz
 	tar xzf $<
 	mv lwip $@
 	patch -d $@ -p0 < lwip.patch-cvs
+	patch -d $@ -p0 < lwip.dhcp_create_request-hwaddr_len.patch
 	touch $@
 
 #############
@@ -211,6 +209,9 @@ tpm_emulator-$(XEN_TARGET_ARCH): tpm_emulator-$(TPMEMU_VERSION).tar.gz
 	patch -d $@ -p1 < tpmemu-$(TPMEMU_VERSION).patch;
 	patch -d $@ -p1 < vtpm-bufsize.patch
 	patch -d $@ -p1 < vtpm-locality.patch
+	patch -d $@ -p1 < vtpm-parent-sign-ek.patch
+	patch -d $@ -p1 < vtpm-deepquote.patch
+	patch -d $@ -p1 < vtpm-cmake-Wextra.patch
 	mkdir $@/build
 	cd $@/build; CC=${CC} $(CMAKE) .. -DCMAKE_C_FLAGS:STRING="-std=c99 -DTPM_NO_EXTERN $(TARGET_CPPFLAGS) $(TARGET_CFLAGS) -Wno-declaration-after-statement"
 	touch $@
@@ -262,7 +263,7 @@ $(OCAML_STAMPFILE): ocaml-$(XEN_TARGET_ARCH)/.dirstamp
 .PHONY: $(CROSS_ROOT)
 $(CROSS_ROOT): cross-newlib cross-zlib cross-libpci
 
-QEMU_ROOT := $(shell if [ -d "$(CONFIG_QEMU)" ]; then echo "$(CONFIG_QEMU)"; else echo .; fi)
+QEMU_ROOT := $(shell if [ -d "$(QEMU_TRADITIONAL_LOC)" ]; then echo "$(QEMU_TRADITIONAL_LOC)"; else echo .; fi)
 
 ifneq ($(filter ioemu,$(STUBDOM_TARGETS)),)
 IOEMU_LINKFARM_TARGET := ioemu/linkfarm.stamp
@@ -306,12 +307,14 @@ mk-headers-$(XEN_TARGET_ARCH): $(IOEMU_LINKFARM_TARGET)
 	mkdir -p libxc-$(XEN_TARGET_ARCH)
 	[ -h libxc-$(XEN_TARGET_ARCH)/Makefile ] || ( cd libxc-$(XEN_TARGET_ARCH) && \
 	  ln -sf $(XEN_ROOT)/tools/libxc/*.h . && \
+	  ln -sf $(XEN_ROOT)/tools/libxc/include/*.h . && \
 	  ln -sf $(XEN_ROOT)/tools/libxc/*.c . && \
 	  ln -sf $(XEN_ROOT)/tools/libxc/Makefile . )
 	mkdir -p xenstore
 	[ -h xenstore/Makefile ] || ( cd xenstore && \
 	  ln -sf $(XEN_ROOT)/tools/xenstore/*.c . && \
 	  ln -sf $(XEN_ROOT)/tools/xenstore/*.h . && \
+	  ln -sf $(XEN_ROOT)/tools/xenstore/include/*.h . && \
 	  ln -sf $(XEN_ROOT)/tools/xenstore/Makefile . )
 	$(MAKE) DESTDIR= -C $(MINI_OS) links
 	touch mk-headers-$(XEN_TARGET_ARCH)
@@ -449,9 +452,9 @@ xenstore-stubdom: mini-os-$(XEN_TARGET_ARCH)-xenstore libxc xenstore
 #########
 
 ifeq ($(STUBDOM_SUPPORTED),1)
-install: genpath install-readme $(STUBDOM_INSTALL)
+install: $(STUBDOMPATH) install-readme $(STUBDOM_INSTALL)
 else
-install: genpath
+install: $(STUBDOMPATH)
 endif
 
 install-readme:
@@ -459,15 +462,17 @@ install-readme:
 	$(INSTALL_DATA) README $(DESTDIR)$(DOCDIR)/README.stubdom
 
 install-ioemu: ioemu-stubdom
-	$(INSTALL_DIR) "$(DESTDIR)$(LIBEXEC)"
-	$(INSTALL_PROG) stubdom-dm "$(DESTDIR)$(LIBEXEC)"
-	$(INSTALL_DATA) stubdompath.sh "$(DESTDIR)$(LIBEXEC)"
+	$(INSTALL_DIR) "$(DESTDIR)$(LIBEXEC_BIN)"
+	$(INSTALL_PROG) stubdom-dm "$(DESTDIR)$(LIBEXEC_BIN)"
+	$(INSTALL_DATA) stubdompath.sh "$(DESTDIR)$(LIBEXEC_BIN)"
 	$(INSTALL_DIR) "$(DESTDIR)$(XENFIRMWAREDIR)"
 	$(INSTALL_DATA) mini-os-$(XEN_TARGET_ARCH)-ioemu/mini-os.gz "$(DESTDIR)$(XENFIRMWAREDIR)/ioemu-stubdom.gz"
 
 install-grub: pv-grub
 	$(INSTALL_DIR) "$(DESTDIR)$(XENFIRMWAREDIR)"
 	$(INSTALL_DATA) mini-os-$(XEN_TARGET_ARCH)-grub/mini-os.gz "$(DESTDIR)$(XENFIRMWAREDIR)/pv-grub-$(XEN_TARGET_ARCH).gz"
+
+install-c: c-stubdom
 
 install-caml: caml-stubdom
 

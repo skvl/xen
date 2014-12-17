@@ -84,12 +84,6 @@
 #define		APIC_LVT0	0x350
 #define		APIC_CMCI	0x2F0
 
-#define			APIC_LVT_TIMER_BASE_MASK	(0x3<<18)
-#define			GET_APIC_TIMER_BASE(x)		(((x)>>18)&0x3)
-#define			SET_APIC_TIMER_BASE(x)		(((x)<<18))
-#define			APIC_TIMER_BASE_CLKIN		0x0
-#define			APIC_TIMER_BASE_TMBASE		0x1
-#define			APIC_TIMER_BASE_DIV		0x2
 #define			APIC_TIMER_MODE_MASK		(0x3<<17)
 #define			APIC_TIMER_MODE_ONESHOT		(0x0<<17)
 #define			APIC_TIMER_MODE_PERIODIC	(0x1<<17)
@@ -110,10 +104,6 @@
 #define		APIC_TMICT	0x380
 #define		APIC_TMCCT	0x390
 #define		APIC_TDCR	0x3E0
-
-/* Only available in x2APIC mode */
-#define		APIC_SELF_IPI	0x3F0
-
 #define			APIC_TDR_DIV_TMBASE	(1<<2)
 #define			APIC_TDR_DIV_1		0xB
 #define			APIC_TDR_DIV_2		0x0
@@ -123,6 +113,9 @@
 #define			APIC_TDR_DIV_32		0x8
 #define			APIC_TDR_DIV_64		0x9
 #define			APIC_TDR_DIV_128	0xA
+
+/* Only available in x2APIC mode */
+#define		APIC_SELF_IPI	0x3F0
 
 #define APIC_BASE (fix_to_virt(FIX_APIC_BASE))
 
@@ -142,7 +135,7 @@
 #define lapic ((volatile struct local_apic *)APIC_BASE)
 
 #ifndef __ASSEMBLY__
-struct local_apic {
+struct __packed local_apic {
 
 /*000*/	struct { u32 __reserved[4]; } __reserved_01;
 
@@ -388,7 +381,7 @@ struct local_apic {
 
 /*3F0*/	struct { u32 __reserved[4]; } __reserved_20;
 
-} __attribute__ ((packed));
+};
 #endif /* !__ASSEMBLY__ */
 
 #undef u32

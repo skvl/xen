@@ -26,7 +26,8 @@
 #include <asm/hvm/asid.h>
 #include <public/domctl.h>
 #include <public/hvm/save.h>
-#include <asm/mm.h>
+#include <public/hvm/ioreq.h>
+#include <xen/mm.h>
 
 /* Interrupt acknowledgement sources. */
 enum hvm_intsrc {
@@ -109,6 +110,10 @@ struct hvm_function_table {
     void (*save_cpu_ctxt)(struct vcpu *v, struct hvm_hw_cpu *ctxt);
     int (*load_cpu_ctxt)(struct vcpu *v, struct hvm_hw_cpu *ctxt);
 
+    unsigned int (*init_msr)(void);
+    void (*save_msr)(struct vcpu *, struct hvm_msr *);
+    int (*load_msr)(struct vcpu *, struct hvm_msr *);
+
     /* Examine specifics of the guest state. */
     unsigned int (*get_interrupt_shadow)(struct vcpu *v);
     void (*set_interrupt_shadow)(struct vcpu *v, unsigned int intr_shadow);
@@ -133,7 +138,7 @@ struct hvm_function_table {
     int  (*get_guest_pat)(struct vcpu *v, u64 *);
     int  (*set_guest_pat)(struct vcpu *v, u64);
 
-    void (*set_tsc_offset)(struct vcpu *v, u64 offset);
+    void (*set_tsc_offset)(struct vcpu *v, u64 offset, u64 at_tsc);
 
     void (*inject_trap)(struct hvm_trap *trap);
 
@@ -196,6 +201,12 @@ struct hvm_function_table {
                                 paddr_t *L1_gpa, unsigned int *page_order,
                                 uint8_t *p2m_acc, bool_t access_r,
                                 bool_t access_w, bool_t access_x);
+
+    void (*hypervisor_cpuid_leaf)(uint32_t sub_idx,
+                                  uint32_t *eax, uint32_t *ebx,
+                                  uint32_t *ecx, uint32_t *edx);
+
+    void (*enable_msr_exit_interception)(struct domain *d);
 };
 
 extern struct hvm_function_table hvm_funcs;
@@ -217,23 +228,21 @@ int hvm_vcpu_cacheattr_init(struct vcpu *v);
 void hvm_vcpu_cacheattr_destroy(struct vcpu *v);
 void hvm_vcpu_reset_state(struct vcpu *v, uint16_t cs, uint16_t ip);
 
-/* Prepare/destroy a ring for a dom0 helper. Helper with talk
- * with Xen on behalf of this hvm domain. */
-int prepare_ring_for_helper(struct domain *d, unsigned long gmfn, 
-                            struct page_info **_page, void **_va);
-void destroy_ring_for_helper(void **_va, struct page_info *page);
-
-bool_t hvm_send_assist_req(struct vcpu *v);
+bool_t hvm_send_assist_req(ioreq_t *p);
+void hvm_broadcast_assist_req(ioreq_t *p);
 
 void hvm_get_guest_pat(struct vcpu *v, u64 *guest_pat);
 int hvm_set_guest_pat(struct vcpu *v, u64 guest_pat);
 
-void hvm_set_guest_tsc(struct vcpu *v, u64 guest_tsc);
-u64 hvm_get_guest_tsc(struct vcpu *v);
+void hvm_set_guest_tsc_fixed(struct vcpu *v, u64 guest_tsc, u64 at_tsc);
+#define hvm_set_guest_tsc(v, t) hvm_set_guest_tsc_fixed(v, t, 0)
+u64 hvm_get_guest_tsc_fixed(struct vcpu *v, u64 at_tsc);
+#define hvm_get_guest_tsc(v) hvm_get_guest_tsc_fixed(v, 0)
 
 void hvm_init_guest_time(struct domain *d);
 void hvm_set_guest_time(struct vcpu *v, u64 guest_time);
-u64 hvm_get_guest_time(struct vcpu *v);
+u64 hvm_get_guest_time_fixed(struct vcpu *v, u64 at_tsc);
+#define hvm_get_guest_time(v) hvm_get_guest_time_fixed(v, 0)
 
 int vmsi_deliver(
     struct domain *d, int vector,
@@ -253,6 +262,8 @@ int hvm_girq_dest_2_vcpu_id(struct domain *d, uint8_t dest, uint8_t dest_mode);
     (hvm_paging_enabled(v) && ((v)->arch.hvm_vcpu.guest_cr[4] & X86_CR4_PAE))
 #define hvm_smep_enabled(v) \
     (hvm_paging_enabled(v) && ((v)->arch.hvm_vcpu.guest_cr[4] & X86_CR4_SMEP))
+#define hvm_smap_enabled(v) \
+    (hvm_paging_enabled(v) && ((v)->arch.hvm_vcpu.guest_cr[4] & X86_CR4_SMAP))
 #define hvm_nx_enabled(v) \
     (!!((v)->arch.hvm_vcpu.guest_efer & EFER_NX))
 
@@ -329,12 +340,27 @@ static inline unsigned long hvm_get_shadow_gs_base(struct vcpu *v)
     return hvm_funcs.get_shadow_gs_base(v);
 }
 
-#define is_viridian_domain(_d)                                             \
- (is_hvm_domain(_d) && ((_d)->arch.hvm_domain.params[HVM_PARAM_VIRIDIAN]))
 
+#define has_hvm_params(d) \
+    ((d)->arch.hvm_domain.params != NULL)
+
+#define viridian_feature_mask(d) \
+    (has_hvm_params(d) ? (d)->arch.hvm_domain.params[HVM_PARAM_VIRIDIAN] : 0)
+
+#define is_viridian_domain(d) \
+    (is_hvm_domain(d) && (viridian_feature_mask(d) & HVMPV_base_freq))
+
+#define has_viridian_time_ref_count(d) \
+    (is_viridian_domain(d) && (viridian_feature_mask(d) & HVMPV_time_ref_count))
+
+void hvm_hypervisor_cpuid_leaf(uint32_t sub_idx,
+                               uint32_t *eax, uint32_t *ebx,
+                               uint32_t *ecx, uint32_t *edx);
 void hvm_cpuid(unsigned int input, unsigned int *eax, unsigned int *ebx,
                                    unsigned int *ecx, unsigned int *edx);
 void hvm_migrate_timers(struct vcpu *v);
+bool_t hvm_has_dm(struct domain *d);
+bool_t hvm_io_pending(struct vcpu *v);
 void hvm_do_resume(struct vcpu *v);
 void hvm_migrate_pirqs(struct vcpu *v);
 
@@ -347,50 +373,9 @@ static inline int hvm_event_pending(struct vcpu *v)
     return hvm_funcs.event_pending(v);
 }
 
-static inline bool_t hvm_vcpu_has_smep(void)
-{
-    unsigned int eax, ebx;
-
-    hvm_cpuid(0, &eax, NULL, NULL, NULL);
-
-    if ( eax < 7 )
-        return 0;
-
-    hvm_cpuid(7, NULL, &ebx, NULL, NULL);
-    return !!(ebx & cpufeat_mask(X86_FEATURE_SMEP));
-}
-
-/* These reserved bits in lower 32 remain 0 after any load of CR0 */
-#define HVM_CR0_GUEST_RESERVED_BITS             \
-    (~((unsigned long)                          \
-       (X86_CR0_PE | X86_CR0_MP | X86_CR0_EM |  \
-        X86_CR0_TS | X86_CR0_ET | X86_CR0_NE |  \
-        X86_CR0_WP | X86_CR0_AM | X86_CR0_NW |  \
-        X86_CR0_CD | X86_CR0_PG)))
-
 /* These bits in CR4 are owned by the host. */
 #define HVM_CR4_HOST_MASK (mmu_cr4_features & \
     (X86_CR4_VMXE | X86_CR4_PAE | X86_CR4_MCE))
-
-/* These bits in CR4 cannot be set by the guest. */
-#define HVM_CR4_GUEST_RESERVED_BITS(v, restore) ({      \
-    const struct vcpu *_v = (v);                        \
-    bool_t _restore = !!(restore);                      \
-    ASSERT((_restore) || _v == current);                \
-    (~((unsigned long)                                  \
-       (X86_CR4_VME | X86_CR4_PVI | X86_CR4_TSD |       \
-        X86_CR4_DE  | X86_CR4_PSE | X86_CR4_PAE |       \
-        X86_CR4_MCE | X86_CR4_PGE | X86_CR4_PCE |       \
-        X86_CR4_OSFXSR | X86_CR4_OSXMMEXCPT |           \
-        (((_restore) ? cpu_has_smep :                   \
-                       hvm_vcpu_has_smep()) ?           \
-         X86_CR4_SMEP : 0) |                            \
-        (cpu_has_fsgsbase ? X86_CR4_FSGSBASE : 0) |     \
-        ((nestedhvm_enabled(_v->domain) && cpu_has_vmx) \
-                      ? X86_CR4_VMXE : 0)  |            \
-        (cpu_has_pcid ? X86_CR4_PCIDE : 0) |            \
-        (cpu_has_xsave ? X86_CR4_OSXSAVE : 0))));       \
-})
 
 /* These exceptions must always be intercepted. */
 #define HVM_TRAP_MASK ((1U << TRAP_machine_check) | (1U << TRAP_invalid_op))
@@ -476,11 +461,8 @@ static inline void hvm_invalidate_regs_fields(struct cpu_user_regs *regs)
 #endif
 }
 
-int hvm_hap_nested_page_fault(paddr_t gpa,
-                              bool_t gla_valid, unsigned long gla,
-                              bool_t access_r,
-                              bool_t access_w,
-                              bool_t access_x);
+int hvm_hap_nested_page_fault(paddr_t gpa, unsigned long gla,
+                              struct npfec npfec);
 
 #define hvm_msr_tsc_aux(v) ({                                               \
     struct domain *__d = (v)->domain;                                       \
@@ -536,4 +518,21 @@ bool_t nhvm_vmcx_hap_enabled(struct vcpu *v);
 /* interrupt */
 enum hvm_intblk nhvm_interrupt_blocked(struct vcpu *v);
 
+#ifndef NDEBUG
+/* Permit use of the Forced Emulation Prefix in HVM guests */
+extern bool_t opt_hvm_fep;
+#else
+#define opt_hvm_fep 0
+#endif
+
 #endif /* __ASM_X86_HVM_HVM_H__ */
+
+/*
+ * Local variables:
+ * mode: C
+ * c-file-style: "BSD"
+ * c-basic-offset: 4
+ * tab-width: 4
+ * indent-tabs-mode: nil
+ * End:
+ */

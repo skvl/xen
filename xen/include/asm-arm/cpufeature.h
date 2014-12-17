@@ -15,18 +15,24 @@
 #define cpu_has_el3_64    (boot_cpu_feature64(el3) >= 1)
 #define cpu_has_fp        (boot_cpu_feature64(fp) == 0)
 #define cpu_has_simd      (boot_cpu_feature64(simd) == 0)
+#define cpu_has_gicv3     (boot_cpu_feature64(gic) == 1)
 #endif
 
 #define cpu_feature32(c, feat)         ((c)->pfr32.feat)
 #define boot_cpu_feature32(feat)       (boot_cpu_data.pfr32.feat)
 
-#define cpu_has_aarch32   (boot_cpu_feature32(arm) == 1)
+#define cpu_has_arm       (boot_cpu_feature32(arm) == 1)
 #define cpu_has_thumb     (boot_cpu_feature32(thumb) >= 1)
 #define cpu_has_thumb2    (boot_cpu_feature32(thumb) >= 3)
 #define cpu_has_jazelle   (boot_cpu_feature32(jazelle) >= 0)
 #define cpu_has_thumbee   (boot_cpu_feature32(thumbee) == 1)
+#define cpu_has_aarch32   (cpu_has_arm || cpu_has_thumb)
 
+#ifdef CONFIG_ARM_32
 #define cpu_has_gentimer  (boot_cpu_feature32(gentimer) == 1)
+#else
+#define cpu_has_gentimer  (1)
+#endif
 #define cpu_has_security  (boot_cpu_feature32(security) > 0)
 
 #endif

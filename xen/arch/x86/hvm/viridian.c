@@ -36,11 +36,11 @@
 #define HvNotifyLongSpinWait    8
 
 /* Viridian CPUID 4000003, Viridian MSR availability. */
-#define CPUID3A_MSR_REF_COUNT   (1 << 1)
-#define CPUID3A_MSR_APIC_ACCESS (1 << 4)
-#define CPUID3A_MSR_HYPERCALL   (1 << 5)
-#define CPUID3A_MSR_VP_INDEX    (1 << 6)
-#define CPUID3A_MSR_FREQ        (1 << 11)
+#define CPUID3A_MSR_TIME_REF_COUNT (1 << 1)
+#define CPUID3A_MSR_APIC_ACCESS    (1 << 4)
+#define CPUID3A_MSR_HYPERCALL      (1 << 5)
+#define CPUID3A_MSR_VP_INDEX       (1 << 6)
+#define CPUID3A_MSR_FREQ           (1 << 11)
 
 /* Viridian CPUID 4000004, Implementation Recommendations. */
 #define CPUID4A_MSR_BASED_APIC  (1 << 3)
@@ -90,8 +90,11 @@ int cpuid_viridian_leaves(unsigned int leaf, unsigned int *eax,
         /* Which hypervisor MSRs are available to the guest */
         *eax = (CPUID3A_MSR_APIC_ACCESS |
                 CPUID3A_MSR_HYPERCALL   |
-                CPUID3A_MSR_VP_INDEX    |
-                CPUID3A_MSR_FREQ);
+                CPUID3A_MSR_VP_INDEX);
+        if ( !(viridian_feature_mask(d) & HVMPV_no_freq) )
+            *eax |= CPUID3A_MSR_FREQ;
+        if ( viridian_feature_mask(d) & HVMPV_time_ref_count )
+            *eax |= CPUID3A_MSR_TIME_REF_COUNT;
         break;
     case 4:
         /* Recommended hypercall usage. */
@@ -119,37 +122,37 @@ int cpuid_viridian_leaves(unsigned int leaf, unsigned int *eax,
 
 static void dump_guest_os_id(const struct domain *d)
 {
-    gdprintk(XENLOG_INFO, "GUEST_OS_ID:\n");
-    gdprintk(XENLOG_INFO, "\tvendor: %x\n",
-            d->arch.hvm_domain.viridian.guest_os_id.fields.vendor);
-    gdprintk(XENLOG_INFO, "\tos: %x\n",
-            d->arch.hvm_domain.viridian.guest_os_id.fields.os);
-    gdprintk(XENLOG_INFO, "\tmajor: %x\n",
-            d->arch.hvm_domain.viridian.guest_os_id.fields.major);
-    gdprintk(XENLOG_INFO, "\tminor: %x\n",
-            d->arch.hvm_domain.viridian.guest_os_id.fields.minor);
-    gdprintk(XENLOG_INFO, "\tsp: %x\n",
-            d->arch.hvm_domain.viridian.guest_os_id.fields.service_pack);
-    gdprintk(XENLOG_INFO, "\tbuild: %x\n",
-            d->arch.hvm_domain.viridian.guest_os_id.fields.build_number);
+    const union viridian_guest_os_id *goi;
+
+    goi = &d->arch.hvm_domain.viridian.guest_os_id;
+
+    printk(XENLOG_G_INFO
+           "d%d: VIRIDIAN GUEST_OS_ID: vendor: %x os: %x major: %x minor: %x sp: %x build: %x\n",
+           d->domain_id,
+           goi->fields.vendor, goi->fields.os,
+           goi->fields.major, goi->fields.minor,
+           goi->fields.service_pack, goi->fields.build_number);
 }
 
 static void dump_hypercall(const struct domain *d)
 {
-    gdprintk(XENLOG_INFO, "HYPERCALL:\n");
-    gdprintk(XENLOG_INFO, "\tenabled: %x\n",
-            d->arch.hvm_domain.viridian.hypercall_gpa.fields.enabled);
-    gdprintk(XENLOG_INFO, "\tpfn: %lx\n",
-            (unsigned long)d->arch.hvm_domain.viridian.hypercall_gpa.fields.pfn);
+    const union viridian_hypercall_gpa *hg;
+
+    hg = &d->arch.hvm_domain.viridian.hypercall_gpa;
+
+    printk(XENLOG_G_INFO "d%d: VIRIDIAN HYPERCALL: enabled: %x pfn: %lx\n",
+           d->domain_id,
+           hg->fields.enabled, (unsigned long)hg->fields.pfn);
 }
 
 static void dump_apic_assist(const struct vcpu *v)
 {
-    gdprintk(XENLOG_INFO, "APIC_ASSIST[%d]:\n", v->vcpu_id);
-    gdprintk(XENLOG_INFO, "\tenabled: %x\n",
-            v->arch.hvm_vcpu.viridian.apic_assist.fields.enabled);
-    gdprintk(XENLOG_INFO, "\tpfn: %lx\n",
-            (unsigned long)v->arch.hvm_vcpu.viridian.apic_assist.fields.pfn);
+    const union viridian_apic_assist *aa;
+
+    aa = &v->arch.hvm_vcpu.viridian.apic_assist;
+
+    printk(XENLOG_G_INFO "%pv: VIRIDIAN APIC_ASSIST: enabled: %x pfn: %lx\n",
+           v, aa->fields.enabled, (unsigned long)aa->fields.pfn);
 }
 
 static void enable_hypercall_page(struct domain *d)
@@ -286,6 +289,39 @@ int wrmsr_viridian_regs(uint32_t idx, uint64_t val)
     return 1;
 }
 
+static int64_t raw_trc_val(struct domain *d)
+{
+    uint64_t tsc;
+    struct time_scale tsc_to_ns;
+
+    tsc = hvm_get_guest_tsc(pt_global_vcpu_target(d));
+
+    /* convert tsc to count of 100ns periods */
+    set_time_scale(&tsc_to_ns, d->arch.tsc_khz * 1000ul);
+    return scale_delta(tsc, &tsc_to_ns) / 100ul;
+}
+
+void viridian_time_ref_count_freeze(struct domain *d)
+{
+    struct viridian_time_ref_count *trc;
+
+    trc = &d->arch.hvm_domain.viridian.time_ref_count;
+
+    if ( test_and_clear_bit(_TRC_running, &trc->flags) )
+        trc->val = raw_trc_val(d) + trc->off;
+}
+
+void viridian_time_ref_count_thaw(struct domain *d)
+{
+    struct viridian_time_ref_count *trc;
+
+    trc = &d->arch.hvm_domain.viridian.time_ref_count;
+
+    if ( !d->is_shutting_down &&
+         !test_and_set_bit(_TRC_running, &trc->flags) )
+        trc->off = (int64_t)trc->val - raw_trc_val(d);
+}
+
 int rdmsr_viridian_regs(uint32_t idx, uint64_t *val)
 {
     struct vcpu *v = current;
@@ -312,11 +348,17 @@ int rdmsr_viridian_regs(uint32_t idx, uint64_t *val)
         break;
 
     case VIRIDIAN_MSR_TSC_FREQUENCY:
+        if ( viridian_feature_mask(d) & HVMPV_no_freq )
+            return 0;
+
         perfc_incr(mshv_rdmsr_tsc_frequency);
         *val = (uint64_t)d->arch.tsc_khz * 1000ull;
         break;
 
     case VIRIDIAN_MSR_APIC_FREQUENCY:
+        if ( viridian_feature_mask(d) & HVMPV_no_freq )
+            return 0;
+
         perfc_incr(mshv_rdmsr_apic_frequency);
         *val = 1000000000ull / APIC_BUS_CYCLE_NS;
         break;
@@ -336,6 +378,24 @@ int rdmsr_viridian_regs(uint32_t idx, uint64_t *val)
         perfc_incr(mshv_rdmsr_apic_msr);
         *val = v->arch.hvm_vcpu.viridian.apic_assist.raw;
         break;
+
+    case VIRIDIAN_MSR_TIME_REF_COUNT:
+    {
+        struct viridian_time_ref_count *trc;
+
+        trc = &d->arch.hvm_domain.viridian.time_ref_count;
+
+        if ( !(viridian_feature_mask(d) & HVMPV_time_ref_count) )
+            return 0;
+
+        if ( !test_and_set_bit(_TRC_accessed, &trc->flags) )
+            printk(XENLOG_G_INFO "d%d: VIRIDIAN MSR_TIME_REF_COUNT: accessed\n",
+                   d->domain_id);
+
+        perfc_incr(mshv_rdmsr_time_ref_count);
+        *val = raw_trc_val(d) + trc->off;
+        break;
+    }
 
     default:
         return 0;
@@ -424,8 +484,9 @@ static int viridian_save_domain_ctxt(struct domain *d, hvm_domain_context_t *h)
     if ( !is_viridian_domain(d) )
         return 0;
 
-    ctxt.hypercall_gpa = d->arch.hvm_domain.viridian.hypercall_gpa.raw;
-    ctxt.guest_os_id   = d->arch.hvm_domain.viridian.guest_os_id.raw;
+    ctxt.time_ref_count = d->arch.hvm_domain.viridian.time_ref_count.val;
+    ctxt.hypercall_gpa  = d->arch.hvm_domain.viridian.hypercall_gpa.raw;
+    ctxt.guest_os_id    = d->arch.hvm_domain.viridian.guest_os_id.raw;
 
     return (hvm_save_entry(VIRIDIAN_DOMAIN, 0, h, &ctxt) != 0);
 }
@@ -434,11 +495,12 @@ static int viridian_load_domain_ctxt(struct domain *d, hvm_domain_context_t *h)
 {
     struct hvm_viridian_domain_context ctxt;
 
-    if ( hvm_load_entry(VIRIDIAN_DOMAIN, h, &ctxt) != 0 )
+    if ( hvm_load_entry_zeroextend(VIRIDIAN_DOMAIN, h, &ctxt) != 0 )
         return -EINVAL;
 
-    d->arch.hvm_domain.viridian.hypercall_gpa.raw = ctxt.hypercall_gpa;
-    d->arch.hvm_domain.viridian.guest_os_id.raw   = ctxt.guest_os_id;
+    d->arch.hvm_domain.viridian.time_ref_count.val = ctxt.time_ref_count;
+    d->arch.hvm_domain.viridian.hypercall_gpa.raw  = ctxt.hypercall_gpa;
+    d->arch.hvm_domain.viridian.guest_os_id.raw    = ctxt.guest_os_id;
 
     return 0;
 }
@@ -489,3 +551,13 @@ static int viridian_load_vcpu_ctxt(struct domain *d, hvm_domain_context_t *h)
 
 HVM_REGISTER_SAVE_RESTORE(VIRIDIAN_VCPU, viridian_save_vcpu_ctxt,
                           viridian_load_vcpu_ctxt, 1, HVMSR_PER_VCPU);
+
+/*
+ * Local variables:
+ * mode: C
+ * c-file-style: "BSD"
+ * c-basic-offset: 4
+ * tab-width: 4
+ * indent-tabs-mode: nil
+ * End:
+ */

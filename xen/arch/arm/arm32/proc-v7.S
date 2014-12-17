@@ -20,10 +20,12 @@
 #include <asm/asm_defns.h>
 #include <asm/arm32/processor.h>
 
-v7_init:
+ca15mp_init:
+ca7mp_init:
+brahma15mp_init:
         /* Set up the SMP bit in ACTLR */
         mrc   CP32(r0, ACTLR)
-        orr   r0, r0, #(ACTLR_V7_SMP) /* enable SMP bit */
+        orr   r0, r0, #(ACTLR_CAXX_SMP) /* enable SMP bit */
         mcr   CP32(r0, ACTLR)
         mov   pc, lr
 
@@ -32,7 +34,8 @@ v7_init:
 __v7_ca15mp_proc_info:
         .long 0x410FC0F0             /* Cortex-A15 */
         .long 0xFF0FFFF0             /* Mask */
-        .long v7_init
+        .long ca15mp_init
+        .long caxx_processor
         .size __v7_ca15mp_proc_info, . - __v7_ca15mp_proc_info
 
         .section ".init.proc.info", #alloc, #execinstr
@@ -40,15 +43,17 @@ __v7_ca15mp_proc_info:
 __v7_ca7mp_proc_info:
         .long 0x410FC070             /* Cortex-A7 */
         .long 0xFF0FFFF0             /* Mask */
-        .long v7_init
+        .long ca7mp_init
+        .long caxx_processor
         .size __v7_ca7mp_proc_info, . - __v7_ca7mp_proc_info
 
         .section ".init.proc.info", #alloc, #execinstr
         .type __v7_brahma15mp_proc_info, #object
 __v7_brahma15mp_proc_info:
-        .long 0x420F00F2             /* Broadcom Brahma-B15 */
-        .long 0xFF0FFFFF             /* Mask */
-        .long v7_init
+        .long 0x420F00F0             /* Broadcom Brahma-B15 */
+        .long 0xFF0FFFF0             /* Mask */
+        .long brahma15mp_init
+        .long caxx_processor
         .size __v7_brahma15mp_proc_info, . - __v7_brahma15mp_proc_info
 
 /*

@@ -1,11 +1,11 @@
-/******************************************************************************
+/*
  * reloc.c
- * 
+ *
  * 32-bit flat memory-map routines for relocating Multiboot structures
  * and modules. This is most easily done early with paging disabled.
- * 
+ *
  * Copyright (c) 2009, Citrix Systems, Inc.
- * 
+ *
  * Authors:
  *    Keir Fraser <keir@xen.org>
  */
@@ -21,8 +21,9 @@ asm (
     "    jmp  reloc                    \n"
     );
 
-/* This is our data.  Because the code must be relocatable, no BSS is
- * allowed.  All data is accessed PC-relative with inline assembly.
+/*
+ * This is our data. Because the code must be relocatable, no BSS is
+ * allowed. All data is accessed PC-relative with inline assembly.
  */
 asm (
     "alloc:                            \n"
@@ -45,7 +46,7 @@ static void *reloc_mbi_struct(void *old, unsigned int bytes)
     "    mov  %0,%%edi                \n"
     "    rep  movsb                   \n"
        : "=&r" (new), "+c" (bytes), "+S" (old)
-	: : "edx", "edi");
+	: : "edx", "edi", "memory");
     return new;
 }
 

@@ -11,8 +11,8 @@ all: xenpmd
 
 .PHONY: install
 install: all
-	$(INSTALL_DIR) $(DESTDIR)$(SBINDIR)
-	$(INSTALL_PROG) xenpmd $(DESTDIR)$(SBINDIR)
+	$(INSTALL_DIR) $(DESTDIR)$(LIBEXEC_BIN)
+	$(INSTALL_PROG) xenpmd $(DESTDIR)$(LIBEXEC_BIN)
 
 .PHONY: clean
 clean:

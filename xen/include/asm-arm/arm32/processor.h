@@ -1,7 +1,7 @@
 #ifndef __ASM_ARM_ARM32_PROCESSOR_H
 #define __ASM_ARM_ARM32_PROCESSOR_H
 
-#define ACTLR_V7_SMP    (1<<6)
+#define ACTLR_CAXX_SMP      (1<<6)
 
 #ifndef __ASSEMBLY__
 /* On stack VCPU state */
@@ -68,6 +68,10 @@ struct cpu_user_regs
 #define STORE_CP32(r, name...) "mcr " __stringify(CP32(%r, name)) ";"
 #define LOAD_CP64(r, name...)  "mrrc " __stringify(CP64(%r, %H##r, name)) ";"
 #define STORE_CP64(r, name...) "mcrr " __stringify(CP64(%r, %H##r, name)) ";"
+
+/* Issue a CP operation which takes no argument,
+ * uses r0 as a placeholder register. */
+#define CMD_CP32(name...)      "mcr " __stringify(CP32(r0, name)) ";"
 
 #ifndef __ASSEMBLY__
 

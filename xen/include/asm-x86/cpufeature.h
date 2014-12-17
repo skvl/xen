@@ -7,7 +7,9 @@
 #ifndef __ASM_I386_CPUFEATURE_H
 #define __ASM_I386_CPUFEATURE_H
 
+#ifndef __ASSEMBLY__
 #include <xen/bitops.h>
+#endif
 
 #define NCAPINTS	8	/* N 32-bit words worth of info */
 
@@ -57,10 +59,7 @@
 #define X86_FEATURE_3DNOWEXT	(1*32+30) /* AMD 3DNow! extensions */
 #define X86_FEATURE_3DNOW	(1*32+31) /* 3DNow! */
 
-/* Transmeta-defined CPU features, CPUID level 0x80860001, word 2 */
-#define X86_FEATURE_RECOVERY	(2*32+ 0) /* CPU in recovery mode */
-#define X86_FEATURE_LONGRUN	(2*32+ 1) /* Longrun power control */
-#define X86_FEATURE_LRTI	(2*32+ 3) /* LongRun table interface */
+/* *** Available for re-use ***, word 2 */
 
 /* Other features, Linux-defined mapping, word 3 */
 /* This range is used for feature bits which conflict or are synthesized */
@@ -137,6 +136,7 @@
 #define X86_FEATURE_NODEID_MSR  (6*32+19) /* NodeId MSR */
 #define X86_FEATURE_TBM         (6*32+21) /* trailing bit manipulations */
 #define X86_FEATURE_TOPOEXT     (6*32+22) /* topology extensions CPUID leafs */
+#define X86_FEATURE_DBEXT       (6*32+26) /* data breakpoint extension */
 
 /* Intel-defined CPU features, CPUID level 0x00000007:0 (ebx), word 7 */
 #define X86_FEATURE_FSGSBASE	(7*32+ 0) /* {RD,WR}{FS,GS}BASE instructions */
@@ -148,9 +148,14 @@
 #define X86_FEATURE_ERMS	(7*32+ 9) /* Enhanced REP MOVSB/STOSB */
 #define X86_FEATURE_INVPCID	(7*32+10) /* Invalidate Process Context ID */
 #define X86_FEATURE_RTM 	(7*32+11) /* Restricted Transactional Memory */
+#define X86_FEATURE_CMT 	(7*32+12) /* Cache Monitoring Technology */
 #define X86_FEATURE_NO_FPU_SEL 	(7*32+13) /* FPU CS/DS stored as zero */
+#define X86_FEATURE_MPX		(7*32+14) /* Memory Protection Extensions */
+#define X86_FEATURE_RDSEED	(7*32+18) /* RDSEED instruction */
+#define X86_FEATURE_ADX		(7*32+19) /* ADCX, ADOX instructions */
 #define X86_FEATURE_SMAP	(7*32+20) /* Supervisor Mode Access Prevention */
 
+#ifndef __ASSEMBLY__
 #define cpu_has(c, bit)		test_bit(bit, (c)->x86_capability)
 #define boot_cpu_has(bit)	test_bit(bit, boot_cpu_data.x86_capability)
 #define cpufeat_mask(idx)       (1u << ((idx) & 31))
@@ -186,6 +191,7 @@
 #define cpu_has_fsgsbase	boot_cpu_has(X86_FEATURE_FSGSBASE)
 
 #define cpu_has_smep            boot_cpu_has(X86_FEATURE_SMEP)
+#define cpu_has_smap            boot_cpu_has(X86_FEATURE_SMAP)
 #define cpu_has_fpu_sel         (!boot_cpu_has(X86_FEATURE_NO_FPU_SEL))
 
 #define cpu_has_ffxsr           ((boot_cpu_data.x86_vendor == X86_VENDOR_AMD) \
@@ -198,6 +204,7 @@
 #define cpu_has_xsave           boot_cpu_has(X86_FEATURE_XSAVE)
 #define cpu_has_avx             boot_cpu_has(X86_FEATURE_AVX)
 #define cpu_has_lwp             boot_cpu_has(X86_FEATURE_LWP)
+#define cpu_has_mpx             boot_cpu_has(X86_FEATURE_MPX)
 
 #define cpu_has_arch_perfmon    boot_cpu_has(X86_FEATURE_ARCH_PERFMON)
 
@@ -208,6 +215,52 @@
 #define cpu_has_vmx		boot_cpu_has(X86_FEATURE_VMXE)
 
 #define cpu_has_cpuid_faulting	boot_cpu_has(X86_FEATURE_CPUID_FAULTING)
+
+enum _cache_type {
+    CACHE_TYPE_NULL = 0,
+    CACHE_TYPE_DATA = 1,
+    CACHE_TYPE_INST = 2,
+    CACHE_TYPE_UNIFIED = 3
+};
+
+union _cpuid4_leaf_eax {
+    struct {
+        enum _cache_type type:5;
+        unsigned int level:3;
+        unsigned int is_self_initializing:1;
+        unsigned int is_fully_associative:1;
+        unsigned int reserved:4;
+        unsigned int num_threads_sharing:12;
+        unsigned int num_cores_on_die:6;
+    } split;
+    u32 full;
+};
+
+union _cpuid4_leaf_ebx {
+    struct {
+        unsigned int coherency_line_size:12;
+        unsigned int physical_line_partition:10;
+        unsigned int ways_of_associativity:10;
+    } split;
+    u32 full;
+};
+
+union _cpuid4_leaf_ecx {
+    struct {
+        unsigned int number_of_sets:32;
+    } split;
+    u32 full;
+};
+
+struct cpuid4_info {
+    union _cpuid4_leaf_eax eax;
+    union _cpuid4_leaf_ebx ebx;
+    union _cpuid4_leaf_ecx ecx;
+    unsigned long size;
+};
+
+int cpuid4_cache_lookup(int index, struct cpuid4_info *this_leaf);
+#endif
 
 #endif /* __ASM_I386_CPUFEATURE_H */
 

@@ -51,6 +51,7 @@
 #include <asm/fixmap.h>
 #include <asm/hvm/hvm.h>
 #include <asm/hvm/support.h>
+#include <asm/hvm/viridian.h>
 #include <asm/debugreg.h>
 #include <asm/msr.h>
 #include <asm/traps.h>
@@ -60,6 +61,7 @@
 #include <xen/numa.h>
 #include <xen/iommu.h>
 #include <compat/vcpu.h>
+#include <asm/psr.h>
 
 DEFINE_PER_CPU(struct vcpu *, curr_vcpu);
 DEFINE_PER_CPU(unsigned long, cr4);
@@ -133,12 +135,12 @@ void startup_cpu_idle_loop(void)
     reset_stack_and_jump(idle_loop);
 }
 
-static void continue_idle_domain(struct vcpu *v)
+static void noreturn continue_idle_domain(struct vcpu *v)
 {
     reset_stack_and_jump(idle_loop);
 }
 
-static void continue_nonidle_domain(struct vcpu *v)
+static void noreturn continue_nonidle_domain(struct vcpu *v)
 {
     check_wakeup_from_wait();
     mark_regs_dirty(guest_cpu_user_regs());
@@ -151,15 +153,29 @@ void dump_pageframe_info(struct domain *d)
 
     printk("Memory pages belonging to domain %u:\n", d->domain_id);
 
-    if ( d->tot_pages >= 10 )
+    if ( d->tot_pages >= 10 && d->is_dying < DOMDYING_dead )
     {
         printk("    DomPage list too long to display\n");
     }
     else
     {
+        unsigned long total[MASK_EXTR(PGT_type_mask, PGT_type_mask) + 1] = {};
+
         spin_lock(&d->page_alloc_lock);
         page_list_for_each ( page, &d->page_list )
         {
+            unsigned int index = MASK_EXTR(page->u.inuse.type_info,
+                                           PGT_type_mask);
+
+            if ( ++total[index] > 16 )
+            {
+                switch ( page->u.inuse.type_info & PGT_type_mask )
+                {
+                case PGT_none:
+                case PGT_writable_page:
+                    continue;
+                }
+            }
             printk("    DomPage %p: caf=%08lx, taf=%" PRtype_info "\n",
                    _p(page_to_mfn(page)),
                    page->count_info, page->u.inuse.type_info);
@@ -178,6 +194,14 @@ void dump_pageframe_info(struct domain *d)
                page->count_info, page->u.inuse.type_info);
     }
     spin_unlock(&d->page_alloc_lock);
+}
+
+smap_check_policy_t smap_policy_change(struct vcpu *v,
+    smap_check_policy_t new_policy)
+{
+    smap_check_policy_t old_policy = v->arch.smap_check_policy;
+    v->arch.smap_check_policy = new_policy;
+    return old_policy;
 }
 
 /*
@@ -406,6 +430,9 @@ int vcpu_initialise(struct vcpu *v)
     int rc;
 
     v->arch.flags = TF_kernel_mode;
+
+    /* By default, do not emulate */
+    v->arch.mem_event.emulate_flags = 0;
 
     rc = mapcache_vcpu_init(v);
     if ( rc )
@@ -636,6 +663,26 @@ void arch_domain_destroy(struct domain *d)
 
     free_xenheap_page(d->shared_info);
     cleanup_domain_irq_mapping(d);
+
+    psr_free_rmid(d);
+}
+
+void arch_domain_shutdown(struct domain *d)
+{
+    if ( has_viridian_time_ref_count(d) )
+        viridian_time_ref_count_freeze(d);
+}
+
+void arch_domain_pause(struct domain *d)
+{
+    if ( has_viridian_time_ref_count(d) )
+        viridian_time_ref_count_freeze(d);
+}
+
+void arch_domain_unpause(struct domain *d)
+{
+    if ( has_viridian_time_ref_count(d) )
+        viridian_time_ref_count_thaw(d);
 }
 
 unsigned long pv_guest_cr4_fixup(const struct vcpu *v, unsigned long guest_cr4)
@@ -651,9 +698,9 @@ unsigned long pv_guest_cr4_fixup(const struct vcpu *v, unsigned long guest_cr4)
         hv_cr4_mask &= ~X86_CR4_OSXSAVE;
 
     if ( (guest_cr4 & hv_cr4_mask) != (hv_cr4 & hv_cr4_mask) )
-        gdprintk(XENLOG_WARNING,
-                 "Attempt to change CR4 flags %08lx -> %08lx\n",
-                 hv_cr4, guest_cr4);
+        printk(XENLOG_G_WARNING
+               "d%d attempted to change %pv's CR4 flags %08lx -> %08lx\n",
+               current->domain->domain_id, v, hv_cr4, guest_cr4);
 
     return (hv_cr4 & hv_cr4_mask) | (guest_cr4 & ~hv_cr4_mask);
 }
@@ -929,8 +976,8 @@ int arch_set_info_guest(
         switch ( rc )
         {
         case -EINTR:
-            rc = -EAGAIN;
-        case -EAGAIN:
+            rc = -ERESTART;
+        case -ERESTART:
         case 0:
             break;
         default:
@@ -957,8 +1004,8 @@ int arch_set_info_guest(
                 switch ( rc )
                 {
                 case -EINTR:
-                    rc = -EAGAIN;
-                case -EAGAIN:
+                    rc = -ERESTART;
+                case -ERESTART:
                     v->arch.old_guest_table =
                         pagetable_get_page(v->arch.guest_table);
                     v->arch.guest_table = pagetable_null();
@@ -1341,14 +1388,7 @@ static void paravirt_ctxt_switch_to(struct vcpu *v)
         write_cr4(cr4);
 
     if ( unlikely(v->arch.debugreg[7] & DR7_ACTIVE_MASK) )
-    {
-        write_debugreg(0, v->arch.debugreg[0]);
-        write_debugreg(1, v->arch.debugreg[1]);
-        write_debugreg(2, v->arch.debugreg[2]);
-        write_debugreg(3, v->arch.debugreg[3]);
-        write_debugreg(6, v->arch.debugreg[6]);
-        write_debugreg(7, v->arch.debugreg[7]);
-    }
+        activate_debugregs(v);
 
     if ( (v->domain->arch.tsc_mode ==  TSC_MODE_PVRDTSCP) &&
          boot_cpu_has(X86_FEATURE_RDTSCP) )
@@ -1356,10 +1396,15 @@ static void paravirt_ctxt_switch_to(struct vcpu *v)
 }
 
 /* Update per-VCPU guest runstate shared memory area (if registered). */
-bool_t update_runstate_area(const struct vcpu *v)
+bool_t update_runstate_area(struct vcpu *v)
 {
+    bool_t rc;
+    smap_check_policy_t smap_policy;
+
     if ( guest_handle_is_null(runstate_guest(v)) )
         return 1;
+
+    smap_policy = smap_policy_change(v, SMAP_CHECK_ENABLED);
 
     if ( has_32bit_shinfo(v->domain) )
     {
@@ -1367,11 +1412,15 @@ bool_t update_runstate_area(const struct vcpu *v)
 
         XLAT_vcpu_runstate_info(&info, &v->runstate);
         __copy_to_guest(v->runstate_guest.compat, &info, 1);
-        return 1;
+        rc = 1;
     }
+    else
+        rc = __copy_to_guest(runstate_guest(v), &v->runstate, 1) !=
+             sizeof(v->runstate);
 
-    return __copy_to_guest(runstate_guest(v), &v->runstate, 1) !=
-           sizeof(v->runstate);
+    smap_policy_change(v, smap_policy);
+
+    return rc;
 }
 
 static void _update_runstate_area(struct vcpu *v)
@@ -1402,6 +1451,8 @@ static void __context_switch(void)
     {
         memcpy(&p->arch.user_regs, stack_regs, CTXT_SWITCH_STACK_BYTES);
         vcpu_save_fpu(p);
+        if ( psr_cmt_enabled() )
+            psr_assoc_rmid(0);
         p->arch.ctxt_switch_from(p);
     }
 
@@ -1426,6 +1477,9 @@ static void __context_switch(void)
         }
         vcpu_restore_fpu_eager(n);
         n->arch.ctxt_switch_to(n);
+
+        if ( psr_cmt_enabled() && n->domain->arch.psr_rmid > 0 )
+            psr_assoc_rmid(n->domain->arch.psr_rmid);
     }
 
     gdt = !is_pv_32on64_vcpu(n) ? per_cpu(gdt_table, cpu) :
@@ -1529,7 +1583,8 @@ void context_switch(struct vcpu *prev, struct vcpu *next)
         }
 
         set_cpuid_faulting(is_pv_vcpu(next) &&
-                           (next->domain->domain_id != 0));
+                           !is_control_domain(next->domain) &&
+                           !is_hardware_domain(next->domain));
     }
 
     if (is_hvm_vcpu(next) && (prev != next) )
@@ -1545,13 +1600,11 @@ void context_switch(struct vcpu *prev, struct vcpu *next)
     update_vcpu_system_time(next);
 
     schedule_tail(next);
-    BUG();
 }
 
 void continue_running(struct vcpu *same)
 {
     schedule_tail(same);
-    BUG();
 }
 
 int __sync_local_execstate(void)
@@ -1820,9 +1873,9 @@ static int relinquish_memory(
         {
         case 0:
             break;
-        case -EAGAIN:
+        case -ERESTART:
         case -EINTR:
-            ret = -EAGAIN;
+            ret = -ERESTART;
             page_list_add(page, list);
             set_bit(_PGT_pinned, &page->u.inuse.type_info);
             put_page(page);
@@ -1867,9 +1920,9 @@ static int relinquish_memory(
                     if ( x & PGT_partial )
                         put_page(page);
                     put_page(page);
-                    ret = -EAGAIN;
+                    ret = -ERESTART;
                     goto out;
-                case -EAGAIN:
+                case -ERESTART:
                     page_list_add(page, list);
                     page->u.inuse.type_info |= PGT_partial;
                     if ( x & PGT_partial )
@@ -1893,7 +1946,7 @@ static int relinquish_memory(
 
         if ( hypercall_preempt_check() )
         {
-            ret = -EAGAIN;
+            ret = -ERESTART;
             goto out;
         }
     }
@@ -1916,7 +1969,9 @@ int domain_relinquish_resources(struct domain *d)
     switch ( d->arch.relmem )
     {
     case RELMEM_not_started:
-        pci_release_devices(d);
+        ret = pci_release_devices(d);
+        if ( ret )
+            return ret;
 
         /* Tear down paging-assistance stuff. */
         ret = paging_teardown(d);
@@ -1942,15 +1997,14 @@ int domain_relinquish_resources(struct domain *d)
                  */
                 destroy_gdt(v);
             }
+        }
 
-            if ( d->arch.pv_domain.pirq_eoi_map != NULL )
-            {
-                unmap_domain_page_global(d->arch.pv_domain.pirq_eoi_map);
-                put_page_and_type(
-                    mfn_to_page(d->arch.pv_domain.pirq_eoi_map_mfn));
-                d->arch.pv_domain.pirq_eoi_map = NULL;
-                d->arch.pv_domain.auto_unmask = 0;
-            }
+        if ( d->arch.pirq_eoi_map != NULL )
+        {
+            unmap_domain_page_global(d->arch.pirq_eoi_map);
+            put_page_and_type(mfn_to_page(d->arch.pirq_eoi_map_mfn));
+            d->arch.pirq_eoi_map = NULL;
+            d->arch.auto_unmask = 0;
         }
 
         d->arch.relmem = RELMEM_shared;

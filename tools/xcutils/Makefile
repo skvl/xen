@@ -11,13 +11,12 @@
 XEN_ROOT	= $(CURDIR)/../..
 include $(XEN_ROOT)/tools/Rules.mk
 
-PROGRAMS = xc_restore xc_save readnotes lsevtchn
+PROGRAMS = readnotes lsevtchn
 
 CFLAGS += -Werror
 
-CFLAGS_xc_restore.o := $(CFLAGS_libxenctrl) $(CFLAGS_libxenguest)
-CFLAGS_xc_save.o    := $(CFLAGS_libxenctrl) $(CFLAGS_libxenguest) $(CFLAGS_libxenstore)
-CFLAGS_readnotes.o  := $(CFLAGS_libxenctrl) $(CFLAGS_libxenguest)
+# incorrectly uses libxc internals
+CFLAGS_readnotes.o  := $(CFLAGS_libxenctrl) $(CFLAGS_libxenguest) -I$(XEN_ROOT)/tools/libxc
 CFLAGS_lsevtchn.o   := $(CFLAGS_libxenctrl)
 
 APPEND_LDFLAGS += $(call LDFLAGS_RPATH,../lib)
@@ -28,12 +27,6 @@ all: build
 .PHONY: build
 build: $(PROGRAMS)
 
-xc_restore: xc_restore.o
-	$(CC) $(LDFLAGS) $^ -o $@ $(LDLIBS_libxenctrl) $(LDLIBS_libxenguest) $(APPEND_LDFLAGS)
-
-xc_save: xc_save.o
-	$(CC) $(LDFLAGS) $^ -o $@ $(LDLIBS_libxenctrl) $(LDLIBS_libxenguest) $(LDLIBS_libxenstore) $(APPEND_LDFLAGS)
-
 readnotes: readnotes.o
 	$(CC) $(LDFLAGS) $^ -o $@ $(LDLIBS_libxenctrl) $(LDLIBS_libxenguest) $(APPEND_LDFLAGS)
 
@@ -42,8 +35,8 @@ lsevtchn: lsevtchn.o
 
 .PHONY: install
 install: build
-	$(INSTALL_DIR) $(DESTDIR)$(PRIVATE_BINDIR)
-	$(INSTALL_PROG) $(PROGRAMS) $(DESTDIR)$(PRIVATE_BINDIR)
+	$(INSTALL_DIR) $(DESTDIR)$(LIBEXEC_BIN)
+	$(INSTALL_PROG) $(PROGRAMS) $(DESTDIR)$(LIBEXEC_BIN)
 
 
 .PHONY: clean

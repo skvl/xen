@@ -7,6 +7,10 @@ CONFIG_HVM := y
 CONFIG_MIGRATE := y
 CONFIG_XCUTILS := y
 
+HAS_MEM_ACCESS := y
+HAS_MEM_PAGING := y
+HAS_MEM_SHARING := y
+
 CONFIG_XEN_INSTALL_SUFFIX := .gz
 
 CFLAGS += -m64
@@ -25,3 +29,5 @@ else
 LDFLAGS_DIRECT += -melf_x86_64
 endif
 endif
+
+IOEMU_CPU_ARCH ?= x86_64

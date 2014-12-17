@@ -91,6 +91,7 @@ static inline int hvm_buffered_io_intercept(ioreq_t *p)
     return hvm_io_intercept(p, HVM_BUFFERED_IO);
 }
 
+bool_t hvm_mmio_internal(paddr_t gpa);
 int hvm_mmio_intercept(ioreq_t *p);
 int hvm_buffered_io_send(ioreq_t *p);
 
@@ -118,12 +119,13 @@ static inline void register_buffered_io_handler(
 void send_timeoffset_req(unsigned long timeoff);
 void send_invalidate_req(void);
 int handle_mmio(void);
-int handle_mmio_with_translation(unsigned long gva, unsigned long gpfn);
+int handle_mmio_with_translation(unsigned long gva, unsigned long gpfn,
+                                 struct npfec);
 int handle_pio(uint16_t port, unsigned int size, int dir);
 void hvm_interrupt_post(struct vcpu *v, int vector, int type);
 void hvm_io_assist(ioreq_t *p);
 void hvm_dpci_eoi(struct domain *d, unsigned int guest_irq,
-                  union vioapic_redir_entry *ent);
+                  const union vioapic_redir_entry *ent);
 void msix_write_completion(struct vcpu *);
 
 struct hvm_hw_stdvga {

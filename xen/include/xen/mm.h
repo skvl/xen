@@ -88,6 +88,27 @@ int assign_pages(
 /* Dump info to serial console */
 void arch_dump_shared_mem_info(void);
 
+/*
+ * Extra fault info types which are used to further describe
+ * the source of an access violation.
+ */
+typedef enum {
+    npfec_kind_unknown, /* must be first */
+    npfec_kind_in_gpt,  /* violation in guest page table */
+    npfec_kind_with_gla /* violation with guest linear address */
+} npfec_kind_t;
+
+/*
+ * Nested page fault exception codes.
+ */
+struct npfec {
+    unsigned int read_access:1;
+    unsigned int write_access:1;
+    unsigned int insn_fetch:1;
+    unsigned int gla_valid:1;
+    unsigned int kind:2;  /* npfec_kind_t */
+};
+
 /* memflags: */
 #define _MEMF_no_refcount 0
 #define  MEMF_no_refcount (1U<<_MEMF_no_refcount)
@@ -370,5 +391,11 @@ int guest_remove_page(struct domain *d, unsigned long gmfn);
 #define RAM_TYPE_ACPI         0x00000008
 /* TRUE if the whole page at @mfn is of the requested RAM type(s) above. */
 int page_is_ram_type(unsigned long mfn, unsigned long mem_type);
+
+/* Prepare/destroy a ring for a dom0 helper. Helper with talk
+ * with Xen on behalf of this domain. */
+int prepare_ring_for_helper(struct domain *d, unsigned long gmfn,
+                            struct page_info **_page, void **_va);
+void destroy_ring_for_helper(void **_va, struct page_info *page);
 
 #endif /* __XEN_MM_H__ */

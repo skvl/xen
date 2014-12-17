@@ -496,15 +496,8 @@ int __setup_msi_irq(struct irq_desc *desc, struct msi_desc *msidesc,
 
 int msi_free_irq(struct msi_desc *entry)
 {
-    unsigned int nr = entry->msi.nvec;
-
-    if ( entry->msi_attrib.type == PCI_CAP_ID_MSIX )
-    {
-        unsigned long start;
-        start = (unsigned long)entry->mask_base & ~(PAGE_SIZE - 1);
-        msix_put_fixmap(entry->dev->msix, virt_to_fix(start));
-        nr = 1;
-    }
+    unsigned int nr = entry->msi_attrib.type != PCI_CAP_ID_MSIX
+                      ? entry->msi.nvec : 1;
 
     while ( nr-- )
     {
@@ -514,6 +507,10 @@ int msi_free_irq(struct msi_desc *entry)
         if ( iommu_intremap )
             iommu_update_ire_from_msi(entry + nr, NULL);
     }
+
+    if ( entry->msi_attrib.type == PCI_CAP_ID_MSIX )
+        msix_put_fixmap(entry->dev->msix,
+                        virt_to_fix((unsigned long)entry->mask_base));
 
     list_del(&entry->list);
     xfree(entry);
@@ -825,32 +822,22 @@ static int msix_capability_init(struct pci_dev *dev,
                                 msix->pba.last) )
             WARN();
 
-        if ( dev->domain )
-            p2m_change_entry_type_global(dev->domain,
-                                         p2m_mmio_direct, p2m_mmio_direct);
-        if ( desc && (!dev->domain || !paging_mode_translate(dev->domain)) )
+        if ( desc )
         {
-            struct domain *d = dev->domain;
+            struct domain *currd = current->domain;
+            struct domain *d = dev->domain ?: currd;
 
-            if ( !d )
-                for_each_domain(d)
-                    if ( !paging_mode_translate(d) &&
-                         (iomem_access_permitted(d, msix->table.first,
-                                                 msix->table.last) ||
-                          iomem_access_permitted(d, msix->pba.first,
-                                                 msix->pba.last)) )
-                        break;
-            if ( d )
-            {
-                if ( !is_hardware_domain(d) && msix->warned != d->domain_id )
-                {
-                    msix->warned = d->domain_id;
-                    printk(XENLOG_ERR
-                           "Potentially insecure use of MSI-X on %04x:%02x:%02x.%u by Dom%d\n",
-                           seg, bus, slot, func, d->domain_id);
-                }
-                /* XXX How to deal with existing mappings? */
-            }
+            if ( !is_hardware_domain(currd) || d != currd )
+                printk("%s use of MSI-X on %04x:%02x:%02x.%u by Dom%d\n",
+                       is_hardware_domain(currd)
+                       ? XENLOG_WARNING "Potentially insecure"
+                       : XENLOG_ERR "Insecure",
+                       seg, bus, slot, func, d->domain_id);
+            if ( !is_hardware_domain(d) &&
+                 /* Assume a domain without memory has no mappings yet. */
+                 (!is_hardware_domain(currd) || d->tot_pages) )
+                domain_crash(d);
+            /* XXX How to deal with existing mappings? */
         }
     }
     WARN_ON(msix->nr_entries != nr_entries);

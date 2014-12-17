@@ -7,6 +7,8 @@
 #include <xen/xen.h>
 #include <sys/mman.h>
 
+#define __packed __attribute__((packed))
+
 #include "x86_emulate/x86_emulate.h"
 #include "blowfish.h"
 
@@ -100,11 +102,11 @@ static int cpuid(
 
 static inline uint64_t xgetbv(uint32_t xcr)
 {
-    uint64_t res;
+    uint32_t lo, hi;
 
-    asm ( ".byte 0x0f, 0x01, 0xd0" : "=A" (res) : "c" (xcr) );
+    asm ( ".byte 0x0f, 0x01, 0xd0" : "=a" (lo), "=d" (hi) : "c" (xcr) );
 
-    return res;
+    return ((uint64_t)hi << 32) | lo;
 }
 
 #define cpu_has_avx ({ \

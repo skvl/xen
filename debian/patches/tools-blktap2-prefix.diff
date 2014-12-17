@@ -1,4 +1,4 @@
-From e3e6c6f2fe01654be0d0fbe125d43a6236423c09 Mon Sep 17 00:00:00 2001
+From d8f57e314b2766a9716399893efb59afd7e82726 Mon Sep 17 00:00:00 2001
 From: Bastian Blank <waldi@debian.org>
 Date: Sat, 5 Jul 2014 11:46:53 +0200
 Subject: tools-blktap2-prefix.diff
@@ -11,7 +11,7 @@ Patch-Name: tools-blktap2-prefix.diff
  3 files changed, 18 insertions(+), 38 deletions(-)
 
 diff --git a/tools/blktap2/control/Makefile b/tools/blktap2/control/Makefile
-index 86a433c..f3a7a6e 100644
+index a88ff4c..d2615d9 100644
 --- a/tools/blktap2/control/Makefile
 +++ b/tools/blktap2/control/Makefile
 @@ -1,10 +1,7 @@
@@ -44,28 +44,28 @@ index 86a433c..f3a7a6e 100644
 -	ln -sf $< $@
 -
  tap-ctl: tap-ctl.o $(LIBNAME).so
--	$(CC) $(LDFLAGS) -o $@ $^
-+	$(CC) $(LDFLAGS) $(call LDFLAGS_RPATH,../lib) -o $@ $^
+-	$(CC) $(LDFLAGS) -o $@ $^ $(APPEND_LDFLAGS)
++	$(CC) $(LDFLAGS) $(call LDFLAGS_RPATH,../lib) -o $@ $^ $(APPEND_LDFLAGS)
  
  $(LIB_STATIC): $(CTL_OBJS)
  	$(AR) r $@ $^
  
  $(LIB_SHARED): $(CTL_PICS)
--	$(CC) $(LDFLAGS) -fPIC  -Wl,$(SONAME_LDFLAG) -Wl,$(LIBSONAME) $(SHLIB_LDFLAGS) -rdynamic $^ -o $@
-+	$(CC) $(LDFLAGS) -fPIC $(SHLIB_LDFLAGS) -rdynamic $^ -o $@
+-	$(CC) $(LDFLAGS) -fPIC  -Wl,$(SONAME_LDFLAG) -Wl,$(LIBSONAME) $(SHLIB_LDFLAGS) -rdynamic $^ -o $@  $(APPEND_LDFLAGS)
++	$(CC) $(LDFLAGS) -fPIC $(SHLIB_LDFLAGS) -rdynamic $^ -o $@ $(APPEND_LDFLAGS)
  
  install: $(IBIN) $(LIB_STATIC) $(LIB_SHARED)
 -	$(INSTALL_DIR) -p $(DESTDIR)$(SBINDIR)
 -	$(INSTALL_PROG) $(IBIN) $(DESTDIR)$(SBINDIR)
-+	$(INSTALL_DIR) -p $(DESTDIR)$(IBDIR)
-+	$(INSTALL_DIR) -p $(DESTDIR)$(PRIVATE_LIBDIR)
-+	$(INSTALL_DIR) -p $(DESTDIR)$(PRIVATE_SBINDIR)
-+	$(INSTALL_PROG) $(IBIN) $(DESTDIR)$(PRIVATE_BINDIR)
++	$(INSTALL_DIR) -p $(DESTDIR)$(LIBDIR)
++	$(INSTALL_DIR) -p $(DESTDIR)$(LIBEXEC_BIN)
++	$(INSTALL_DIR) -p $(DESTDIR)$(LIBEXEC_LIB)
++	$(INSTALL_PROG) $(IBIN) $(DESTDIR)$(LIBEXEC_BIN)
  	$(INSTALL_DATA) $(LIB_STATIC) $(DESTDIR)$(LIBDIR)
 -	$(INSTALL_PROG) $(LIB_SHARED) $(DESTDIR)$(LIBDIR)
 -	ln -sf $(LIBSONAME) $(DESTDIR)$(LIBDIR)/$(LIBNAME).so
 -	ln -sf $(LIB_SHARED) $(DESTDIR)$(LIBDIR)/$(LIBSONAME)
-+	$(INSTALL_PROG) $(LIB_SHARED) $(DESTDIR)$(PRIVATE_LIBDIR)
++	$(INSTALL_PROG) $(LIB_SHARED) $(DESTDIR)$(LIBEXEC_LIB)
  
  clean:
  	rm -f $(OBJS) $(PICS) $(DEPS) $(IBIN) $(LIB_STATIC) $(LIB_SHARED)
@@ -74,7 +74,7 @@ index 86a433c..f3a7a6e 100644
  
  .PHONY: all build clean install
 diff --git a/tools/blktap2/vhd/Makefile b/tools/blktap2/vhd/Makefile
-index c5019de..e55c73c 100644
+index fef0d36..cf8b639 100644
 --- a/tools/blktap2/vhd/Makefile
 +++ b/tools/blktap2/vhd/Makefile
 @@ -12,6 +12,7 @@ CFLAGS            += -Werror
@@ -86,10 +86,10 @@ index c5019de..e55c73c 100644
  ifeq ($(CONFIG_X86_64),y)
  CFLAGS            += -fPIC
 diff --git a/tools/blktap2/vhd/lib/Makefile b/tools/blktap2/vhd/lib/Makefile
-index cdbb86c..0ab9885 100644
+index 99e3cdb..45fac4f 100644
 --- a/tools/blktap2/vhd/lib/Makefile
 +++ b/tools/blktap2/vhd/lib/Makefile
-@@ -2,26 +2,20 @@ XEN_ROOT=$(CURDIR)/../../../..
+@@ -2,25 +2,19 @@ XEN_ROOT=$(CURDIR)/../../../..
  BLKTAP_ROOT := ../..
  include $(XEN_ROOT)/tools/Rules.mk
  
@@ -108,8 +108,7 @@ index cdbb86c..0ab9885 100644
  CFLAGS          += -I../../include
  CFLAGS          += -D_GNU_SOURCE
  CFLAGS          += -fPIC
- CFLAGS          += -g
-+CFLAGS  += $(CFLAGS_libxenctrl)
++CFLAGS		+= $(CFLAGS_libxenctrl)
  
  ifeq ($(CONFIG_Linux),y)
  LIBS            := -luuid
@@ -118,7 +117,7 @@ index cdbb86c..0ab9885 100644
  
  ifeq ($(CONFIG_LIBICONV),y)
  LIBS            += -liconv
-@@ -51,27 +45,22 @@ LIB-OBJS        += $(LVM-UTIL-OBJ)
+@@ -50,27 +44,22 @@ LIB-OBJS        += $(LVM-UTIL-OBJ)
  
  LIB-PICOBJS      = $(patsubst %.o,%.opic,$(LIB-OBJS))
  

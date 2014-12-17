@@ -30,6 +30,8 @@ SECTIONS
   .text : /* XXX should be AT ( XEN_PHYS_START ) */ {
         _stext = .;            /* Text section */
        *(.text)
+       *(.text.cold)
+       *(.text.unlikely)
        *(.fixup)
        *(.gnu.warning)
        _etext = .;             /* End of text section */
@@ -38,6 +40,14 @@ SECTIONS
   . = ALIGN(PAGE_SIZE);
   .rodata : {
         _srodata = .;          /* Read-only data */
+        /* Bug frames table */
+       __start_bug_frames = .;
+       *(.bug_frames.0)
+       __stop_bug_frames_0 = .;
+       *(.bug_frames.1)
+       __stop_bug_frames_1 = .;
+       *(.bug_frames.2)
+       __stop_bug_frames_2 = .;
        *(.rodata)
        *(.rodata.*)
         _erodata = .;          /* End of read-only data */
@@ -133,6 +143,7 @@ SECTIONS
        *(.xsm_initcall.init)
        __xsm_initcall_end = .;
   } :text
+  __init_end_efi = .;
   . = ALIGN(STACK_SIZE);
   __init_end = .;
 
@@ -176,3 +187,9 @@ SECTIONS
   .stab.indexstr 0 : { *(.stab.indexstr) }
   .comment 0 : { *(.comment) }
 }
+
+/*
+ * We require that Xen is loaded at a 4K boundary, so this ensures that any
+ * code running on the boot time identity map cannot cross a section boundary.
+ */
+ASSERT( _end_boot - start <= PAGE_SIZE, "Boot code is larger than 4K")

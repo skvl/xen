@@ -6,6 +6,8 @@ CFLAGS += -Werror
 CFLAGS += $(CFLAGS_libxenctrl)
 CFLAGS += $(CFLAGS_xeninclude)
 CFLAGS += $(CFLAGS_libxenstore)
+# xen-hptool.c and xen-mfndump.c incorrectly use libxc internals
+CFLAGS += -I$(XEN_ROOT)/tools/libxc
 
 HDRS     = $(wildcard *.h)
 
@@ -14,13 +16,11 @@ TARGETS-$(CONFIG_X86) += xen-detect xen-hvmctx xen-hvmcrash xen-lowmemd xen-mfnd
 TARGETS-$(CONFIG_MIGRATE) += xen-hptool
 TARGETS := $(TARGETS-y)
 
-SUBDIRS := $(SUBDIRS-y)
-
 INSTALL_BIN-y := xencons xencov_split
 INSTALL_BIN-$(CONFIG_X86) += xen-detect
 INSTALL_BIN := $(INSTALL_BIN-y)
 
-INSTALL_SBIN-y := xen-bugtool xen-python-path xenperf xenpm xen-tmem-list-parse gtraceview \
+INSTALL_SBIN-y := xen-bugtool xenperf xenpm xen-tmem-list-parse gtraceview \
 	gtracestat xenlockprof xenwatchdogd xen-ringwatch xencov
 INSTALL_SBIN-$(CONFIG_X86) += xen-hvmctx xen-hvmcrash xen-lowmemd xen-mfndump
 INSTALL_SBIN-$(CONFIG_MIGRATE) += xen-hptool
@@ -39,18 +39,15 @@ all: build
 
 .PHONY: build
 build: $(TARGETS)
-	set -e; for d in $(SUBDIRS); do $(MAKE) -C $$d; done
 
 .PHONY: install
 install: build
-	$(INSTALL_DIR) $(DESTDIR)$(PRIVATE_BINDIR)
-	$(INSTALL_PYTHON_PROG) $(INSTALL_BIN) $(INSTALL_SBIN) $(INSTALL_PRIVBIN) $(DESTDIR)$(PRIVATE_BINDIR)
-	set -e; for d in $(SUBDIRS); do $(MAKE) -C $$d install-recurse; done
+	$(INSTALL_DIR) $(DESTDIR)$(LIBEXEC_BIN)
+	$(INSTALL_PYTHON_PROG) $(INSTALL_BIN) $(INSTALL_SBIN) $(INSTALL_PRIVBIN) $(DESTDIR)$(LIBEXEC_BIN)
 
 .PHONY: clean
 clean:
 	$(RM) *.o $(TARGETS) *~ $(DEPS)
-	set -e; for d in $(SUBDIRS); do $(MAKE) -C $$d clean; done
 
 xen-hvmctx: xen-hvmctx.o
 	$(CC) $(LDFLAGS) -o $@ $< $(LDLIBS_libxenctrl) $(APPEND_LDFLAGS)
@@ -74,7 +71,7 @@ xen-hptool: xen-hptool.o
 	$(CC) $(LDFLAGS) -o $@ $< $(LDLIBS_libxenctrl) $(LDLIBS_libxenguest) $(LDLIBS_libxenstore) $(APPEND_LDFLAGS)
 
 xen-mfndump: xen-mfndump.o
-	$(CC) $(LDFLAGS) -o $@ $< $(LDLIBS_libxenctrl) $(LDLIBS_libxenguest) $(LDLIBS_libxenstore) $(APPEND_LDFLAGS)
+	$(CC) $(LDFLAGS) -o $@ $< $(LDLIBS_libxenctrl) $(LDLIBS_libxenguest) $(APPEND_LDFLAGS)
 
 xenwatchdogd: xenwatchdogd.o
 	$(CC) $(LDFLAGS) -o $@ $< $(LDLIBS_libxenctrl) $(APPEND_LDFLAGS)

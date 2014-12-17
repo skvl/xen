@@ -1,4 +1,4 @@
-From 66f2cc186b7cd712a059c51af7fd89c0d7806e20 Mon Sep 17 00:00:00 2001
+From 57e02a108aa4dc29be9a9fde4ae44a06703be81c Mon Sep 17 00:00:00 2001
 From: Bastian Blank <waldi@debian.org>
 Date: Sat, 5 Jul 2014 11:46:55 +0200
 Subject: tools-libfsimage-prefix.diff
@@ -10,7 +10,7 @@ Patch-Name: tools-libfsimage-prefix.diff
  2 files changed, 6 insertions(+), 3 deletions(-)
 
 diff --git a/tools/libfsimage/Rules.mk b/tools/libfsimage/Rules.mk
-index 8a23655..2750f4f 100644
+index 8a23655..3e35fc7 100644
 --- a/tools/libfsimage/Rules.mk
 +++ b/tools/libfsimage/Rules.mk
 @@ -3,10 +3,11 @@ include $(XEN_ROOT)/tools/Rules.mk
@@ -22,19 +22,19 @@ index 8a23655..2750f4f 100644
  PIC_OBJS := $(patsubst %.c,%.opic,$(LIB_SRCS-y))
  
 -FSDIR = $(LIBDIR)/fs
-+FSDIR = $(PRIVATE_LIBDIR)/fs
++FSDIR = $(LIBEXEC_LIB)/fs
  
  FSLIB = fsimage.so
  
 diff --git a/tools/libfsimage/common/Makefile b/tools/libfsimage/common/Makefile
-index 4202cc1..85f3d29 100644
+index 0e6c728..4e472f0 100644
 --- a/tools/libfsimage/common/Makefile
 +++ b/tools/libfsimage/common/Makefile
 @@ -1,6 +1,8 @@
  XEN_ROOT = $(CURDIR)/../../..
  include $(XEN_ROOT)/tools/libfsimage/Rules.mk
  
-+CFLAGS += -DFSDIR="\"$(PRIVATE_LIBDIR)/fs\""
++CFLAGS += -DFSDIR="\"$(LIBEXEC_LIB)/fs\""
 +
  LDFLAGS-$(CONFIG_SunOS) = -Wl,-M -Wl,mapfile-SunOS
  LDFLAGS-$(CONFIG_Linux) = -Wl,mapfile-GNU
@@ -44,10 +44,10 @@ index 4202cc1..85f3d29 100644
  .PHONY: install
  install: all
 -	$(INSTALL_DIR) $(DESTDIR)$(LIBDIR)
-+	$(INSTALL_DIR) $(DESTDIR)$(PRIVATE_LIBDIR)
++	$(INSTALL_DIR) $(DESTDIR)$(LIBEXEC_LIB)
  	$(INSTALL_DIR) $(DESTDIR)$(INCLUDEDIR)
 -	$(INSTALL_PROG) libfsimage.so $(DESTDIR)$(LIBDIR)
-+	$(INSTALL_PROG) libfsimage.so $(DESTDIR)$(PRIVATE_LIBDIR)
++	$(INSTALL_PROG) libfsimage.so $(DESTDIR)$(LIBEXEC_LIB)
  	$(INSTALL_DATA) fsimage.h $(DESTDIR)$(INCLUDEDIR)
  	$(INSTALL_DATA) fsimage_plugin.h $(DESTDIR)$(INCLUDEDIR)
  	$(INSTALL_DATA) fsimage_grub.h $(DESTDIR)$(INCLUDEDIR)

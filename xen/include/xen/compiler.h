@@ -7,12 +7,16 @@
 
 #define barrier()     __asm__ __volatile__("": : :"memory")
 
-#define likely(x)     __builtin_expect((x),1)
-#define unlikely(x)   __builtin_expect((x),0)
+#define likely(x)     __builtin_expect(!!(x),1)
+#define unlikely(x)   __builtin_expect(!!(x),0)
 
 #define inline        __inline__
 #define always_inline __inline__ __attribute__ ((always_inline))
 #define noinline      __attribute__((noinline))
+
+#define noreturn      __attribute__((noreturn))
+
+#define __packed      __attribute__((packed))
 
 #if (!defined(__clang__) && (__GNUC__ == 4) && (__GNUC_MINOR__ < 5))
 #define unreachable() do {} while (1)

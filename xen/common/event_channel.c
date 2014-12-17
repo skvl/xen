@@ -59,7 +59,7 @@
  * with a pointer, we stash them dynamically in a small lookup array which
  * can be indexed by a small integer.
  */
-static xen_event_channel_notification_t xen_consumers[8];
+static xen_event_channel_notification_t xen_consumers[NR_XEN_CONSUMERS];
 
 /* Default notification action: wake up from wait_on_xen_event_channel(). */
 static void default_xen_notification_fn(struct vcpu *v, unsigned int port)
@@ -743,7 +743,7 @@ void send_global_virq(uint32_t virq)
     ASSERT(virq < NR_VIRQS);
     ASSERT(virq_is_global(virq));
 
-    send_guest_global_virq(global_virq_handlers[virq] ?: dom0, virq);
+    send_guest_global_virq(global_virq_handlers[virq] ?: hardware_domain, virq);
 }
 
 int set_global_virq_handler(struct domain *d, uint32_t virq)
@@ -956,6 +956,21 @@ static long evtchn_reset(evtchn_reset_t *r)
 
     for ( i = 0; port_is_valid(d, i); i++ )
         (void)__evtchn_close(d, i);
+
+    spin_lock(&d->event_lock);
+
+    if ( (dom == DOMID_SELF) && d->evtchn_fifo )
+    {
+        /*
+         * Guest domain called EVTCHNOP_reset with DOMID_SELF, destroying
+         * FIFO event array and control blocks, resetting evtchn_port_ops to
+         * evtchn_port_ops_2l.
+         */
+        evtchn_fifo_destroy(d);
+        evtchn_2l_init(d);
+    }
+
+    spin_unlock(&d->event_lock);
 
     rc = 0;
 

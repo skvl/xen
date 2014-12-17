@@ -20,7 +20,8 @@
 #include <asm/current.h>
 #include <asm/hvm/support.h>
 #include <xen/pci_regs.h>
- 
+#include <xen/pci_ids.h>
+
 #include "op_x86_model.h"
 #include "op_counter.h"
 
@@ -236,7 +237,7 @@ static void athlon_setup_ctrs(struct op_msrs const * const msrs)
 }
 
 static inline void
-ibs_log_event(u64 data, struct cpu_user_regs * const regs, int mode)
+ibs_log_event(u64 data, struct cpu_user_regs const * const regs, int mode)
 {
 	struct vcpu *v = current;
 	u32 temp = 0;
@@ -249,7 +250,7 @@ ibs_log_event(u64 data, struct cpu_user_regs * const regs, int mode)
 	
 }
 
-static inline int handle_ibs(int mode, struct cpu_user_regs * const regs)
+static inline int handle_ibs(int mode, struct cpu_user_regs const * const regs)
 {
 	u64 val, ctl;
 	struct vcpu *v = current;
@@ -309,7 +310,7 @@ static inline int handle_ibs(int mode, struct cpu_user_regs * const regs)
 
 static int athlon_check_ctrs(unsigned int const cpu,
 			     struct op_msrs const * const msrs,
-			     struct cpu_user_regs * const regs)
+			     struct cpu_user_regs const * const regs)
 
 {
 	uint64_t msr_content;
@@ -445,7 +446,6 @@ static inline void __init init_ibs_nmi_per_cpu(void *arg)
 	apic_write(reg, APIC_EILVT_MSG_NMI << 8);
 }
 
-#define PCI_VENDOR_ID_AMD               0x1022
 #define PCI_DEVICE_ID_AMD_10H_NB_MISC   0x1203
 #define IBSCTL                          0x1cc
 static int __init init_ibs_nmi(void)
@@ -497,14 +497,11 @@ static int __init init_ibs_nmi(void)
 
 static void __init get_ibs_caps(void)
 {
-	unsigned int max_level;
-
 	if (!boot_cpu_has(X86_FEATURE_IBS))
 		return;
 
     /* check IBS cpuid feature flags */
-	max_level = cpuid_eax(0x80000000);
-	if (max_level >= IBS_CPUID_FEATURES)
+	if (current_cpu_data.extended_cpuid_level >= IBS_CPUID_FEATURES)
 		ibs_caps = cpuid_eax(IBS_CPUID_FEATURES);
 	if (!(ibs_caps & IBS_CAPS_AVAIL))
 		/* cpuid flags not valid */
