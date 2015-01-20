@@ -1,4 +1,4 @@
-From e3eb13e030e91ed7d3bcd1f15d2c1c66bb51f1c5 Mon Sep 17 00:00:00 2001
+From 1f5daf0e99d7e961baa22a61575506455b00bb46 Mon Sep 17 00:00:00 2001
 From: Bastian Blank <waldi@debian.org>
 Date: Sat, 5 Jul 2014 11:46:43 +0200
 Subject: version
@@ -14,7 +14,7 @@ Patch-Name: version.diff
  6 files changed, 29 insertions(+), 32 deletions(-)
 
 diff --git a/xen/Makefile b/xen/Makefile
-index 72c1313..ca6f0c1 100644
+index 5d70741..bc2d228 100644
 --- a/xen/Makefile
 +++ b/xen/Makefile
 @@ -125,20 +125,19 @@ delete-unfresh-files:
@@ -102,7 +102,7 @@ index b152e27..7b5af55 100644
 -    return XEN_BANNER;
 -}
 diff --git a/xen/drivers/char/console.c b/xen/drivers/char/console.c
-index 2f03259..1f5200a 100644
+index 0b8d3d4..99507df 100644
 --- a/xen/drivers/char/console.c
 +++ b/xen/drivers/char/console.c
 @@ -727,14 +727,11 @@ void __init console_init_preirq(void)

@@ -1,4 +1,4 @@
-From 8a804fe6b91d895d043656a0737f1debfe9819f8 Mon Sep 17 00:00:00 2001
+From 91aca1c82d48c8226faa72e0a6f16cef25bbe130 Mon Sep 17 00:00:00 2001
 From: Bastian Blank <waldi@debian.org>
 Date: Sat, 5 Jul 2014 11:46:45 +0200
 Subject: config-prefix.diff
@@ -10,7 +10,7 @@ Patch-Name: config-prefix.diff
  2 files changed, 4 insertions(+), 3 deletions(-)
 
 diff --git a/Config.mk b/Config.mk
-index a53cfb5..2e84ee1 100644
+index 7288326..68775d4 100644
 --- a/Config.mk
 +++ b/Config.mk
 @@ -75,7 +75,7 @@ EXTRA_LIB += $(EXTRA_PREFIX)/lib

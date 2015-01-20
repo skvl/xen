@@ -596,13 +596,16 @@ Force or disable use of EFI runtime services.
 ### extra\_guest\_irqs
 > `= [<domU number>][,<dom0 number>]`
 
-> Default: `32,256`
+> Default: `32,<variable>`
 
 Change the number of PIRQs available for guests.  The optional first number is
 common for all domUs, while the optional second number (preceded by a comma)
 is for dom0.  Changing the setting for domU has no impact on dom0 and vice
 versa.  For example to change dom0 without changing domU, use
-`extra_guest_irqs=,512`
+`extra_guest_irqs=,512`.  The default value for Dom0 and an eventual separate
+hardware domain is architecture dependent.
+Note that specifying zero as domU value means zero, while for dom0 it means
+to use the default.
 
 ### flask\_enabled
 > `= <integer>`
@@ -611,7 +614,7 @@ versa.  For example to change dom0 without changing domU, use
 > `= <integer>`
 
 ### font
-> `= <height>` where height is `8x8 | 8x14 | 8x16 '`
+> `= <height>` where height is `8x8 | 8x14 | 8x16`
 
 Specify the font size when using the VESA console driver.
 
@@ -645,13 +648,13 @@ Specify the maximum number of frames per grant table operation.
 > `= <integer>`
 
 Specify the maximum number of maptrack frames domain.
-The default value is 8 times gnttab_max_frames.
+The default value is 8 times **gnttab\_max\_frames**.
 
 ### gnttab\_max\_nr\_frames
 > `= <integer>`
 
 *Deprecated*
-Use gnttab\_max\_frames and gnttab\_max\_maptrack\_frames instead.
+Use **gnttab\_max\_frames** and **gnttab\_max\_maptrack\_frames** instead.
 
 Specify the maximum number of frames per grant table operation and the
 maximum number of maptrack frames domain.
@@ -983,7 +986,7 @@ of the ACPI based one.
 ### nmi
 > `= ignore | dom0 | fatal`
 
-> Default: `nmi=fatal`
+> Default: `fatal` for a debug build, or `dom0` for a non-debug build
 
 Specify what Xen should do in the event of an NMI parity or I/O error.
 `ignore` discards the error; `dom0` causes Xen to report the error to
@@ -1171,7 +1174,12 @@ Flag to enable Supervisor Mode Execution Protection
 Flag to enable Supervisor Mode Access Prevention
 
 ### snb\_igd\_quirk
-> `= <boolean>`
+> `= <boolean> | cap | <integer>`
+
+A true boolean value enables legacy behavior (1s timeout), while `cap`
+enforces the maximum theoretically necessary timeout of 670ms. Any number
+is being interpreted as a custom timeout in milliseconds. Zero or boolean
+false disable the quirk workaround, which is also the default.
 
 ### sync\_console
 > `= <boolean>`

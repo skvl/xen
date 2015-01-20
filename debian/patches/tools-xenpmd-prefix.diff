@@ -1,4 +1,4 @@
-From 9dee08b274bc47c6df2706f06a7985a976358aa4 Mon Sep 17 00:00:00 2001
+From fe75d9145658c6b798e63a4aa4db48d64a60557e Mon Sep 17 00:00:00 2001
 From: Bastian Blank <waldi@debian.org>
 Date: Sat, 13 Dec 2014 19:37:02 +0100
 Subject: tools-xenpmd-prefix.diff

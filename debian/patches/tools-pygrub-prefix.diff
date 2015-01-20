@@ -1,4 +1,4 @@
-From 8aa1828689ff90535bb53d4d2ad2e0f2de9ddab8 Mon Sep 17 00:00:00 2001
+From dadc3e25a33d401960914d30623a5e49aa038d54 Mon Sep 17 00:00:00 2001
 From: Bastian Blank <waldi@debian.org>
 Date: Sat, 5 Jul 2014 11:47:01 +0200
 Subject: tools-pygrub-prefix.diff
@@ -45,7 +45,7 @@ index 52dcf57..8a1be9a 100644
      library_dirs = [ XEN_ROOT + "/tools/libfsimage/common/" ],
      libraries = ["fsimage"],
 diff --git a/tools/pygrub/src/pygrub b/tools/pygrub/src/pygrub
-index aa7e562..17f2396 100644
+index 3ec52fd..ed5b5d6 100755
 --- a/tools/pygrub/src/pygrub
 +++ b/tools/pygrub/src/pygrub
 @@ -22,6 +22,8 @@ import xen.lowlevel.xc

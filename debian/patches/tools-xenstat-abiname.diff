@@ -1,4 +1,4 @@
-From 68ce7e635b54b1b9b2a56328e65ce0f63c8f3c66 Mon Sep 17 00:00:00 2001
+From 0e96125d7a8672209f57f8e2fcaaebe51737c480 Mon Sep 17 00:00:00 2001
 From: Bastian Blank <waldi@debian.org>
 Date: Sat, 5 Jul 2014 11:46:50 +0200
 Subject: tools-xenstat-abiname.diff

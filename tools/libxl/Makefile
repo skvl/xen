@@ -37,7 +37,7 @@ LDFLAGS += $(PTHREAD_LDFLAGS)
 LIBXL_LIBS += $(PTHREAD_LIBS)
 LIBXL_LIBS += $(LIBXL_LIBS-y)
 
-LIBXLU_LIBS =
+LIBXLU_LIBS = libxenlight.so
 
 LIBXL_OBJS-y = osdeps.o libxl_paths.o libxl_bootloader.o flexarray.o
 ifeq ($(LIBXL_BLKTAP),y)
@@ -217,8 +217,8 @@ libxenlight.a: $(LIBXL_OBJS)
 libxlutil.so: libxlutil-$(PACKAGE_VERSION).so
 	$(SYMLINK_SHLIB) $< $@
 
-libxlutil-$(PACKAGE_VERSION).so: $(LIBXLU_OBJS)
-	$(CC) $(LDFLAGS) -Wl,$(SONAME_LDFLAG),$@ $(SHLIB_LDFLAGS) -o $@ $^ $(LIBXLU_LIBS) $(APPEND_LDFLAGS)
+libxlutil-$(PACKAGE_VERSION).so: $(LIBXLU_OBJS) libxenlight.so
+	$(CC) $(LDFLAGS) -Wl,$(SONAME_LDFLAG),$@ $(SHLIB_LDFLAGS) -o $@ $(LIBXLU_OBJS) $(LIBXLU_LIBS) $(APPEND_LDFLAGS)
 
 libxlutil.a: $(LIBXLU_OBJS)
 	$(AR) rcs libxlutil.a $^

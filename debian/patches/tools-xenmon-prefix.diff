@@ -1,4 +1,4 @@
-From cc094cf644ad8955e227f5c5427b1c93389ef383 Mon Sep 17 00:00:00 2001
+From b34b61fa56ea09672557ff3d69d27c632779e2b9 Mon Sep 17 00:00:00 2001
 From: Bastian Blank <waldi@debian.org>
 Date: Sat, 5 Jul 2014 11:47:06 +0200
 Subject: tools-xenmon-prefix.diff
