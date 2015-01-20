@@ -524,6 +524,13 @@ static char *watch_token(libxl__gc *gc, int slotnum, uint32_t counterval)
     return libxl__sprintf(gc, "%d/%"PRIx32, slotnum, counterval);
 }
 
+static void watches_check_fd_deregister(libxl__gc *gc)
+{
+    assert(CTX->nwatches>=0);
+    if (!CTX->nwatches)
+        libxl__ev_fd_deregister(gc, &CTX->watch_efd);
+}
+
 int libxl__ev_xswatch_register(libxl__gc *gc, libxl__ev_xswatch *w,
                                libxl__ev_xswatch_callback *func,
                                const char *path /* copied */)
@@ -579,6 +586,7 @@ int libxl__ev_xswatch_register(libxl__gc *gc, libxl__ev_xswatch *w,
     w->slotnum = slotnum;
     w->path = path_copy;
     w->callback = func;
+    CTX->nwatches++;
     libxl__set_watch_slot_contents(use, w);
 
     CTX_UNLOCK;
@@ -590,6 +598,7 @@ int libxl__ev_xswatch_register(libxl__gc *gc, libxl__ev_xswatch *w,
     if (use)
         LIBXL_SLIST_INSERT_HEAD(&CTX->watch_freeslots, use, empty);
     free(path_copy);
+    watches_check_fd_deregister(gc);
     CTX_UNLOCK;
     return rc;
 }
@@ -614,6 +623,8 @@ void libxl__ev_xswatch_deregister(libxl__gc *gc, libxl__ev_xswatch *w)
         libxl__ev_watch_slot *slot = &CTX->watch_slots[w->slotnum];
         LIBXL_SLIST_INSERT_HEAD(&CTX->watch_freeslots, slot, empty);
         w->slotnum = -1;
+        CTX->nwatches--;
+        watches_check_fd_deregister(gc);
     } else {
         LOG(DEBUG, "watch w=%p: deregister unregistered", w);
     }
@@ -728,10 +739,6 @@ int libxl__ctx_evtchn_init(libxl__gc *gc) {
     rc = libxl_fd_set_nonblock(CTX, fd, 1);
     if (rc) goto out;
 
-    rc = libxl__ev_fd_register(gc, &CTX->evtchn_efd,
-                               evtchn_fd_callback, fd, POLLIN);
-    if (rc) goto out;
-
     CTX->xce = xce;
     return 0;
 
@@ -740,12 +747,27 @@ int libxl__ctx_evtchn_init(libxl__gc *gc) {
     return rc;
 }
 
+static void evtchn_check_fd_deregister(libxl__gc *gc)
+{
+    if (CTX->xce && LIBXL_LIST_EMPTY(&CTX->evtchns_waiting))
+        libxl__ev_fd_deregister(gc, &CTX->evtchn_efd);
+}
+
 int libxl__ev_evtchn_wait(libxl__gc *gc, libxl__ev_evtchn *evev)
 {
     int r, rc;
 
     DBG("ev_evtchn=%p port=%d wait (was waiting=%d)",
         evev, evev->port, evev->waiting);
+
+    rc = libxl__ctx_evtchn_init(gc);
+    if (rc) goto out;
+
+    if (!libxl__ev_fd_isregistered(&CTX->evtchn_efd)) {
+        rc = libxl__ev_fd_register(gc, &CTX->evtchn_efd, evtchn_fd_callback,
+                                   xc_evtchn_fd(CTX->xce), POLLIN);
+        if (rc) goto out;
+    }
 
     if (evev->waiting)
         return 0;
@@ -762,6 +784,7 @@ int libxl__ev_evtchn_wait(libxl__gc *gc, libxl__ev_evtchn *evev)
     return 0;
 
  out:
+    evtchn_check_fd_deregister(gc);
     return rc;
 }
 
@@ -775,6 +798,7 @@ void libxl__ev_evtchn_cancel(libxl__gc *gc, libxl__ev_evtchn *evev)
 
     evev->waiting = 0;
     LIBXL_LIST_REMOVE(evev, entry);
+    evtchn_check_fd_deregister(gc);
 }
 
 /*
@@ -1195,6 +1219,8 @@ void libxl_osevent_register_hooks(libxl_ctx *ctx,
 {
     GC_INIT(ctx);
     CTX_LOCK;
+    assert(LIBXL_LIST_EMPTY(&ctx->efds));
+    assert(LIBXL_TAILQ_EMPTY(&ctx->etimes));
     ctx->osevent_hooks = hooks;
     ctx->osevent_user = user;
     CTX_UNLOCK;

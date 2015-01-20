@@ -381,10 +381,10 @@ out:
 }
 static void printf_info(enum output_format output_format,
                         int domid,
-                        libxl_domain_config *d_config)
+                        libxl_domain_config *d_config, FILE *fh)
 {
     if (output_format == OUTPUT_FORMAT_SXP)
-        return printf_info_sexp(domid, d_config);
+        return printf_info_sexp(domid, d_config, fh);
 
     const char *buf;
     libxl_yajl_length len = 0;
@@ -405,7 +405,7 @@ static void printf_info(enum output_format output_format,
     if (s != yajl_gen_status_ok)
         goto out;
 
-    puts(buf);
+    fputs(buf, fh);
 
 out:
     yajl_gen_free(hand);
@@ -414,7 +414,13 @@ out:
         fprintf(stderr,
                 "unable to format domain config as JSON (YAJL:%d)\n", s);
 
-    if (ferror(stdout) || fflush(stdout)) { perror("stdout"); exit(-1); }
+    if (ferror(fh) || fflush(fh)) {
+        if (fh == stdout)
+            perror("stdout");
+        else
+            perror("stderr");
+        exit(-1);
+    }
 }
 
 static int do_daemonize(char *name)
@@ -920,6 +926,7 @@ static void parse_config_data(const char *config_source,
     int pci_permissive = 0;
     int pci_seize = 0;
     int i, e;
+    char *kernel_basename;
 
     libxl_domain_create_info *c_info = &d_config->c_info;
     libxl_domain_build_info *b_info = &d_config->b_info;
@@ -1116,13 +1123,15 @@ static void parse_config_data(const char *config_source,
 
     switch(b_info->type) {
     case LIBXL_DOMAIN_TYPE_HVM:
-        if (!strcmp(libxl_basename(b_info->kernel), "hvmloader")) {
+        kernel_basename = libxl_basename(b_info->kernel);
+        if (!strcmp(kernel_basename, "hvmloader")) {
             fprintf(stderr, "WARNING: you seem to be using \"kernel\" "
                     "directive to override HVM guest firmware. Ignore "
                     "that. Use \"firmware_override\" instead if you "
                     "really want a non-default firmware\n");
             b_info->kernel = NULL;
         }
+        free(kernel_basename);
 
         xlu_cfg_replace_string (config, "firmware_override",
                                 &b_info->u.hvm.firmware, 0);
@@ -2436,7 +2445,7 @@ static uint32_t create_domain(struct domain_create *dom_info)
     }
 
     if (!dom_info->quiet)
-        printf("Parsing config from %s\n", config_source);
+        fprintf(stderr, "Parsing config from %s\n", config_source);
 
     if (config_in_json) {
         libxl_domain_config_from_json(ctx, &d_config,
@@ -2464,7 +2473,8 @@ static uint32_t create_domain(struct domain_create *dom_info)
     }
 
     if (debug || dom_info->dryrun)
-        printf_info(default_output_format, -1, &d_config);
+        printf_info(default_output_format, -1, &d_config,
+                    debug ? stderr : stdout);
 
     ret = 0;
     if (dom_info->dryrun)
@@ -3416,7 +3426,7 @@ static void list_domains_details(const libxl_dominfo *info, int nb_domain)
         if (default_output_format == OUTPUT_FORMAT_JSON)
             s = printf_info_one_json(hand, info[i].domid, &d_config);
         else
-            printf_info_sexp(info[i].domid, &d_config);
+            printf_info_sexp(info[i].domid, &d_config, stdout);
         libxl_domain_config_dispose(&d_config);
         if (s != yajl_gen_status_ok)
             goto out;
@@ -4738,7 +4748,7 @@ int main_config_update(int argc, char **argv)
     parse_config_data(filename, config_data, config_len, &d_config);
 
     if (debug || dryrun_only)
-        printf_info(default_output_format, -1, &d_config);
+        printf_info(default_output_format, -1, &d_config, stdout);
 
     if (!dryrun_only) {
         fprintf(stderr, "setting dom%d configuration\n", domid);
@@ -7023,7 +7033,7 @@ int main_cpupoolcreate(int argc, char **argv)
     int config_len = 0;
     XLU_Config *config;
     const char *buf;
-    const char *name;
+    char *name = NULL;
     uint32_t poolid;
     libxl_scheduler sched = 0;
     XLU_ConfigList *cpus;
@@ -7197,6 +7207,7 @@ int main_cpupoolcreate(int argc, char **argv)
 out_cfg:
     xlu_cfg_destroy(config);
 out:
+    free(name);
     free(config_data);
     return rc;
 }

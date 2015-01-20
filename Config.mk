@@ -17,7 +17,7 @@ or       = $(if $(strip $(1)),$(1),$(if $(strip $(2)),$(2),$(if $(strip $(3)),$(
 -include $(XEN_ROOT)/.config
 
 # A debug build of Xen and tools?
-debug ?= y
+debug ?= n
 debug_symbols ?= $(debug)
 
 # Test coverage support
@@ -242,17 +242,17 @@ endif
 
 ifeq ($(GIT_HTTP),y)
 OVMF_UPSTREAM_URL ?= http://xenbits.xen.org/git-http/ovmf.git
-QEMU_UPSTREAM_URL ?= http://xenbits.xen.org/git-http/qemu-upstream-unstable.git
-QEMU_TRADITIONAL_URL ?= http://xenbits.xen.org/git-http/qemu-xen-unstable.git
+QEMU_UPSTREAM_URL ?= http://xenbits.xen.org/git-http/qemu-upstream-4.5-testing.git
+QEMU_TRADITIONAL_URL ?= http://xenbits.xen.org/git-http/qemu-xen-4.5-testing.git
 SEABIOS_UPSTREAM_URL ?= http://xenbits.xen.org/git-http/seabios.git
 else
 OVMF_UPSTREAM_URL ?= git://xenbits.xen.org/ovmf.git
-QEMU_UPSTREAM_URL ?= git://xenbits.xen.org/qemu-upstream-unstable.git
-QEMU_TRADITIONAL_URL ?= git://xenbits.xen.org/qemu-xen-unstable.git
+QEMU_UPSTREAM_URL ?= git://xenbits.xen.org/qemu-upstream-4.5-testing.git
+QEMU_TRADITIONAL_URL ?= git://xenbits.xen.org/qemu-xen-4.5-testing.git
 SEABIOS_UPSTREAM_URL ?= git://xenbits.xen.org/seabios.git
 endif
 OVMF_UPSTREAM_REVISION ?= 447d264115c476142f884af0be287622cd244423
-QEMU_UPSTREAM_REVISION ?= qemu-xen-4.5.0-rc3
+QEMU_UPSTREAM_REVISION ?= qemu-xen-4.5.0
 SEABIOS_UPSTREAM_REVISION ?= rel-1.7.5
 # Thu May 22 16:59:16 2014 -0400
 # python3 fixes for vgabios and csm builds.
@@ -260,7 +260,7 @@ SEABIOS_UPSTREAM_REVISION ?= rel-1.7.5
 ETHERBOOT_NICS ?= rtl8139 8086100e
 
 
-QEMU_TRADITIONAL_REVISION ?= xen-4.5.0-rc1
+QEMU_TRADITIONAL_REVISION ?= xen-4.5.0
 # Mon Oct 6 16:24:46 2014 +0100
 # qemu-xen-trad: Switch to $(LIBEXEC_BIN) from $(LIBEXEC)
 

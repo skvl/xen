@@ -134,18 +134,6 @@ static void vmx_vcpu_destroy(struct vcpu *v)
     passive_domain_destroy(v);
 }
 
-/* Only crash the guest if the problem originates in kernel mode. */
-static void vmx_crash_or_fault(struct vcpu *v)
-{
-    struct segment_register ss;
-
-    vmx_get_segment_register(v, x86_seg_ss, &ss);
-    if ( ss.attr.fields.dpl )
-        hvm_inject_hw_exception(TRAP_invalid_op, HVM_DELIVER_NO_ERROR_CODE);
-    else
-        domain_crash(v->domain);
-}
-
 static DEFINE_PER_CPU(struct vmx_msr_state, host_msr_state);
 
 static const u32 msr_index[] =
@@ -2520,7 +2508,7 @@ static void vmx_failed_vmentry(unsigned int exit_reason,
     vmcs_dump_vcpu(curr);
     printk("**************************************\n");
 
-    vmx_crash_or_fault(curr);
+    domain_crash(curr->domain);
 }
 
 void vmx_enter_realmode(struct cpu_user_regs *regs)
@@ -3098,7 +3086,8 @@ void vmx_vmexit_handler(struct cpu_user_regs *regs)
         if ( exit_qualification & 0x10 )
         {
             /* INS, OUTS */
-            if ( !handle_mmio() )
+            if ( unlikely(is_pvh_vcpu(v)) /* PVH fixme */ ||
+                 !handle_mmio() )
                 hvm_inject_hw_exception(TRAP_gp_fault, 0);
         }
         else
@@ -3173,8 +3162,19 @@ void vmx_vmexit_handler(struct cpu_user_regs *regs)
     /* fall through */
     default:
     exit_and_crash:
-        gdprintk(XENLOG_WARNING, "Bad vmexit (reason %#lx)\n", exit_reason);
-        vmx_crash_or_fault(v);
+        {
+            struct segment_register ss;
+
+            gdprintk(XENLOG_WARNING, "Bad vmexit (reason %#lx)\n",
+                     exit_reason);
+
+            vmx_get_segment_register(v, x86_seg_ss, &ss);
+            if ( ss.attr.fields.dpl )
+                hvm_inject_hw_exception(TRAP_invalid_op,
+                                        HVM_DELIVER_NO_ERROR_CODE);
+            else
+                domain_crash(v->domain);
+        }
         break;
     }
 

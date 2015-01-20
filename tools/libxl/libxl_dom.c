@@ -1824,6 +1824,9 @@ void libxl__domain_suspend(libxl__egc *egc, libxl__domain_suspend_state *dss)
     port = xs_suspend_evtchn_port(dss->domid);
 
     if (port >= 0) {
+        rc = libxl__ctx_evtchn_init(gc);
+        if (rc) goto out;
+
         dss->guest_evtchn.port =
             xc_suspend_evtchn_init_exclusive(CTX->xch, CTX->xce,
                                   dss->domid, port, &dss->guest_evtchn_lockfd);
@@ -2043,19 +2046,25 @@ const char *libxl__userdata_path(libxl__gc *gc, uint32_t domid,
                                  const char *wh)
 {
     libxl_ctx *ctx = libxl__gc_owner(gc);
-    char *uuid_string;
+    char *uuid_string, *path;
     libxl_dominfo info;
     int rc;
+
+    libxl_dominfo_init(&info);
 
     rc = libxl_domain_info(ctx, &info, domid);
     if (rc) {
         LOGE(ERROR, "unable to find domain info for domain %"PRIu32, domid);
-        return NULL;
+        path = NULL;
+        goto out;
     }
     uuid_string = GCSPRINTF(LIBXL_UUID_FMT, LIBXL_UUID_BYTES(info.uuid));
-
-    return GCSPRINTF("/var/lib/xen/userdata-%s.%u.%s.%s",
+    path = GCSPRINTF("/var/lib/xen/userdata-%s.%u.%s.%s",
                      wh, domid, uuid_string, userdata_userid);
+
+ out:
+    libxl_dominfo_dispose(&info);
+    return path;
 }
 
 static int userdata_delete(libxl__gc *gc, const char *path)

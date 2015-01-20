@@ -352,7 +352,7 @@ struct libxl__ctx {
     LIBXL_TAILQ_HEAD(, libxl__ev_time) etimes;
 
     libxl__ev_watch_slot *watch_slots;
-    int watch_nslots;
+    int watch_nslots, nwatches;
     LIBXL_SLIST_HEAD(, libxl__ev_watch_slot) watch_freeslots;
     uint32_t watch_counter; /* helps disambiguate slot reuse */
     libxl__ev_fd watch_efd;
@@ -800,8 +800,10 @@ static inline int libxl__ev_xswatch_isregistered(const libxl__ev_xswatch *xw)
 
 /*
  * The evtchn facility is one-shot per call to libxl__ev_evtchn_wait.
- * You should call some suitable xc bind function on (or to obtain)
- * the port, then libxl__ev_evtchn_wait.
+ * You should:
+ *   Use libxl__ctx_evtchn_init to make sure CTX->xce is valid;
+ *   Call some suitable xc bind function on (or to obtain) the port;
+ *   Then call libxl__ev_evtchn_wait.
  *
  * When the event is signaled then the callback will be made, once.
  * Then you must call libxl__ev_evtchn_wait again, if desired.

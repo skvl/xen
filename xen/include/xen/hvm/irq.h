@@ -88,19 +88,18 @@ struct hvm_irq_dpci {
     DECLARE_BITMAP(isairq_map, NR_ISAIRQS);
     /* Record of mapped Links */
     uint8_t link_cnt[NR_LINK];
+    struct tasklet dirq_tasklet;
 };
 
 /* Machine IRQ to guest device/intx mapping. */
 struct hvm_pirq_dpci {
     uint32_t flags;
-    unsigned int state;
     bool_t masked;
     uint16_t pending;
     struct list_head digl_list;
     struct domain *dom;
     struct hvm_gmsi_info gmsi;
     struct timer timer;
-    struct list_head softirq_list;
 };
 
 void pt_pirq_init(struct domain *, struct hvm_pirq_dpci *);
@@ -110,7 +109,6 @@ int pt_pirq_iterate(struct domain *d,
                               struct hvm_pirq_dpci *, void *arg),
                     void *arg);
 
-bool_t pt_pirq_softirq_active(struct hvm_pirq_dpci *);
 /* Modify state of a PCI INTx wire. */
 void hvm_pci_intx_assert(
     struct domain *d, unsigned int device, unsigned int intx);
