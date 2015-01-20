@@ -12,18 +12,6 @@ from debian_xen.debian import VersionXen
 from debian_linux.debian import Changelog
 
 
-class RepoGit(object):
-    def __init__(self, repo, options):
-        self.repo = repo
-        self.tag = options.tag or 'HEAD'
-
-    def do_archive(self, info):
-        temp_tar = os.path.join(info.temp_dir, 'orig.tar')
-        args = ('git', 'archive', '--prefix', '%s/' % info.orig_dir, '-o', os.path.realpath(temp_tar), self.tag)
-        subprocess.check_call(args, cwd=self.repo)
-        subprocess.check_call(('tar', '-C', info.temp_dir, '-xf', temp_tar))
-
-
 class Main(object):
     log = sys.stdout.write
 
@@ -46,25 +34,7 @@ class Main(object):
             if options.tag is None:
                 options.tag = 'RELEASE-' + self.version.upstream
 
-        if os.path.exists(os.path.join(repo, '.git')):
-            self.repo = RepoGit(repo, options)
-        else:
-            raise NotImplementedError
-
     def __call__(self):
-        import tempfile
-        self.temp_dir = tempfile.mkdtemp(prefix='genorig', dir='debian')
-        try:
-            self.do_archive()
-            self.do_tar()
-        finally:
-            shutil.rmtree(self.temp_dir)
-
-    def do_archive(self):
-        self.log("Create archive.\n")
-        self.repo.do_archive(self)
-
-    def do_tar(self):
         out = "../orig/%s" % self.orig_tar
         self.log("Generate tarball %s\n" % out)
 
@@ -73,7 +43,16 @@ class Main(object):
             raise RuntimeError("Destination already exists")
         except OSError: pass
 
-        subprocess.check_call(('tar', '-C', self.temp_dir, '-caf', out, self.orig_dir))
+        try:
+            with open(out, 'wb') as f:
+                tag = self.options.tag or 'HEAD'
+                p1 = subprocess.Popen(('git', 'archive', '--prefix', '%s/' % self.orig_dir, tag), stdout=subprocess.PIPE)
+                subprocess.check_call(('xz', ), stdin=p1.stdout, stdout=f)
+                if p1.wait():
+                    raise RuntimeError
+        except:
+            os.unlink(out)
+            raise
 
         try:
             os.symlink(os.path.join('orig', self.orig_tar), os.path.join('..', self.orig_tar))
