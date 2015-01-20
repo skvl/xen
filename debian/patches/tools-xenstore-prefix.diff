@@ -1,4 +1,4 @@
-From c06d96cdbe650d2f7d2ed23fccba59bf8d0f3d34 Mon Sep 17 00:00:00 2001
+From cfb373c7981b0b388cfe48a50a9856d13eecf9d5 Mon Sep 17 00:00:00 2001
 From: Bastian Blank <waldi@debian.org>
 Date: Sat, 5 Jul 2014 11:47:12 +0200
 Subject: tools-xenstore-prefix.diff
@@ -9,7 +9,7 @@ Patch-Name: tools-xenstore-prefix.diff
  1 file changed, 10 insertions(+), 8 deletions(-)
 
 diff --git a/tools/xenstore/Makefile b/tools/xenstore/Makefile
-index bff9b25..f0a0b14 100644
+index 11b6a06..183b4d8 100644
 --- a/tools/xenstore/Makefile
 +++ b/tools/xenstore/Makefile
 @@ -17,6 +17,8 @@ LDFLAGS-$(CONFIG_SYSTEMD) += $(SYSTEMD_LIBS)
@@ -25,12 +25,12 @@ index bff9b25..f0a0b14 100644
  init-xenstore-domain.o: CFLAGS += $(CFLAGS_libxenguest)
  
  init-xenstore-domain: init-xenstore-domain.o $(LIBXENSTORE)
--	$(CC) $(LDFLAGS) $^ $(LDLIBS_libxenctrl) $(LDLIBS_libxenguest) $(LDLIBS_libxenstore) -o $@ $(APPEND_LDFLAGS)
-+	$(CC) $(LDFLAGS) $^ $(LDLIBS_libxenctrl) $(LDLIBS_libxenguest) $(LDLIBS_libxenstore) $(call LDFLAGS_RPATH,../lib) -o $@ $(APPEND_LDFLAGS)
+-	$(CC) $^ $(LDFLAGS) $(LDLIBS_libxenctrl) $(LDLIBS_libxenguest) $(LDLIBS_libxenstore) -o $@ $(APPEND_LDFLAGS)
++	$(CC) $^ $(LDFLAGS) $(LDLIBS_libxenctrl) $(LDLIBS_libxenguest) $(LDLIBS_libxenstore) $(call LDFLAGS_RPATH,../lib) -o $@ $(APPEND_LDFLAGS)
  
  xenstored: $(XENSTORED_OBJS)
--	$(CC) $(LDFLAGS) $^ $(LDLIBS_libxenctrl) $(SOCKET_LIBS) -o $@ $(APPEND_LDFLAGS)
-+	$(CC) $(LDFLAGS) $^ $(LDLIBS_libxenctrl) $(SOCKET_LIBS) $(call LDFLAGS_RPATH,../lib) -o $@ $(APPEND_LDFLAGS)
+-	$(CC) $^ $(LDFLAGS) $(LDLIBS_libxenctrl) $(SOCKET_LIBS) -o $@ $(APPEND_LDFLAGS)
++	$(CC) $^ $(LDFLAGS) $(LDLIBS_libxenctrl) $(SOCKET_LIBS) $(call LDFLAGS_RPATH,../lib) -o $@ $(APPEND_LDFLAGS)
  
  xenstored.a: $(XENSTORED_OBJS)
  	$(AR) cr $@ $^

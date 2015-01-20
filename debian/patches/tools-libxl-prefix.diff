@@ -1,4 +1,4 @@
-From 05c3a7581b37dcde3a10900a53cd51c3fa4413e8 Mon Sep 17 00:00:00 2001
+From d7fc46960bdcf2967f9b76bdfe4d1c22d2f55eca Mon Sep 17 00:00:00 2001
 From: Bastian Blank <waldi@debian.org>
 Date: Sat, 5 Jul 2014 11:46:57 +0200
 Subject: tools-libxl-prefix.diff
@@ -9,7 +9,7 @@ Patch-Name: tools-libxl-prefix.diff
  1 file changed, 5 insertions(+), 4 deletions(-)
 
 diff --git a/tools/libxl/Makefile b/tools/libxl/Makefile
-index 1c5a00b..e15bb7c 100644
+index da526c4..d8b8157 100644
 --- a/tools/libxl/Makefile
 +++ b/tools/libxl/Makefile
 @@ -12,6 +12,8 @@ CFLAGS += -I. -fPIC

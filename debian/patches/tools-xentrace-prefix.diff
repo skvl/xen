@@ -1,4 +1,4 @@
-From a86b5a90f4008e6704167c63535a49a8977f77f8 Mon Sep 17 00:00:00 2001
+From 7f5fb659e513f3dcab79610e3d1ab0980657a0fb Mon Sep 17 00:00:00 2001
 From: Bastian Blank <waldi@debian.org>
 Date: Sat, 5 Jul 2014 11:47:14 +0200
 Subject: tools-xentrace-prefix.diff

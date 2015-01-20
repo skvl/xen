@@ -1,4 +1,4 @@
-From 2d9b92f5b0a94534595224ab783b7d3946ef43cd Mon Sep 17 00:00:00 2001
+From abfa5749d0ac167c66fc63e2a3fae6934f1bd265 Mon Sep 17 00:00:00 2001
 From: Bastian Blank <waldi@debian.org>
 Date: Sat, 5 Jul 2014 11:47:08 +0200
 Subject: tools-xenpaging-prefix.diff

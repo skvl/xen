@@ -118,8 +118,6 @@ int libxl_ctx_alloc(libxl_ctx **pctx, int version,
         rc = ERROR_FAIL; goto out;
     }
 
-    rc = libxl__ctx_evtchn_init(gc);
-
     *pctx = ctx;
     return 0;
 
@@ -148,6 +146,8 @@ int libxl_ctx_free(libxl_ctx *ctx)
 {
     if (!ctx) return 0;
 
+    assert(!ctx->osevent_in_hook);
+
     int i;
     GC_INIT(ctx);
 
@@ -160,11 +160,12 @@ int libxl_ctx_free(libxl_ctx *ctx)
     while ((eject = LIBXL_LIST_FIRST(&CTX->disk_eject_evgens)))
         libxl__evdisable_disk_eject(gc, eject);
 
+    libxl_childproc_setmode(CTX,0,0);
     for (i = 0; i < ctx->watch_nslots; i++)
         assert(!libxl__watch_slot_contents(gc, i));
-    libxl__ev_fd_deregister(gc, &ctx->watch_efd);
-    libxl__ev_fd_deregister(gc, &ctx->evtchn_efd);
-    libxl__ev_fd_deregister(gc, &ctx->sigchld_selfpipe_efd);
+    assert(!libxl__ev_fd_isregistered(&ctx->watch_efd));
+    assert(!libxl__ev_fd_isregistered(&ctx->evtchn_efd));
+    assert(!libxl__ev_fd_isregistered(&ctx->sigchld_selfpipe_efd));
 
     /* Now there should be no more events requested from the application: */
 
@@ -363,6 +364,8 @@ int libxl__domain_rename(libxl__gc *gc, uint32_t domid,
     char *uuid;
     const char *vm_name_path;
 
+    libxl_dominfo_init(&info);
+
     dom_path = libxl__xs_get_dompath(gc, domid);
     if (!dom_path) goto x_nomem;
 
@@ -383,6 +386,13 @@ int libxl__domain_rename(libxl__gc *gc, uint32_t domid,
                             "create xs transaction for domain (re)name");
             goto x_fail;
         }
+    }
+
+    if (!new_name) {
+        LIBXL__LOG(ctx, LIBXL__LOG_ERROR,
+                        "new domain name not specified");
+        rc = ERROR_INVAL;
+        goto x_rc;
     }
 
     if (new_name[0]) {
@@ -473,6 +483,7 @@ int libxl__domain_rename(libxl__gc *gc, uint32_t domid,
     rc = 0;
  x_rc:
     if (our_trans) xs_transaction_end(ctx->xsh, our_trans, 1);
+    libxl_dominfo_dispose(&info);
     return rc;
 
  x_fail:  rc = ERROR_FAIL;  goto x_rc;
@@ -674,7 +685,7 @@ int libxl_domain_info(libxl_ctx *ctx, libxl_dominfo *info_r,
 
     ret = xc_domain_getinfolist(ctx->xch, domid, 1, &xcinfo);
     if (ret<0) {
-        LIBXL__LOG_ERRNO(ctx, LIBXL__LOG_ERROR, "geting domain info list");
+        LIBXL__LOG_ERRNO(ctx, LIBXL__LOG_ERROR, "getting domain info list");
         return ERROR_FAIL;
     }
     if (ret==0 || xcinfo.domain != domid) return ERROR_INVAL;
@@ -4586,6 +4597,8 @@ static int libxl__fill_dom0_memory_info(libxl__gc *gc, uint32_t *target_memkb,
     libxl_ctx *ctx = libxl__gc_owner(gc);
     uint32_t free_mem_slack_kb = 0;
 
+    libxl_dominfo_init(&info);
+
 retry_transaction:
     t = xs_transaction_start(ctx->xsh);
 
@@ -4618,6 +4631,8 @@ retry_transaction:
         }
     }
 
+    libxl_dominfo_dispose(&info);
+    libxl_dominfo_init(&info);
     rc = libxl_domain_info(ctx, &info, 0);
     if (rc < 0)
         goto out;
@@ -4656,7 +4671,7 @@ out:
             rc = ERROR_FAIL;
     }
 
-
+    libxl_dominfo_dispose(&info);
     return rc;
 }
 
@@ -4991,6 +5006,8 @@ int libxl_wait_for_memory_target(libxl_ctx *ctx, uint32_t domid, int wait_secs)
     uint32_t target_memkb = 0;
     libxl_dominfo info;
 
+    libxl_dominfo_init(&info);
+
     do {
         wait_secs--;
         sleep(1);
@@ -4999,9 +5016,11 @@ int libxl_wait_for_memory_target(libxl_ctx *ctx, uint32_t domid, int wait_secs)
         if (rc < 0)
             goto out;
 
+        libxl_dominfo_dispose(&info);
+        libxl_dominfo_init(&info);
         rc = libxl_domain_info(ctx, &info, domid);
         if (rc < 0)
-            return rc;
+            goto out;
     } while (wait_secs > 0 && (info.current_memkb + info.outstanding_memkb) > target_memkb);
 
     if ((info.current_memkb + info.outstanding_memkb) <= target_memkb)
@@ -5010,6 +5029,7 @@ int libxl_wait_for_memory_target(libxl_ctx *ctx, uint32_t domid, int wait_secs)
         rc = ERROR_FAIL;
 
 out:
+    libxl_dominfo_dispose(&info);
     return rc;
 }
 
@@ -5427,6 +5447,8 @@ static int libxl__set_vcpuonline_xenstore(libxl__gc *gc, uint32_t domid,
     xs_transaction_t t;
     int i, rc = ERROR_FAIL;
 
+    libxl_dominfo_init(&info);
+
     if (libxl_domain_info(CTX, &info, domid) < 0) {
         LOGE(ERROR, "getting domain info list");
         goto out;
@@ -5446,6 +5468,7 @@ retry_transaction:
     } else
         rc = 0;
 out:
+    libxl_dominfo_dispose(&info);
     return rc;
 }
 
@@ -5455,8 +5478,11 @@ static int libxl__set_vcpuonline_qmp(libxl__gc *gc, uint32_t domid,
     libxl_dominfo info;
     int i;
 
+    libxl_dominfo_init(&info);
+
     if (libxl_domain_info(CTX, &info, domid) < 0) {
         LOGE(ERROR, "getting domain info list");
+        libxl_dominfo_dispose(&info);
         return ERROR_FAIL;
     }
     for (i = 0; i <= info.vcpu_max_id; i++) {
@@ -5469,6 +5495,7 @@ static int libxl__set_vcpuonline_qmp(libxl__gc *gc, uint32_t domid,
             libxl__qmp_cpu_add(gc, domid, i);
         }
     }
+    libxl_dominfo_dispose(&info);
     return 0;
 }
 
@@ -6561,12 +6588,15 @@ int libxl_retrieve_domain_configuration(libxl_ctx *ctx, uint32_t domid,
     /* Domain UUID */
     {
         libxl_dominfo info;
+        libxl_dominfo_init(&info);
         rc = libxl_domain_info(ctx, &info, domid);
         if (rc) {
             LOG(ERROR, "fail to get domain info for domain %d", domid);
+            libxl_dominfo_dispose(&info);
             goto out;
         }
         libxl_uuid_copy(ctx, &d_config->c_info.uuid, &info.uuid);
+        libxl_dominfo_dispose(&info);
     }
 
     /* Memory limits:

@@ -1,4 +1,4 @@
-From 7bfdd00ceb1699d7545343896417badd4a4b50e7 Mon Sep 17 00:00:00 2001
+From 802c803af35af4dbd83fc495d18e930bbada8261 Mon Sep 17 00:00:00 2001
 From: Bastian Blank <waldi@debian.org>
 Date: Sat, 5 Jul 2014 11:47:05 +0200
 Subject: tools-xcutils-rpath.diff

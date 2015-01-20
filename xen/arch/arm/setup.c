@@ -286,7 +286,7 @@ static paddr_t __init consider_modules(paddr_t s, paddr_t e,
         return 0;
 
     /* First check the boot modules */
-    for ( i = first_mod; i <= mi->nr_mods; i++ )
+    for ( i = first_mod; i < mi->nr_mods; i++ )
     {
         paddr_t mod_s = mi->module[i].start;
         paddr_t mod_e = mod_s + mi->module[i].size;
@@ -745,6 +745,7 @@ void __init start_xen(unsigned long boot_phys_offset,
 
     dt_uart_init();
     console_init_preirq();
+    console_init_ring();
 
     system_state = SYS_STATE_boot;
 

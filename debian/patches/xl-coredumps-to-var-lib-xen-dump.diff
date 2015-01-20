@@ -1,4 +1,4 @@
-From f1b16d718afb3270ba7284952d77c7f9641f7ead Mon Sep 17 00:00:00 2001
+From d9e5c51f81f9454305888ba9a4e0439f5a2fbb9a Mon Sep 17 00:00:00 2001
 From: Ian Campbell <ijc@hellion.org.uk>
 Date: Sun, 31 Aug 2014 01:42:03 +0100
 Subject: send xl coredumps /var/lib/xen/dump/NAME
@@ -43,10 +43,10 @@ index af9798a..521bd2e 100644
  	$(INSTALL_DIR) $(DESTDIR)/var/lib/xen
  
 diff --git a/tools/libxl/xl_cmdimpl.c b/tools/libxl/xl_cmdimpl.c
-index 0e754e7..1663b2e 100644
+index ed0d478..3474970 100644
 --- a/tools/libxl/xl_cmdimpl.c
 +++ b/tools/libxl/xl_cmdimpl.c
-@@ -2083,7 +2083,7 @@ static int handle_domain_death(uint32_t *r_domid,
+@@ -2092,7 +2092,7 @@ static int handle_domain_death(uint32_t *r_domid,
          char *corefile;
          int rc;
  

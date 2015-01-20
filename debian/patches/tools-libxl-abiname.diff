@@ -1,4 +1,4 @@
-From 402d3cfa4b5f7066a2df2269ab6eec97728aeae4 Mon Sep 17 00:00:00 2001
+From 060450f0923720abd816afa14b8c9364a6cd553e Mon Sep 17 00:00:00 2001
 From: Bastian Blank <waldi@debian.org>
 Date: Sat, 5 Jul 2014 11:46:49 +0200
 Subject: tools-libxl-abiname.diff
@@ -9,7 +9,7 @@ Patch-Name: tools-libxl-abiname.diff
  1 file changed, 10 insertions(+), 24 deletions(-)
 
 diff --git a/tools/libxl/Makefile b/tools/libxl/Makefile
-index df08c8a..1c5a00b 100644
+index b417372..da526c4 100644
 --- a/tools/libxl/Makefile
 +++ b/tools/libxl/Makefile
 @@ -5,12 +5,6 @@
@@ -54,10 +54,10 @@ index df08c8a..1c5a00b 100644
 +libxlutil.so: libxlutil-$(PACKAGE_VERSION).so
  	$(SYMLINK_SHLIB) $< $@
  
--libxlutil.so.$(XLUMAJOR).$(XLUMINOR): $(LIBXLU_OBJS)
--	$(CC) $(LDFLAGS) -Wl,$(SONAME_LDFLAG) -Wl,libxlutil.so.$(XLUMAJOR) $(SHLIB_LDFLAGS) -o $@ $^ $(LIBXLU_LIBS) $(APPEND_LDFLAGS)
-+libxlutil-$(PACKAGE_VERSION).so: $(LIBXLU_OBJS)
-+	$(CC) $(LDFLAGS) -Wl,$(SONAME_LDFLAG),$@ $(SHLIB_LDFLAGS) -o $@ $^ $(LIBXLU_LIBS) $(APPEND_LDFLAGS)
+-libxlutil.so.$(XLUMAJOR).$(XLUMINOR): $(LIBXLU_OBJS) libxenlight.so
+-	$(CC) $(LDFLAGS) -Wl,$(SONAME_LDFLAG) -Wl,libxlutil.so.$(XLUMAJOR) $(SHLIB_LDFLAGS) -o $@ $(LIBXLU_OBJS) $(LIBXLU_LIBS) $(APPEND_LDFLAGS)
++libxlutil-$(PACKAGE_VERSION).so: $(LIBXLU_OBJS) libxenlight.so
++	$(CC) $(LDFLAGS) -Wl,$(SONAME_LDFLAG),$@ $(SHLIB_LDFLAGS) -o $@ $(LIBXLU_OBJS) $(LIBXLU_LIBS) $(APPEND_LDFLAGS)
  
  libxlutil.a: $(LIBXLU_OBJS)
  	$(AR) rcs libxlutil.a $^

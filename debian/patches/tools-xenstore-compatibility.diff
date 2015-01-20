@@ -1,4 +1,4 @@
-From 4ccbd7db0dcba9f9322fa71b17da086fa6cd6e2b Mon Sep 17 00:00:00 2001
+From 4ad8b98cb36d4900dd47485f553e1f18d042f2e2 Mon Sep 17 00:00:00 2001
 From: Bastian Blank <waldi@debian.org>
 Date: Sat, 5 Jul 2014 11:47:36 +0200
 Subject: tools-xenstore-compatibility.diff
@@ -11,7 +11,7 @@ Patch-Name: tools-xenstore-compatibility.diff
  3 files changed, 5 insertions(+), 2 deletions(-)
 
 diff --git a/tools/xenstore/include/xenstore.h b/tools/xenstore/include/xenstore.h
-index fdf5e76..b45224b 100644
+index b4b113e..be2491b 100644
 --- a/tools/xenstore/include/xenstore.h
 +++ b/tools/xenstore/include/xenstore.h
 @@ -26,6 +26,7 @@
