@@ -1,8 +1,9 @@
-xen (4.5.0-1) UNRELEASED; urgency=medium
+xen (4.5.0-1) experimental; urgency=medium
 
+  [ Ian Campbell ]
   * New upstream release
 
- -- Ian Campbell <ijc@debian.org>  Tue, 20 Jan 2015 13:33:27 +0000
+ -- Bastian Blank <waldi@debian.org>  Wed, 21 Jan 2015 20:21:45 +0100
 
 xen (4.5.0~rc3-1) experimental; urgency=medium
 
