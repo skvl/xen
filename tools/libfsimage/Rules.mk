@@ -7,7 +7,7 @@ LDFLAGS += $(call LDFLAGS_RPATH,../..)
 
 PIC_OBJS := $(patsubst %.c,%.opic,$(LIB_SRCS-y))
 
-FSDIR = $(PRIVATE_LIBDIR)/fs
+FSDIR = $(LIBEXEC_LIB)/fs
 
 FSLIB = fsimage.so
 

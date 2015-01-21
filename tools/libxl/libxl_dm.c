@@ -18,10 +18,11 @@
 #include "libxl_osdeps.h" /* must come before any other headers */
 
 #include "libxl_internal.h"
+#include <xen/hvm/e820.h>
 
 static const char *libxl_tapif_script(libxl__gc *gc)
 {
-#ifdef __linux__
+#if defined(__linux__) || defined(__FreeBSD__)
     return libxl__strdup(gc, "no");
 #else
     return libxl__sprintf(gc, "%s/qemu-ifup", libxl__xen_script_dir_path());
@@ -38,7 +39,7 @@ static const char *qemu_xen_path(libxl__gc *gc)
 #ifdef QEMU_XEN_PATH
     return QEMU_XEN_PATH;
 #else
-    return libxl__abs_path(gc, "qemu-system-i386", libxl__libexec_path());
+    return libxl__abs_path(gc, "qemu-system-i386", libxl__private_bindir_path());
 #endif
 }
 
@@ -73,7 +74,7 @@ const char *libxl__domain_device_model(libxl__gc *gc,
     } else {
         switch (info->device_model_version) {
         case LIBXL_DEVICE_MODEL_VERSION_QEMU_XEN_TRADITIONAL:
-            dm = libxl__abs_path(gc, "qemu-dm", libxl__libexec_path());
+            dm = libxl__abs_path(gc, "qemu-dm", libxl__private_bindir_path());
             break;
         case LIBXL_DEVICE_MODEL_VERSION_QEMU_XEN:
             dm = qemu_xen_path(gc);
@@ -196,8 +197,31 @@ static char ** libxl__build_device_model_args_old(libxl__gc *gc,
         int nr_set_cpus = 0;
         char *s;
 
-        if (b_info->u.hvm.serial) {
-            flexarray_vappend(dm_args, "-serial", b_info->u.hvm.serial, NULL);
+        if (b_info->kernel) {
+            LOG(ERROR, "HVM direct kernel boot is not supported by "
+                "qemu-xen-traditional");
+            return NULL;
+        }
+
+        if (b_info->u.hvm.serial || b_info->u.hvm.serial_list) {
+            if ( b_info->u.hvm.serial && b_info->u.hvm.serial_list )
+            {
+                LOG(ERROR, "Both serial and serial_list set");
+                return NULL;
+            }
+            if (b_info->u.hvm.serial) {
+                flexarray_vappend(dm_args,
+                                  "-serial", b_info->u.hvm.serial, NULL);
+            } else if (b_info->u.hvm.serial_list) {
+                char **p;
+                for (p = b_info->u.hvm.serial_list;
+                     *p;
+                     p++) {
+                    flexarray_vappend(dm_args,
+                                      "-serial",
+                                      *p, NULL);
+                }
+            }
         }
 
         if (libxl_defbool_val(b_info->u.hvm.nographic) && (!sdl && !vnc)) {
@@ -217,6 +241,9 @@ static char ** libxl__build_device_model_args_old(libxl__gc *gc,
             break;
         case LIBXL_VGA_INTERFACE_TYPE_CIRRUS:
             break;
+        case LIBXL_VGA_INTERFACE_TYPE_NONE:
+            flexarray_append_pair(dm_args, "-vga", "none");
+            break;
         }
 
         if (b_info->u.hvm.boot) {
@@ -227,8 +254,7 @@ static char ** libxl__build_device_model_args_old(libxl__gc *gc,
             || b_info->u.hvm.usbdevice_list) {
             if ( b_info->u.hvm.usbdevice && b_info->u.hvm.usbdevice_list )
             {
-                LOG(ERROR, "%s: Both usbdevice and usbdevice_list set",
-                    __func__);
+                LOG(ERROR, "Both usbdevice and usbdevice_list set");
                 return NULL;
             }
             flexarray_append(dm_args, "-usb");
@@ -378,7 +404,8 @@ static char *dm_spice_options(libxl__gc *gc,
 static char ** libxl__build_device_model_args_new(libxl__gc *gc,
                                         const char *dm, int guest_domid,
                                         const libxl_domain_config *guest_config,
-                                        const libxl__domain_build_state *state)
+                                        const libxl__domain_build_state *state,
+                                        int *dm_state_fd)
 {
     libxl_ctx *ctx = libxl__gc_owner(gc);
     const libxl_domain_create_info *c_info = &guest_config->c_info;
@@ -390,9 +417,11 @@ static char ** libxl__build_device_model_args_new(libxl__gc *gc,
     const libxl_vnc_info *vnc = libxl__dm_vnc(guest_config);
     const libxl_sdl_info *sdl = dm_sdl(guest_config);
     const char *keymap = dm_keymap(guest_config);
+    char *machinearg;
     flexarray_t *dm_args;
-    int i;
+    int i, connection, devid;
     uint64_t ram_size;
+    const char *path, *chardev;
 
     dm_args = flexarray_make(gc, 16, 1);
 
@@ -409,10 +438,31 @@ static char ** libxl__build_device_model_args_new(libxl__gc *gc,
     flexarray_append(dm_args, "-mon");
     flexarray_append(dm_args, "chardev=libxl-cmd,mode=control");
 
+    for (i = 0; i < guest_config->num_channels; i++) {
+        connection = guest_config->channels[i].connection;
+        devid = guest_config->channels[i].devid;
+        switch (connection) {
+            case LIBXL_CHANNEL_CONNECTION_PTY:
+                chardev = GCSPRINTF("pty,id=libxl-channel%d", devid);
+                break;
+            case LIBXL_CHANNEL_CONNECTION_SOCKET:
+                path = guest_config->channels[i].u.socket.path;
+                chardev = GCSPRINTF("socket,id=libxl-channel%d,path=%s,"
+                                    "server,nowait", devid, path);
+                break;
+            default:
+                /* We've forgotten to add the clause */
+                LOG(ERROR, "%s: unknown channel connection %d",
+                    __func__, connection);
+                return NULL;
+        }
+        flexarray_append(dm_args, "-chardev");
+        flexarray_append(dm_args, (void*)chardev);
+    }
+
     /*
      * Remove default devices created by qemu. Qemu will create only devices
      * defined by xen, since the devices not defined by xen are not usable.
-     * Remove deleting of empty floppy no more needed with nodefault.
      */
     flexarray_append(dm_args, "-nodefaults");
 
@@ -470,10 +520,6 @@ static char ** libxl__build_device_model_args_new(libxl__gc *gc,
         /* XXX sdl->{display,xauthority} into $DISPLAY/$XAUTHORITY */
     }
 
-    /*if (info->type == LIBXL_DOMAIN_TYPE_PV && !b_info->nographic) {
-        flexarray_vappend(dm_args, "-vga", "xenfb", NULL);
-      } never was possible?*/
-
     if (keymap) {
         flexarray_vappend(dm_args, "-k", keymap, NULL);
     }
@@ -481,8 +527,34 @@ static char ** libxl__build_device_model_args_new(libxl__gc *gc,
     if (b_info->type == LIBXL_DOMAIN_TYPE_HVM) {
         int ioemu_nics = 0;
 
-        if (b_info->u.hvm.serial) {
-            flexarray_vappend(dm_args, "-serial", b_info->u.hvm.serial, NULL);
+        if (b_info->kernel)
+            flexarray_vappend(dm_args, "-kernel", b_info->kernel, NULL);
+
+        if (b_info->ramdisk)
+            flexarray_vappend(dm_args, "-initrd", b_info->ramdisk, NULL);
+
+        if (b_info->cmdline)
+            flexarray_vappend(dm_args, "-append", b_info->cmdline, NULL);
+
+        if (b_info->u.hvm.serial || b_info->u.hvm.serial_list) {
+            if ( b_info->u.hvm.serial && b_info->u.hvm.serial_list )
+            {
+                LOG(ERROR, "Both serial and serial_list set");
+                return NULL;
+            }
+            if (b_info->u.hvm.serial) {
+                flexarray_vappend(dm_args,
+                                  "-serial", b_info->u.hvm.serial, NULL);
+            } else if (b_info->u.hvm.serial_list) {
+                char **p;
+                for (p = b_info->u.hvm.serial_list;
+                     *p;
+                     p++) {
+                    flexarray_vappend(dm_args,
+                                      "-serial",
+                                      *p, NULL);
+                }
+            }
         }
 
         if (libxl_defbool_val(b_info->u.hvm.nographic) && (!sdl && !vnc)) {
@@ -507,13 +579,16 @@ static char ** libxl__build_device_model_args_new(libxl__gc *gc,
 
         switch (b_info->u.hvm.vga.kind) {
         case LIBXL_VGA_INTERFACE_TYPE_STD:
-            flexarray_append_pair(dm_args, "-device", "VGA");
+            flexarray_append_pair(dm_args, "-device",
+                GCSPRINTF("VGA,vgamem_mb=%d",
+                libxl__sizekb_to_mb(b_info->video_memkb)));
             break;
         case LIBXL_VGA_INTERFACE_TYPE_CIRRUS:
-            flexarray_append_pair(dm_args, "-device", "cirrus-vga");
-            flexarray_append_pair(dm_args, "-global",
-                GCSPRINTF("vga.vram_size_mb=%d",
+            flexarray_append_pair(dm_args, "-device",
+                GCSPRINTF("cirrus-vga,vgamem_mb=%d",
                 libxl__sizekb_to_mb(b_info->video_memkb)));
+            break;
+        case LIBXL_VGA_INTERFACE_TYPE_NONE:
             break;
         }
 
@@ -526,8 +601,7 @@ static char ** libxl__build_device_model_args_new(libxl__gc *gc,
             || b_info->u.hvm.usbdevice_list) {
             if ( b_info->u.hvm.usbdevice && b_info->u.hvm.usbdevice_list )
             {
-                LOG(ERROR, "%s: Both usbdevice and usbdevice_list set",
-                    __func__);
+                LOG(ERROR, "Both usbdevice and usbdevice_list set");
                 return NULL;
             }
             flexarray_append(dm_args, "-usb");
@@ -564,8 +638,8 @@ static char ** libxl__build_device_model_args_new(libxl__gc *gc,
                     "-device", "nec-usb-xhci,id=usb", NULL);
                 break;
             default:
-                LOG(ERROR, "%s: usbversion parameter is invalid, "
-                    "must be between 1 and 3", __func__);
+                LOG(ERROR, "usbversion parameter is invalid, "
+                    "must be between 1 and 3");
                 return NULL;
             }
             if (b_info->u.hvm.spice.usbredirection >= 0 &&
@@ -576,8 +650,8 @@ static char ** libxl__build_device_model_args_new(libxl__gc *gc,
                         libxl__sprintf(gc, "usb-redir,chardev=usbrc%d,"
                         "id=usbrc%d", i, i), NULL);
             } else {
-                LOG(ERROR, "%s: usbredirection parameter is invalid, "
-                    "it must be between 1 and 4", __func__);
+                LOG(ERROR, "usbredirection parameter is invalid, "
+                    "it must be between 1 and 4");
                 return NULL;
             }
         }
@@ -638,9 +712,9 @@ static char ** libxl__build_device_model_args_new(libxl__gc *gc,
 
     if (state->saved_state) {
         /* This file descriptor is meant to be used by QEMU */
-        int migration_fd = open(state->saved_state, O_RDONLY);
+        *dm_state_fd = open(state->saved_state, O_RDONLY);
         flexarray_append(dm_args, "-incoming");
-        flexarray_append(dm_args, libxl__sprintf(gc, "fd:%d", migration_fd));
+        flexarray_append(dm_args, GCSPRINTF("fd:%d",*dm_state_fd));
     }
     for (i = 0; b_info->extra && b_info->extra[i] != NULL; i++)
         flexarray_append(dm_args, b_info->extra[i]);
@@ -657,10 +731,24 @@ static char ** libxl__build_device_model_args_new(libxl__gc *gc,
             /* Switching here to the machine "pc" which does not add
              * the xen-platform device instead of the default "xenfv" machine.
              */
-            flexarray_append(dm_args, "pc,accel=xen");
+            machinearg = libxl__sprintf(gc, "pc,accel=xen");
         } else {
-            flexarray_append(dm_args, "xenfv");
+            machinearg = libxl__sprintf(gc, "xenfv");
         }
+        if (b_info->u.hvm.mmio_hole_memkb) {
+            uint64_t max_ram_below_4g = (1ULL << 32) -
+                (b_info->u.hvm.mmio_hole_memkb << 10);
+
+            if (max_ram_below_4g > HVM_BELOW_4G_MMIO_START) {
+                LOG(WARN, "mmio_hole_memkb=%"PRIu64
+                    " invalid ignored.\n",
+                    b_info->u.hvm.mmio_hole_memkb);
+            } else {
+                machinearg = libxl__sprintf(gc, "%s,max-ram-below-4g=%"PRIu64,
+                                            machinearg, max_ram_below_4g);
+            }
+        }
+        flexarray_append(dm_args, machinearg);
         for (i = 0; b_info->extra_hvm && b_info->extra_hvm[i] != NULL; i++)
             flexarray_append(dm_args, b_info->extra_hvm[i]);
         break;
@@ -679,6 +767,7 @@ static char ** libxl__build_device_model_args_new(libxl__gc *gc,
                 libxl__device_disk_dev_number(disks[i].vdev, &disk, &part);
             const char *format = qemu_disk_format_string(disks[i].format);
             char *drive;
+            const char *pdev_path;
 
             if (dev_number == -1) {
                 LIBXL__LOG(ctx, LIBXL__LOG_WARNING, "unable to determine"
@@ -708,6 +797,14 @@ static char ** libxl__build_device_model_args_new(libxl__gc *gc,
                     continue;
                 }
 
+                if (disks[i].backend == LIBXL_DISK_BACKEND_TAP) {
+                    format = qemu_disk_format_string(LIBXL_DISK_FORMAT_RAW);
+                    pdev_path = libxl__blktap_devpath(gc, disks[i].pdev_path,
+                                                      disks[i].format);
+                } else {
+                    pdev_path = disks[i].pdev_path;
+                }
+
                 /*
                  * Explicit sd disks are passed through as is.
                  *
@@ -717,11 +814,11 @@ static char ** libxl__build_device_model_args_new(libxl__gc *gc,
                 if (strncmp(disks[i].vdev, "sd", 2) == 0)
                     drive = libxl__sprintf
                         (gc, "file=%s,if=scsi,bus=0,unit=%d,format=%s,cache=writeback",
-                         disks[i].pdev_path, disk, format);
+                         pdev_path, disk, format);
                 else if (disk < 4)
                     drive = libxl__sprintf
                         (gc, "file=%s,if=ide,index=%d,media=disk,format=%s,cache=writeback",
-                         disks[i].pdev_path, disk, format);
+                         pdev_path, disk, format);
                 else
                     continue; /* Do not emulate this disk */
             }
@@ -746,7 +843,10 @@ static char ** libxl__build_device_model_args_new(libxl__gc *gc,
 static char ** libxl__build_device_model_args(libxl__gc *gc,
                                         const char *dm, int guest_domid,
                                         const libxl_domain_config *guest_config,
-                                        const libxl__domain_build_state *state)
+                                        const libxl__domain_build_state *state,
+                                        int *dm_state_fd)
+/* dm_state_fd may be NULL iff caller knows we are using old stubdom
+ * and therefore will be passing a filename rather than a fd. */
 {
     libxl_ctx *ctx = libxl__gc_owner(gc);
 
@@ -756,9 +856,11 @@ static char ** libxl__build_device_model_args(libxl__gc *gc,
                                                   guest_domid, guest_config,
                                                   state);
     case LIBXL_DEVICE_MODEL_VERSION_QEMU_XEN:
+        assert(dm_state_fd != NULL);
+        assert(*dm_state_fd < 0);
         return libxl__build_device_model_args_new(gc, dm,
                                                   guest_domid, guest_config,
-                                                  state);
+                                                  state, dm_state_fd);
     default:
         LIBXL__LOG_ERRNO(ctx, LIBXL__LOG_ERROR, "unknown device model version %d",
                          guest_config->b_info.device_model_version);
@@ -909,7 +1011,11 @@ void libxl__spawn_stub_dm(libxl__egc *egc, libxl__stub_dm_spawn_state *sdss)
     dm_config->c_info.type = LIBXL_DOMAIN_TYPE_PV;
     dm_config->c_info.name = libxl__stub_dm_name(gc,
                                     libxl__domid_to_name(gc, guest_domid));
+    /* When we are here to launch stubdom, ssidref is a valid value
+     * already, no need to parse it again.
+     */
     dm_config->c_info.ssidref = guest_config->b_info.device_model_ssidref;
+    dm_config->c_info.ssid_label = NULL;
 
     libxl_uuid_generate(&dm_config->c_info.uuid);
 
@@ -966,7 +1072,7 @@ void libxl__spawn_stub_dm(libxl__egc *egc, libxl__stub_dm_spawn_state *sdss)
         goto out;
 
     args = libxl__build_device_model_args(gc, "stubdom-dm", guest_domid,
-                                          guest_config, d_state);
+                                          guest_config, d_state, NULL);
     if (!args) {
         ret = ERROR_FAIL;
         goto out;
@@ -1066,6 +1172,7 @@ static void spawn_stub_launch_dm(libxl__egc *egc,
     }
 
     for (i = 0; i < num_console; i++) {
+        libxl__device device;
         console[i].devid = i;
         console[i].consback = LIBXL__CONSOLE_BACKEND_IOEMU;
         /* STUBDOM_CONSOLE_LOGGING (console 0) is for minios logging
@@ -1096,7 +1203,8 @@ static void spawn_stub_launch_dm(libxl__egc *egc,
                 break;
         }
         ret = libxl__device_console_add(gc, dm_domid, &console[i],
-                        i == STUBDOM_CONSOLE_LOGGING ? stubdom_state : NULL);
+                        i == STUBDOM_CONSOLE_LOGGING ? stubdom_state : NULL,
+                        &device);
         if (ret)
             goto out;
     }
@@ -1218,6 +1326,7 @@ void libxl__spawn_local_dm(libxl__egc *egc, libxl__dm_spawn_state *dmss)
     char *vm_path;
     char **pass_stuff;
     const char *dm;
+    int dm_state_fd = -1;
 
     if (libxl_defbool_val(b_info->device_model_stubdomain)) {
         abort();
@@ -1234,7 +1343,8 @@ void libxl__spawn_local_dm(libxl__egc *egc, libxl__dm_spawn_state *dmss)
         rc = ERROR_FAIL;
         goto out;
     }
-    args = libxl__build_device_model_args(gc, dm, domid, guest_config, state);
+    args = libxl__build_device_model_args(gc, dm, domid, guest_config, state,
+                                          &dm_state_fd);
     if (!args) {
         rc = ERROR_FAIL;
         goto out;
@@ -1327,6 +1437,7 @@ out_close:
     if (null >= 0) close(null);
     if (logfile_w >= 0) close(logfile_w);
 out:
+    if (dm_state_fd >= 0) close(dm_state_fd);
     if (rc)
         device_model_spawn_outcome(egc, dmss, rc);
 }
@@ -1516,7 +1627,8 @@ int libxl__destroy_device_model(libxl__gc *gc, uint32_t domid)
 int libxl__need_xenpv_qemu(libxl__gc *gc,
         int nr_consoles, libxl__device_console *consoles,
         int nr_vfbs, libxl_device_vfb *vfbs,
-        int nr_disks, libxl_device_disk *disks)
+        int nr_disks, libxl_device_disk *disks,
+        int nr_channels, libxl_device_channel *channels)
 {
     int i, ret = 0;
     uint32_t domid;
@@ -1550,6 +1662,20 @@ int libxl__need_xenpv_qemu(libxl__gc *gc,
         for (i = 0; i < nr_disks; i++) {
             if (disks[i].backend == LIBXL_DISK_BACKEND_QDISK &&
                 disks[i].backend_domid == domid) {
+                ret = 1;
+                goto out;
+            }
+        }
+    }
+
+    if (nr_channels > 0) {
+        ret = libxl__get_domid(gc, &domid);
+        if (ret) goto out;
+        for (i = 0; i < nr_channels; i++) {
+            if (channels[i].backend_domid == domid) {
+                /* xenconsoled is limited to the first console only.
+                   Until this restriction is removed we must use qemu for
+                   secondary consoles which includes all channels. */
                 ret = 1;
                 goto out;
             }

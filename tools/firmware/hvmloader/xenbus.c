@@ -37,50 +37,6 @@ static struct xenstore_domain_interface *rings; /* Shared ring with dom0 */
 static evtchn_port_t event;                     /* Event-channel to dom0 */
 static char payload[XENSTORE_PAYLOAD_MAX + 1];  /* Unmarshalling area */
 
-/* Connect our xenbus client to the backend.
- * Call once, before any other xenbus actions. */
-void xenbus_setup(void)
-{
-    xen_hvm_param_t param;
-
-    /* Ask Xen where the xenbus shared page is. */
-    param.domid = DOMID_SELF;
-    param.index = HVM_PARAM_STORE_PFN;
-    if ( hypercall_hvm_op(HVMOP_get_param, &param) )
-        BUG();
-    rings = (void *) (unsigned long) (param.value << PAGE_SHIFT);
-
-    /* Ask Xen where the xenbus event channel is. */
-    param.domid = DOMID_SELF;
-    param.index = HVM_PARAM_STORE_EVTCHN;
-    if ( hypercall_hvm_op(HVMOP_get_param, &param) )
-        BUG();
-    event = param.value;
-
-    printf("Xenbus rings @0x%lx, event channel %lu\n",
-           (unsigned long) rings, (unsigned long) event);
-}
-
-/* Reset the xenbus connection so the next kernel can start again. */
-void xenbus_shutdown(void)
-{
-    struct shared_info *shinfo = get_shared_info();
-
-    ASSERT(rings != NULL);
-
-    /* We zero out the whole ring -- the backend can handle this, and it's 
-     * not going to surprise any frontends since it's equivalent to never 
-     * having used the rings. */
-    memset(rings, 0, sizeof *rings);
-
-    /* Clear the event-channel state too. */
-    memset(shinfo->vcpu_info, 0, sizeof(shinfo->vcpu_info));
-    memset(shinfo->evtchn_pending, 0, sizeof(shinfo->evtchn_pending));
-    memset(shinfo->evtchn_mask, 0, sizeof(shinfo->evtchn_mask));
-
-    rings = NULL;
-}
-
 static void ring_wait(void)
 {
     struct shared_info *shinfo = get_shared_info();
@@ -92,6 +48,58 @@ static void ring_wait(void)
 
     while ( !test_and_clear_bit(event, shinfo->evtchn_pending) )
         hypercall_sched_op(SCHEDOP_poll, &poll);
+}
+
+/* Connect our xenbus client to the backend.
+ * Call once, before any other xenbus actions. */
+void xenbus_setup(void)
+{
+    uint64_t val;
+
+    /* Ask Xen where the xenbus shared page is. */
+    if ( hvm_param_get(HVM_PARAM_STORE_PFN, &val) )
+        BUG();
+    rings = (void *) (unsigned long) (val << PAGE_SHIFT);
+
+    /* Ask Xen where the xenbus event channel is. */
+    if ( hvm_param_get(HVM_PARAM_STORE_EVTCHN, &val) )
+        BUG();
+    event = val;
+
+    printf("Xenbus rings @0x%lx, event channel %lu\n",
+           (unsigned long) rings, (unsigned long) event);
+}
+
+/* Reset the xenbus connection so the next kernel can start again. */
+void xenbus_shutdown(void)
+{
+    struct shared_info *shinfo = get_shared_info();
+    evtchn_send_t send;
+
+    ASSERT(rings != NULL);
+
+    if (rings->server_features & XENSTORE_SERVER_FEATURE_RECONNECTION) {
+        rings->connection = XENSTORE_RECONNECT;
+        send.port = event;
+        hypercall_event_channel_op(EVTCHNOP_send, &send);
+        while (*(volatile uint32_t*)&rings->connection == XENSTORE_RECONNECT)
+            ring_wait ();
+    } else {
+        /* If the backend reads the state while we're erasing it then the
+         * ring state will become corrupted, preventing guest frontends from
+         * connecting. This is rare. To help diagnose the failure, we fill
+         * the ring with XS_INVALID packets. */
+        memset(rings->req, 0xff, XENSTORE_RING_SIZE);
+        memset(rings->rsp, 0xff, XENSTORE_RING_SIZE);
+        rings->req_cons = rings->req_prod = 0;
+        rings->rsp_cons = rings->rsp_prod = 0;
+    }
+    /* Clear the event-channel state too. */
+    memset(shinfo->vcpu_info, 0, sizeof(shinfo->vcpu_info));
+    memset(shinfo->evtchn_pending, 0, sizeof(shinfo->evtchn_pending));
+    memset(shinfo->evtchn_mask, 0, sizeof(shinfo->evtchn_mask));
+
+    rings = NULL;
 }
 
 /* Helper functions: copy data in and out of the ring */

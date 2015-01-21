@@ -6,26 +6,35 @@ VERSION		:= $(shell $(MAKE) -C $(XEN_ROOT)/xen --no-print-directory xenversion)
 
 DOC_ARCHES      := arm x86_32 x86_64
 
-DOC_MAN5SRC	:= $(wildcard man/*.pod.5)
-DOC_MAN1SRC	:= $(wildcard man/*.pod.1)
-DOC_MAN1	:= $(patsubst man/%.pod.1,man1/%.1,$(DOC_MAN1SRC))
-DOC_MAN5	:= $(patsubst man/%.pod.5,man5/%.5,$(DOC_MAN5SRC))
-DOC_MARKDOWN	:= $(wildcard misc/*.markdown)
-DOC_HTML	:= $(patsubst %.markdown,html/%.html,$(DOC_MARKDOWN)) \
-		   $(patsubst man/%.pod.1,html/man/%.1.html,$(DOC_MAN1SRC)) \
-		   $(patsubst man/%.pod.5,html/man/%.5.html,$(DOC_MAN5SRC)) \
-		   $(patsubst %.txt,html/%.txt,$(wildcard misc/*.txt)) \
-		   $(patsubst %,html/hypercall/%/index.html,$(DOC_ARCHES))
-DOC_TXT         := $(patsubst %.txt,txt/%.txt,$(wildcard misc/*.txt)) \
-		   $(patsubst %.markdown,txt/%.txt,$(DOC_MARKDOWN)) \
-		   $(patsubst man/%.pod.1,txt/man/%.1.txt,$(DOC_MAN1SRC)) \
-		   $(patsubst man/%.pod.5,txt/man/%.5.txt,$(DOC_MAN5SRC))
+# Documentation sources to build
+MAN1SRC-y := $(wildcard man/xl*.pod.1)
+MAN1SRC-y += $(wildcard man/xenstore*.pod.1)
+
+MAN5SRC-y := $(wildcard man/xl*.pod.5)
+
+MARKDOWNSRC-y := $(wildcard misc/*.markdown)
+
+TXTSRC-y := $(wildcard misc/*.txt)
+
+
+DOC_MAN1 := $(patsubst man/%.pod.1,man1/%.1,$(MAN1SRC-y))
+DOC_MAN5 := $(patsubst man/%.pod.5,man5/%.5,$(MAN5SRC-y))
+DOC_HTML := $(patsubst %.markdown,html/%.html,$(MARKDOWNSRC-y)) \
+            $(patsubst man/%.pod.1,html/man/%.1.html,$(MAN1SRC-y)) \
+            $(patsubst man/%.pod.5,html/man/%.5.html,$(MAN5SRC-y)) \
+            $(patsubst %.txt,html/%.txt,$(TXTSRC-y)) \
+            $(patsubst %,html/hypercall/%/index.html,$(DOC_ARCHES))
+DOC_TXT  := $(patsubst %.txt,txt/%.txt,$(TXTSRC-y)) \
+            $(patsubst %.markdown,txt/%.txt,$(MARKDOWNSRC-y)) \
+            $(patsubst man/%.pod.1,txt/man/%.1.txt,$(MAN1SRC-y)) \
+            $(patsubst man/%.pod.5,txt/man/%.5.txt,$(MAN5SRC-y))
+DOC_PDF  := $(patsubst %.markdown,pdf/%.pdf,$(MARKDOWNSRC-y))
 
 .PHONY: all
 all: build
 
 .PHONY: build
-build: html txt man-pages figs
+build: html txt pdf man-pages figs
 
 .PHONY: html
 html: $(DOC_HTML) html/index.html
@@ -54,6 +63,14 @@ else
 	@echo "pod2man not installed; skipping man-pages."
 endif
 
+.PHONY: pdf
+pdf:
+ifdef PANDOC
+	$(MAKE) $(DOC_PDF)
+else
+	@echo "pandoc not installed; skipping pdfs."
+endif
+
 man1/%.1: man/%.pod.1 Makefile
 	$(INSTALL_DIR) $(@D)
 	$(POD2MAN) --release=$(VERSION) --name=`echo $@ | sed 's/^man1.//'| \
@@ -69,7 +86,7 @@ clean:
 	$(MAKE) -C figs clean
 	rm -rf .word_count *.aux *.dvi *.bbl *.blg *.glo *.idx *~ 
 	rm -rf *.ilg *.log *.ind *.toc *.bak *.tmp core
-	rm -rf html txt
+	rm -rf html txt pdf
 	rm -rf man5
 	rm -rf man1
 
@@ -78,15 +95,19 @@ distclean: clean
 	rm -rf $(XEN_ROOT)/config/Docs.mk config.log config.status config.cache \
 		autom4te.cache
 
-.PHONY: install
-install: all
-	rm -rf $(DESTDIR)$(DOCDIR)
-	$(INSTALL_DIR) $(DESTDIR)$(DOCDIR)
-
+.PHONY: install-man-pages
+install-man-pages: man-pages
 	$(INSTALL_DIR) $(DESTDIR)$(MANDIR)
 	cp -R man1 $(DESTDIR)$(MANDIR)
 	cp -R man5 $(DESTDIR)$(MANDIR)
+
+.PHONY: install-html
+install-html: html txt figs
+	$(INSTALL_DIR) $(DESTDIR)$(DOCDIR)
 	[ ! -d html ] || cp -R html $(DESTDIR)$(DOCDIR)
+
+.PHONY: install
+install: install-man-pages install-html
 
 html/index.html: $(DOC_HTML) $(CURDIR)/gen-html-index INDEX
 	$(PERL) -w -- $(CURDIR)/gen-html-index -i INDEX html $(DOC_HTML)
@@ -103,7 +124,7 @@ endif
 
 html/%.txt: %.txt
 	$(INSTALL_DIR) $(@D)
-	cp $< $@
+	$(INSTALL_DATA) $< $@
 
 html/man/%.1.html: man/%.pod.1 Makefile
 	$(INSTALL_DIR) $(@D)
@@ -165,6 +186,10 @@ ifdef POD2TEXT
 else
 	@echo "pod2text not installed; skipping $<."
 endif
+
+pdf/%.pdf: %.markdown
+	$(INSTALL_DIR) $(@D)
+	pandoc -N --toc --standalone $< --output $@
 
 ifeq (,$(findstring clean,$(MAKECMDGOALS)))
 $(XEN_ROOT)/config/Docs.mk:

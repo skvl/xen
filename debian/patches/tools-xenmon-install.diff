@@ -1,0 +1,34 @@
+From 06030208bbd65a83524ec4e9bd4b6688702c4ba6 Mon Sep 17 00:00:00 2001
+From: Bastian Blank <waldi@debian.org>
+Date: Sat, 5 Jul 2014 11:47:31 +0200
+Subject: tools-xenmon-install.diff
+
+Patch-Name: tools-xenmon-install.diff
+---
+ tools/xenmon/Makefile | 6 +++++-
+ 1 file changed, 5 insertions(+), 1 deletion(-)
+
+diff --git a/tools/xenmon/Makefile b/tools/xenmon/Makefile
+index eb10389..f79c327 100644
+--- a/tools/xenmon/Makefile
++++ b/tools/xenmon/Makefile
+@@ -13,6 +13,10 @@
+ XEN_ROOT=$(CURDIR)/../..
+ include $(XEN_ROOT)/tools/Rules.mk
+ 
++DEFAULT_PYTHON_PATH := $(shell $(XEN_ROOT)/tools/python/get-path)
++PYTHON_PATH ?= $(DEFAULT_PYTHON_PATH)
++INSTALL_PYTHON_PROG = $(XEN_ROOT)/tools/python/install-wrap "$(PYTHON_PATH)" $(INSTALL_PROG)
++
+ CFLAGS  += -Werror
+ CFLAGS  += $(CFLAGS_libxenctrl)
+ LDLIBS  += $(LDLIBS_libxenctrl)
+@@ -31,7 +35,7 @@ install: build
+ 	$(INSTALL_DIR) $(DESTDIR)$(LIBEXEC_BIN)
+ 	$(INSTALL_PROG) xenbaked $(DESTDIR)$(LIBEXEC_BIN)/xenbaked
+ 	$(INSTALL_PROG) xentrace_setmask  $(DESTDIR)$(LIBEXEC_BIN)/xentrace_setmask
+-	$(INSTALL_PROG) xenmon.py  $(DESTDIR)$(LIBEXEC_BIN)/xenmon.py
++	$(INSTALL_PROG) xenmon.py  $(DESTDIR)$(LIBEXEC_BIN)/xenmon
+ 	$(INSTALL_DIR) $(DESTDIR)$(DOCDIR)
+ 	$(INSTALL_DATA) README $(DESTDIR)$(DOCDIR)/README.xenmon
+ 

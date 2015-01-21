@@ -38,7 +38,6 @@ void xsm_fixup_ops (struct xsm_operations *ops)
     set_to_dummy_if_null(ops, domctl);
     set_to_dummy_if_null(ops, sysctl);
     set_to_dummy_if_null(ops, readconsole);
-    set_to_dummy_if_null(ops, do_mca);
 
     set_to_dummy_if_null(ops, evtchn_unbound);
     set_to_dummy_if_null(ops, evtchn_interdomain);
@@ -59,6 +58,8 @@ void xsm_fixup_ops (struct xsm_operations *ops)
     set_to_dummy_if_null(ops, alloc_security_evtchn);
     set_to_dummy_if_null(ops, free_security_evtchn);
     set_to_dummy_if_null(ops, show_security_evtchn);
+    set_to_dummy_if_null(ops, init_hardware_domain);
+
     set_to_dummy_if_null(ops, get_pod_target);
     set_to_dummy_if_null(ops, set_pod_target);
 
@@ -84,11 +85,14 @@ void xsm_fixup_ops (struct xsm_operations *ops)
     set_to_dummy_if_null(ops, iomem_permission);
     set_to_dummy_if_null(ops, iomem_mapping);
     set_to_dummy_if_null(ops, pci_config_permission);
+    set_to_dummy_if_null(ops, get_vnumainfo);
 
+#if defined(HAS_PASSTHROUGH) && defined(HAS_PCI)
     set_to_dummy_if_null(ops, get_device_group);
     set_to_dummy_if_null(ops, test_assign_device);
     set_to_dummy_if_null(ops, assign_device);
     set_to_dummy_if_null(ops, deassign_device);
+#endif
 
     set_to_dummy_if_null(ops, resource_plug_core);
     set_to_dummy_if_null(ops, resource_unplug_core);
@@ -102,21 +106,31 @@ void xsm_fixup_ops (struct xsm_operations *ops)
     set_to_dummy_if_null(ops, tmem_op);
     set_to_dummy_if_null(ops, tmem_control);
     set_to_dummy_if_null(ops, hvm_param);
+    set_to_dummy_if_null(ops, hvm_control);
     set_to_dummy_if_null(ops, hvm_param_nested);
 
     set_to_dummy_if_null(ops, do_xsm_op);
+#ifdef CONFIG_COMPAT
+    set_to_dummy_if_null(ops, do_compat_op);
+#endif
 
     set_to_dummy_if_null(ops, add_to_physmap);
     set_to_dummy_if_null(ops, remove_from_physmap);
+    set_to_dummy_if_null(ops, map_gmfn_foreign);
+
+#ifdef HAS_MEM_ACCESS
+    set_to_dummy_if_null(ops, mem_event_control);
+    set_to_dummy_if_null(ops, mem_event_op);
+#endif
 
 #ifdef CONFIG_X86
+    set_to_dummy_if_null(ops, do_mca);
     set_to_dummy_if_null(ops, shadow_control);
     set_to_dummy_if_null(ops, hvm_set_pci_intx_level);
     set_to_dummy_if_null(ops, hvm_set_isa_irq_level);
     set_to_dummy_if_null(ops, hvm_set_pci_link_route);
     set_to_dummy_if_null(ops, hvm_inject_msi);
-    set_to_dummy_if_null(ops, mem_event_control);
-    set_to_dummy_if_null(ops, mem_event_op);
+    set_to_dummy_if_null(ops, hvm_ioreq_server);
     set_to_dummy_if_null(ops, mem_sharing_op);
     set_to_dummy_if_null(ops, apic);
     set_to_dummy_if_null(ops, platform_op);
@@ -130,8 +144,5 @@ void xsm_fixup_ops (struct xsm_operations *ops)
     set_to_dummy_if_null(ops, unbind_pt_irq);
     set_to_dummy_if_null(ops, ioport_permission);
     set_to_dummy_if_null(ops, ioport_mapping);
-#endif
-#ifdef CONFIG_ARM
-    set_to_dummy_if_null(ops, map_gmfn_foreign);
 #endif
 }

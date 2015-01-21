@@ -14,19 +14,32 @@ struct irqaction {
     const char *name;
     void *dev_id;
     bool_t free_on_release;
+#ifdef CONFIG_IRQ_HAS_MULTIPLE_ACTION
+    struct irqaction *next;
+#endif
 };
 
 /*
  * IRQ line status.
  */
-#define IRQ_INPROGRESS    (1u<<0) /* IRQ handler active - do not enter! */
-#define IRQ_DISABLED      (1u<<1) /* IRQ disabled - do not enter! */
-#define IRQ_PENDING       (1u<<2) /* IRQ pending - replay on enable */
-#define IRQ_REPLAY        (1u<<3) /* IRQ has been replayed but not acked yet */
-#define IRQ_GUEST         (1u<<4) /* IRQ is handled by guest OS(es) */
-#define IRQ_MOVE_PENDING  (1u<<5) /* IRQ is migrating to another CPUs */
-#define IRQ_PER_CPU       (1u<<6) /* IRQ is per CPU */
-#define IRQ_GUEST_EOI_PENDING (1u<<7) /* IRQ was disabled, pending a guest EOI */
+#define _IRQ_INPROGRESS         0 /* IRQ handler active - do not enter! */
+#define _IRQ_DISABLED           1 /* IRQ disabled - do not enter! */
+#define _IRQ_PENDING            2 /* IRQ pending - replay on enable */
+#define _IRQ_REPLAY             3 /* IRQ has been replayed but not acked yet */
+#define _IRQ_GUEST              4 /* IRQ is handled by guest OS(es) */
+#define _IRQ_MOVE_PENDING       5 /* IRQ is migrating to another CPUs */
+#define _IRQ_PER_CPU            6 /* IRQ is per CPU */
+#define _IRQ_GUEST_EOI_PENDING  7 /* IRQ was disabled, pending a guest EOI */
+#define _IRQF_SHARED            8 /* IRQ is shared */
+#define IRQ_INPROGRESS          (1u<<_IRQ_INPROGRESS)
+#define IRQ_DISABLED            (1u<<_IRQ_DISABLED)
+#define IRQ_PENDING             (1u<<_IRQ_PENDING)
+#define IRQ_REPLAY              (1u<<_IRQ_REPLAY)
+#define IRQ_GUEST               (1u<<_IRQ_GUEST)
+#define IRQ_MOVE_PENDING        (1u<<_IRQ_MOVE_PENDING)
+#define IRQ_PER_CPU             (1u<<_IRQ_PER_CPU)
+#define IRQ_GUEST_EOI_PENDING   (1u<<_IRQ_GUEST_EOI_PENDING)
+#define IRQF_SHARED             (1u<<_IRQF_SHARED)
 
 /* Special IRQ numbers. */
 #define AUTO_ASSIGN_IRQ         (-1)
@@ -63,6 +76,11 @@ struct msi_desc;
  * This is the "IRQ descriptor", which contains various information
  * about the irq, including what kind of hardware handling it has,
  * whether it is disabled etc etc.
+ *
+ * Note: on ARMv8 we can use normal bit manipulation functions to access
+ * the status field because struct irq_desc contains pointers, therefore
+ * the alignment of the struct is at least 8 bytes and status is the
+ * first field.
  */
 typedef struct irq_desc {
     unsigned int status;        /* IRQ status */
@@ -89,9 +107,10 @@ int arch_init_one_irq_desc(struct irq_desc *);
 
 #define irq_desc_initialized(desc) ((desc)->handler != NULL)
 
-extern int setup_irq(unsigned int irq, struct irqaction *);
-extern void release_irq(unsigned int irq);
-extern int request_irq(unsigned int irq,
+extern int setup_irq(unsigned int irq, unsigned int irqflags,
+                     struct irqaction *);
+extern void release_irq(unsigned int irq, const void *dev_id);
+extern int request_irq(unsigned int irq, unsigned int irqflags,
                void (*handler)(int, void *, struct cpu_user_regs *),
                const char * devname, void *dev_id);
 
@@ -148,5 +167,9 @@ static inline void set_native_irq_info(unsigned int irq, const cpumask_t *mask)
 }
 
 unsigned int set_desc_affinity(struct irq_desc *, const cpumask_t *);
+
+#ifndef arch_hwdom_irqs
+unsigned int arch_hwdom_irqs(domid_t);
+#endif
 
 #endif /* __XEN_IRQ_H__ */

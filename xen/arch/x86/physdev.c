@@ -37,9 +37,8 @@ static int physdev_hvm_map_pirq(
     switch ( type )
     {
     case MAP_PIRQ_TYPE_GSI: {
-        struct hvm_irq_dpci *hvm_irq_dpci;
-        struct hvm_girq_dpci_mapping *girq;
-        uint32_t machine_gsi = 0;
+        const struct hvm_irq_dpci *hvm_irq_dpci;
+        unsigned int machine_gsi = 0;
 
         if ( *index < 0 || *index >= NR_HVM_IRQS )
         {
@@ -52,6 +51,8 @@ static int physdev_hvm_map_pirq(
         hvm_irq_dpci = domain_get_irq_dpci(d);
         if ( hvm_irq_dpci )
         {
+            const struct hvm_girq_dpci_mapping *girq;
+
             BUILD_BUG_ON(ARRAY_SIZE(hvm_irq_dpci->girq) < NR_HVM_IRQS);
             list_for_each_entry ( girq,
                                   &hvm_irq_dpci->girq[*index],
@@ -310,8 +311,7 @@ ret_t do_physdev_op(int cmd, XEN_GUEST_HANDLE_PARAM(void) arg)
             spin_unlock(&v->domain->event_lock);
             break;
         }
-        if ( is_pv_domain(v->domain) &&
-             v->domain->arch.pv_domain.auto_unmask )
+        if ( v->domain->arch.auto_unmask )
             evtchn_unmask(pirq->evtchn);
         if ( is_pv_domain(v->domain) ||
              domain_pirq_to_irq(v->domain, eoi.irq) > 0 )
@@ -354,7 +354,7 @@ ret_t do_physdev_op(int cmd, XEN_GUEST_HANDLE_PARAM(void) arg)
         }
         mfn = page_to_mfn(page);
 
-        if ( cmpxchg(&v->domain->arch.pv_domain.pirq_eoi_map_mfn,
+        if ( cmpxchg(&v->domain->arch.pirq_eoi_map_mfn,
                      0, mfn) != 0 )
         {
             put_page_and_type(mfn_to_page(mfn));
@@ -362,16 +362,16 @@ ret_t do_physdev_op(int cmd, XEN_GUEST_HANDLE_PARAM(void) arg)
             break;
         }
 
-        v->domain->arch.pv_domain.pirq_eoi_map = map_domain_page_global(mfn);
-        if ( v->domain->arch.pv_domain.pirq_eoi_map == NULL )
+        v->domain->arch.pirq_eoi_map = map_domain_page_global(mfn);
+        if ( v->domain->arch.pirq_eoi_map == NULL )
         {
-            v->domain->arch.pv_domain.pirq_eoi_map_mfn = 0;
+            v->domain->arch.pirq_eoi_map_mfn = 0;
             put_page_and_type(mfn_to_page(mfn));
             ret = -ENOSPC;
             break;
         }
         if ( cmd == PHYSDEVOP_pirq_eoi_gmfn_v1 )
-            v->domain->arch.pv_domain.auto_unmask = 1;
+            v->domain->arch.auto_unmask = 1;
 
         ret = 0;
         break;

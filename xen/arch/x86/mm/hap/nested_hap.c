@@ -19,14 +19,14 @@
  * Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
  */
 
+#include <xen/mem_event.h>
+#include <xen/event.h>
+#include <public/mem_event.h>
 #include <asm/domain.h>
 #include <asm/page.h>
 #include <asm/paging.h>
 #include <asm/p2m.h>
-#include <asm/mem_event.h>
-#include <public/mem_event.h>
 #include <asm/mem_sharing.h>
-#include <xen/event.h>
 #include <asm/hap.h>
 #include <asm/hvm/support.h>
 
@@ -79,7 +79,7 @@
 
 void
 nestedp2m_write_p2m_entry(struct p2m_domain *p2m, unsigned long gfn,
-    l1_pgentry_t *p, mfn_t table_mfn, l1_pgentry_t new, unsigned int level)
+    l1_pgentry_t *p, l1_pgentry_t new, unsigned int level)
 {
     struct domain *d = p2m->domain;
     uint32_t old_flags;
@@ -103,7 +103,7 @@ nestedhap_fix_p2m(struct vcpu *v, struct p2m_domain *p2m,
                   paddr_t L2_gpa, paddr_t L0_gpa,
                   unsigned int page_order, p2m_type_t p2mt, p2m_access_t p2ma)
 {
-    int rv = 1;
+    int rc = 0;
     ASSERT(p2m);
     ASSERT(p2m->set_entry);
 
@@ -124,15 +124,16 @@ nestedhap_fix_p2m(struct vcpu *v, struct p2m_domain *p2m,
         gfn = (L2_gpa >> PAGE_SHIFT) & mask;
         mfn = _mfn((L0_gpa >> PAGE_SHIFT) & mask);
 
-        rv = set_p2m_entry(p2m, gfn, mfn, page_order, p2mt, p2ma);
+        rc = p2m_set_entry(p2m, gfn, mfn, page_order, p2mt, p2ma);
     }
 
     p2m_unlock(p2m);
 
-    if (rv == 0) {
+    if ( rc )
+    {
         gdprintk(XENLOG_ERR,
-		"failed to set entry for %#"PRIx64" -> %#"PRIx64"\n",
-		L2_gpa, L0_gpa);
+                 "failed to set entry for %#"PRIx64" -> %#"PRIx64" rc:%d\n",
+                 L2_gpa, L0_gpa, rc);
         domain_crash(p2m->domain);
     }
 }
@@ -263,7 +264,7 @@ nestedhvm_hap_nested_page_fault(struct vcpu *v, paddr_t *L2_gpa,
 
     switch ( p2ma_10 )
     {
-    case p2m_access_n ... p2m_access_rwx:
+    case p2m_access_rwx ... p2m_access_n:
         break;
     case p2m_access_rx2rw:
         p2ma_10 = p2m_access_rx;

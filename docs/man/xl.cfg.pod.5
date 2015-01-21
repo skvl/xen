@@ -48,6 +48,14 @@ not nested.
 
 The semantics of each C<KEY> defines which form of C<VALUE> is required.
 
+Pairs may be separated either by a newline or a semicolon.  Both
+of the following are valid:
+
+  name="h0"
+  builder="hvm"
+
+  name="h0"; builder="hvm"
+
 =head1 OPTIONS
 
 =head2 Mandatory Configuration Items
@@ -135,27 +143,49 @@ Combining this with "all" is also possible, meaning "all,^nodes:1"
 results in all the vcpus of the guest running on all the cpus on the
 host, except for the cpus belonging to the host NUMA node 1.
 
-=item ["2", "3"] (or [2, 3])
+=item ["2", "3-8,^5"]
 
-To ask for specific vcpu mapping. That means (in this example), vcpu #0
-of the guest will run on cpu #2 of the host and vcpu #1 of the guest will
-run on cpu #3 of the host.
+To ask for specific vcpu mapping. That means (in this example), vcpu 0
+of the guest will run on cpu 2 of the host and vcpu 1 of the guest will
+run on cpus 3,4,6,7,8 of the host.
+
+More complex notation can be also used, exactly as described above. So
+"all,^5-8", or just "all", or "node:0,node:2,^9-11,18-20" are all legal,
+for each element of the list.
 
 =back
 
 If this option is not specified, no vcpu to cpu pinning is established,
-and the vcpus of the guest can run on all the cpus of the host.
+and the vcpus of the guest can run on all the cpus of the host. If this
+option is specified, the intersection of the vcpu pinning mask, provided
+here, and the soft affinity mask, provided via B<cpus\_soft=> (if any),
+is utilized to compute the domain node-affinity, for driving memory
+allocations.
 
-If we are on a NUMA machine (i.e., if the host has more than one NUMA
-node) and this option is not specified, libxl automatically tries to
-place the guest on the least possible number of nodes. That, however,
-will not affect vcpu pinning, so the guest will still be able to run on
-all the cpus, it will just prefer the ones from the node it has been
-placed on. A heuristic approach is used for choosing the best node (or
-set of nodes), with the goals of maximizing performance for the guest
-and, at the same time, achieving efficient utilization of host cpus
-and memory. See F<docs/misc/xl-numa-placement.markdown> for more
-details.
+=item B<cpus_soft="CPU-LIST">
+
+Exactly as B<cpus=>, but specifies soft affinity, rather than pinning
+(hard affinity). When using the credit scheduler, this means what cpus
+the vcpus of the domain prefer.
+
+A C<CPU-LIST> is specified exactly as above, for B<cpus=>.
+
+If this option is not specified, the vcpus of the guest will not have
+any preference regarding on what cpu to run. If this option is specified,
+the intersection of the soft affinity mask, provided here, and the vcpu
+pinning, provided via B<cpus=> (if any), is utilized to compute the
+domain node-affinity, for driving memory allocations.
+
+If this option is not specified (and B<cpus=> is not specified either),
+libxl automatically tries to place the guest on the least possible
+number of nodes. A heuristic approach is used for choosing the best
+node (or set of nodes), with the goal of maximizing performance for
+the guest and, at the same time, achieving efficient utilization of
+host cpus and memory. In that case, the soft affinity of all the vcpus
+of the domain will be set to the pcpus belonging to the NUMA nodes
+chosen during placement.
+
+For more details, see F<docs/misc/xl-numa-placement.markdown>.
 
 =back
 
@@ -296,6 +326,44 @@ Action to take if the domain crashes.  Default is C<destroy>.
 
 =back
 
+=head3 Direct Kernel Boot
+
+Direct kernel boot allows booting directly from a kernel and initrd
+stored in the host physical machine OS, allowing command line arguments
+to be passed directly. PV guest direct kernel boot is supported. HVM
+guest direct kernel boot is supported with limitation (it's supported
+when using qemu-xen and default BIOS 'seabios'; not supported in case of
+stubdom-dm and old rombios.)
+
+=over 4
+
+=item B<kernel="PATHNAME">
+
+Load the specified file as the kernel image.
+
+=item B<ramdisk="PATHNAME">
+
+Load the specified file as the ramdisk.
+
+=item B<cmdline="STRING">
+
+Append B<cmdline="STRING"> to the kernel command line. (Note: it is
+guest specific what meaning this has). It can replace B<root="STRING">
+plus B<extra="STRING"> and is preferred. When B<cmdline="STRING"> is set,
+B<root="STRING"> and B<extra="STRING"> will be ignored.
+
+=item B<root="STRING">
+
+Append B<root="STRING"> to the kernel command line (Note: it is guest
+specific what meaning this has).
+
+=item B<extra="STRING">
+
+Append B<STRING> to the kernel command line. (Note: it is guest
+specific what meaning this has).
+
+=back
+
 =head3 Other Options
 
 =over 4
@@ -389,8 +457,8 @@ This options does not control the emulated graphics card presented to
 an HVM guest. See L<Emulated VGA Graphics Device> below for how to
 configure the emulated device. If L<Emulated VGA Graphics Device> options
 are used in a PV guest configuration, xl will pick up B<vnc>, B<vnclisten>,
-B<vncpasswd>, B<vncdisplay> and B<vncunused> to construct paravirtual
-framebuffer device for the guest.
+B<vncpasswd>, B<vncdisplay>, B<vncunused>, B<sdl>, B<opengl> and
+B<keymap> to construct paravirtual framebuffer device for the guest.
 
 Each B<VFB_SPEC_STRING> is a comma-separated list of C<KEY=VALUE>
 settings, from the following list:
@@ -462,6 +530,59 @@ L<qemu(1)> manpage. The default is B<en-us>.
 
 =back
 
+=item B<channel=[ "CHANNEL_SPEC_STRING", "CHANNEL_SPEC_STRING", ...]>
+
+Specifies the virtual channels to be provided to the guest. A
+channel is a low-bandwidth, bidirectional byte stream, which resembles
+a serial link. Typical uses for channels include transmitting VM
+configuration after boot and signalling to in-guest agents. Please see
+F<docs/misc/channels.txt> for more details.
+
+Each B<CHANNEL_SPEC_STRING> is a comma-separated list of C<KEY=VALUE>
+seettings. Leading and trailing whitespace is ignored in both KEY and
+VALUE. Neither KEY nor VALUE may contain ',', '=' or '"'. Defined values
+are:
+
+=over 4
+
+=item C<backend=DOMAIN>
+
+Specify the backend domain name or id. This parameter is optional. If
+this parameter is omitted then the toolstack domain will be assumed.
+
+=item C<name=NAME>
+
+Specify the string name for this device. This parameter is mandatory.
+This should be a well-known name for the specific application (e.g.
+guest agent) and should be used by the frontend to connect the
+application to the right channel device. There is no formal registry
+of channel names, so application authors are encouraged to make their
+names unique by including domain name and version number in the string
+(e.g. org.mydomain.guestagent.1).
+
+=item C<connection=CONNECTION>
+
+Specify how the backend will be implemented. This following options are
+available:
+
+=over 4
+
+=item B<connection=SOCKET>
+
+The backend will bind a Unix domain socket (at the path given by
+B<path=PATH>), call listen and accept connections. The backend will proxy
+data between the channel and the connected socket.
+
+=item B<connection=PTY>
+
+The backend will create a pty and proxy data between the channel and the
+master device. The command B<xl channel-list> can be used to discover the
+assigned slave device.
+
+=back
+
+=back
+
 =item B<pci=[ "PCI_SPEC_STRING", "PCI_SPEC_STRING", ... ]>
 
 Specifies the host PCI devices to passthrough to this guest. Each B<PCI_SPEC_STRING>
@@ -509,6 +630,15 @@ the PCI device regardless whether the guest uses INTx or MSI. Some
 device drivers, such as NVIDIA's, detect an inconsistency and do not
 function when this option is enabled. Therefore the default is false (0).
 
+=item B<seize=BOOLEAN>
+
+Tells xl to automatically attempt to re-assign a device to
+pciback if it is not already assigned.
+
+WARNING: If you set this option, xl will gladly re-assign a critical
+system device, such as a network or a disk controller being used by
+dom0 without confirmation.  Please use with care.
+
 =item B<power_mgmt=BOOLEAN>
 
 (HVM only) Specifies that the VM should be able to program the
@@ -529,6 +659,11 @@ above.
 
 Changes the default value of 'msitranslate' for all PCI devices passed
 through to this VM. See L<msitranslate|/"msitranslate_boolean"> above.
+
+=item B<pci_seize=BOOLEAN>
+
+Changes the default value of 'seize' for all PCI devices passed
+through to this VM. See L<seize|/"seize_boolean"> above.
 
 =item B<pci_power_mgmt=BOOLEAN>
 
@@ -588,16 +723,23 @@ is given in hexadecimal and may either a span e.g. C<2f8-2ff>
 It is recommended to use this option only for trusted VMs under
 administrator control.
 
-=item B<iomem=[ "IOMEM_START,NUM_PAGES", "IOMEM_START,NUM_PAGES", ... ]>
+=item B<iomem=[ "IOMEM_START,NUM_PAGES[@GFN]", "IOMEM_START,NUM_PAGES[@GFN]", ... ]>
 
-Allow guest to access specific hardware I/O memory pages. B<IOMEM_START>
-is a physical page number. B<NUM_PAGES> is the number
-of pages beginning with B<START_PAGE> to allow access. Both values
-must be given in hexadecimal.
+Allow auto-translated domains to access specific hardware I/O memory pages.
+
+B<IOMEM_START> is a physical page number. B<NUM_PAGES> is the number of pages
+beginning with B<START_PAGE> to allow access. B<GFN> specifies the guest frame
+number where the mapping will start in the domU's address space. If B<GFN> is
+not given, the mapping will be performed using B<IOMEM_START> as a start in the
+domU's address space, therefore performing an 1:1 mapping as default.
+All of these values must be given in hexadecimal.
+
+Note that the IOMMU won't be updated with the mappings specified with this
+option. This option therefore should not be used to passthrough any
+IOMMU-protected device.
 
 It is recommended to use this option only for trusted VMs under
 administrator control.
-
 
 =item B<irqs=[ NUMBER, NUMBER, ... ]>
 
@@ -625,36 +767,18 @@ The following options apply only to Paravirtual guests.
 
 =over 4
 
-=item B<kernel="PATHNAME">
-
-Load the specified file as the kernel image.  Either B<kernel> or
-B<bootloader> must be specified for PV guests.
-
-=item B<ramdisk="PATHNAME">
-
-Load the specified file as the ramdisk.
-
 =item B<bootloader="PROGRAM">
 
 Run C<PROGRAM> to find the kernel image and ramdisk to use.  Normally
 C<PROGRAM> would be C<pygrub>, which is an emulation of
-grub/grub2/syslinux.
+grub/grub2/syslinux. Either B<kernel> or B<bootloader> must be specified
+for PV guests.
 
 =item B<bootloader_args=[ "ARG", "ARG", ...]>
 
 Append B<ARG>s to the arguments to the B<bootloader>
 program. Alternatively if the argument is a simple string then it will
 be split into words at whitespace (this second option is deprecated).
-
-=item B<root="STRING">
-
-Append B<root="STRING"> to the kernel command line (Note: it is guest
-specific what meaning this has).
-
-=item B<extra="STRING">
-
-Append B<STRING> to the kernel command line. Note: it is guest
-specific what meaning this has).
 
 =item B<e820_host=BOOLEAN>
 
@@ -680,6 +804,7 @@ it is safe to allow this to be enabled but you may wish to disable it
 anyway.
 
 =item B<pvh=BOOLEAN>
+
 Selects whether to run this PV guest in an HVM container. Default is 0.
 
 =back
@@ -859,9 +984,13 @@ Possible values for a single feature bit:
   'k' -> pass through the host bit value
   's' -> as 'k' but preserve across save/restore and migration (not implemented)
 
+Note: when specifying B<cpuid> for hypervisor leaves (0x4000xxxx major group)
+only the lowest 8 bits of leaf's 0x4000xx00 EAX register are processed, the rest
+are ignored (these 8 bits signify maximum number of hypervisor leaves).
+
 List of keys taking a value:
-apicidsize brandid clflush family localapicid maxleaf model nc proccount procpkg
-stepping
+apicidsize brandid clflush family localapicid maxleaf maxhvleaf model nc
+proccount procpkg stepping
 
 List of keys taking a character:
 3dnow 3dnowext 3dnowprefetch abm acpi aes altmovcr8 apic avx clfsh cmov
@@ -910,6 +1039,35 @@ number of vendor defined SMBIOS structures (type 128 - 255). Since SMBIOS
 structures do not present their overall size, each entry in the file must be
 preceded by a 32b integer indicating the size of the next structure.
 
+=item B<ms_vm_genid="OPTION">
+
+Provide a VM generation ID to the guest.
+
+The VM generation ID as a 128-bit random number that a guest may use
+to determine if the guest has been restored from an earlier snapshot
+or cloned.
+
+This is required for Microsoft Windows Server 2012 (and later) domain
+controllers.
+
+Valid options are:
+
+=over 4
+
+=item B<"generate">
+
+Generate a random VM generation ID every time the domain is created or
+restored.
+
+=item B<"none">
+
+Do not provide a VM generation ID.
+
+=back
+
+See also "Virtual Machine Generation ID" by Microsoft
+(http://www.microsoft.com/en-us/download/details.aspx?id=30707).
+
 =back 
 
 =head3 Guest Virtual Time Controls
@@ -917,7 +1075,6 @@ preceded by a 32b integer indicating the size of the next structure.
 =over 4
 
 =item B<tsc_mode="MODE">
-
 
 Specifies how the TSC (Time Stamp Counter) should be provided to the
 guest (X86 only). Specifying this option as a number is
@@ -964,7 +1121,6 @@ i.e. set to UTC.
 
 Set the real time clock offset in seconds. False (0) by default.
 
-
 =item B<vpt_align=BOOLEAN>
 
 Specifies that periodic Virtual Platform Timers should be aligned to
@@ -1008,6 +1164,21 @@ wallclock (i.e., real) time.
 
 =back
 
+=head3 Memory layout
+
+=over 4
+
+=item B<mmio_hole=MBYTES>
+
+Specifies the size the MMIO hole below 4GiB will be.  Only valid for
+device_model_version = "qemu-xen".
+
+Cannot be smaller than 256. Cannot be larger than 3840.
+
+Known good large value is 3072.
+
+=back
+
 =head3 Support for Paravirtualisation of HVM Guests
 
 The following options allow Paravirtualised features (such as devices)
@@ -1031,18 +1202,68 @@ Windows L<http://wiki.xen.org/wiki/XenWindowsGplPv>.
 Setting B<xen_platform_pci=0> with the default device_model "qemu-xen"
 requires at least QEMU 1.6.
 
-=item B<viridian=BOOLEAN>
+=item B<viridian=[ "GROUP", "GROUP", ...]>
 
-Turns on or off the exposure of MicroSoft Hyper-V (AKA viridian)
-compatible enlightenments to the guest.  These can improve performance
-of Microsoft Windows guests from Windows Vista and Windows 2008
-onwards and setting this option for such guests is strongly
-recommended. This option should be harmless for other versions of
-Windows (although it will not give any benefit) and the majority of
-other non-Windows OSes. However it is known to be incompatible with
-some other Operating Systems and in some circumstance can prevent
-Xen's own paravirtualisation interfaces for HVM guests from being
-used.
+The groups of Microsoft Hyper-V (AKA viridian) compatible enlightenments
+exposed to the guest. The following groups of enlightenments may be
+specified:
+
+=over 4
+
+=item B<base>
+
+This group incorporates the Hypercall MSRs, Virtual processor index MSR,
+and APIC access MSRs. These enlightenments can improve performance of
+Windows Vista and Windows Server 2008 onwards and setting this option
+for such guests is strongly recommended.
+This group is also a pre-requisite for all others. If it is disabled
+then it is an error to attempt to enable any other group.
+
+=item B<freq>
+
+This group incorporates the TSC and APIC frequency MSRs. These
+enlightenments can improve performance of Windows 7 and Windows
+Server 2008 R2 onwards.
+
+=item B<time_ref_count>
+
+This group incorporates Partition Time Reference Counter MSR. This
+enlightenment can improve performance of Windows 8 and Windows
+Server 2012 onwards.
+
+=item B<defaults>
+
+This is a special value that enables the default set of groups, which
+is currently the B<base>, B<freq> and B<time_ref_count> groups.
+
+=item B<all>
+
+This is a special value that enables all available groups.
+
+=back
+
+Groups can be disabled by prefixing the name with '!'. So, for example,
+to enable all groups except B<freq>, specify:
+
+=over 4
+
+B<viridian=[ "all", "!freq" ]>
+
+=back
+
+For details of the enlightenments see the latest version of Microsoft's
+Hypervisor Top-Level Functional Specification.
+
+The enlightenments should be harmless for other versions of Windows
+(although they will not give any benefit) and the majority of other
+non-Windows OSes.
+However it is known that they are incompatible with some other Operating
+Systems and in some circumstance can prevent Xen's own paravirtualisation
+interfaces for HVM guests from being used.
+
+The viridian option can be specified as a boolean. A value of true (1)
+is equivalent to the list [ "defaults" ], and a value of false (0) is
+equivalent to an empty list.
 
 =back
 
@@ -1082,17 +1303,13 @@ This option is deprecated, use vga="stdvga" instead.
 
 =item B<vga="STRING">
 
-Selects the emulated video card (stdvga|cirrus).
+Selects the emulated video card (none|stdvga|cirrus).
 The default is cirrus.
 
 =item B<vnc=BOOLEAN>
 
 Allow access to the display via the VNC protocol.  This enables the
 other VNC-related settings.  The default is to enable this.
-
-=item B<vncviewer=BOOLEAN>
-
-Automatically spawn a vncviewer when creating/restoring a guest.
 
 =item B<vnclisten="ADDRESS[:DISPLAYNUM]">
 
@@ -1210,12 +1427,14 @@ an usb2 controller. The default is disabled (0).
 
 =over 4
 
-=item B<serial=DEVICE>
+=item B<serial=[ "DEVICE", "DEVICE", ...]>
 
-Redirect the virtual serial port to B<DEVICE>. Please see the
+Redirect virtual serial ports to B<DEVICE>s. Please see the
 B<-serial> option in the L<qemu(1)> manpage for details of the valid
 B<DEVICE> options. Default is B<vc> when in graphical mode and
 B<stdio> if B<nographics=1> is used.
+
+The form serial=DEVICE is also accepted for backwards compatibilty.
 
 =item B<soundhw=DEVICE>
 

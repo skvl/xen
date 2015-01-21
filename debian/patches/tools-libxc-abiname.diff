@@ -1,0 +1,99 @@
+From 95f764dfa5d8b60d98a8136659a96cbb63a8dcc8 Mon Sep 17 00:00:00 2001
+From: Bastian Blank <waldi@debian.org>
+Date: Sat, 5 Jul 2014 11:46:48 +0200
+Subject: tools-libxc-abiname.diff
+
+Patch-Name: tools-libxc-abiname.diff
+---
+ tools/libxc/Makefile | 35 +++++++++++++----------------------
+ 1 file changed, 13 insertions(+), 22 deletions(-)
+
+diff --git a/tools/libxc/Makefile b/tools/libxc/Makefile
+index bd2ca6c..09a065d 100644
+--- a/tools/libxc/Makefile
++++ b/tools/libxc/Makefile
+@@ -1,9 +1,6 @@
+ XEN_ROOT = $(CURDIR)/../..
+ include $(XEN_ROOT)/tools/Rules.mk
+ 
+-MAJOR    = 4.5
+-MINOR    = 0
+-
+ CTRL_SRCS-y       :=
+ CTRL_SRCS-y       += xc_core.c
+ CTRL_SRCS-$(CONFIG_X86) += xc_core_x86.c
+@@ -113,12 +110,12 @@ $(CTRL_PIC_OBJS) $(GUEST_PIC_OBJS) $(OSDEP_PIC_OBJS) : CFLAGS += -include $(XEN_
+ 
+ LIB := libxenctrl.a
+ ifneq ($(nosharedlibs),y)
+-LIB += libxenctrl.so libxenctrl.so.$(MAJOR) libxenctrl.so.$(MAJOR).$(MINOR)
++LIB += libxenctrl.so libxenctrl-$(PACKAGE_VERSION).so
+ endif
+ 
+ LIB += libxenguest.a
+ ifneq ($(nosharedlibs),y)
+-LIB += libxenguest.so libxenguest.so.$(MAJOR) libxenguest.so.$(MAJOR).$(MINOR)
++LIB += libxenguest.so libxenguest-$(PACKAGE_VERSION).so
+ endif
+ 
+ ifneq ($(nosharedlibs),y)
+@@ -147,15 +144,13 @@ libs: $(LIB)
+ install: build
+ 	$(INSTALL_DIR) $(DESTDIR)$(LIBDIR)
+ 	$(INSTALL_DIR) $(DESTDIR)$(INCLUDEDIR)
+-	$(INSTALL_SHLIB) libxenctrl.so.$(MAJOR).$(MINOR) $(DESTDIR)$(LIBDIR)
++	$(INSTALL_SHLIB) libxenctrl-$(PACKAGE_VERSION).so $(DESTDIR)$(LIBDIR)
+ 	$(INSTALL_DATA) libxenctrl.a $(DESTDIR)$(LIBDIR)
+-	$(SYMLINK_SHLIB) libxenctrl.so.$(MAJOR).$(MINOR) $(DESTDIR)$(LIBDIR)/libxenctrl.so.$(MAJOR)
+-	$(SYMLINK_SHLIB) libxenctrl.so.$(MAJOR) $(DESTDIR)$(LIBDIR)/libxenctrl.so
++	$(SYMLINK_SHLIB) libxenctrl-$(PACKAGE_VERSION).so $(DESTDIR)$(LIBDIR)/libxenctrl.so
+ 	$(INSTALL_DATA) include/xenctrl.h include/xenctrlosdep.h include/xentoollog.h $(DESTDIR)$(INCLUDEDIR)
+-	$(INSTALL_SHLIB) libxenguest.so.$(MAJOR).$(MINOR) $(DESTDIR)$(LIBDIR)
++	$(INSTALL_SHLIB) libxenguest-$(PACKAGE_VERSION).so $(DESTDIR)$(LIBDIR)
+ 	$(INSTALL_DATA) libxenguest.a $(DESTDIR)$(LIBDIR)
+-	$(SYMLINK_SHLIB) libxenguest.so.$(MAJOR).$(MINOR) $(DESTDIR)$(LIBDIR)/libxenguest.so.$(MAJOR)
+-	$(SYMLINK_SHLIB) libxenguest.so.$(MAJOR) $(DESTDIR)$(LIBDIR)/libxenguest.so
++	$(SYMLINK_SHLIB) libxenguest-$(PACKAGE_VERSION).so $(DESTDIR)$(LIBDIR)/libxenguest.so
+ 	$(INSTALL_DATA) include/xenguest.h $(DESTDIR)$(INCLUDEDIR)
+ 
+ .PHONY: TAGS
+@@ -185,22 +180,18 @@ rpm: build
+ libxenctrl.a: $(CTRL_LIB_OBJS)
+ 	$(AR) rc $@ $^
+ 
+-libxenctrl.so: libxenctrl.so.$(MAJOR)
+-	$(SYMLINK_SHLIB) $< $@
+-libxenctrl.so.$(MAJOR): libxenctrl.so.$(MAJOR).$(MINOR)
++libxenctrl.so: libxenctrl-$(PACKAGE_VERSION).so
+ 	$(SYMLINK_SHLIB) $< $@
+ 
+-libxenctrl.so.$(MAJOR).$(MINOR): $(CTRL_PIC_OBJS)
+-	$(CC) $(LDFLAGS) $(PTHREAD_LDFLAGS) -Wl,$(SONAME_LDFLAG) -Wl,libxenctrl.so.$(MAJOR) $(SHLIB_LDFLAGS) -o $@ $^ $(DLOPEN_LIBS) $(PTHREAD_LIBS) $(APPEND_LDFLAGS)
++libxenctrl-$(PACKAGE_VERSION).so: $(CTRL_PIC_OBJS)
++	$(CC) $(LDFLAGS) $(PTHREAD_LDFLAGS) -Wl,$(SONAME_LDFLAG),$@ $(SHLIB_LDFLAGS) -o $@ $^ $(DLOPEN_LIBS) $(PTHREAD_LIBS) $(APPEND_LDFLAGS)
+ 
+ # libxenguest
+ 
+ libxenguest.a: $(GUEST_LIB_OBJS)
+ 	$(AR) rc $@ $^
+ 
+-libxenguest.so: libxenguest.so.$(MAJOR)
+-	$(SYMLINK_SHLIB) $< $@
+-libxenguest.so.$(MAJOR): libxenguest.so.$(MAJOR).$(MINOR)
++libxenguest.so: libxenguest-$(PACKAGE_VERSION).so
+ 	$(SYMLINK_SHLIB) $< $@
+ 
+ ifeq ($(CONFIG_MiniOS),y)
+@@ -212,9 +203,9 @@ endif
+ xc_dom_bzimageloader.o: CFLAGS += $(call zlib-options,D)
+ xc_dom_bzimageloader.opic: CFLAGS += $(call zlib-options,D)
+ 
+-libxenguest.so.$(MAJOR).$(MINOR): COMPRESSION_LIBS = $(call zlib-options,l)
+-libxenguest.so.$(MAJOR).$(MINOR): $(GUEST_PIC_OBJS) libxenctrl.so
+-	$(CC) $(LDFLAGS) -Wl,$(SONAME_LDFLAG) -Wl,libxenguest.so.$(MAJOR) $(SHLIB_LDFLAGS) -o $@ $(GUEST_PIC_OBJS) $(COMPRESSION_LIBS) -lz $(LDLIBS_libxenctrl) $(PTHREAD_LIBS) $(APPEND_LDFLAGS)
++libxenguest-$(PACKAGE_VERSION).so: COMPRESSION_LIBS = $(call zlib-options,l)
++libxenguest-$(PACKAGE_VERSION).so: $(GUEST_PIC_OBJS) libxenctrl-$(PACKAGE_VERSION).so
++	$(CC) $(LDFLAGS) -Wl,$(SONAME_LDFLAG),$@ $(SHLIB_LDFLAGS) -o $@ $(GUEST_PIC_OBJS) $(COMPRESSION_LIBS) -lz $(LDLIBS_libxenctrl) $(PTHREAD_LIBS) $(APPEND_LDFLAGS)
+ 
+ xenctrl_osdep_ENOSYS.so: $(OSDEP_PIC_OBJS) libxenctrl.so
+ 	$(CC) $(LDFLAGS) $(SHLIB_LDFLAGS) -o $@ $(OSDEP_PIC_OBJS) $(LDLIBS_libxenctrl) $(APPEND_LDFLAGS)

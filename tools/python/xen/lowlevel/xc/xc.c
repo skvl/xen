@@ -256,7 +256,8 @@ static PyObject *pyxc_vcpu_setaffinity(XcObject *self,
         }
     }
   
-    if ( xc_vcpu_setaffinity(self->xc_handle, dom, vcpu, cpumap) != 0 )
+    if ( xc_vcpu_setaffinity(self->xc_handle, dom, vcpu, cpumap,
+                             NULL, XEN_VCPUAFFINITY_HARD) != 0 )
     {
         free(cpumap);
         return pyxc_error_to_exception(self->xc_handle);
@@ -403,7 +404,8 @@ static PyObject *pyxc_vcpu_getinfo(XcObject *self,
     if(cpumap == NULL)
         return pyxc_error_to_exception(self->xc_handle);
 
-    rc = xc_vcpu_getaffinity(self->xc_handle, dom, vcpu, cpumap);
+    rc = xc_vcpu_getaffinity(self->xc_handle, dom, vcpu, cpumap,
+                             NULL, XEN_VCPUAFFINITY_HARD);
     if ( rc < 0 )
     {
         free(cpumap);
@@ -544,27 +546,27 @@ static PyObject *pyxc_linux_build(XcObject *self,
     return pyxc_error_to_exception(self->xc_handle);
 }
 
-static PyObject *pyxc_get_hvm_param(XcObject *self,
+static PyObject *pyxc_hvm_param_get(XcObject *self,
                                     PyObject *args,
                                     PyObject *kwds)
 {
     uint32_t dom;
     int param;
-    unsigned long value;
+    uint64_t value;
 
     static char *kwd_list[] = { "domid", "param", NULL }; 
     if ( !PyArg_ParseTupleAndKeywords(args, kwds, "ii", kwd_list,
                                       &dom, &param) )
         return NULL;
 
-    if ( xc_get_hvm_param(self->xc_handle, dom, param, &value) != 0 )
+    if ( xc_hvm_param_get(self->xc_handle, dom, param, &value) != 0 )
         return pyxc_error_to_exception(self->xc_handle);
 
-    return PyLong_FromUnsignedLong(value);
+    return PyLong_FromUnsignedLongLong(value);
 
 }
 
-static PyObject *pyxc_set_hvm_param(XcObject *self,
+static PyObject *pyxc_hvm_param_set(XcObject *self,
                                     PyObject *args,
                                     PyObject *kwds)
 {
@@ -577,7 +579,7 @@ static PyObject *pyxc_set_hvm_param(XcObject *self,
                                       &dom, &param, &value) )
         return NULL;
 
-    if ( xc_set_hvm_param(self->xc_handle, dom, param, value) != 0 )
+    if ( xc_hvm_param_set(self->xc_handle, dom, param, value) != 0 )
         return pyxc_error_to_exception(self->xc_handle);
 
     Py_INCREF(zero);
@@ -1087,7 +1089,7 @@ static PyObject *pyxc_readconsolering(XcObject *self,
 {
     unsigned int clear = 0, index = 0, incremental = 0;
     unsigned int count = 16384 + 1, size = count;
-    char        *str = malloc(size), *ptr;
+    char        *str, *ptr;
     PyObject    *obj;
     int          ret;
 
@@ -1095,15 +1097,17 @@ static PyObject *pyxc_readconsolering(XcObject *self,
 
     if ( !PyArg_ParseTupleAndKeywords(args, kwds, "|iii", kwd_list,
                                       &clear, &index, &incremental) ||
-         !str )
+         !(str = malloc(size)) )
         return NULL;
 
     ret = xc_readconsolering(self->xc_handle, str, &count, clear,
                              incremental, &index);
-    if ( ret < 0 )
+    if ( ret < 0 ) {
+        free(str);
         return pyxc_error_to_exception(self->xc_handle);
+    }
 
-    while ( !incremental && count == size )
+    while ( !incremental && count == size && ret >= 0 )
     {
         size += count - 1;
         if ( size < count )
@@ -1117,9 +1121,6 @@ static PyObject *pyxc_readconsolering(XcObject *self,
         count = size - count;
         ret = xc_readconsolering(self->xc_handle, str, &count, clear,
                                  1, &index);
-        if ( ret < 0 )
-            break;
-
         count += str - ptr;
         str = ptr;
     }
@@ -1181,6 +1182,40 @@ static PyObject *pyxc_physinfo(XcObject *self)
                             "cpu_khz",          pinfo.cpu_khz,
                             "hw_caps",          cpu_cap,
                             "virt_caps",        virt_caps);
+}
+
+static PyObject *pyxc_getcpuinfo(XcObject *self, PyObject *args, PyObject *kwds)
+{
+    xc_cpuinfo_t *cpuinfo, *cpuinfo_ptr;
+    PyObject *cpuinfo_list_obj, *cpuinfo_obj;
+    int max_cpus, nr_cpus, ret, i;
+    static char *kwd_list[] = { "max_cpus", NULL };
+    static char kwd_type[] = "i";
+
+    if(!PyArg_ParseTupleAndKeywords(args, kwds, kwd_type, kwd_list, &max_cpus))
+        return NULL;
+
+    cpuinfo = malloc(sizeof(xc_cpuinfo_t) * max_cpus);
+    if (!cpuinfo)
+        return NULL;
+
+    ret = xc_getcpuinfo(self->xc_handle, max_cpus, cpuinfo, &nr_cpus);
+    if (ret != 0) {
+        free(cpuinfo);
+        return pyxc_error_to_exception(self->xc_handle);
+    }
+
+    cpuinfo_list_obj = PyList_New(0);
+    cpuinfo_ptr = cpuinfo;
+    for (i = 0; i < nr_cpus; i++) {
+        cpuinfo_obj = Py_BuildValue("{s:k}", "idletime", cpuinfo_ptr->idletime);
+        PyList_Append(cpuinfo_list_obj, cpuinfo_obj);
+        cpuinfo_ptr++;
+    }
+
+    free(cpuinfo);
+
+    return cpuinfo_list_obj;
 }
 
 static PyObject *pyxc_topologyinfo(XcObject *self)
@@ -2090,8 +2125,6 @@ static PyObject *pyflask_context_to_sid(PyObject *self, PyObject *args,
 {
     xc_interface *xc_handle;
     char *ctx;
-    char *buf;
-    uint32_t len;
     uint32_t sid;
     int ret;
 
@@ -2101,28 +2134,15 @@ static PyObject *pyflask_context_to_sid(PyObject *self, PyObject *args,
                                       &ctx) )
         return NULL;
 
-    len = strlen(ctx);
-
-    buf = malloc(len);
-    if (!buf) {
-        errno = -ENOMEM;
-        PyErr_SetFromErrno(xc_error_obj);
-    }
-    
-    memcpy(buf, ctx, len);
-    
     xc_handle = xc_interface_open(0,0,0);
     if (!xc_handle) {
-        free(buf);
         return PyErr_SetFromErrno(xc_error_obj);
     }
-    
-    ret = xc_flask_context_to_sid(xc_handle, buf, len, &sid);
-        
+
+    ret = xc_flask_context_to_sid(xc_handle, ctx, strlen(ctx), &sid);
+
     xc_interface_close(xc_handle);
 
-    free(buf);
-    
     if ( ret != 0 ) {
         errno = -ret;
         return PyErr_SetFromErrno(xc_error_obj);
@@ -2446,7 +2466,7 @@ static PyMethodDef pyxc_methods[] = {
       "Returns: None on sucess. Raises exception on error.\n" },
 
     { "hvm_get_param", 
-      (PyCFunction)pyxc_get_hvm_param, 
+      (PyCFunction)pyxc_hvm_param_get,
       METH_VARARGS | METH_KEYWORDS, "\n"
       "get a parameter of HVM guest OS.\n"
       " dom     [int]:      Identifier of domain to build into.\n"
@@ -2454,7 +2474,7 @@ static PyMethodDef pyxc_methods[] = {
       "Returns: [long] value of the param.\n" },
 
     { "hvm_set_param", 
-      (PyCFunction)pyxc_set_hvm_param, 
+      (PyCFunction)pyxc_hvm_param_set,
       METH_VARARGS | METH_KEYWORDS, "\n"
       "set a parameter of HVM guest OS.\n"
       " dom     [int]:      Identifier of domain to build into.\n"
@@ -2609,6 +2629,13 @@ static PyMethodDef pyxc_methods[] = {
       METH_NOARGS, "\n"
       "Get information about the physical host machine\n"
       "Returns [dict]: information about the hardware"
+      "        [None]: on failure.\n" },
+
+    { "getcpuinfo",
+      (PyCFunction)pyxc_getcpuinfo,
+      METH_VARARGS | METH_KEYWORDS, "\n"
+      "Get information about physical CPUs\n"
+      "Returns [list]: information about physical CPUs"
       "        [None]: on failure.\n" },
 
     { "topologyinfo",

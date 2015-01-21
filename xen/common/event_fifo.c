@@ -185,8 +185,7 @@ static void evtchn_fifo_set_pending(struct vcpu *v, struct evtchn *evtchn)
         if ( unlikely(!v->evtchn_fifo->control_block) )
         {
             printk(XENLOG_G_WARNING
-                   "d%dv%d has no FIFO event channel control block\n",
-                   d->domain_id, v->vcpu_id);
+                   "%pv has no FIFO event channel control block\n", v);
             goto done;
         }
 
@@ -470,6 +469,7 @@ static void cleanup_event_array(struct domain *d)
     for ( i = 0; i < EVTCHN_FIFO_MAX_EVENT_ARRAY_PAGES; i++ )
         unmap_guest_page(d->evtchn_fifo->event_array[i]);
     xfree(d->evtchn_fifo);
+    d->evtchn_fifo = NULL;
 }
 
 static void setup_ports(struct domain *d)

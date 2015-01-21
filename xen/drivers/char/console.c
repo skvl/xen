@@ -28,6 +28,7 @@
 #include <asm/debugger.h>
 #include <asm/div64.h>
 #include <xen/hypercall.h> /* for do_console_io */
+#include <xen/early_printk.h>
 
 /* console: comma-separated list of console outputs. */
 static char __initdata opt_console[30] = OPT_CONSOLE_STR;
@@ -49,8 +50,18 @@ static bool_t __read_mostly opt_console_to_ring;
 boolean_param("console_to_ring", opt_console_to_ring);
 
 /* console_timestamps: include a timestamp prefix on every Xen console line. */
-static bool_t __read_mostly opt_console_timestamps;
-boolean_param("console_timestamps", opt_console_timestamps);
+enum con_timestamp_mode
+{
+    TSM_NONE,          /* No timestamps */
+    TSM_DATE,          /* [YYYY-MM-DD HH:MM:SS] */
+    TSM_DATE_MS,       /* [YYYY-MM-DD HH:MM:SS.mmm] */
+    TSM_BOOT           /* [SSSSSS.uuuuuu] */
+};
+
+static enum con_timestamp_mode __read_mostly opt_con_timestamp_mode = TSM_NONE;
+
+static void parse_console_timestamps(char *s);
+custom_param("console_timestamps", parse_console_timestamps);
 
 /* conring_size: allows a large console ring than default (16kB). */
 static uint32_t __initdata opt_conring_size;
@@ -245,7 +256,7 @@ long read_console_ring(struct xen_sysctl_readconsole *op)
 static char serial_rx_ring[SERIAL_RX_SIZE];
 static unsigned int serial_rx_cons, serial_rx_prod;
 
-static void (*serial_steal_fn)(const char *);
+static void (*serial_steal_fn)(const char *) = early_puts;
 
 int console_steal(int handle, void (*fn)(const char *))
 {
@@ -546,23 +557,69 @@ static int printk_prefix_check(char *p, char **pp)
             ((loglvl < upper_thresh) && printk_ratelimit()));
 } 
 
+static void __init parse_console_timestamps(char *s)
+{
+    switch ( parse_bool(s) )
+    {
+    case 0:
+        opt_con_timestamp_mode = TSM_NONE;
+        return;
+    case 1:
+        opt_con_timestamp_mode = TSM_DATE;
+        return;
+    }
+    if ( *s == '\0' || /* Compat for old booleanparam() */
+         !strcmp(s, "date") )
+        opt_con_timestamp_mode = TSM_DATE;
+    else if ( !strcmp(s, "datems") )
+        opt_con_timestamp_mode = TSM_DATE_MS;
+    else if ( !strcmp(s, "boot") )
+        opt_con_timestamp_mode = TSM_BOOT;
+    else if ( !strcmp(s, "none") )
+        opt_con_timestamp_mode = TSM_NONE;
+}
+
 static void printk_start_of_line(const char *prefix)
 {
     struct tm tm;
     char tstr[32];
+    uint64_t sec, nsec;
 
     __putstr(prefix);
 
-    if ( !opt_console_timestamps )
-        return;
+    switch ( opt_con_timestamp_mode )
+    {
+    case TSM_DATE:
+    case TSM_DATE_MS:
+        tm = wallclock_time(&nsec);
 
-    tm = wallclock_time();
-    if ( tm.tm_mday == 0 )
-        return;
+        if ( tm.tm_mday == 0 )
+            return;
 
-    snprintf(tstr, sizeof(tstr), "[%04u-%02u-%02u %02u:%02u:%02u] ",
-             1900 + tm.tm_year, tm.tm_mon + 1, tm.tm_mday,
-             tm.tm_hour, tm.tm_min, tm.tm_sec);
+        if ( opt_con_timestamp_mode == TSM_DATE )
+            snprintf(tstr, sizeof(tstr), "[%04u-%02u-%02u %02u:%02u:%02u] ",
+                     1900 + tm.tm_year, tm.tm_mon + 1, tm.tm_mday,
+                     tm.tm_hour, tm.tm_min, tm.tm_sec);
+        else
+            snprintf(tstr, sizeof(tstr),
+                     "[%04u-%02u-%02u %02u:%02u:%02u.%03"PRIu64"] ",
+                     1900 + tm.tm_year, tm.tm_mon + 1, tm.tm_mday,
+                     tm.tm_hour, tm.tm_min, tm.tm_sec, nsec / 1000000);
+        break;
+
+    case TSM_BOOT:
+        sec = NOW();
+        nsec = do_div(sec, 1000000000);
+
+        snprintf(tstr, sizeof(tstr), "[%5"PRIu64".%06"PRIu64"] ",
+                 sec, nsec / 1000);
+        break;
+
+    case TSM_NONE:
+    default:
+        return;
+    }
+
     __putstr(tstr);
 }
 
@@ -652,7 +709,10 @@ void __init console_init_preirq(void)
         else if ( !strncmp(p, "none", 4) )
             continue;
         else if ( (sh = serial_parse_handle(p)) >= 0 )
+        {
             sercon_handle = sh;
+            serial_steal_fn = NULL;
+        }
         else
         {
             char *q = strchr(p, ',');
@@ -681,15 +741,14 @@ void __init console_init_preirq(void)
     }
 }
 
-void __init console_init_postirq(void)
+void __init console_init_ring(void)
 {
     char *ring;
     unsigned int i, order, memflags;
-
-    serial_init_postirq();
+    unsigned long flags;
 
     if ( !opt_conring_size )
-        opt_conring_size = num_present_cpus() << (9 + xenlog_lower_thresh);
+        return;
 
     order = get_order_from_bytes(max(opt_conring_size, conring_size));
     memflags = MEMF_bits(crashinfo_maxaddr_bits);
@@ -700,15 +759,28 @@ void __init console_init_postirq(void)
     }
     opt_conring_size = PAGE_SIZE << order;
 
-    spin_lock_irq(&console_lock);
+    spin_lock_irqsave(&console_lock, flags);
     for ( i = conringc ; i != conringp; i++ )
         ring[i & (opt_conring_size - 1)] = conring[i & (conring_size - 1)];
     conring = ring;
     smp_wmb(); /* Allow users of console_force_unlock() to see larger buffer. */
     conring_size = opt_conring_size;
-    spin_unlock_irq(&console_lock);
+    spin_unlock_irqrestore(&console_lock, flags);
 
     printk("Allocated console ring of %u KiB.\n", opt_conring_size >> 10);
+}
+
+void __init console_init_postirq(void)
+{
+    serial_init_postirq();
+
+    if ( conring != _conring )
+        return;
+
+    if ( !opt_conring_size )
+        opt_conring_size = num_present_cpus() << (9 + xenlog_lower_thresh);
+
+    console_init_ring();
 }
 
 void __init console_endboot(void)
@@ -1070,14 +1142,9 @@ void panic(const char *fmt, ...)
 #endif
 
     if ( opt_noreboot )
-    {
         machine_halt();
-    }
     else
-    {
-        watchdog_disable();
         machine_restart(5000);
-    }
 }
 
 void __bug(char *file, int line)
@@ -1086,7 +1153,6 @@ void __bug(char *file, int line)
     printk("Xen BUG at %s:%d\n", file, line);
     dump_execution_state();
     panic("Xen BUG at %s:%d", file, line);
-    for ( ; ; ) ;
 }
 
 void __warn(char *file, int line)

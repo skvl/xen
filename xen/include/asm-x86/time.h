@@ -44,12 +44,9 @@ int time_resume(void);
 void init_percpu_time(void);
 
 struct ioreq;
-int dom0_pit_access(struct ioreq *ioreq);
+int hwdom_pit_access(struct ioreq *ioreq);
 
 int cpu_frequency_change(u64 freq);
-
-struct tm;
-struct tm wallclock_time(void);
 
 void pit_broadcast_enter(void);
 void pit_broadcast_exit(void);
@@ -74,9 +71,13 @@ void tsc_get_info(struct domain *d, uint32_t *tsc_mode, uint64_t *elapsed_nsec,
 void force_update_vcpu_system_time(struct vcpu *v);
 
 int host_tsc_is_safe(void);
-void cpuid_time_leaf(uint32_t sub_idx, unsigned int *eax, unsigned int *ebx,
-                      unsigned int *ecx, unsigned int *edx);
+void cpuid_time_leaf(uint32_t sub_idx, uint32_t *eax, uint32_t *ebx,
+                     uint32_t *ecx, uint32_t *edx);
 
 u64 stime2tsc(s_time_t stime);
+
+struct time_scale;
+void set_time_scale(struct time_scale *ts, u64 ticks_per_sec);
+u64 scale_delta(u64 delta, struct time_scale *scale);
 
 #endif /* __X86_TIME_H__ */

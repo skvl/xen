@@ -56,8 +56,20 @@ void test_xenbus(void);
 
 static void xenbus_tester(void *p)
 {
-    printk("Xenbus tests disabled, because of a Xend bug.\n");
-    /* test_xenbus(); */
+    test_xenbus();
+}
+#endif
+
+#ifndef HAVE_LIBC
+/* Should be random enough for our uses */
+int rand(void)
+{
+    static unsigned int previous;
+    struct timeval tv;
+    gettimeofday(&tv, NULL);
+    previous += tv.tv_sec + tv.tv_usec;
+    previous *= RAND_MIX;
+    return previous;
 }
 #endif
 

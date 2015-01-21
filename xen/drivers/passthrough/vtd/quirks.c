@@ -50,6 +50,11 @@
 #define IS_ILK(id)    (id == 0x00408086 || id == 0x00448086 || id== 0x00628086 || id == 0x006A8086)
 #define IS_CPT(id)    (id == 0x01008086 || id == 0x01048086)
 
+/* SandyBridge IGD timeouts in milliseconds */
+#define SNB_IGD_TIMEOUT_LEGACY    1000
+#define SNB_IGD_TIMEOUT            670
+static unsigned int snb_igd_timeout;
+
 static u32 __read_mostly ioh_id;
 static u32 __initdata igd_id;
 bool_t __read_mostly rwbf_quirk;
@@ -117,7 +122,7 @@ static void __init snb_errata_init(void)
  */
 static void __init map_igd_reg(void)
 {
-    u64 igd_mmio, igd_reg;
+    u64 igd_mmio;
 
     if ( !is_cantiga_b3 && !is_snb_gfx )
         return;
@@ -125,16 +130,10 @@ static void __init map_igd_reg(void)
     if ( igd_reg_va )
         return;
 
-    /* get IGD mmio address in PCI BAR */
-    igd_mmio = ((u64)pci_conf_read32(0, 0, IGD_DEV, 0, 0x14) << 32) +
-                     pci_conf_read32(0, 0, IGD_DEV, 0, 0x10);
-
-    /* offset of IGD regster we want to access is in 0x2000 range */
-    igd_reg = (igd_mmio & IGD_BAR_MASK) + 0x2000;
-
-    /* ioremap this physical page */
-    set_fixmap_nocache(FIX_IGD_MMIO, igd_reg);
-    igd_reg_va = (u8 *)fix_to_virt(FIX_IGD_MMIO);
+    igd_mmio   = pci_conf_read32(0, 0, IGD_DEV, 0, PCI_BASE_ADDRESS_1);
+    igd_mmio <<= 32;
+    igd_mmio  += pci_conf_read32(0, 0, IGD_DEV, 0, PCI_BASE_ADDRESS_0);
+    igd_reg_va = ioremap(igd_mmio & IGD_BAR_MASK, 0x3000);
 }
 
 /*
@@ -152,12 +151,10 @@ static int cantiga_vtd_ops_preamble(struct iommu* iommu)
         return 0;
 
     /*
-     * read IGD register at IGD MMIO + 0x20A4 to force IGD
-     * to exit low power state.  Since map_igd_reg()
-     * already mapped page starting 0x2000, we just need to
-     * add page offset 0x0A4 to virtual address base.
+     * Read IGD register at IGD MMIO + 0x20A4 to force IGD
+     * to exit low power state.
      */
-    return ( *((volatile int *)(igd_reg_va + 0x0A4)) );
+    return *(volatile int *)(igd_reg_va + 0x20A4);
 }
 
 /*
@@ -166,6 +163,16 @@ static int cantiga_vtd_ops_preamble(struct iommu* iommu)
  * Workaround is to prevent graphics get into RC6
  * state when doing VT-d IOTLB operations, do the VT-d
  * IOTLB operation, and then re-enable RC6 state.
+ *
+ * This quirk is enabled with the snb_igd_quirk command
+ * line parameter.  Specifying snb_igd_quirk with no value
+ * (or any of the standard boolean values) enables this
+ * quirk and sets the timeout to the legacy timeout of
+ * 1000 msec.  Setting this parameter to the string
+ * "cap" enables this quirk and sets the timeout to
+ * the theoretical maximum of 670 msec.  Setting this
+ * parameter to a numerical value enables the quirk and
+ * sets the timeout to that numerical number of msecs.
  */
 static void snb_vtd_ops_preamble(struct iommu* iommu)
 {
@@ -179,13 +186,13 @@ static void snb_vtd_ops_preamble(struct iommu* iommu)
     if ( !igd_reg_va )
         return;
 
-    *((volatile u32 *)(igd_reg_va + 0x54)) = 0x000FFFFF;
-    *((volatile u32 *)(igd_reg_va + 0x700)) = 0;
+    *(volatile u32 *)(igd_reg_va + 0x2054) = 0x000FFFFF;
+    *(volatile u32 *)(igd_reg_va + 0x2700) = 0;
 
     start_time = NOW();
-    while ( (*((volatile u32 *)(igd_reg_va + 0x2AC)) & 0xF) != 0 )
+    while ( (*(volatile u32 *)(igd_reg_va + 0x22AC) & 0xF) != 0 )
     {
-        if ( NOW() > start_time + DMAR_OPERATION_TIMEOUT )
+        if ( NOW() > start_time + snb_igd_timeout )
         {
             dprintk(XENLOG_INFO VTDPREFIX,
                     "snb_vtd_ops_preamble: failed to disable idle handshake\n");
@@ -194,7 +201,7 @@ static void snb_vtd_ops_preamble(struct iommu* iommu)
         cpu_relax();
     }
 
-    *((volatile u32*)(igd_reg_va + 0x50)) = 0x10001;
+    *(volatile u32 *)(igd_reg_va + 0x2050) = 0x10001;
 }
 
 static void snb_vtd_ops_postamble(struct iommu* iommu)
@@ -208,21 +215,18 @@ static void snb_vtd_ops_postamble(struct iommu* iommu)
     if ( !igd_reg_va )
         return;
 
-    *((volatile u32 *)(igd_reg_va + 0x54)) = 0xA;
-    *((volatile u32 *)(igd_reg_va + 0x50)) = 0x10000;
+    *(volatile u32 *)(igd_reg_va + 0x2054) = 0xA;
+    *(volatile u32 *)(igd_reg_va + 0x2050) = 0x10000;
 }
 
 /*
  * call before VT-d translation enable and IOTLB flush operations.
  */
 
-static int snb_igd_quirk;
-boolean_param("snb_igd_quirk", snb_igd_quirk);
-
 void vtd_ops_preamble_quirk(struct iommu* iommu)
 {
     cantiga_vtd_ops_preamble(iommu);
-    if ( snb_igd_quirk )
+    if ( snb_igd_timeout != 0 )
     {
         spin_lock(&igd_lock);
 
@@ -236,7 +240,7 @@ void vtd_ops_preamble_quirk(struct iommu* iommu)
  */
 void vtd_ops_postamble_quirk(struct iommu* iommu)
 {
-    if ( snb_igd_quirk )
+    if ( snb_igd_timeout != 0 )
     {
         snb_vtd_ops_postamble(iommu);
 
@@ -244,6 +248,28 @@ void vtd_ops_postamble_quirk(struct iommu* iommu)
         spin_unlock(&igd_lock);
     }
 }
+
+static void __init parse_snb_timeout(const char *s)
+{
+    int t;
+
+    t = parse_bool(s);
+    if ( t < 0 )
+    {
+        if ( *s == '\0' )
+            t = SNB_IGD_TIMEOUT_LEGACY;
+        else if ( strcmp(s, "cap") == 0 )
+            t = SNB_IGD_TIMEOUT;
+        else
+            t = strtoul(s, NULL, 0);
+    }
+    else
+        t = t ? SNB_IGD_TIMEOUT_LEGACY : 0;
+    snb_igd_timeout = MILLISECS(t);
+
+    return;
+}
+custom_param("snb_igd_quirk", parse_snb_timeout);
 
 /* 5500/5520/X58 Chipset Interrupt remapping errata, for stepping B-3.
  * Fixed in stepping C-2. */

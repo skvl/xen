@@ -276,7 +276,7 @@ struct dma_pte {
 #define dma_set_pte_snp(p)  do {(p).val |= DMA_PTE_SNP;} while(0)
 #define dma_set_pte_prot(p, prot) \
             do {(p).val = ((p).val & ~3) | ((prot) & 3); } while (0)
-#define dma_pte_addr(p) ((p).val & PAGE_MASK_4K)
+#define dma_pte_addr(p) ((p).val & PADDR_MASK & PAGE_MASK_4K)
 #define dma_set_pte_addr(p, addr) do {\
             (p).val |= ((addr) & PAGE_MASK_4K); } while (0)
 #define dma_pte_present(p) (((p).val & 3) != 0)
@@ -487,8 +487,6 @@ extern struct list_head acpi_ioapic_units;
 
 struct qi_ctrl {
     u64 qinval_maddr;  /* queue invalidation page machine address */
-    int qinval_index;                    /* queue invalidation index */
-    spinlock_t qinval_lock;      /* lock for queue invalidation page */
 };
 
 struct ir_ctrl {

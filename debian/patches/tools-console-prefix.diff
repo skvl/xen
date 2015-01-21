@@ -1,0 +1,33 @@
+From db197353e29273c49d85fa56e481234b19cdc15e Mon Sep 17 00:00:00 2001
+From: Bastian Blank <waldi@debian.org>
+Date: Sat, 5 Jul 2014 11:46:54 +0200
+Subject: tools-console-prefix.diff
+
+Patch-Name: tools-console-prefix.diff
+---
+ tools/console/Makefile | 5 ++---
+ 1 file changed, 2 insertions(+), 3 deletions(-)
+
+diff --git a/tools/console/Makefile b/tools/console/Makefile
+index 6e55618..3e96550 100644
+--- a/tools/console/Makefile
++++ b/tools/console/Makefile
+@@ -8,6 +8,7 @@ CFLAGS  += $(CFLAGS_libxenstore)
+ LDLIBS += $(LDLIBS_libxenctrl)
+ LDLIBS += $(LDLIBS_libxenstore)
+ LDLIBS += $(SOCKET_LIBS)
++LDFLAGS += $(call LDFLAGS_RPATH,../lib)
+ 
+ LDLIBS_xenconsoled += $(UTIL_LIBS)
+ LDLIBS_xenconsoled += -lrt
+@@ -30,9 +31,7 @@ xenconsole: $(patsubst %.c,%.o,$(wildcard client/*.c))
+ 
+ .PHONY: install
+ install: $(BIN)
+-	$(INSTALL_DIR) $(DESTDIR)/$(SBINDIR)
+-	$(INSTALL_PROG) xenconsoled $(DESTDIR)/$(SBINDIR)
+ 	$(INSTALL_DIR) $(DESTDIR)$(LIBEXEC_BIN)
+-	$(INSTALL_PROG) xenconsole $(DESTDIR)$(LIBEXEC_BIN)
++	$(INSTALL_PROG) xenconsole xenconsoled $(DESTDIR)$(LIBEXEC_BIN)
+ 
+ -include $(DEPS)

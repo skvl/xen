@@ -105,9 +105,9 @@ static void handle_pmc_quirk(u64 msr_content)
         if ( val & 0x1 )
         {
             u64 cnt;
-            rdmsrl(MSR_P6_PERFCTR0 + i, cnt);
+            rdmsrl(MSR_P6_PERFCTR(i), cnt);
             if ( cnt == 0 )
-                wrmsrl(MSR_P6_PERFCTR0 + i, 1);
+                wrmsrl(MSR_P6_PERFCTR(i), 1);
         }
         val >>= 1;
     }
@@ -238,11 +238,11 @@ static int is_core2_vpmu_msr(u32 msr_index, int *type, int *index)
         return 1;
     }
 
-    if ( (msr_index >= MSR_P6_EVNTSEL0) &&
-         (msr_index < (MSR_P6_EVNTSEL0 + core2_get_pmc_count())) )
+    if ( (msr_index >= MSR_P6_EVNTSEL(0)) &&
+         (msr_index < (MSR_P6_EVNTSEL(core2_get_pmc_count()))) )
     {
         *type = MSR_TYPE_ARCH_CTRL;
-        *index = msr_index - MSR_P6_EVNTSEL0;
+        *index = msr_index - MSR_P6_EVNTSEL(0);
         return 1;
     }
 
@@ -278,7 +278,7 @@ static void core2_vpmu_set_msr_bitmap(unsigned long *msr_bitmap)
     for ( i = 0; i < core2_ctrls.num; i++ )
         clear_bit(msraddr_to_bitpos(core2_ctrls.msr[i]), msr_bitmap);
     for ( i = 0; i < core2_get_pmc_count(); i++ )
-        clear_bit(msraddr_to_bitpos(MSR_P6_EVNTSEL0+i), msr_bitmap);
+        clear_bit(msraddr_to_bitpos(MSR_P6_EVNTSEL(i)), msr_bitmap);
 }
 
 static void core2_vpmu_unset_msr_bitmap(unsigned long *msr_bitmap)
@@ -308,7 +308,7 @@ static void core2_vpmu_unset_msr_bitmap(unsigned long *msr_bitmap)
     for ( i = 0; i < core2_ctrls.num; i++ )
         set_bit(msraddr_to_bitpos(core2_ctrls.msr[i]), msr_bitmap);
     for ( i = 0; i < core2_get_pmc_count(); i++ )
-        set_bit(msraddr_to_bitpos(MSR_P6_EVNTSEL0+i), msr_bitmap);
+        set_bit(msraddr_to_bitpos(MSR_P6_EVNTSEL(i)), msr_bitmap);
 }
 
 static inline void __core2_vpmu_save(struct vcpu *v)
@@ -359,7 +359,7 @@ static inline void __core2_vpmu_load(struct vcpu *v)
     for ( i = 0; i < core2_ctrls.num; i++ )
         wrmsrl(core2_ctrls.msr[i], core2_vpmu_cxt->ctrls[i]);
     for ( i = 0; i < core2_get_pmc_count(); i++ )
-        wrmsrl(MSR_P6_EVNTSEL0+i, core2_vpmu_cxt->arch_msr_pair[i].control);
+        wrmsrl(MSR_P6_EVNTSEL(i), core2_vpmu_cxt->arch_msr_pair[i].control);
 }
 
 static void core2_vpmu_load(struct vcpu *v)
@@ -368,6 +368,8 @@ static void core2_vpmu_load(struct vcpu *v)
 
     if ( vpmu_is_set(vpmu, VPMU_CONTEXT_LOADED) )
         return;
+
+    vpmu_set(vpmu, VPMU_CONTEXT_LOADED);
 
     __core2_vpmu_load(v);
 }
@@ -452,7 +454,8 @@ static int core2_vpmu_msr_common_check(u32 msr_index, int *type, int *index)
     return 1;
 }
 
-static int core2_vpmu_do_wrmsr(unsigned int msr, uint64_t msr_content)
+static int core2_vpmu_do_wrmsr(unsigned int msr, uint64_t msr_content,
+                               uint64_t supported)
 {
     u64 global_ctrl, non_global_ctrl;
     char pmu_enable = 0;
@@ -467,23 +470,25 @@ static int core2_vpmu_do_wrmsr(unsigned int msr, uint64_t msr_content)
         /* Special handling for BTS */
         if ( msr == MSR_IA32_DEBUGCTLMSR )
         {
-            uint64_t supported = IA32_DEBUGCTLMSR_TR | IA32_DEBUGCTLMSR_BTS |
-                                 IA32_DEBUGCTLMSR_BTINT;
+            supported |= IA32_DEBUGCTLMSR_TR | IA32_DEBUGCTLMSR_BTS |
+                         IA32_DEBUGCTLMSR_BTINT;
 
             if ( cpu_has(&current_cpu_data, X86_FEATURE_DSCPL) )
                 supported |= IA32_DEBUGCTLMSR_BTS_OFF_OS |
                              IA32_DEBUGCTLMSR_BTS_OFF_USR;
-            if ( msr_content & supported )
-            {
-                if ( vpmu_is_set(vpmu, VPMU_CPU_HAS_BTS) )
-                    return 1;
-                gdprintk(XENLOG_WARNING, "Debug Store is not supported on this cpu\n");
-                hvm_inject_hw_exception(TRAP_gp_fault, 0);
-                return 0;
-            }
+            if ( !(msr_content & ~supported) &&
+                 vpmu_is_set(vpmu, VPMU_CPU_HAS_BTS) )
+                return 1;
+            if ( (msr_content & supported) &&
+                 !vpmu_is_set(vpmu, VPMU_CPU_HAS_BTS) )
+                printk(XENLOG_G_WARNING
+                       "%pv: Debug Store unsupported on this CPU\n",
+                       current);
         }
         return 0;
     }
+
+    ASSERT(!supported);
 
     core2_vpmu_cxt = vpmu->context;
     switch ( msr )
@@ -521,7 +526,7 @@ static int core2_vpmu_do_wrmsr(unsigned int msr, uint64_t msr_content)
         global_ctrl = msr_content;
         for ( i = 0; i < core2_get_pmc_count(); i++ )
         {
-            rdmsrl(MSR_P6_EVNTSEL0+i, non_global_ctrl);
+            rdmsrl(MSR_P6_EVNTSEL(i), non_global_ctrl);
             core2_vpmu_cxt->pmu_enable->arch_pmc_enable[i] =
                     global_ctrl & (non_global_ctrl >> 22) & 1;
             global_ctrl >>= 1;
@@ -550,7 +555,7 @@ static int core2_vpmu_do_wrmsr(unsigned int msr, uint64_t msr_content)
         }
         break;
     default:
-        tmp = msr - MSR_P6_EVNTSEL0;
+        tmp = msr - MSR_P6_EVNTSEL(0);
         vmx_read_guest_msr(MSR_CORE_PERF_GLOBAL_CTRL, &global_ctrl);
         if ( tmp >= 0 && tmp < core2_get_pmc_count() )
             core2_vpmu_cxt->pmu_enable->arch_pmc_enable[tmp] =
@@ -759,19 +764,19 @@ static int core2_vpmu_initialise(struct vcpu *v, unsigned int vpmu_flags)
 {
     struct vpmu_struct *vpmu = vcpu_vpmu(v);
     u64 msr_content;
-    struct cpuinfo_x86 *c = &current_cpu_data;
+    static bool_t ds_warned;
 
     if ( !(vpmu_flags & VPMU_BOOT_BTS) )
         goto func_out;
     /* Check the 'Debug Store' feature in the CPUID.EAX[1]:EDX[21] */
-    if ( cpu_has(c, X86_FEATURE_DS) )
+    while ( boot_cpu_has(X86_FEATURE_DS) )
     {
-        if ( !cpu_has(c, X86_FEATURE_DTES64) )
+        if ( !boot_cpu_has(X86_FEATURE_DTES64) )
         {
-            printk(XENLOG_G_WARNING "CPU doesn't support 64-bit DS Area"
-                   " - Debug Store disabled for d%d:v%d\n",
-                   v->domain->domain_id, v->vcpu_id);
-            goto func_out;
+            if ( !ds_warned )
+                printk(XENLOG_G_WARNING "CPU doesn't support 64-bit DS Area"
+                       " - Debug Store disabled for guests\n");
+            break;
         }
         vpmu_set(vpmu, VPMU_CPU_HAS_DS);
         rdmsrl(MSR_IA32_MISC_ENABLE, msr_content);
@@ -779,14 +784,16 @@ static int core2_vpmu_initialise(struct vcpu *v, unsigned int vpmu_flags)
         {
             /* If BTS_UNAVAIL is set reset the DS feature. */
             vpmu_reset(vpmu, VPMU_CPU_HAS_DS);
-            printk(XENLOG_G_WARNING "CPU has set BTS_UNAVAIL"
-                   " - Debug Store disabled for d%d:v%d\n",
-                   v->domain->domain_id, v->vcpu_id);
+            if ( !ds_warned )
+                printk(XENLOG_G_WARNING "CPU has set BTS_UNAVAIL"
+                       " - Debug Store disabled for guests\n");
+            break;
         }
-        else
+
+        vpmu_set(vpmu, VPMU_CPU_HAS_BTS);
+        if ( !ds_warned )
         {
-            vpmu_set(vpmu, VPMU_CPU_HAS_BTS);
-            if ( !cpu_has(c, X86_FEATURE_DSCPL) )
+            if ( !boot_cpu_has(X86_FEATURE_DSCPL) )
                 printk(XENLOG_G_INFO
                        "vpmu: CPU doesn't support CPL-Qualified BTS\n");
             printk("******************************************************\n");
@@ -798,8 +805,10 @@ static int core2_vpmu_initialise(struct vcpu *v, unsigned int vpmu_flags)
             printk("** It is NOT recommended for production use!        **\n");
             printk("******************************************************\n");
         }
+        break;
     }
-func_out:
+    ds_warned = 1;
+ func_out:
     check_pmc_quirk();
     return 0;
 }
@@ -809,8 +818,6 @@ static void core2_vpmu_destroy(struct vcpu *v)
     struct vpmu_struct *vpmu = vcpu_vpmu(v);
     struct core2_vpmu_context *core2_vpmu_cxt = vpmu->context;
 
-    if ( !vpmu_is_set(vpmu, VPMU_CONTEXT_ALLOCATED) )
-        return;
     xfree(core2_vpmu_cxt->pmu_enable);
     xfree(vpmu->context);
     if ( cpu_has_vmx_msr_bitmap )

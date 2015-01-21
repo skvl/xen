@@ -11,9 +11,13 @@
 #include <xen/device_tree.h>
 #include <xen/libfdt/libfdt.h>
 #include <xen/guest_access.h>
+#include <xen/iocap.h>
+#include <asm/device.h>
 #include <asm/setup.h>
 #include <asm/platform.h>
 #include <asm/psci.h>
+#include <asm/setup.h>
+#include <asm/cpufeature.h>
 
 #include <asm/gic.h>
 #include <xen/irq.h>
@@ -43,6 +47,13 @@ custom_param("dom0_mem", parse_dom0_mem);
 # define DPRINT(fmt, args...) do {} while ( 0 )
 #endif
 
+//#define DEBUG_11_ALLOCATION
+#ifdef DEBUG_11_ALLOCATION
+# define D11PRINT(fmt, args...) printk(XENLOG_DEBUG fmt, ##args)
+#else
+# define D11PRINT(fmt, args...) do {} while ( 0 )
+#endif
+
 /*
  * Amount of extra space required to dom0's device tree.  No new nodes
  * are added (yet) but one terminating reserve map entry (16 bytes) is
@@ -50,7 +61,7 @@ custom_param("dom0_mem", parse_dom0_mem);
  */
 #define DOM0_FDT_EXTRA_SIZE (128 + sizeof(struct fdt_reserve_entry))
 
-struct vcpu *__init alloc_dom0_vcpu0(void)
+struct vcpu *__init alloc_dom0_vcpu0(struct domain *dom0)
 {
     if ( opt_dom0_max_vcpus == 0 )
         opt_dom0_max_vcpus = num_online_cpus();
@@ -65,43 +76,276 @@ struct vcpu *__init alloc_dom0_vcpu0(void)
     return alloc_vcpu(dom0, 0, 0);
 }
 
-static void allocate_memory_11(struct domain *d, struct kernel_info *kinfo)
+static unsigned int get_11_allocation_size(paddr_t size)
 {
-    paddr_t start;
-    paddr_t size;
-    struct page_info *pg = NULL;
-    unsigned int order = get_order_from_bytes(dom0_mem);
-    int res;
+    /*
+     * get_order_from_bytes returns the order greater than or equal to
+     * the given size, but we need less than or equal. Adding one to
+     * the size pushes an evenly aligned size into the next order, so
+     * we can then unconditionally subtract 1 from the order which is
+     * returned.
+     */
+    return get_order_from_bytes(size + 1) - 1;
+}
+
+/*
+ * Insert the given pages into a memory bank, banks are ordered by address.
+ *
+ * Returns false if the memory would be below bank 0 or we have run
+ * out of banks. In this case it will free the pages.
+ */
+static bool_t insert_11_bank(struct domain *d,
+                             struct kernel_info *kinfo,
+                             struct page_info *pg,
+                             unsigned int order)
+{
+    int res, i;
     paddr_t spfn;
-    unsigned int bits;
-
-    for ( bits = PAGE_SHIFT + 1; bits < PADDR_BITS; bits++ )
-    {
-        pg = alloc_domheap_pages(d, order, MEMF_bits(bits));
-        if ( pg != NULL )
-            break;
-    }
-
-    if ( !pg )
-        panic("Failed to allocate contiguous memory for dom0");
+    paddr_t start, size;
 
     spfn = page_to_mfn(pg);
     start = pfn_to_paddr(spfn);
     size = pfn_to_paddr((1 << order));
 
-    // 1:1 mapping
-    printk("Populate P2M %#"PRIx64"->%#"PRIx64" (1:1 mapping for dom0)\n",
-           start, start + size);
+    D11PRINT("Allocated %#"PRIpaddr"-%#"PRIpaddr" (%ldMB/%ldMB, order %d)\n",
+             start, start + size,
+             1UL << (order+PAGE_SHIFT-20),
+             /* Don't want format this as PRIpaddr (16 digit hex) */
+             (unsigned long)(kinfo->unassigned_mem >> 20),
+             order);
+
+    if ( kinfo->mem.nr_banks > 0 &&
+         size < MB(128) &&
+         start + size < kinfo->mem.bank[0].start )
+    {
+        D11PRINT("Allocation below bank 0 is too small, not using\n");
+        goto fail;
+    }
+
     res = guest_physmap_add_page(d, spfn, spfn, order);
-
     if ( res )
-        panic("Unable to add pages in DOM0: %d", res);
-
-    kinfo->mem.bank[0].start = start;
-    kinfo->mem.bank[0].size = size;
-    kinfo->mem.nr_banks = 1;
+        panic("Failed map pages to DOM0: %d", res);
 
     kinfo->unassigned_mem -= size;
+
+    if ( kinfo->mem.nr_banks == 0 )
+    {
+        kinfo->mem.bank[0].start = start;
+        kinfo->mem.bank[0].size = size;
+        kinfo->mem.nr_banks = 1;
+        return true;
+    }
+
+    for( i = 0; i < kinfo->mem.nr_banks; i++ )
+    {
+        struct membank *bank = &kinfo->mem.bank[i];
+
+        /* If possible merge new memory into the start of the bank */
+        if ( bank->start == start+size )
+        {
+            bank->start = start;
+            bank->size += size;
+            return true;
+        }
+
+        /* If possible merge new memory onto the end of the bank */
+        if ( start == bank->start + bank->size )
+        {
+            bank->size += size;
+            return true;
+        }
+
+        /*
+         * Otherwise if it is below this bank insert new memory in a
+         * new bank before this one. If there was a lower bank we
+         * could have inserted the memory into/before we would already
+         * have done so, so this must be the right place.
+         */
+        if ( start + size < bank->start && kinfo->mem.nr_banks < NR_MEM_BANKS )
+        {
+            memmove(bank + 1, bank, sizeof(*bank)*(kinfo->mem.nr_banks - i));
+            kinfo->mem.nr_banks++;
+            bank->start = start;
+            bank->size = size;
+            return true;
+        }
+    }
+
+    if ( i == kinfo->mem.nr_banks && kinfo->mem.nr_banks < NR_MEM_BANKS )
+    {
+        struct membank *bank = &kinfo->mem.bank[kinfo->mem.nr_banks];
+
+        bank->start = start;
+        bank->size = size;
+        kinfo->mem.nr_banks++;
+        return true;
+    }
+
+    /* If we get here then there are no more banks to fill. */
+
+fail:
+    free_domheap_pages(pg, order);
+    return false;
+}
+
+/*
+ * This is all pretty horrible.
+ *
+ * Requirements:
+ *
+ * 1. The dom0 kernel should be loaded within the first 128MB of RAM. This
+ *    is necessary at least for Linux zImage kernels, which are all we
+ *    support today.
+ * 2. We want to put the dom0 kernel, ramdisk and DTB in the same
+ *    bank. Partly this is just easier for us to deal with, but also
+ *    the ramdisk and DTB must be placed within a certain proximity of
+ *    the kernel within RAM.
+ * 3. For 32-bit dom0 we want to place as much of the RAM as we
+ *    reasonably can below 4GB, so that it can be used by non-LPAE
+ *    enabled kernels.
+ * 4. For 32-bit dom0 the kernel must be located below 4GB.
+ * 5. We want to have a few largers banks rather than many smaller ones.
+ *
+ * For the first two requirements we need to make sure that the lowest
+ * bank is sufficiently large.
+ *
+ * For convenience we also sort the banks by physical address.
+ *
+ * The memory allocator does not really give us the flexibility to
+ * meet these requirements directly. So instead of proceed as follows:
+ *
+ * We first allocate the largest allocation we can as low as we
+ * can. This then becomes the first bank. This bank must be at least
+ * 128MB (or dom0_mem if that is smaller).
+ *
+ * Then we start allocating more memory, trying to allocate the
+ * largest possible size and trying smaller sizes until we
+ * successfully allocate something.
+ *
+ * We then try and insert this memory in to the list of banks. If it
+ * can be merged into an existing bank then this is trivial.
+ *
+ * If the new memory is before the first bank (and cannot be merged into it)
+ * and is at least 128M then we allow it, otherwise we give up. Since the
+ * allocator prefers to allocate high addresses first and the first bank has
+ * already been allocated to be as low as possible this likely means we
+ * wouldn't have been able to allocate much more memory anyway.
+ *
+ * Otherwise we insert a new bank. If we've reached MAX_NR_BANKS then
+ * we give up.
+ *
+ * For 32-bit domain we require that the initial allocation for the
+ * first bank is under 4G. Then for the subsequent allocations we
+ * initially allocate memory only from below 4GB. Once that runs out
+ * (as described above) we allow higher allocations and continue until
+ * that runs out (or we have allocated sufficient dom0 memory).
+ */
+static void allocate_memory_11(struct domain *d, struct kernel_info *kinfo)
+{
+    const unsigned int min_low_order =
+        get_order_from_bytes(min_t(paddr_t, dom0_mem, MB(128)));
+    const unsigned int min_order = get_order_from_bytes(MB(4));
+    struct page_info *pg;
+    unsigned int order = get_11_allocation_size(kinfo->unassigned_mem);
+    int i;
+
+    bool_t lowmem = is_32bit_domain(d);
+    unsigned int bits;
+
+    printk("Allocating 1:1 mappings totalling %ldMB for dom0:\n",
+           /* Don't want format this as PRIpaddr (16 digit hex) */
+           (unsigned long)(kinfo->unassigned_mem >> 20));
+
+    kinfo->mem.nr_banks = 0;
+
+    /*
+     * First try and allocate the largest thing we can as low as
+     * possible to be bank 0.
+     */
+    while ( order >= min_low_order )
+    {
+        for ( bits = order ; bits <= (lowmem ? 32 : PADDR_BITS); bits++ )
+        {
+            pg = alloc_domheap_pages(d, order, MEMF_bits(bits));
+            if ( pg != NULL )
+                goto got_bank0;
+        }
+        order--;
+    }
+
+    panic("Unable to allocate first memory bank");
+
+ got_bank0:
+
+    if ( !insert_11_bank(d, kinfo, pg, order) )
+        BUG(); /* Cannot fail for first bank */
+
+    /* Now allocate more memory and fill in additional banks */
+
+    order = get_11_allocation_size(kinfo->unassigned_mem);
+    while ( kinfo->unassigned_mem && kinfo->mem.nr_banks < NR_MEM_BANKS )
+    {
+        pg = alloc_domheap_pages(d, order, lowmem ? MEMF_bits(32) : 0);
+        if ( !pg )
+        {
+            order --;
+
+            if ( lowmem && order < min_low_order)
+            {
+                D11PRINT("Failed at min_low_order, allow high allocations\n");
+                order = get_11_allocation_size(kinfo->unassigned_mem);
+                lowmem = false;
+                continue;
+            }
+            if ( order >= min_order )
+                continue;
+
+            /* No more we can do */
+            break;
+        }
+
+        if ( !insert_11_bank(d, kinfo, pg, order) )
+        {
+            if ( kinfo->mem.nr_banks == NR_MEM_BANKS )
+                /* Nothing more we can do. */
+                break;
+
+            if ( lowmem )
+            {
+                D11PRINT("Allocation below bank 0, allow high allocations\n");
+                order = get_11_allocation_size(kinfo->unassigned_mem);
+                lowmem = false;
+                continue;
+            }
+            else
+            {
+                D11PRINT("Allocation below bank 0\n");
+                break;
+            }
+        }
+
+        /*
+         * Success, next time around try again to get the largest order
+         * allocation possible.
+         */
+        order = get_11_allocation_size(kinfo->unassigned_mem);
+    }
+
+    if ( kinfo->unassigned_mem )
+        printk("WARNING: Failed to allocate requested dom0 memory."
+               /* Don't want format this as PRIpaddr (16 digit hex) */
+               " %ldMB unallocated\n",
+               (unsigned long)kinfo->unassigned_mem >> 20);
+
+    for( i = 0; i < kinfo->mem.nr_banks; i++ )
+    {
+        printk("BANK[%d] %#"PRIpaddr"-%#"PRIpaddr" (%ldMB)\n",
+               i,
+               kinfo->mem.bank[i].start,
+               kinfo->mem.bank[i].start + kinfo->mem.bank[i].size,
+               /* Don't want format this as PRIpaddr (16 digit hex) */
+               (unsigned long)(kinfo->mem.bank[i].size >> 20));
+    }
 }
 
 static void allocate_memory(struct domain *d, struct kernel_info *kinfo)
@@ -162,9 +406,10 @@ static int write_properties(struct domain *d, struct kernel_info *kinfo,
     int res = 0;
     int had_dom0_bootargs = 0;
 
-    if ( early_info.modules.nr_mods >= MOD_KERNEL &&
-         early_info.modules.module[MOD_KERNEL].cmdline[0] )
-        bootargs = &early_info.modules.module[MOD_KERNEL].cmdline[0];
+    const struct bootmodule *mod = kinfo->kernel_bootmodule;
+
+    if ( mod && mod->cmdline[0] )
+        bootargs = &mod->cmdline[0];
 
     dt_for_each_property_node (node, prop)
     {
@@ -179,12 +424,21 @@ static int write_properties(struct domain *d, struct kernel_info *kinfo,
          *   bootargs (from module #1, above).
          * * remove bootargs,  xen,dom0-bootargs, xen,xen-bootargs,
          *   linux,initrd-start and linux,initrd-end.
+         * * remove bootargs, linux,uefi-system-table,
+         *   linux,uefi-mmap-start, linux,uefi-mmap-size,
+         *   linux,uefi-mmap-desc-size, and linux,uefi-mmap-desc-ver
+         *   (since EFI boot is not currently supported in dom0).
          */
         if ( dt_node_path_is_equal(node, "/chosen") )
         {
             if ( dt_property_name_is_equal(prop, "xen,xen-bootargs") ||
                  dt_property_name_is_equal(prop, "linux,initrd-start") ||
-                 dt_property_name_is_equal(prop, "linux,initrd-end") )
+                 dt_property_name_is_equal(prop, "linux,initrd-end") ||
+                 dt_property_name_is_equal(prop, "linux,uefi-system-table") ||
+                 dt_property_name_is_equal(prop, "linux,uefi-mmap-start") ||
+                 dt_property_name_is_equal(prop, "linux,uefi-mmap-size") ||
+                 dt_property_name_is_equal(prop, "linux,uefi-mmap-desc-size") ||
+                 dt_property_name_is_equal(prop, "linux,uefi-mmap-desc-ver"))
                 continue;
 
             if ( dt_property_name_is_equal(prop, "xen,dom0-bootargs") )
@@ -211,6 +465,8 @@ static int write_properties(struct domain *d, struct kernel_info *kinfo,
 
     if ( dt_node_path_is_equal(node, "/chosen") )
     {
+        const struct bootmodule *mod = kinfo->initrd_bootmodule;
+
         if ( bootargs )
         {
             res = fdt_property(kinfo->fdt, "bootargs", bootargs,
@@ -223,7 +479,7 @@ static int write_properties(struct domain *d, struct kernel_info *kinfo,
          * If the bootloader provides an initrd, we must create a placeholder
          * for the initrd properties. The values will be replaced later.
          */
-        if ( early_info.modules.module[MOD_INITRD].size )
+        if ( mod && mod->size )
         {
             u64 a = 0;
             res = fdt_property(kinfo->fdt, "linux,initrd-start", &a, sizeof(a));
@@ -391,6 +647,9 @@ static int make_hypervisor_node(struct domain *d,
 static int make_psci_node(void *fdt, const struct dt_device_node *parent)
 {
     int res;
+    const char compat[] =
+        "arm,psci-0.2""\0"
+        "arm,psci";
 
     DPRINT("Create PSCI node\n");
 
@@ -399,7 +658,7 @@ static int make_psci_node(void *fdt, const struct dt_device_node *parent)
     if ( res )
         return res;
 
-    res = fdt_property_string(fdt, "compatible", "arm,psci");
+    res = fdt_property(fdt, "compatible", compat, sizeof(compat));
     if ( res )
         return res;
 
@@ -507,7 +766,7 @@ static int make_cpus_node(const struct domain *d, void *fdt,
                 return res;
         }
 
-        if ( is_pv64_domain(d) )
+        if ( is_64bit_domain(d) )
         {
             res = fdt_property_string(fdt, "enable-method", "psci");
             if ( res )
@@ -528,10 +787,9 @@ static int make_gic_node(const struct domain *d, void *fdt,
                          const struct dt_device_node *node)
 {
     const struct dt_device_node *gic = dt_interrupt_controller;
-    const void *compatible = NULL;
-    u32 len;
-    __be32 *new_cells, *tmp;
     int res = 0;
+    const void *addrcells;
+    u32 addrcells_len;
 
     /*
      * Xen currently supports only a single GIC. Discard any secondary
@@ -545,48 +803,7 @@ static int make_gic_node(const struct domain *d, void *fdt,
 
     DPRINT("Create gic node\n");
 
-    compatible = dt_get_property(gic, "compatible", &len);
-    if ( !compatible )
-    {
-        dprintk(XENLOG_ERR, "Can't find compatible property for the gic node\n");
-        return -FDT_ERR_XEN(ENOENT);
-    }
-
-    res = fdt_begin_node(fdt, "interrupt-controller");
-    if ( res )
-        return res;
-
-    res = fdt_property(fdt, "compatible", compatible, len);
-    if ( res )
-        return res;
-
-    res = fdt_property_cell(fdt, "#interrupt-cells", 3);
-    if ( res )
-        return res;
-
-    res = fdt_property(fdt, "interrupt-controller", NULL, 0);
-
-    if ( res )
-        return res;
-
-    len = dt_cells_to_size(dt_n_addr_cells(node) + dt_n_size_cells(node));
-    len *= 2; /* GIC has two memory regions: Distributor + CPU interface */
-    new_cells = xzalloc_bytes(len);
-    if ( new_cells == NULL )
-        return -FDT_ERR_XEN(ENOMEM);
-
-    tmp = new_cells;
-    DPRINT("  Set Distributor Base 0x%"PRIpaddr"-0x%"PRIpaddr"\n",
-           d->arch.vgic.dbase, d->arch.vgic.dbase + PAGE_SIZE - 1);
-    dt_set_range(&tmp, node, d->arch.vgic.dbase, PAGE_SIZE);
-
-    DPRINT("  Set Cpu Base 0x%"PRIpaddr"-0x%"PRIpaddr"\n",
-           d->arch.vgic.cbase, d->arch.vgic.cbase + (PAGE_SIZE * 2) - 1);
-    dt_set_range(&tmp, node, d->arch.vgic.cbase, PAGE_SIZE * 2);
-
-    res = fdt_property(fdt, "reg", new_cells, len);
-    xfree(new_cells);
-
+    res = gic_make_node(d, node, fdt);
     if ( res )
         return res;
 
@@ -598,6 +815,14 @@ static int make_gic_node(const struct domain *d, void *fdt,
     {
         DPRINT("  Set phandle = 0x%x\n", gic->phandle);
         res = fdt_property_cell(fdt, "phandle", gic->phandle);
+        if ( res )
+            return res;
+    }
+
+    addrcells = dt_get_property(gic, "#address-cells", &addrcells_len);
+    if ( addrcells )
+    {
+        res = fdt_property(fdt, "#address-cells", addrcells, addrcells_len);
         if ( res )
             return res;
     }
@@ -620,8 +845,10 @@ static int make_timer_node(const struct domain *d, void *fdt,
     u32 len;
     const void *compatible;
     int res;
-    const struct dt_irq *irq;
+    unsigned int irq;
     gic_interrupt_t intrs[3];
+    u32 clock_frequency;
+    bool_t clock_valid;
 
     DPRINT("Create timer node\n");
 
@@ -647,21 +874,33 @@ static int make_timer_node(const struct domain *d, void *fdt,
     if ( res )
         return res;
 
-    irq = timer_dt_irq(TIMER_PHYS_SECURE_PPI);
-    DPRINT("  Secure interrupt %u\n", irq->irq);
-    set_interrupt_ppi(intrs[0], irq->irq, 0xf, irq->type);
+    /* The timer IRQ is emulated by Xen. It always exposes an active-low
+     * level-sensitive interrupt */
 
-    irq = timer_dt_irq(TIMER_PHYS_NONSECURE_PPI);
-    DPRINT("  Non secure interrupt %u\n", irq->irq);
-    set_interrupt_ppi(intrs[1], irq->irq, 0xf, irq->type);
+    irq = timer_get_irq(TIMER_PHYS_SECURE_PPI);
+    DPRINT("  Secure interrupt %u\n", irq);
+    set_interrupt_ppi(intrs[0], irq, 0xf, DT_IRQ_TYPE_LEVEL_LOW);
 
-    irq = timer_dt_irq(TIMER_VIRT_PPI);
-    DPRINT("  Virt interrupt %u\n", irq->irq);
-    set_interrupt_ppi(intrs[2], irq->irq, 0xf, irq->type);
+    irq = timer_get_irq(TIMER_PHYS_NONSECURE_PPI);
+    DPRINT("  Non secure interrupt %u\n", irq);
+    set_interrupt_ppi(intrs[1], irq, 0xf, DT_IRQ_TYPE_LEVEL_LOW);
+
+    irq = timer_get_irq(TIMER_VIRT_PPI);
+    DPRINT("  Virt interrupt %u\n", irq);
+    set_interrupt_ppi(intrs[2], irq, 0xf, DT_IRQ_TYPE_LEVEL_LOW);
 
     res = fdt_property_interrupts(fdt, intrs, 3);
     if ( res )
         return res;
+
+    clock_valid = dt_property_read_u32(dev, "clock-frequency",
+                                       &clock_frequency);
+    if ( clock_valid )
+    {
+        res = fdt_property_cell(fdt, "clock-frequency", clock_frequency);
+        if ( res )
+            return res;
+    }
 
     res = fdt_end_node(fdt);
 
@@ -669,13 +908,13 @@ static int make_timer_node(const struct domain *d, void *fdt,
 }
 
 /* Map the device in the domain */
-static int map_device(struct domain *d, const struct dt_device_node *dev)
+static int map_device(struct domain *d, struct dt_device_node *dev)
 {
     unsigned int nirq;
     unsigned int naddr;
     unsigned int i;
     int res;
-    struct dt_irq irq;
+    unsigned int irq;
     struct dt_raw_irq rirq;
     u64 addr, size;
 
@@ -683,6 +922,18 @@ static int map_device(struct domain *d, const struct dt_device_node *dev)
     naddr = dt_number_of_address(dev);
 
     DPRINT("%s nirq = %d naddr = %u\n", dt_node_full_name(dev), nirq, naddr);
+
+    if ( dt_device_is_protected(dev) )
+    {
+        DPRINT("%s setup iommu\n", dt_node_full_name(dev));
+        res = iommu_assign_dt_device(d, dev);
+        if ( res )
+        {
+            printk(XENLOG_ERR "Failed to setup the IOMMU for %s\n",
+                   dt_node_full_name(dev));
+            return res;
+        }
+    }
 
     /* Map IRQs */
     for ( i = 0; i < nirq; i++ )
@@ -706,17 +957,24 @@ static int map_device(struct domain *d, const struct dt_device_node *dev)
             continue;
         }
 
-        res = dt_irq_translate(&rirq, &irq);
-        if ( res )
+        res = platform_get_irq(dev, i);
+        if ( res < 0 )
         {
-            printk(XENLOG_ERR "Unable to translate irq %u for %s\n",
+            printk(XENLOG_ERR "Unable to get irq %u for %s\n",
                    i, dt_node_full_name(dev));
             return res;
         }
 
-        DPRINT("irq %u = %u type = 0x%x\n", i, irq.irq, irq.type);
-        /* Don't check return because the IRQ can be use by multiple device */
-        gic_route_irq_to_guest(d, &irq, dt_node_name(dev));
+        irq = res;
+
+        DPRINT("irq %u = %u\n", i, irq);
+        res = route_irq_to_guest(d, irq, dt_node_name(dev));
+        if ( res )
+        {
+            printk(XENLOG_ERR "Unable to route IRQ %u to domain %u\n",
+                   irq, d->domain_id);
+            return res;
+        }
     }
 
     /* Map the address ranges */
@@ -733,14 +991,26 @@ static int map_device(struct domain *d, const struct dt_device_node *dev)
         DPRINT("addr %u = 0x%"PRIx64" - 0x%"PRIx64"\n",
                i, addr, addr + size - 1);
 
-        res = map_mmio_regions(d, addr & PAGE_MASK,
-                               PAGE_ALIGN(addr + size) - 1,
-                               addr & PAGE_MASK);
+        res = iomem_permit_access(d, paddr_to_pfn(addr & PAGE_MASK),
+                                  paddr_to_pfn(PAGE_ALIGN(addr + size - 1)));
+        if ( res )
+        {
+            printk(XENLOG_ERR "Unable to permit to dom%d access to"
+                   " 0x%"PRIx64" - 0x%"PRIx64"\n",
+                   d->domain_id,
+                   addr & PAGE_MASK, PAGE_ALIGN(addr + size) - 1);
+            return res;
+        }
+        res = map_mmio_regions(d,
+                               paddr_to_pfn(addr & PAGE_MASK),
+                               DIV_ROUND_UP(size, PAGE_SIZE),
+                               paddr_to_pfn(addr & PAGE_MASK));
         if ( res )
         {
             printk(XENLOG_ERR "Unable to map 0x%"PRIx64
-                   " - 0x%"PRIx64" in dom0\n",
-                   addr & PAGE_MASK, PAGE_ALIGN(addr + size) - 1);
+                   " - 0x%"PRIx64" in domain %d\n",
+                   addr & PAGE_MASK, PAGE_ALIGN(addr + size) - 1,
+                   d->domain_id);
             return res;
         }
     }
@@ -749,12 +1019,13 @@ static int map_device(struct domain *d, const struct dt_device_node *dev)
 }
 
 static int handle_node(struct domain *d, struct kernel_info *kinfo,
-                       const struct dt_device_node *node)
+                       struct dt_device_node *node)
 {
     static const struct dt_device_match skip_matches[] __initconst =
     {
         DT_MATCH_COMPATIBLE("xen,xen"),
         DT_MATCH_COMPATIBLE("xen,multiboot-module"),
+        DT_MATCH_COMPATIBLE("multiboot,module"),
         DT_MATCH_COMPATIBLE("arm,psci"),
         DT_MATCH_PATH("/cpus"),
         DT_MATCH_TYPE("memory"),
@@ -762,7 +1033,8 @@ static int handle_node(struct domain *d, struct kernel_info *kinfo,
     };
     static const struct dt_device_match gic_matches[] __initconst =
     {
-        DT_MATCH_GIC,
+        DT_MATCH_GIC_V2,
+        DT_MATCH_GIC_V3,
         { /* sentinel */ },
     };
     static const struct dt_device_match timer_matches[] __initconst =
@@ -770,7 +1042,7 @@ static int handle_node(struct domain *d, struct kernel_info *kinfo,
         DT_MATCH_TIMER,
         { /* sentinel */ },
     };
-    const struct dt_device_node *child;
+    struct dt_device_node *child;
     int res;
     const char *name;
     const char *path;
@@ -802,6 +1074,15 @@ static int handle_node(struct domain *d, struct kernel_info *kinfo,
     if ( dt_device_used_by(node) == DOMID_XEN )
     {
         DPRINT("  Skip it (used by Xen)\n");
+        return 0;
+    }
+
+    /* Even if the IOMMU device is not used by Xen, it should not be
+     * passthrough to DOM0
+     */
+    if ( device_get_type(node) == DEVICE_IOMMU )
+    {
+        DPRINT(" IOMMU, skip it\n");
         return 0;
     }
 
@@ -924,17 +1205,20 @@ static void dtb_load(struct kernel_info *kinfo)
 
 static void initrd_load(struct kernel_info *kinfo)
 {
+    const struct bootmodule *mod = kinfo->initrd_bootmodule;
     paddr_t load_addr = kinfo->initrd_paddr;
-    paddr_t paddr = early_info.modules.module[MOD_INITRD].start;
-    paddr_t len = early_info.modules.module[MOD_INITRD].size;
+    paddr_t paddr, len;
     unsigned long offs;
     int node;
     int res;
     __be32 val[2];
     __be32 *cellp;
 
-    if ( !len )
+    if ( !mod || !mod->size )
         return;
+
+    paddr = mod->start;
+    len = mod->size;
 
     printk("Loading dom0 initrd from %"PRIpaddr" to 0x%"PRIpaddr"-0x%"PRIpaddr"\n",
            paddr, load_addr, load_addr + len);
@@ -976,7 +1260,7 @@ static void initrd_load(struct kernel_info *kinfo)
 
         dst = map_domain_page(ma>>PAGE_SHIFT);
 
-        copy_from_paddr(dst + s, paddr + offs, l, BUFFERABLE);
+        copy_from_paddr(dst + s, paddr + offs, l);
 
         unmap_domain_page(dst);
         offs += l;
@@ -999,19 +1283,27 @@ int construct_dom0(struct domain *d)
 
     printk("*** LOADING DOMAIN 0 ***\n");
 
+    iommu_hwdom_init(d);
+
     d->max_pages = ~0U;
 
     kinfo.unassigned_mem = dom0_mem;
 
-    allocate_memory(d, &kinfo);
-
-    rc = kernel_prepare(&kinfo);
+    rc = kernel_probe(&kinfo);
     if ( rc < 0 )
         return rc;
 
 #ifdef CONFIG_ARM_64
+    /* if aarch32 mode is not supported at EL1 do not allow 32-bit domain */
+    if ( !(cpu_has_el1_32) && kinfo.type == DOMAIN_32BIT )
+    {
+        printk("Platform does not support 32-bit domain\n");
+        return -EINVAL;
+    }
     d->arch.type = kinfo.type;
 #endif
+
+    allocate_memory(d, &kinfo);
 
     rc = prepare_dtb(d, &kinfo);
     if ( rc < 0 )
@@ -1030,8 +1322,8 @@ int construct_dom0(struct domain *d)
     set_current(v);
 
     /*
-     * kernel_load will determine the placement of the initrd & fdt in
-     * RAM, so call it first.
+     * kernel_load will determine the placement of the kernel as well
+     * as the initrd & fdt in RAM, so call it first.
      */
     kernel_load(&kinfo);
     /* initrd_load will fix up the fdt, so call it before dtb_load */
@@ -1051,7 +1343,7 @@ int construct_dom0(struct domain *d)
 
     regs->pc = (register_t)kinfo.entry;
 
-    if ( is_pv32_domain(d) )
+    if ( is_32bit_domain(d) )
     {
         regs->cpsr = PSR_GUEST32_INIT;
 

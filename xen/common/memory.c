@@ -21,17 +21,14 @@
 #include <xen/errno.h>
 #include <xen/tmem.h>
 #include <xen/tmem_xen.h>
+#include <xen/numa.h>
+#include <xen/mem_access.h>
+#include <xen/trace.h>
 #include <asm/current.h>
 #include <asm/hardirq.h>
 #include <asm/p2m.h>
-#include <xen/numa.h>
 #include <public/memory.h>
 #include <xsm/xsm.h>
-#include <xen/trace.h>
-
-#ifndef is_domain_direct_mapped
-# define is_domain_direct_mapped(d) ((void)(d), 0)
-#endif
 
 struct memop_args {
     /* INPUT */
@@ -202,6 +199,12 @@ int guest_remove_page(struct domain *d, unsigned long gmfn)
                 put_page(page);
         }
         p2m_mem_paging_drop_page(d, gmfn, p2mt);
+        return 1;
+    }
+    if ( p2mt == p2m_mmio_direct )
+    {
+        clear_mmio_p2m_entry(d, gmfn, _mfn(mfn));
+        put_gfn(d, gmfn);
         return 1;
     }
 #else
@@ -776,16 +779,25 @@ long do_memory_op(unsigned long cmd, XEN_GUEST_HANDLE_PARAM(void) arg)
         break;
 
     case XENMEM_exchange:
+        if ( unlikely(start_extent) )
+            return -ENOSYS;
+
         rc = memory_exchange(guest_handle_cast(arg, xen_memory_exchange_t));
         break;
 
     case XENMEM_maximum_ram_page:
+        if ( unlikely(start_extent) )
+            return -ENOSYS;
+
         rc = max_page;
         break;
 
     case XENMEM_current_reservation:
     case XENMEM_maximum_reservation:
     case XENMEM_maximum_gpfn:
+        if ( unlikely(start_extent) )
+            return -ENOSYS;
+
         if ( copy_from_guest(&domid, arg, 1) )
             return -EFAULT;
 
@@ -909,6 +921,9 @@ long do_memory_op(unsigned long cmd, XEN_GUEST_HANDLE_PARAM(void) arg)
         struct page_info *page;
         struct domain *d;
 
+        if ( unlikely(start_extent) )
+            return -ENOSYS;
+
         if ( copy_from_guest(&xrfp, arg, 1) )
             return -EFAULT;
 
@@ -937,7 +952,14 @@ long do_memory_op(unsigned long cmd, XEN_GUEST_HANDLE_PARAM(void) arg)
         break;
     }
 
+    case XENMEM_access_op:
+        rc = mem_access_memop(cmd, guest_handle_cast(arg, xen_mem_access_op_t));
+        break;
+
     case XENMEM_claim_pages:
+        if ( unlikely(start_extent) )
+            return -ENOSYS;
+
         if ( copy_from_guest(&reservation, arg, 1) )
             return -EFAULT;
 
@@ -963,12 +985,209 @@ long do_memory_op(unsigned long cmd, XEN_GUEST_HANDLE_PARAM(void) arg)
 
         break;
 
+    case XENMEM_get_vnumainfo:
+    {
+        struct xen_vnuma_topology_info topology;
+        struct domain *d;
+        unsigned int dom_vnodes, dom_vranges, dom_vcpus;
+        struct vnuma_info tmp;
+
+        if ( unlikely(start_extent) )
+            return -ENOSYS;
+
+        /*
+         * Guest passes nr_vnodes, number of regions and nr_vcpus thus
+         * we know how much memory guest has allocated.
+         */
+        if ( copy_from_guest(&topology, arg, 1 ))
+            return -EFAULT;
+
+        if ( topology.pad != 0 )
+            return -EINVAL;
+
+        if ( (d = rcu_lock_domain_by_any_id(topology.domid)) == NULL )
+            return -ESRCH;
+
+        rc = xsm_get_vnumainfo(XSM_TARGET, d);
+        if ( rc )
+        {
+            rcu_unlock_domain(d);
+            return rc;
+        }
+
+        read_lock(&d->vnuma_rwlock);
+
+        if ( d->vnuma == NULL )
+        {
+            read_unlock(&d->vnuma_rwlock);
+            rcu_unlock_domain(d);
+            return -EOPNOTSUPP;
+        }
+
+        dom_vnodes = d->vnuma->nr_vnodes;
+        dom_vranges = d->vnuma->nr_vmemranges;
+        dom_vcpus = d->max_vcpus;
+
+        /*
+         * Copied from guest values may differ from domain vnuma config.
+         * Check here guest parameters make sure we dont overflow.
+         * Additionaly check padding.
+         */
+        if ( topology.nr_vnodes < dom_vnodes      ||
+             topology.nr_vcpus < dom_vcpus        ||
+             topology.nr_vmemranges < dom_vranges )
+        {
+            read_unlock(&d->vnuma_rwlock);
+            rcu_unlock_domain(d);
+
+            topology.nr_vnodes = dom_vnodes;
+            topology.nr_vcpus = dom_vcpus;
+            topology.nr_vmemranges = dom_vranges;
+
+            /* Copy back needed values. */
+            return __copy_to_guest(arg, &topology, 1) ? -EFAULT : -ENOBUFS;
+        }
+
+        read_unlock(&d->vnuma_rwlock);
+
+        tmp.vdistance = xmalloc_array(unsigned int, dom_vnodes * dom_vnodes);
+        tmp.vmemrange = xmalloc_array(xen_vmemrange_t, dom_vranges);
+        tmp.vcpu_to_vnode = xmalloc_array(unsigned int, dom_vcpus);
+
+        if ( tmp.vdistance == NULL ||
+             tmp.vmemrange == NULL ||
+             tmp.vcpu_to_vnode == NULL )
+        {
+            rc = -ENOMEM;
+            goto vnumainfo_out;
+        }
+
+        /*
+         * Check if vnuma info has changed and if the allocated arrays
+         * are not big enough.
+         */
+        read_lock(&d->vnuma_rwlock);
+
+        if ( dom_vnodes < d->vnuma->nr_vnodes ||
+             dom_vranges < d->vnuma->nr_vmemranges ||
+             dom_vcpus < d->max_vcpus )
+        {
+            read_unlock(&d->vnuma_rwlock);
+            rc = -EAGAIN;
+            goto vnumainfo_out;
+        }
+
+        dom_vnodes = d->vnuma->nr_vnodes;
+        dom_vranges = d->vnuma->nr_vmemranges;
+        dom_vcpus = d->max_vcpus;
+
+        memcpy(tmp.vmemrange, d->vnuma->vmemrange,
+               sizeof(*d->vnuma->vmemrange) * dom_vranges);
+        memcpy(tmp.vdistance, d->vnuma->vdistance,
+               sizeof(*d->vnuma->vdistance) * dom_vnodes * dom_vnodes);
+        memcpy(tmp.vcpu_to_vnode, d->vnuma->vcpu_to_vnode,
+               sizeof(*d->vnuma->vcpu_to_vnode) * dom_vcpus);
+
+        read_unlock(&d->vnuma_rwlock);
+
+        rc = -EFAULT;
+
+        if ( copy_to_guest(topology.vmemrange.h, tmp.vmemrange,
+                           dom_vranges) != 0 )
+            goto vnumainfo_out;
+
+        if ( copy_to_guest(topology.vdistance.h, tmp.vdistance,
+                           dom_vnodes * dom_vnodes) != 0 )
+            goto vnumainfo_out;
+
+        if ( copy_to_guest(topology.vcpu_to_vnode.h, tmp.vcpu_to_vnode,
+                           dom_vcpus) != 0 )
+            goto vnumainfo_out;
+
+        topology.nr_vnodes = dom_vnodes;
+        topology.nr_vcpus = dom_vcpus;
+        topology.nr_vmemranges = dom_vranges;
+
+        rc = __copy_to_guest(arg, &topology, 1) ? -EFAULT : 0;
+
+ vnumainfo_out:
+        rcu_unlock_domain(d);
+
+        xfree(tmp.vdistance);
+        xfree(tmp.vmemrange);
+        xfree(tmp.vcpu_to_vnode);
+        break;
+    }
+
     default:
-        rc = arch_memory_op(op, arg);
+        rc = arch_memory_op(cmd, arg);
         break;
     }
 
     return rc;
+}
+
+void destroy_ring_for_helper(
+    void **_va, struct page_info *page)
+{
+    void *va = *_va;
+
+    if ( va != NULL )
+    {
+        unmap_domain_page_global(va);
+        put_page_and_type(page);
+        *_va = NULL;
+    }
+}
+
+int prepare_ring_for_helper(
+    struct domain *d, unsigned long gmfn, struct page_info **_page,
+    void **_va)
+{
+    struct page_info *page;
+    p2m_type_t p2mt;
+    void *va;
+
+    page = get_page_from_gfn(d, gmfn, &p2mt, P2M_UNSHARE);
+
+#ifdef HAS_MEM_PAGING
+    if ( p2m_is_paging(p2mt) )
+    {
+        if ( page )
+            put_page(page);
+        p2m_mem_paging_populate(d, gmfn);
+        return -ENOENT;
+    }
+#endif
+#ifdef HAS_MEM_SHARING
+    if ( p2m_is_shared(p2mt) )
+    {
+        if ( page )
+            put_page(page);
+        return -ENOENT;
+    }
+#endif
+
+    if ( !page )
+        return -EINVAL;
+
+    if ( !get_page_type(page, PGT_writable_page) )
+    {
+        put_page(page);
+        return -EINVAL;
+    }
+
+    va = __map_domain_page_global(page);
+    if ( va == NULL )
+    {
+        put_page_and_type(page);
+        return -ENOMEM;
+    }
+
+    *_va = va;
+    *_page = page;
+
+    return 0;
 }
 
 /*

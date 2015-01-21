@@ -7,7 +7,6 @@ extern unsigned long xenheap_initial_phys_start;
 
 void early_cpu_init(void);
 void early_time_init(void);
-void early_page_fault(void);
 
 int intel_cpu_init(void);
 int amd_init_cpu(void);
@@ -35,6 +34,8 @@ int construct_dom0(
 
 unsigned long initial_images_nrpages(void);
 void discard_initial_images(void);
+
+unsigned int dom0_max_vcpus(void);
 
 int xen_in_range(unsigned long mfn);
 

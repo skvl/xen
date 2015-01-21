@@ -1,0 +1,37 @@
+From 0b20b83dd104be27b39c5d095d7b73b529c07b76 Mon Sep 17 00:00:00 2001
+From: Bastian Blank <waldi@debian.org>
+Date: Sat, 5 Jul 2014 11:46:59 +0200
+Subject: tools-misc-prefix.diff
+
+Patch-Name: tools-misc-prefix.diff
+---
+ tools/misc/Makefile | 8 +++-----
+ 1 file changed, 3 insertions(+), 5 deletions(-)
+
+diff --git a/tools/misc/Makefile b/tools/misc/Makefile
+index 7a2bfd2..98627f9 100644
+--- a/tools/misc/Makefile
++++ b/tools/misc/Makefile
+@@ -32,6 +32,8 @@ INSTALL_PRIVBIN := $(INSTALL_PRIVBIN-y)
+ # Include configure output (config.h) to headers search path
+ CFLAGS += -I$(XEN_ROOT)/tools
+ 
++APPEND_LDFLAGS += $(call LDFLAGS_RPATH,../lib)
++
+ .PHONY: all
+ all: build
+ 
+@@ -40,12 +42,8 @@ build: $(TARGETS)
+ 
+ .PHONY: install
+ install: build
+-	$(INSTALL_DIR) $(DESTDIR)$(BINDIR)
+-	$(INSTALL_DIR) $(DESTDIR)$(SBINDIR)
+ 	$(INSTALL_DIR) $(DESTDIR)$(LIBEXEC_BIN)
+-	$(INSTALL_PYTHON_PROG) $(INSTALL_BIN) $(DESTDIR)$(BINDIR)
+-	$(INSTALL_PYTHON_PROG) $(INSTALL_SBIN) $(DESTDIR)$(SBINDIR)
+-	$(INSTALL_PYTHON_PROG) $(INSTALL_PRIVBIN) $(DESTDIR)$(LIBEXEC_BIN)
++	$(INSTALL_PYTHON_PROG) $(INSTALL_BIN) $(INSTALL_SBIN) $(INSTALL_PRIVBIN) $(DESTDIR)$(LIBEXEC_BIN)
+ 
+ .PHONY: clean
+ clean:

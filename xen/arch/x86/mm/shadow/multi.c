@@ -592,6 +592,8 @@ _sh_propagate(struct vcpu *v,
     {
         unsigned int type;
 
+        ASSERT(!(sflags & (_PAGE_PAT | _PAGE_PCD | _PAGE_PWT)));
+
         /* compute the PAT index for shadow page entry when VT-d is enabled
          * and device assigned. 
          * 1) direct MMIO: compute the PAT index with gMTRR=UC and gPAT.
@@ -599,7 +601,7 @@ _sh_propagate(struct vcpu *v,
          * 3) if disables snoop control, compute the PAT index with
          *    gMTRR and gPAT.
          */
-        if ( hvm_get_mem_pinned_cacheattr(d, gfn_x(target_gfn), &type) )
+        if ( hvm_get_mem_pinned_cacheattr(d, gfn_x(target_gfn), 0, &type) )
             sflags |= pat_type_2_pte_flags(type);
         else if ( d->arch.hvm_domain.is_in_uc_mode )
             sflags |= pat_type_2_pte_flags(PAT_TYPE_UNCACHABLE);
@@ -692,21 +694,7 @@ _sh_propagate(struct vcpu *v,
                        && (ft == ft_demand_write))
 #endif /* OOS */
                   ) )
-    {
-        if ( shadow_mode_trap_reads(d) )
-        {
-            // if we are trapping both reads & writes, then mark this page
-            // as not present...
-            //
-            sflags &= ~_PAGE_PRESENT;
-        }
-        else
-        {
-            // otherwise, just prevent any writes...
-            //
-            sflags &= ~_PAGE_RW;
-        }
-    }
+        sflags &= ~_PAGE_RW;
 
     // PV guests in 64-bit mode use two different page tables for user vs
     // supervisor permissions, making the guest's _PAGE_USER bit irrelevant.
@@ -816,7 +804,6 @@ shadow_write_entries(void *d, void *s, int entries, mfn_t mfn)
     {
         perfc_incr(shadow_linear_map_failed);
         map = sh_map_domain_page(mfn);
-        ASSERT(map != NULL);
         dst = map + ((unsigned long)dst & (PAGE_SIZE - 1));
     }
 
@@ -1436,8 +1423,7 @@ void sh_install_xen_entries_in_l4(struct vcpu *v, mfn_t gl4mfn, mfn_t sl4mfn)
     unsigned int slots;
 
     sl4e = sh_map_domain_page(sl4mfn);
-    ASSERT(sl4e != NULL);
-    ASSERT(sizeof (l4_pgentry_t) == sizeof (shadow_l4e_t));
+    BUILD_BUG_ON(sizeof (l4_pgentry_t) != sizeof (shadow_l4e_t));
     
     /* Copy the common Xen mappings from the idle domain */
     slots = (shadow_mode_external(d)
@@ -1490,8 +1476,7 @@ static void sh_install_xen_entries_in_l2h(struct vcpu *v, mfn_t sl2hmfn)
         return;
 
     sl2e = sh_map_domain_page(sl2hmfn);
-    ASSERT(sl2e != NULL);
-    ASSERT(sizeof (l2_pgentry_t) == sizeof (shadow_l2e_t));
+    BUILD_BUG_ON(sizeof (l2_pgentry_t) != sizeof (shadow_l2e_t));
 
     /* Copy the common Xen mappings from the idle domain */
     memcpy(
@@ -2712,13 +2697,13 @@ static inline void trace_shadow_fixup(guest_l1e_t gl1e,
 {
     if ( tb_init_done )
     {
-        struct {
+        struct __packed {
             /* for PAE, guest_l1e may be 64 while guest_va may be 32;
                so put it first for alignment sake. */
             guest_l1e_t gl1e;
             guest_va_t va;
             u32 flags;
-        } __attribute__((packed)) d;
+        } d;
         u32 event;
 
         event = TRC_SHADOW_FIXUP | ((GUEST_PAGING_LEVELS-2)<<8);
@@ -2736,13 +2721,13 @@ static inline void trace_not_shadow_fault(guest_l1e_t gl1e,
 {
     if ( tb_init_done )
     {
-        struct {
+        struct __packed {
             /* for PAE, guest_l1e may be 64 while guest_va may be 32;
                so put it first for alignment sake. */
             guest_l1e_t gl1e;
             guest_va_t va;
             u32 flags;
-        } __attribute__((packed)) d;
+        } d;
         u32 event;
 
         event = TRC_SHADOW_NOT_SHADOW | ((GUEST_PAGING_LEVELS-2)<<8);
@@ -2761,7 +2746,7 @@ static inline void trace_shadow_emulate_other(u32 event,
 {
     if ( tb_init_done )
     {
-        struct {
+        struct __packed {
             /* for PAE, guest_l1e may be 64 while guest_va may be 32;
                so put it first for alignment sake. */
 #if GUEST_PAGING_LEVELS == 2
@@ -2770,7 +2755,7 @@ static inline void trace_shadow_emulate_other(u32 event,
             u64 gfn;
 #endif
             guest_va_t va;
-        } __attribute__((packed)) d;
+        } d;
 
         event |= ((GUEST_PAGING_LEVELS-2)<<8);
 
@@ -2791,13 +2776,13 @@ static inline void trace_shadow_emulate(guest_l1e_t gl1e, unsigned long va)
 {
     if ( tb_init_done )
     {
-        struct {
+        struct __packed {
             /* for PAE, guest_l1e may be 64 while guest_va may be 32;
                so put it first for alignment sake. */
             guest_l1e_t gl1e, write_val;
             guest_va_t va;
             unsigned flags:29, emulation_count:3;
-        } __attribute__((packed)) d;
+        } d;
         u32 event;
 
         event = TRC_SHADOW_EMULATE | ((GUEST_PAGING_LEVELS-2)<<8);
@@ -2839,6 +2824,11 @@ static int sh_page_fault(struct vcpu *v,
     p2m_type_t p2mt;
     uint32_t rc;
     int version;
+    struct npfec access = {
+         .read_access = 1,
+         .gla_valid = 1,
+         .kind = npfec_kind_with_gla
+    };
 #if SHADOW_OPTIMIZATIONS & SHOPT_FAST_EMULATION
     int fast_emul = 0;
 #endif
@@ -2848,6 +2838,9 @@ static int sh_page_fault(struct vcpu *v,
                   regs->eip);
 
     perfc_incr(shadow_fault);
+
+    if ( regs->error_code & PFEC_write_access )
+        access.write_access = 1;
 
 #if SHADOW_OPTIMIZATIONS & SHOPT_FAST_EMULATION
     /* If faulting frame is successfully emulated in last shadow fault
@@ -2950,7 +2943,7 @@ static int sh_page_fault(struct vcpu *v,
             SHADOW_PRINTK("fast path mmio %#"PRIpaddr"\n", gpa);
             reset_early_unshadow(v);
             trace_shadow_gen(TRC_SHADOW_FAST_MMIO, va);
-            return (handle_mmio_with_translation(va, gpa >> PAGE_SHIFT)
+            return (handle_mmio_with_translation(va, gpa >> PAGE_SHIFT, access)
                     ? EXCRET_fault_fixed : 0);
         }
         else
@@ -3181,18 +3174,10 @@ static int sh_page_fault(struct vcpu *v,
          && !(mfn_is_out_of_sync(gmfn)
               && !(regs->error_code & PFEC_user_mode))
 #endif
-         )
+         && (ft == ft_demand_write) )
     {
-        if ( ft == ft_demand_write )
-        {
-            perfc_incr(shadow_fault_emulate_write);
-            goto emulate;
-        }
-        else if ( shadow_mode_trap_reads(d) && ft == ft_demand_read )
-        {
-            perfc_incr(shadow_fault_emulate_read);
-            goto emulate;
-        }
+        perfc_incr(shadow_fault_emulate_write);
+        goto emulate;
     }
 
     /* Need to hand off device-model MMIO to the device model */
@@ -3447,7 +3432,7 @@ static int sh_page_fault(struct vcpu *v,
     paging_unlock(d);
     put_gfn(d, gfn_x(gfn));
     trace_shadow_gen(TRC_SHADOW_MMIO, va);
-    return (handle_mmio_with_translation(va, gpa >> PAGE_SHIFT)
+    return (handle_mmio_with_translation(va, gpa >> PAGE_SHIFT, access)
             ? EXCRET_fault_fixed : 0);
 
  not_a_shadow_fault:

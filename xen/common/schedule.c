@@ -69,6 +69,7 @@ static const struct scheduler *schedulers[] = {
     &sched_credit_def,
     &sched_credit2_def,
     &sched_arinc653_def,
+    &sched_rtds_def,
 };
 
 static struct scheduler __read_mostly ops;
@@ -194,9 +195,11 @@ int sched_init_vcpu(struct vcpu *v, unsigned int processor)
      */
     v->processor = processor;
     if ( is_idle_domain(d) || d->is_pinned )
-        cpumask_copy(v->cpu_affinity, cpumask_of(processor));
+        cpumask_copy(v->cpu_hard_affinity, cpumask_of(processor));
     else
-        cpumask_setall(v->cpu_affinity);
+        cpumask_setall(v->cpu_hard_affinity);
+
+    cpumask_setall(v->cpu_soft_affinity);
 
     /* Initialise the per-vcpu timers. */
     init_timer(&v->periodic_timer, vcpu_periodic_timer_fn,
@@ -222,6 +225,12 @@ int sched_init_vcpu(struct vcpu *v, unsigned int processor)
     SCHED_OP(DOM2OP(d), insert_vcpu, v);
 
     return 0;
+}
+
+static void sched_move_irqs(struct vcpu *v)
+{
+    arch_move_irqs(v);
+    evtchn_move_pirqs(v);
 }
 
 int sched_move_domain(struct domain *d, struct cpupool *c)
@@ -285,7 +294,8 @@ int sched_move_domain(struct domain *d, struct cpupool *c)
         migrate_timer(&v->singleshot_timer, new_p);
         migrate_timer(&v->poll_timer, new_p);
 
-        cpumask_setall(v->cpu_affinity);
+        cpumask_setall(v->cpu_hard_affinity);
+        cpumask_setall(v->cpu_soft_affinity);
 
         lock = vcpu_schedule_lock_irq(v);
         v->processor = new_p;
@@ -298,7 +308,7 @@ int sched_move_domain(struct domain *d, struct cpupool *c)
 
         v->sched_priv = vcpu_priv[v->vcpu_id];
         if ( !d->is_dying )
-            evtchn_move_pirqs(v);
+            sched_move_irqs(v);
 
         new_p = cpumask_cycle(new_p, c->cpu_valid);
 
@@ -458,7 +468,7 @@ static void vcpu_migrate(struct vcpu *v)
              */
             if ( pick_called &&
                  (new_lock == per_cpu(schedule_data, new_cpu).schedule_lock) &&
-                 cpumask_test_cpu(new_cpu, v->cpu_affinity) &&
+                 cpumask_test_cpu(new_cpu, v->cpu_hard_affinity) &&
                  cpumask_test_cpu(new_cpu, v->domain->cpupool->cpu_valid) )
                 break;
 
@@ -523,7 +533,7 @@ static void vcpu_migrate(struct vcpu *v)
     spin_unlock_irqrestore(old_lock, flags);
 
     if ( old_cpu != new_cpu )
-        evtchn_move_pirqs(v);
+        sched_move_irqs(v);
 
     /* Wake on new CPU. */
     vcpu_wake(v);
@@ -560,9 +570,8 @@ void restore_vcpu_affinity(struct domain *d)
 
         if ( v->affinity_broken )
         {
-            printk(XENLOG_DEBUG "Restoring affinity for d%dv%d\n",
-                   d->domain_id, v->vcpu_id);
-            cpumask_copy(v->cpu_affinity, v->cpu_affinity_saved);
+            printk(XENLOG_DEBUG "Restoring affinity for %pv\n", v);
+            cpumask_copy(v->cpu_hard_affinity, v->cpu_hard_affinity_saved);
             v->affinity_broken = 0;
         }
 
@@ -605,20 +614,20 @@ int cpu_disable_scheduler(unsigned int cpu)
             unsigned long flags;
             spinlock_t *lock = vcpu_schedule_lock_irqsave(v, &flags);
 
-            cpumask_and(&online_affinity, v->cpu_affinity, c->cpu_valid);
+            cpumask_and(&online_affinity, v->cpu_hard_affinity, c->cpu_valid);
             if ( cpumask_empty(&online_affinity) &&
-                 cpumask_test_cpu(cpu, v->cpu_affinity) )
+                 cpumask_test_cpu(cpu, v->cpu_hard_affinity) )
             {
-                printk(XENLOG_DEBUG "Breaking affinity for d%dv%d\n",
-                        d->domain_id, v->vcpu_id);
+                printk(XENLOG_DEBUG "Breaking affinity for %pv\n", v);
 
                 if (system_state == SYS_STATE_suspend)
                 {
-                    cpumask_copy(v->cpu_affinity_saved, v->cpu_affinity);
+                    cpumask_copy(v->cpu_hard_affinity_saved,
+                                 v->cpu_hard_affinity);
                     v->affinity_broken = 1;
                 }
 
-                cpumask_setall(v->cpu_affinity);
+                cpumask_setall(v->cpu_hard_affinity);
             }
 
             if ( v->processor == cpu )
@@ -646,27 +655,14 @@ int cpu_disable_scheduler(unsigned int cpu)
     return ret;
 }
 
-void sched_set_node_affinity(struct domain *d, nodemask_t *mask)
+static int vcpu_set_affinity(
+    struct vcpu *v, const cpumask_t *affinity, cpumask_t *which)
 {
-    SCHED_OP(DOM2OP(d), set_node_affinity, d, mask);
-}
-
-int vcpu_set_affinity(struct vcpu *v, const cpumask_t *affinity)
-{
-    cpumask_t online_affinity;
-    cpumask_t *online;
     spinlock_t *lock;
-
-    if ( v->domain->is_pinned )
-        return -EINVAL;
-    online = VCPU2ONLINE(v);
-    cpumask_and(&online_affinity, affinity, online);
-    if ( cpumask_empty(&online_affinity) )
-        return -EINVAL;
 
     lock = vcpu_schedule_lock_irq(v);
 
-    cpumask_copy(v->cpu_affinity, affinity);
+    cpumask_copy(which, affinity);
 
     /* Always ask the scheduler to re-evaluate placement
      * when changing the affinity */
@@ -683,6 +679,27 @@ int vcpu_set_affinity(struct vcpu *v, const cpumask_t *affinity)
     }
 
     return 0;
+}
+
+int vcpu_set_hard_affinity(struct vcpu *v, const cpumask_t *affinity)
+{
+    cpumask_t online_affinity;
+    cpumask_t *online;
+
+    if ( v->domain->is_pinned )
+        return -EINVAL;
+
+    online = VCPU2ONLINE(v);
+    cpumask_and(&online_affinity, affinity, online);
+    if ( cpumask_empty(&online_affinity) )
+        return -EINVAL;
+
+    return vcpu_set_affinity(v, affinity, v->cpu_hard_affinity);
+}
+
+int vcpu_set_soft_affinity(struct vcpu *v, const cpumask_t *affinity)
+{
+    return vcpu_set_affinity(v, affinity, v->cpu_soft_affinity);
 }
 
 /* Block the currently-executing domain until a pertinent event occurs. */
@@ -783,7 +800,7 @@ static long do_poll(struct sched_poll *sched_poll)
 }
 
 /* Voluntarily yield the processor for this allocation. */
-static long do_yield(void)
+long vcpu_yield(void)
 {
     struct vcpu * v=current;
     spinlock_t *lock = vcpu_schedule_lock_irq(v);
@@ -876,7 +893,7 @@ long do_sched_op_compat(int cmd, unsigned long arg)
     {
     case SCHEDOP_yield:
     {
-        ret = do_yield();
+        ret = vcpu_yield();
         break;
     }
 
@@ -913,7 +930,7 @@ ret_t do_sched_op(int cmd, XEN_GUEST_HANDLE_PARAM(void) arg)
     {
     case SCHEDOP_yield:
     {
-        ret = do_yield();
+        ret = vcpu_yield();
         break;
     }
 
@@ -1239,7 +1256,7 @@ static void schedule(void)
     stop_timer(&prev->periodic_timer);
 
     if ( next_slice.migrated )
-        evtchn_move_pirqs(next);
+        sched_move_irqs(next);
 
     vcpu_periodic_timer_work(next);
 

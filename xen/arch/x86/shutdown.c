@@ -34,13 +34,13 @@ enum reboot_type {
         BOOT_CF9 = 'p',
 };
 
-static long no_idt[2];
 static int reboot_mode;
 
 /*
- * reboot=b[ios] | t[riple] | k[bd] | n[o] [, [w]arm | [c]old]
+ * reboot=t[riple] | k[bd] | a[cpi] | p[ci] | n[o] [, [w]arm | [c]old]
  * warm   Don't set the cold reboot flag
  * cold   Set the cold reboot flag
+ * no     Suppress automatic reboot after panics or crashes
  * triple Force a triple fault (init)
  * kbd    Use the keyboard controller. cold reset (default)
  * acpi   Use the RESET_REG in the FADT
@@ -85,7 +85,7 @@ static inline void kb_wait(void)
             break;
 }
 
-static void __attribute__((noreturn)) __machine_halt(void *unused)
+static void noreturn __machine_halt(void *unused)
 {
     local_irq_disable();
     for ( ; ; )
@@ -96,8 +96,13 @@ void machine_halt(void)
 {
     watchdog_disable();
     console_start_sync();
-    local_irq_enable();
-    smp_call_function(__machine_halt, NULL, 0);
+
+    if ( system_state >= SYS_STATE_smp_boot )
+    {
+        local_irq_enable();
+        smp_call_function(__machine_halt, NULL, 0);
+    }
+
     __machine_halt(NULL);
 }
 
@@ -452,7 +457,7 @@ static int __init reboot_init(void)
 }
 __initcall(reboot_init);
 
-static void __machine_restart(void *pdelay)
+static void noreturn __machine_restart(void *pdelay)
 {
     machine_restart(*(unsigned int *)pdelay);
 }
@@ -461,22 +466,11 @@ void machine_restart(unsigned int delay_millisecs)
 {
     unsigned int i, attempt;
     enum reboot_type orig_reboot_type = reboot_type;
+    const struct desc_ptr no_idt = { 0 };
 
     watchdog_disable();
     console_start_sync();
     spin_debug_disable();
-
-    local_irq_enable();
-
-    /* Ensure we are the boot CPU. */
-    if ( get_apic_id() != boot_cpu_physical_apicid )
-    {
-        /* Send IPI to the boot CPU (logical cpu 0). */
-        on_selected_cpus(cpumask_of(0), __machine_restart,
-                         &delay_millisecs, 0);
-        for ( ; ; )
-            halt();
-    }
 
     /*
      * We may be called from an interrupt context, and various functions we
@@ -485,7 +479,22 @@ void machine_restart(unsigned int delay_millisecs)
      */
     local_irq_count(0) = 0;
 
-    smp_send_stop();
+    if ( system_state >= SYS_STATE_smp_boot )
+    {
+        local_irq_enable();
+
+        /* Ensure we are the boot CPU. */
+        if ( get_apic_id() != boot_cpu_physical_apicid )
+        {
+            /* Send IPI to the boot CPU (logical cpu 0). */
+            on_selected_cpus(cpumask_of(0), __machine_restart,
+                             &delay_millisecs, 0);
+            for ( ; ; )
+                halt();
+        }
+
+        smp_send_stop();
+    }
 
     mdelay(delay_millisecs);
 
@@ -524,7 +533,7 @@ void machine_restart(unsigned int delay_millisecs)
                            ? BOOT_ACPI : BOOT_TRIPLE);
             break;
         case BOOT_TRIPLE:
-            asm volatile ( "lidt %0 ; int3" : "=m" (no_idt) );
+            asm volatile ("lidt %0; int3" : : "m" (no_idt));
             reboot_type = BOOT_KBD;
             break;
         case BOOT_ACPI:

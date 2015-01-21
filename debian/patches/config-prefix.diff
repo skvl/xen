@@ -1,0 +1,47 @@
+From 91aca1c82d48c8226faa72e0a6f16cef25bbe130 Mon Sep 17 00:00:00 2001
+From: Bastian Blank <waldi@debian.org>
+Date: Sat, 5 Jul 2014 11:46:45 +0200
+Subject: config-prefix.diff
+
+Patch-Name: config-prefix.diff
+---
+ Config.mk          | 2 +-
+ config/Paths.mk.in | 5 +++--
+ 2 files changed, 4 insertions(+), 3 deletions(-)
+
+diff --git a/Config.mk b/Config.mk
+index 7288326..68775d4 100644
+--- a/Config.mk
++++ b/Config.mk
+@@ -75,7 +75,7 @@ EXTRA_LIB += $(EXTRA_PREFIX)/lib
+ endif
+ 
+ PYTHON      ?= python
+-PYTHON_PREFIX_ARG ?= --prefix="$(PREFIX)"
++PYTHON_PREFIX_ARG ?= --home="$(LIBEXEC)"
+ # The above requires that PREFIX contains *no spaces*. This variable is here
+ # to permit the user to set PYTHON_PREFIX_ARG to '' to workaround this bug:
+ #  https://bugs.launchpad.net/ubuntu/+bug/362570
+diff --git a/config/Paths.mk.in b/config/Paths.mk.in
+index fe10f76..c3b9200 100644
+--- a/config/Paths.mk.in
++++ b/config/Paths.mk.in
+@@ -13,6 +13,7 @@
+ # http://wiki.xen.org/wiki/Category:Host_Configuration#System_wide_xen_configuration
+ 
+ PACKAGE_TARNAME          := @PACKAGE_TARNAME@
++PACKAGE_VERSION          := @PACKAGE_VERSION@
+ prefix                   := @prefix@
+ bindir                   := @bindir@
+ sbindir                  := @sbindir@
+@@ -33,8 +34,8 @@ PREFIX                   := $(prefix)
+ 
+ SBINDIR                  := $(sbindir)
+ BINDIR                   := $(bindir)
+-LIBEXEC                  := $(libexecdir)/$(PACKAGE_TARNAME)
+-LIBEXEC_BIN              := @LIBEXEC_BIN@
++LIBEXEC                  := $(libexecdir)/$(PACKAGE_TARNAME)-$(PACKAGE_VERSION)
++LIBEXEC_BIN              := $(LIBEXEC)/bin
+ LIBEXEC_LIB              := $(LIBEXEC)/lib
+ LIBEXEC_INC              := $(LIBEXEC)/include
+ 

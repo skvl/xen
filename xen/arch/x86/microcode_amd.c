@@ -8,7 +8,7 @@
  *  Tigran Aivazian <tigran@aivazian.fsnet.co.uk>
  *
  *  This driver allows to upgrade microcode on AMD
- *  family 0x10 and 0x11 processors.
+ *  family 0x10 and later.
  *
  *  Licensed unter the terms of the GNU General Public
  *  License version 2. See file COPYING for details.
@@ -27,15 +27,21 @@
 #include <asm/microcode.h>
 #include <asm/hvm/svm/svm.h>
 
-struct equiv_cpu_entry {
+#define pr_debug(x...) ((void)0)
+
+#define CONT_HDR_SIZE           12
+#define SECTION_HDR_SIZE        8
+#define PATCH_HDR_SIZE          32
+
+struct __packed equiv_cpu_entry {
     uint32_t installed_cpu;
     uint32_t fixed_errata_mask;
     uint32_t fixed_errata_compare;
     uint16_t equiv_cpu;
     uint16_t reserved;
-} __attribute__((packed));
+};
 
-struct microcode_header_amd {
+struct __packed microcode_header_amd {
     uint32_t data_code;
     uint32_t patch_id;
     uint8_t  mc_patch_data_id[2];
@@ -50,7 +56,7 @@ struct microcode_header_amd {
     uint8_t  bios_api_rev;
     uint8_t  reserved1[3];
     uint32_t match_reg[8];
-} __attribute__((packed));
+};
 
 #define UCODE_MAGIC                0x00414d44
 #define UCODE_EQUIV_CPU_TABLE_TYPE 0x00000000
@@ -88,8 +94,57 @@ static int collect_cpu_info(int cpu, struct cpu_signature *csig)
 
     rdmsrl(MSR_AMD_PATCHLEVEL, csig->rev);
 
-    printk(KERN_DEBUG "microcode: CPU%d collect_cpu_info: patch_id=%#x\n",
-           cpu, csig->rev);
+    pr_debug("microcode: CPU%d collect_cpu_info: patch_id=%#x\n",
+             cpu, csig->rev);
+
+    return 0;
+}
+
+static bool_t verify_patch_size(uint32_t patch_size)
+{
+    uint32_t max_size;
+
+#define F1XH_MPB_MAX_SIZE 2048
+#define F14H_MPB_MAX_SIZE 1824
+#define F15H_MPB_MAX_SIZE 4096
+#define F16H_MPB_MAX_SIZE 3458
+
+    switch (boot_cpu_data.x86)
+    {
+    case 0x14:
+        max_size = F14H_MPB_MAX_SIZE;
+        break;
+    case 0x15:
+        max_size = F15H_MPB_MAX_SIZE;
+        break;
+    case 0x16:
+        max_size = F16H_MPB_MAX_SIZE;
+        break;
+    default:
+        max_size = F1XH_MPB_MAX_SIZE;
+        break;
+    }
+
+    return (patch_size <= max_size);
+}
+
+static bool_t find_equiv_cpu_id(const struct equiv_cpu_entry *equiv_cpu_table,
+                                unsigned int current_cpu_id,
+                                unsigned int *equiv_cpu_id)
+{
+    unsigned int i;
+
+    if ( !equiv_cpu_table )
+        return 0;
+
+    for ( i = 0; equiv_cpu_table[i].installed_cpu != 0; i++ )
+    {
+        if ( current_cpu_id == equiv_cpu_table[i].installed_cpu )
+        {
+            *equiv_cpu_id = equiv_cpu_table[i].equiv_cpu & 0xffff;
+            return 1;
+        }
+    }
 
     return 0;
 }
@@ -100,35 +155,33 @@ static bool_t microcode_fits(const struct microcode_amd *mc_amd, int cpu)
     const struct microcode_header_amd *mc_header = mc_amd->mpb;
     const struct equiv_cpu_entry *equiv_cpu_table = mc_amd->equiv_cpu_table;
     unsigned int current_cpu_id;
-    unsigned int equiv_cpu_id = 0x0;
-    unsigned int i;
+    unsigned int equiv_cpu_id;
 
     /* We should bind the task to the CPU */
     BUG_ON(cpu != raw_smp_processor_id());
 
     current_cpu_id = cpuid_eax(0x00000001);
 
-    for ( i = 0; equiv_cpu_table[i].installed_cpu != 0; i++ )
-    {
-        if ( current_cpu_id == equiv_cpu_table[i].installed_cpu )
-        {
-            equiv_cpu_id = equiv_cpu_table[i].equiv_cpu & 0xffff;
-            break;
-        }
-    }
-
-    if ( !equiv_cpu_id )
+    if ( !find_equiv_cpu_id(equiv_cpu_table, current_cpu_id, &equiv_cpu_id) )
         return 0;
 
     if ( (mc_header->processor_rev_id) != equiv_cpu_id )
         return 0;
 
-    if ( mc_header->patch_id <= uci->cpu_sig.rev )
+    if ( !verify_patch_size(mc_amd->mpb_size) )
+    {
+        pr_debug("microcode: patch size mismatch\n");
         return 0;
+    }
 
-    printk(KERN_DEBUG "microcode: CPU%d found a matching microcode "
-           "update with version %#x (current=%#x)\n",
-           cpu, mc_header->patch_id, uci->cpu_sig.rev);
+    if ( mc_header->patch_id <= uci->cpu_sig.rev )
+    {
+        pr_debug("microcode: patch is already at required level or greater.\n");
+        return 0;
+    }
+
+    pr_debug("microcode: CPU%d found a matching microcode update with version %#x (current=%#x)\n",
+             cpu, mc_header->patch_id, uci->cpu_sig.rev);
 
     return 1;
 }
@@ -140,6 +193,7 @@ static int apply_microcode(int cpu)
     uint32_t rev;
     struct microcode_amd *mc_amd = uci->mc.mc_amd;
     struct microcode_header_amd *hdr;
+    int hw_err;
 
     /* We should bind the task to the CPU */
     BUG_ON(raw_smp_processor_id() != cpu);
@@ -153,7 +207,7 @@ static int apply_microcode(int cpu)
 
     spin_lock_irqsave(&microcode_update_lock, flags);
 
-    wrmsrl(MSR_AMD_PATCHLOADER, (unsigned long)hdr);
+    hw_err = wrmsr_safe(MSR_AMD_PATCHLOADER, (unsigned long)hdr);
 
     /* get patch id after patching */
     rdmsrl(MSR_AMD_PATCHLEVEL, rev);
@@ -161,7 +215,7 @@ static int apply_microcode(int cpu)
     spin_unlock_irqrestore(&microcode_update_lock, flags);
 
     /* check current patch id and patch's id for match */
-    if ( rev != hdr->patch_id )
+    if ( hw_err || (rev != hdr->patch_id) )
     {
         printk(KERN_ERR "microcode: CPU%d update from revision "
                "%#x to %#x failed\n", cpu, rev, hdr->patch_id);
@@ -182,27 +236,22 @@ static int get_ucode_from_buffer_amd(
     size_t bufsize,
     size_t *offset)
 {
-    const uint8_t *bufp = buf;
-    size_t off;
-    const struct mpbhdr *mpbuf;
-
-    off = *offset;
+    const struct mpbhdr *mpbuf = buf + *offset;
 
     /* No more data */
-    if ( off >= bufsize )
+    if ( *offset >= bufsize )
     {
         printk(KERN_ERR "microcode: Microcode buffer overrun\n");
         return -EINVAL;
     }
 
-    mpbuf = (const struct mpbhdr *)&bufp[off];
     if ( mpbuf->type != UCODE_UCODE_TYPE )
     {
         printk(KERN_ERR "microcode: Wrong microcode payload type field\n");
         return -EINVAL;
     }
 
-    if ( (off + mpbuf->len) > bufsize )
+    if ( (*offset + mpbuf->len) > bufsize )
     {
         printk(KERN_ERR "microcode: Bad data in microcode data file\n");
         return -EINVAL;
@@ -222,26 +271,24 @@ static int get_ucode_from_buffer_amd(
     }
     memcpy(mc_amd->mpb, mpbuf->data, mpbuf->len);
 
-    *offset = off + mpbuf->len + 8;
+    pr_debug("microcode: CPU%d size %zu, block size %u offset %zu equivID %#x rev %#x\n",
+             raw_smp_processor_id(), bufsize, mpbuf->len, *offset,
+             ((struct microcode_header_amd *)mc_amd->mpb)->processor_rev_id,
+             ((struct microcode_header_amd *)mc_amd->mpb)->patch_id);
 
-    printk(KERN_DEBUG "microcode: CPU%d size %zu, block size %u offset %zu equivID %#x rev %#x\n",
-           raw_smp_processor_id(), bufsize, mpbuf->len, off,
-           ((struct microcode_header_amd *)mc_amd->mpb)->processor_rev_id,
-           ((struct microcode_header_amd *)mc_amd->mpb)->patch_id);
+    *offset += mpbuf->len + SECTION_HDR_SIZE;
 
     return 0;
 }
 
 static int install_equiv_cpu_table(
     struct microcode_amd *mc_amd,
-    const uint32_t *buf,
+    const void *data,
     size_t *offset)
 {
-    const struct mpbhdr *mpbuf = (const struct mpbhdr *)&buf[1];
+    const struct mpbhdr *mpbuf = data + *offset + 4;
 
-    /* No more data */
-    if ( mpbuf->len + 12 >= *offset )
-        return -EINVAL;
+    *offset += mpbuf->len + CONT_HDR_SIZE;	/* add header length */
 
     if ( mpbuf->type != UCODE_EQUIV_CPU_TABLE_TYPE )
     {
@@ -265,7 +312,37 @@ static int install_equiv_cpu_table(
     memcpy(mc_amd->equiv_cpu_table, mpbuf->data, mpbuf->len);
     mc_amd->equiv_cpu_table_size = mpbuf->len;
 
-    *offset = mpbuf->len + 12;	/* add header length */
+    return 0;
+}
+
+static int container_fast_forward(const void *data, size_t size_left, size_t *offset)
+{
+    for ( ; ; )
+    {
+        size_t size;
+        const uint32_t *header;
+
+        if ( size_left < SECTION_HDR_SIZE )
+            return -EINVAL;
+
+        header = data + *offset;
+
+        if ( header[0] == UCODE_MAGIC &&
+             header[1] == UCODE_EQUIV_CPU_TABLE_TYPE )
+            break;
+
+        if ( header[0] != UCODE_UCODE_TYPE )
+            return -EINVAL;
+        size = header[1] + SECTION_HDR_SIZE;
+        if ( size < PATCH_HDR_SIZE || size_left < size )
+            return -EINVAL;
+
+        size_left -= size;
+        *offset += size;
+
+        if ( !size_left )
+            return -ENODATA;
+    }
 
     return 0;
 }
@@ -273,13 +350,17 @@ static int install_equiv_cpu_table(
 static int cpu_request_microcode(int cpu, const void *buf, size_t bufsize)
 {
     struct microcode_amd *mc_amd, *mc_old;
-    size_t offset = bufsize;
+    size_t offset = 0;
     size_t last_offset, applied_offset = 0;
     int error = 0, save_error = 1;
     struct ucode_cpu_info *uci = &per_cpu(ucode_cpu_info, cpu);
+    unsigned int current_cpu_id;
+    unsigned int equiv_cpu_id;
 
     /* We should bind the task to the CPU */
     BUG_ON(cpu != raw_smp_processor_id());
+
+    current_cpu_id = cpuid_eax(0x00000001);
 
     if ( *(const uint32_t *)buf != UCODE_MAGIC )
     {
@@ -296,12 +377,53 @@ static int cpu_request_microcode(int cpu, const void *buf, size_t bufsize)
         goto out;
     }
 
-    error = install_equiv_cpu_table(mc_amd, buf, &offset);
+    /*
+     * Multiple container file support:
+     * 1. check if this container file has equiv_cpu_id match
+     * 2. If not, fast-fwd to next container file
+     */
+    while ( offset < bufsize )
+    {
+        error = install_equiv_cpu_table(mc_amd, buf, &offset);
+        if ( error )
+        {
+            printk(KERN_ERR "microcode: installing equivalent cpu table failed\n");
+            break;
+        }
+
+        /*
+         * Could happen as we advance 'offset' early
+         * in install_equiv_cpu_table
+         */
+        if ( offset > bufsize )
+        {
+            printk(KERN_ERR "microcode: Microcode buffer overrun\n");
+            error = -EINVAL;
+            break;
+        }
+
+        if ( find_equiv_cpu_id(mc_amd->equiv_cpu_table, current_cpu_id,
+                               &equiv_cpu_id) )
+            break;
+
+        error = container_fast_forward(buf, bufsize - offset, &offset);
+        if ( error == -ENODATA )
+        {
+            ASSERT(offset == bufsize);
+            break;
+        }
+        if ( error )
+        {
+            printk(KERN_ERR "microcode: CPU%d incorrect or corrupt container file\n"
+                   "microcode: Failed to update patch level. "
+                   "Current lvl:%#x\n", cpu, uci->cpu_sig.rev);
+            break;
+        }
+    }
+
     if ( error )
     {
         xfree(mc_amd);
-        printk(KERN_ERR "microcode: installing equivalent cpu table failed\n");
-        error = -EINVAL;
         goto out;
     }
 
@@ -330,6 +452,30 @@ static int cpu_request_microcode(int cpu, const void *buf, size_t bufsize)
         last_offset = offset;
 
         if ( offset >= bufsize )
+            break;
+
+        /*
+         * 1. Given a situation where multiple containers exist and correct
+         *    patch lives on a container that is not the last container.
+         * 2. We match equivalent ids using find_equiv_cpu_id() from the
+         *    earlier while() (On this case, matches on earlier container
+         *    file and we break)
+         * 3. Proceed to while ( (error = get_ucode_from_buffer_amd(mc_amd,
+         *                                  buf, bufsize,&offset)) == 0 )
+         * 4. Find correct patch using microcode_fits() and apply the patch
+         *    (Assume: apply_microcode() is successful)
+         * 5. The while() loop from (3) continues to parse the binary as
+         *    there is a subsequent container file, but...
+         * 6. ...a correct patch can only be on one container and not on any
+         *    subsequent ones. (Refer docs for more info) Therefore, we
+         *    don't have to parse a subsequent container. So, we can abort
+         *    the process here.
+         * 7. This ensures that we retain a success value (= 0) to 'error'
+         *    before if ( mpbuf->type != UCODE_UCODE_TYPE ) evaluates to
+         *    false and returns -EINVAL.
+         */
+        if ( offset + SECTION_HDR_SIZE <= bufsize &&
+             *(const uint32_t *)(buf + offset) == UCODE_MAGIC )
             break;
     }
 

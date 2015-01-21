@@ -25,6 +25,9 @@
 #include <xen/numa.h>
 #include <xen/nodemask.h>
 #include <xen/guest_access.h>
+#include <xen/hypercall.h>
+#include <xen/mem_event.h>
+#include <xen/mem_access.h>
 #include <asm/current.h>
 #include <asm/asm_defns.h>
 #include <asm/page.h>
@@ -34,18 +37,8 @@
 #include <asm/msr.h>
 #include <asm/setup.h>
 #include <asm/numa.h>
-#include <asm/mem_event.h>
 #include <asm/mem_sharing.h>
 #include <public/memory.h>
-
-/* Parameters for PFN/MADDR compression. */
-unsigned long __read_mostly max_pdx;
-unsigned long __read_mostly pfn_pdx_bottom_mask = ~0UL;
-unsigned long __read_mostly ma_va_bottom_mask = ~0UL;
-unsigned long __read_mostly pfn_top_mask = 0;
-unsigned long __read_mostly ma_top_mask = 0;
-unsigned long __read_mostly pfn_hole_mask = 0;
-unsigned int __read_mostly pfn_pdx_hole_shift = 0;
 
 unsigned int __read_mostly m2p_compat_vstart = __HYPERVISOR_COMPAT_VIRT_START;
 
@@ -56,14 +49,6 @@ l2_pgentry_t __attribute__ ((__section__ (".bss.page_aligned")))
     l2_bootmap[L2_PAGETABLE_ENTRIES];
 
 l2_pgentry_t *compat_idle_pg_table_l2;
-
-int __mfn_valid(unsigned long mfn)
-{
-    return likely(mfn < max_page) &&
-           likely(!(mfn & pfn_hole_mask)) &&
-           likely(test_bit(pfn_to_pdx(mfn) / PDX_GROUP_COUNT,
-                           pdx_group_valid));
-}
 
 void *do_page_walk(struct vcpu *v, unsigned long addr)
 {
@@ -115,42 +100,6 @@ void *do_page_walk(struct vcpu *v, unsigned long addr)
 
  ret:
     return map_domain_page(mfn) + (addr & ~PAGE_MASK);
-}
-
-void __init pfn_pdx_hole_setup(unsigned long mask)
-{
-    unsigned int i, j, bottom_shift = 0, hole_shift = 0;
-
-    /*
-     * We skip the first MAX_ORDER bits, as we never want to compress them.
-     * This guarantees that page-pointer arithmetic remains valid within
-     * contiguous aligned ranges of 2^MAX_ORDER pages. Among others, our
-     * buddy allocator relies on this assumption.
-     */
-    for ( j = MAX_ORDER-1; ; )
-    {
-        i = find_next_zero_bit(&mask, BITS_PER_LONG, j);
-        j = find_next_bit(&mask, BITS_PER_LONG, i);
-        if ( j >= BITS_PER_LONG )
-            break;
-        if ( j - i > hole_shift )
-        {
-            hole_shift = j - i;
-            bottom_shift = i;
-        }
-    }
-    if ( !hole_shift )
-        return;
-
-    printk(KERN_INFO "PFN compression on bits %u...%u\n",
-           bottom_shift, bottom_shift + hole_shift - 1);
-
-    pfn_pdx_hole_shift  = hole_shift;
-    pfn_pdx_bottom_mask = (1UL << bottom_shift) - 1;
-    ma_va_bottom_mask   = (PAGE_SIZE << bottom_shift) - 1;
-    pfn_hole_mask       = ((1UL << hole_shift) - 1) << bottom_shift;
-    pfn_top_mask        = ~(pfn_pdx_bottom_mask | pfn_hole_mask);
-    ma_top_mask         = pfn_top_mask << PAGE_SHIFT;
 }
 
 /*
@@ -948,17 +897,17 @@ void __init subarch_init_memory(void)
     }
 }
 
-long subarch_memory_op(int op, XEN_GUEST_HANDLE_PARAM(void) arg)
+long subarch_memory_op(unsigned long cmd, XEN_GUEST_HANDLE_PARAM(void) arg)
 {
     struct xen_machphys_mfn_list xmml;
     l3_pgentry_t l3e;
     l2_pgentry_t l2e;
-    unsigned long v;
+    unsigned long v, limit;
     xen_pfn_t mfn, last_mfn;
     unsigned int i;
     long rc = 0;
 
-    switch ( op )
+    switch ( cmd )
     {
     case XENMEM_machphys_mfn_list:
         if ( copy_from_guest(&xmml, arg, 1) )
@@ -1000,6 +949,34 @@ long subarch_memory_op(int op, XEN_GUEST_HANDLE_PARAM(void) arg)
 
         break;
 
+    case XENMEM_machphys_compat_mfn_list:
+        if ( copy_from_guest(&xmml, arg, 1) )
+            return -EFAULT;
+
+        limit = (unsigned long)(compat_machine_to_phys_mapping + max_page);
+        if ( limit > RDWR_COMPAT_MPT_VIRT_END )
+            limit = RDWR_COMPAT_MPT_VIRT_END;
+        for ( i = 0, v = RDWR_COMPAT_MPT_VIRT_START, last_mfn = 0;
+              (i != xmml.max_extents) && (v < limit);
+              i++, v += 1 << L2_PAGETABLE_SHIFT )
+        {
+            l2e = compat_idle_pg_table_l2[l2_table_offset(v)];
+            if ( l2e_get_flags(l2e) & _PAGE_PRESENT )
+                mfn = l2e_get_pfn(l2e);
+            else
+                mfn = last_mfn;
+            ASSERT(mfn);
+            if ( copy_to_guest_offset(xmml.extent_start, i, &mfn, 1) )
+                return -EFAULT;
+            last_mfn = mfn;
+        }
+
+        xmml.nr_extents = i;
+        if ( __copy_to_guest(arg, &xmml, 1) )
+            rc = -EFAULT;
+
+        break;
+
     case XENMEM_get_sharing_freed_pages:
         return mem_sharing_get_nr_saved_mfns();
 
@@ -1007,16 +984,16 @@ long subarch_memory_op(int op, XEN_GUEST_HANDLE_PARAM(void) arg)
         return mem_sharing_get_nr_shared_mfns();
 
     case XENMEM_paging_op:
-    case XENMEM_access_op:
     {
         xen_mem_event_op_t meo;
         if ( copy_from_guest(&meo, arg, 1) )
             return -EFAULT;
-        rc = do_mem_event_op(op, meo.domain, (void *) &meo);
+        rc = do_mem_event_op(cmd, meo.domain, &meo);
         if ( !rc && __copy_to_guest(arg, &meo, 1) )
             return -EFAULT;
         break;
     }
+
     case XENMEM_sharing_op:
     {
         xen_mem_sharing_op_t mso;
@@ -1024,7 +1001,7 @@ long subarch_memory_op(int op, XEN_GUEST_HANDLE_PARAM(void) arg)
             return -EFAULT;
         if ( mso.op == XENMEM_sharing_op_audit )
             return mem_sharing_audit(); 
-        rc = do_mem_event_op(op, mso.domain, (void *) &mso);
+        rc = do_mem_event_op(cmd, mso.domain, &mso);
         if ( !rc && __copy_to_guest(arg, &mso, 1) )
             return -EFAULT;
         break;
@@ -1447,15 +1424,15 @@ int memory_add(unsigned long spfn, unsigned long epfn, unsigned int pxm)
     if ( ret )
         goto destroy_m2p;
 
-    if ( !need_iommu(dom0) )
+    if ( !need_iommu(hardware_domain) )
     {
         for ( i = spfn; i < epfn; i++ )
-            if ( iommu_map_page(dom0, i, i, IOMMUF_readable|IOMMUF_writable) )
+            if ( iommu_map_page(hardware_domain, i, i, IOMMUF_readable|IOMMUF_writable) )
                 break;
         if ( i != epfn )
         {
             while (i-- > old_max)
-                iommu_unmap_page(dom0, i);
+                iommu_unmap_page(hardware_domain, i);
             goto destroy_m2p;
         }
     }

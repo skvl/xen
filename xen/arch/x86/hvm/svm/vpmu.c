@@ -203,6 +203,8 @@ static void amd_vpmu_load(struct vcpu *v)
         return;
     }
 
+    vpmu_set(vpmu, VPMU_CONTEXT_LOADED);
+
     context_load(v);
 }
 
@@ -276,10 +278,13 @@ static void context_update(unsigned int msr, u64 msr_content)
     }
 }
 
-static int amd_vpmu_do_wrmsr(unsigned int msr, uint64_t msr_content)
+static int amd_vpmu_do_wrmsr(unsigned int msr, uint64_t msr_content,
+                             uint64_t supported)
 {
     struct vcpu *v = current;
     struct vpmu_struct *vpmu = vcpu_vpmu(v);
+
+    ASSERT(!supported);
 
     /* For all counters, enable guest only mode for HVM guest */
     if ( (get_pmu_reg_type(msr) == MSR_TYPE_CTRL) &&
@@ -397,9 +402,6 @@ static int amd_vpmu_initialise(struct vcpu *v)
 static void amd_vpmu_destroy(struct vcpu *v)
 {
     struct vpmu_struct *vpmu = vcpu_vpmu(v);
-
-    if ( !vpmu_is_set(vpmu, VPMU_CONTEXT_ALLOCATED) )
-        return;
 
     if ( ((struct amd_vpmu_context *)vpmu->context)->msr_bitmap_set )
         amd_vpmu_unset_msr_bitmap(v);

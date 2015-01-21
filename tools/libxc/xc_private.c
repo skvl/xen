@@ -33,6 +33,10 @@
 
 #define XENCTRL_OSDEP "XENCTRL_OSDEP"
 
+#if !defined (__MINIOS__) && !defined(__RUMPUSER_XEN__)
+#define DO_DYNAMIC_OSDEP
+#endif
+
 /*
  * Returns a (shallow) copy of the xc_osdep_info_t for the
  * active OS interface.
@@ -50,7 +54,7 @@
 static int xc_osdep_get_info(xc_interface *xch, xc_osdep_info_t *info)
 {
     int rc = -1;
-#ifndef __MINIOS__
+#ifdef DO_DYNAMIC_OSDEP
     const char *lib = getenv(XENCTRL_OSDEP);
     xc_osdep_info_t *pinfo;
     void *dl_handle = NULL;
@@ -86,7 +90,7 @@ static int xc_osdep_get_info(xc_interface *xch, xc_osdep_info_t *info)
         info->dl_handle = dl_handle;
     }
     else
-#endif
+#endif /*DO_DYNAMIC_OSDEP*/
     {
         *info = xc_osdep_info;
         info->dl_handle = NULL;
@@ -94,21 +98,21 @@ static int xc_osdep_get_info(xc_interface *xch, xc_osdep_info_t *info)
 
     rc = 0;
 
-#ifndef __MINIOS__
+#ifdef DO_DYNAMIC_OSDEP
 out:
     if ( dl_handle && rc == -1 )
         dlclose(dl_handle);
-#endif
+#endif /*DO_DYNAMIC_OSDEP*/
 
     return rc;
 }
 
 static void xc_osdep_put(xc_osdep_info_t *info)
 {
-#ifndef __MINIOS__
+#ifdef DO_DYNAMIC_OSDEP
     if ( info->dl_handle )
         dlclose(info->dl_handle);
-#endif
+#endif /*DO_DYNAMIC_OSDEP*/
 }
 
 static const char *xc_osdep_type_name(enum xc_osdep_type type)
@@ -588,10 +592,6 @@ int xc_get_pfn_list(xc_interface *xch,
     DECLARE_HYPERCALL_BOUNCE(pfn_buf, max_pfns * sizeof(*pfn_buf), XC_HYPERCALL_BUFFER_BOUNCE_OUT);
     int ret;
 
-#ifdef VALGRIND
-    memset(pfn_buf, 0, max_pfns * sizeof(*pfn_buf));
-#endif
-
     if ( xc_hypercall_bounce_pre(xch, pfn_buf) )
     {
         PERROR("xc_get_pfn_list: pfn_buf bounce failed");
@@ -613,8 +613,10 @@ int xc_get_pfn_list(xc_interface *xch,
 long xc_get_tot_pages(xc_interface *xch, uint32_t domid)
 {
     xc_dominfo_t info;
-    return (xc_domain_getinfo(xch, domid, 1, &info) != 1) ?
-        -1 : info.nr_pages;
+    if ( (xc_domain_getinfo(xch, domid, 1, &info) != 1) ||
+         (info.domid != domid) )
+        return -1;
+    return info.nr_pages;
 }
 
 int xc_copy_to_domain_page(xc_interface *xch,
@@ -632,17 +634,19 @@ int xc_copy_to_domain_page(xc_interface *xch,
     return 0;
 }
 
-int xc_clear_domain_page(xc_interface *xch,
-                         uint32_t domid,
-                         unsigned long dst_pfn)
+int xc_clear_domain_pages(xc_interface *xch,
+                          uint32_t domid,
+                          unsigned long dst_pfn,
+                          int num)
 {
+    size_t size = num * PAGE_SIZE;
     void *vaddr = xc_map_foreign_range(
-        xch, domid, PAGE_SIZE, PROT_WRITE, dst_pfn);
+        xch, domid, size, PROT_WRITE, dst_pfn);
     if ( vaddr == NULL )
         return -1;
-    memset(vaddr, 0, PAGE_SIZE);
-    munmap(vaddr, PAGE_SIZE);
-    xc_domain_cacheflush(xch, domid, dst_pfn, 1);
+    memset(vaddr, 0, size);
+    munmap(vaddr, size);
+    xc_domain_cacheflush(xch, domid, dst_pfn, num);
     return 0;
 }
 
@@ -706,11 +710,6 @@ int xc_version(xc_interface *xch, int cmd, void *arg)
         PERROR("Could not bounce buffer for version hypercall");
         return -ENOMEM;
     }
-
-#ifdef VALGRIND
-    if (sz != 0)
-        memset(hypercall_bounce_get(bounce), 0, sz);
-#endif
 
     rc = do_xen_version(xch, cmd, HYPERCALL_BUFFER(arg));
 

@@ -13,6 +13,7 @@
 #define __ASM_X86_HVM_EMULATE_H__
 
 #include <xen/config.h>
+#include <asm/hvm/hvm.h>
 #include <asm/x86_emulate.h>
 
 struct hvm_emulate_ctxt {
@@ -28,15 +29,18 @@ struct hvm_emulate_ctxt {
     unsigned long seg_reg_dirty;
 
     bool_t exn_pending;
-    uint8_t exn_vector;
-    uint8_t exn_insn_len;
-    int32_t exn_error_code;
+    struct hvm_trap trap;
 
     uint32_t intr_shadow;
 };
 
 int hvm_emulate_one(
     struct hvm_emulate_ctxt *hvmemul_ctxt);
+int hvm_emulate_one_no_write(
+    struct hvm_emulate_ctxt *hvmemul_ctxt);
+void hvm_mem_event_emulate_one(bool_t nowrite,
+    unsigned int trapnr,
+    unsigned int errcode);
 void hvm_emulate_prepare(
     struct hvm_emulate_ctxt *hvmemul_ctxt,
     struct cpu_user_regs *regs);
@@ -49,5 +53,8 @@ struct segment_register *hvmemul_get_seg_reg(
 int hvmemul_do_pio(
     unsigned long port, unsigned long *reps, int size,
     paddr_t ram_gpa, int dir, int df, void *p_data);
+
+void hvm_dump_emulation_state(const char *prefix,
+                              struct hvm_emulate_ctxt *hvmemul_ctxt);
 
 #endif /* __ASM_X86_HVM_EMULATE_H__ */

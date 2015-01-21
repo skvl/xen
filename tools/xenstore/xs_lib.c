@@ -30,7 +30,7 @@
 const char *xs_daemon_rootdir(void)
 {
 	char *s = getenv("XENSTORED_ROOTDIR");
-	return (s ? s : "/var/lib/xenstored");
+	return (s ? s : XEN_LIB_STORED);
 }
 
 const char *xs_daemon_rundir(void)
@@ -79,8 +79,9 @@ const char *xs_domain_dev(void)
 	char *s = getenv("XENSTORED_PATH");
 	if (s)
 		return s;
-
-#if defined(__linux__)
+#if defined(__RUMPUSER_XEN__)
+	return "/dev/xen/xenbus";
+#elif defined(__linux__)
 	return "/proc/xen/xenbus";
 #elif defined(__NetBSD__)
 	return "/kern/xen/xenbus";

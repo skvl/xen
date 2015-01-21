@@ -82,7 +82,7 @@ void passive_domain_destroy(struct vcpu *v)
 		model->free_msr(v);
 }
 
-static int nmi_callback(struct cpu_user_regs *regs, int cpu)
+static int nmi_callback(const struct cpu_user_regs *regs, int cpu)
 {
 	int xen_mode, ovf;
 
@@ -274,7 +274,7 @@ static void nmi_cpu_stop(void * dummy)
 	 * power on apic lvt contain a zero vector nr which are legal only for
 	 * NMI delivery mode. So inhibit apic err before restoring lvtpc
 	 */
-	if ( !(apic_read(APIC_LVTPC) & APIC_DM_NMI)
+	if ( (apic_read(APIC_LVTPC) & APIC_MODE_MASK) != APIC_DM_NMI
 	     || (apic_read(APIC_LVTPC) & APIC_LVT_MASKED) )
 	{
 		printk("nmi_stop: APIC not good %ul\n", apic_read(APIC_LVTPC));

@@ -28,10 +28,12 @@
 #include <xen/sched.h>
 #include <xen/acpi.h>
 #include <xen/keyhandler.h>
+#include <xen/softirq.h>
 #include <asm/mc146818rtc.h>
 #include <asm/smp.h>
 #include <asm/desc.h>
 #include <asm/msi.h>
+#include <asm/setup.h>
 #include <mach_apic.h>
 #include <io_ports.h>
 #include <public/physdev.h>
@@ -1091,7 +1093,7 @@ static inline void UNEXPECTED_IO_APIC(void)
 {
 }
 
-static void /*__init*/ __print_IO_APIC(void)
+static void /*__init*/ __print_IO_APIC(bool_t boot)
 {
     int apic, i;
     union IO_APIC_reg_00 reg_00;
@@ -1112,6 +1114,9 @@ static void /*__init*/ __print_IO_APIC(void)
     printk(KERN_INFO "testing the IO APIC.......................\n");
 
     for (apic = 0; apic < nr_ioapics; apic++) {
+        if ( !boot )
+            process_pending_softirqs();
+
         if (!nr_ioapic_entries[apic])
             continue;
 
@@ -1215,6 +1220,10 @@ static void /*__init*/ __print_IO_APIC(void)
     printk(KERN_DEBUG "IRQ to pin mappings:\n");
     for (i = 0; i < nr_irqs_gsi; i++) {
         struct irq_pin_list *entry = irq_2_pin + i;
+
+        if ( !boot && !(i & 0x1f) )
+            process_pending_softirqs();
+
         if (entry->pin < 0)
             continue;
         printk(KERN_DEBUG "IRQ%d ", irq_to_desc(i)->arch.vector);
@@ -1235,12 +1244,12 @@ static void /*__init*/ __print_IO_APIC(void)
 static void __init print_IO_APIC(void)
 {
     if (apic_verbosity != APIC_QUIET)
-        __print_IO_APIC();
+        __print_IO_APIC(1);
 }
 
 static void _print_IO_APIC_keyhandler(unsigned char key)
 {
-    __print_IO_APIC();
+    __print_IO_APIC(0);
 }
 static struct keyhandler print_IO_APIC_keyhandler = {
     .diagnostic = 1,
@@ -2363,7 +2372,7 @@ int ioapic_guest_write(unsigned long physbase, unsigned int reg, u32 val)
      * that dom0 pirq == irq.
      */
     pirq = (irq >= 256) ? irq : rte.vector;
-    if ( (pirq < 0) || (pirq >= dom0->nr_pirqs) )
+    if ( (pirq < 0) || (pirq >= hardware_domain->nr_pirqs) )
         return -EINVAL;
     
     if ( desc->action )
@@ -2399,10 +2408,10 @@ int ioapic_guest_write(unsigned long physbase, unsigned int reg, u32 val)
 
         printk(XENLOG_INFO "allocated vector %02x for irq %d\n", ret, irq);
     }
-    spin_lock(&dom0->event_lock);
-    ret = map_domain_pirq(dom0, pirq, irq,
+    spin_lock(&hardware_domain->event_lock);
+    ret = map_domain_pirq(hardware_domain, pirq, irq,
             MAP_PIRQ_TYPE_GSI, NULL);
-    spin_unlock(&dom0->event_lock);
+    spin_unlock(&hardware_domain->event_lock);
     if ( ret < 0 )
         return ret;
 
@@ -2454,6 +2463,9 @@ void dump_ioapic_irq_info(void)
 
     for ( irq = 0; irq < nr_irqs_gsi; irq++ )
     {
+        if ( !(irq & 0x1f) )
+            process_pending_softirqs();
+
         entry = &irq_2_pin[irq];
         if ( entry->pin == -1 )
             continue;
@@ -2595,3 +2607,14 @@ void __init init_ioapic_mappings(void)
            nr_irqs_gsi, nr_irqs - nr_irqs_gsi);
 }
 
+unsigned int arch_hwdom_irqs(domid_t domid)
+{
+    unsigned int n = fls(num_present_cpus());
+
+    if ( !domid )
+        n = min(n, dom0_max_vcpus());
+    n = min(nr_irqs_gsi + n * NR_DYNAMIC_VECTORS, nr_irqs);
+    printk("Dom%d has maximum %u PIRQs\n", domid, n);
+
+    return n;
+}

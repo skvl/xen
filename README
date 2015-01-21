@@ -1,9 +1,9 @@
 #################################
-__  __            _  _   _  _ 
-\ \/ /___ _ __   | || | | || |
- \  // _ \ '_ \  | || |_| || |_
- /  \  __/ | | | |__   _|__   _|
-/_/\_\___|_| |_|    |_|(_) |_|
+__  __            _  _    ____   ___
+\ \/ /___ _ __   | || |  | ___| / _ \
+ \  // _ \ '_ \  | || |_ |___ \| | | |
+ /  \  __/ | | | |__   _| ___) | |_| |
+/_/\_\___|_| |_|    |_|(_)____(_)___/
 
 #################################
 
@@ -19,16 +19,37 @@ is freely-distributable Open Source software, released under the GNU
 GPL. Since its initial public release, Xen has grown a large
 development community, spearheaded by xen.org (http://www.xen.org).
 
-The 4.4 release offers a number of improvements, including solid
-support for libvirt running on libxl, a new scalable event channel
-interface, improved flexibility for driver domains, an experimental
-"PVH" virtualization mode, improved kexec support, and improved
-support for SPICE clients.  Additionally, the ARM platform has had a
-number of improvements.  The most important of these is that the
-hypervisor ABIs for both arm32 and arm64 have been declared stable.
-Additionally, many new ARM platforms have been added, and changes have
-been made that will make adding new platforms easier.  And as always,
-there are a number of performance, stability, and security
+The 4.5 release offers a number of improvements, including:
+improvements for large scale machines during bootup and for PCI
+passthrough; multiple IO-REQ servers (many QEMUs for a guest); soft
+affinity for vCPUs (aka NUMA affinity); and API expansion for guest
+introspection.  We also have number of updates for CPU specific
+changes, such as: Broadwell Supervisor Mode Access Prevention; Haswell
+Server Cache QoS Monitoring aka Intel Resource Director Technology;
+further extensions to vAPIC (SandyBridge feature); fixes in AMD
+microcode loading; Data Breaking Extensions; and further MSR masking
+support on AMD.
+
+On the experimental side we have added a new Real-Time Deferrable
+Server Based CPU Scheduler (rtds), and PVH initial domain (dom0)
+support for Intel CPUs.
+
+Additionally, 4.5 has a huge update to the ARM code, including support
+for: up to 1TB in guests; up to 8 CPUs; Power State Coordination
+Interface (0.2) to power up and down CPUs; UEFI booting; IOMMU support
+(SMMUv1); Super Page (2MB) support; passthrough of MMIO regions to
+guests; and lower interrupt latency.
+
+The toolstack has expanded to include support for: VM Generation ID (a
+Windows 2012 Server requirement); Remus initial support (for high
+availability) in libxl (since xend has been removed); libxenlight JSON
+support, HVM guest direct kernel boot, and persistent configuration
+support; systemd support; performance optimizations in oxenstored;
+and support in QEMU for expanding the PCI hole.
+
+Lastly, we have removed the Python toolstack (xend).
+
+And as always, there are a number of performance, stability, and security
 improvements under-the hood.
 
 This file contains some quick-start instructions to install Xen on
@@ -59,7 +80,6 @@ provided by your OS distributor:
     * pkg-config
     * bridge-utils package (/sbin/brctl)
     * iproute package (/sbin/ip)
-    * udev
     * GNU bison and GNU flex
     * GNU gettext
     * 16-bit x86 assembler, loader and compiler (dev86 rpm or bin86 & bcc debs)
@@ -74,6 +94,11 @@ disabled at compile time:
     * cmake (if building vtpm stub domains)
     * markdown
     * figlet (for generating the traditional Xen start of day banner)
+    * systemd daemon development files
+    * Development install of libnl3 (e.g., libnl-3-200,
+      libnl-3-dev, etc).  Required if network buffering is desired
+      when using Remus with libxl.  See docs/README.remus for detailed
+      information.
 
 Second, you need to acquire a suitable kernel for use in domain 0. If
 possible you should use a kernel provided by your OS distributor. If
@@ -88,8 +113,8 @@ performed with root privileges.]
 
 1. Download and untar the source tarball file. This will be a
    file named xen-unstable-src.tgz, or xen-$version-src.tgz.
-   You can also pull the current version from the mercurial
-   repository at http://xenbits.xen.org/
+   You can also pull the current version from the git or mercurial
+   repositories at http://xenbits.xen.org/
 
     # tar xzf xen-unstable-src.tgz
 
@@ -107,8 +132,7 @@ performed with root privileges.]
     # make world
     # make install
 
-   If you want, you can run ./configure --help to see the list of
-   options available options when building and installing Xen.
+   See the documentation in the INSTALL file for more info.
 
    This will create and install onto the local machine. It will build
    the xen binary (xen.gz), the tools and the documentation.
@@ -131,35 +155,46 @@ performed with root privileges.]
    versions of those scripts, so that you can copy the dist directory
    to another machine and install from that distribution.
 
+xenstore: xenstored and oxenstored
+====================================
+
+Xen uses a configuration database called xenstore [0] to maintain configuration
+and status information shared between domains. A daemon is implemented as part
+of xenstore to act as an interface for access to the database for dom0 and
+guests. Two xenstored daemons are supported, one written in C which we refer
+to as the xenstored (sometimes referred to as cxenstored), and another written
+in Ocaml called oxenstored. Details for xenstore and the different
+implementations can be found on the wiki's xenstore reference guide [1] and
+the xenstored [2] page. You can choose which xenstore you want to enable as
+default on a system through configure:
+
+	./configure --with-xenstored=xenstored
+	./configure --with-xenstored=oxenstored
+
+By default oxenstored will be used if the ocaml development tools are found.
+If you enable oxenstored the xenstored will still be built and installed,
+the xenstored used can be changed through the configuration file:
+
+/etc/sysconfig/xencommons
+or
+/etc/default/xencommons
+
+You can change the preferred xenstored you want to use in the configuration
+but since we cannot stop the daemon a reboot will be required to make the
+change take effect.
+
+[0] http://wiki.xen.org/wiki/XenStore
+[1] http://wiki.xen.org/wiki/XenStoreReference
+[2] http://wiki.xen.org/wiki/Xenstored
+
 Python Runtime Libraries
 ========================
 
-Xend (the Xen daemon) has the following runtime dependencies:
+Various tools, such as pygrub, have the following runtime dependencies:
 
     * Python 2.3 or later.
-      In some distros, the XML-aspects to the standard library
-      (xml.dom.minidom etc) are broken out into a separate python-xml package.
-      This is also required.
-      In more recent versions of Debian and Ubuntu the XML-aspects are included
-      in the base python package however (python-xml has been removed
-      from Debian in squeeze and from Ubuntu in intrepid).
-
           URL:    http://www.python.org/
           Debian: python
-
-    * For optional SSL support, pyOpenSSL:
-          URL:    http://pyopenssl.sourceforge.net/
-          Debian: python-pyopenssl
-
-    * For optional PAM support, PyPAM:
-          URL:    http://www.pangalactic.org/PyPAM/
-          Debian: python-pam
-
-    * For optional XenAPI support in XM, lxml:
-          URL:    http://lxml.de/
-          Debian: python-lxml
-          YUM:    python-lxml
-
 
 Intel(R) Trusted Execution Technology Support
 =============================================

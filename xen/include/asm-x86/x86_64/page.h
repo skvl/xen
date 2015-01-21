@@ -35,17 +35,10 @@
 #include <xen/config.h>
 #include <asm/types.h>
 
+#include <xen/pdx.h>
+
 extern unsigned long xen_virt_end;
 
-extern unsigned long max_pdx;
-extern unsigned long pfn_pdx_bottom_mask, ma_va_bottom_mask;
-extern unsigned int pfn_pdx_hole_shift;
-extern unsigned long pfn_hole_mask;
-extern unsigned long pfn_top_mask, ma_top_mask;
-extern void pfn_pdx_hole_setup(unsigned long);
-
-#define page_to_pdx(pg)  ((pg) - frame_table)
-#define pdx_to_page(pdx) (frame_table + (pdx))
 #define spage_to_pdx(spg) (((spg) - spage_table)<<(SUPERPAGE_SHIFT-PAGE_SHIFT))
 #define pdx_to_spage(pdx) (spage_table + ((pdx)>>(SUPERPAGE_SHIFT-PAGE_SHIFT)))
 /*
@@ -56,20 +49,6 @@ extern void pfn_pdx_hole_setup(unsigned long);
                           PAGE_SHIFT)
 #define pdx_to_virt(pdx) ((void *)(DIRECTMAP_VIRT_START + \
                                    ((unsigned long)(pdx) << PAGE_SHIFT)))
-
-extern int __mfn_valid(unsigned long mfn);
-
-static inline unsigned long pfn_to_pdx(unsigned long pfn)
-{
-    return (pfn & pfn_pdx_bottom_mask) |
-           ((pfn & pfn_top_mask) >> pfn_pdx_hole_shift);
-}
-
-static inline unsigned long pdx_to_pfn(unsigned long pdx)
-{
-    return (pdx & pfn_pdx_bottom_mask) |
-           ((pdx << pfn_pdx_hole_shift) & pfn_top_mask);
-}
 
 static inline unsigned long pfn_to_sdx(unsigned long pfn)
 {
@@ -161,20 +140,15 @@ typedef l4_pgentry_t root_pgentry_t;
 /* Bit 22 of a 24-bit flag mask. This corresponds to bit 62 of a pte.*/
 #define _PAGE_GNTTAB (1U<<22)
 
-#define PAGE_HYPERVISOR         (__PAGE_HYPERVISOR         | _PAGE_GLOBAL)
-#define PAGE_HYPERVISOR_NOCACHE (__PAGE_HYPERVISOR_NOCACHE | _PAGE_GLOBAL)
-
-#define USER_MAPPINGS_ARE_GLOBAL
-#ifdef USER_MAPPINGS_ARE_GLOBAL
 /*
  * Bit 12 of a 24-bit flag mask. This corresponds to bit 52 of a pte.
  * This is needed to distinguish between user and kernel PTEs since _PAGE_USER
  * is asserted for both.
  */
 #define _PAGE_GUEST_KERNEL (1U<<12)
-#else
-#define _PAGE_GUEST_KERNEL 0
-#endif
+
+#define PAGE_HYPERVISOR         (__PAGE_HYPERVISOR         | _PAGE_GLOBAL)
+#define PAGE_HYPERVISOR_NOCACHE (__PAGE_HYPERVISOR_NOCACHE | _PAGE_GLOBAL)
 
 #endif /* __X86_64_PAGE_H__ */
 
