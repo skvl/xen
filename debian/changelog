@@ -1,3 +1,10 @@
+xen (4.5.0-2) UNRELEASED; urgency=medium
+
+  [ Ian Campbell ]
+  * Use xen-init-dom0 from initscript when it is available.
+
+ -- Ian Campbell <ijc@debian.org>  Tue, 27 Jan 2015 09:46:21 +0000
+
 xen (4.5.0-1) experimental; urgency=medium
 
   [ Ian Campbell ]

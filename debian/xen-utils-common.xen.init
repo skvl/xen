@@ -193,8 +193,17 @@ xenstored_start()
 	start-stop-daemon --start --quiet --pidfile "$XENSTORED_PIDFILE" --exec "$XENSTORED" -- \
 		$XENSTORED_ARGS --pid-file="$XENSTORED_PIDFILE" \
 		|| return 2
-	xenstore-write "/local/domain/0/name" "Domain-0"
-	xenstore-write "/local/domain/0/domid" "0"
+}
+
+init_dom0()
+{
+	log_progress_msg "init-dom0"
+	if [ -e $ROOT/bin/xen-init-dom0 ] ; then
+	    $ROOT/bin/xen-init-dom0
+	else
+	    xenstore-write "/local/domain/0/name" "Domain-0"
+	    xenstore-write "/local/domain/0/domid" "0"
+	fi
 }
 
 case "$1" in
@@ -223,6 +232,11 @@ case "$1" in
 		*) log_end_msg 1; exit ;;
 	esac
 	xend_start
+	case "$?" in
+		0|1) ;;
+		*) log_end_msg 1; exit ;;
+	esac
+	init_dom0
 	case "$?" in
 		0|1) ;;
 		*) log_end_msg 1; exit ;;
