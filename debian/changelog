@@ -1,9 +1,13 @@
 xen (4.4.1-7) UNRELEASED; urgency=medium
 
+  [ Bastian Blank ]
   * Fix use after free on guest shutdown.
     CVE-2015-0361
   * Fix rate limits of guest triggered locking.
     CVE-2015-1563
+
+  [ Ian Campbell ]
+  * Use xen-init-dom0 from initscript when it is available.
 
  -- Bastian Blank <waldi@debian.org>  Sat, 28 Feb 2015 23:06:03 +0100
 
