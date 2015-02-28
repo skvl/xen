@@ -199,7 +199,7 @@ init_dom0()
 {
 	log_progress_msg "init-dom0"
 	if [ -e $ROOT/bin/xen-init-dom0 ] ; then
-	    $ROOT/bin/xen-init-dom0
+	    $ROOT/bin/xen-init-dom0 > /dev/null
 	else
 	    xenstore-write "/local/domain/0/name" "Domain-0"
 	    xenstore-write "/local/domain/0/domid" "0"
