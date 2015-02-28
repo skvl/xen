@@ -46,3 +46,5 @@
 0046-libxc-don-t-leak-buffer-containing-the-uncompressed-.patch
 0047-tools-libxl-do-not-leak-diskpath-during-local-disk-a.patch
 CVE-2014-9065.diff
+CVE-2015-0361.diff
+CVE-2015-1563.diff
