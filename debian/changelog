@@ -1,3 +1,16 @@
+xen (4.4.1-7) unstable; urgency=medium
+
+  [ Bastian Blank ]
+  * Fix use after free on guest shutdown.
+    CVE-2015-0361
+  * Fix rate limits of guest triggered locking.
+    CVE-2015-1563
+
+  [ Ian Campbell ]
+  * Use xen-init-dom0 from initscript when it is available.
+
+ -- Bastian Blank <waldi@debian.org>  Sun, 01 Mar 2015 00:56:58 +0100
+
 xen (4.4.1-6) unstable; urgency=medium
 
   * Fix starvation of writers in locks.

@@ -34,6 +34,8 @@ class SXPParser(object):
 class Data(object):
     def __call__(self, out):
         for domid, info in sorted(self.data.iteritems(), reverse=True):
+            if domid == 0:
+                continue
             out.write('{!s} {}\n'.format(domid, *info))
 
 
@@ -57,8 +59,6 @@ class DataSXP(Data):
                     data = dict(j for j in i if len(j) == 2)
                     domid = int(data['domid'])
                     name = data['name']
-                    if domid == 0:
-                        continue
                     d[domid] = (name, )
                 except (KeyError, ValueError) as e:
                     pass
