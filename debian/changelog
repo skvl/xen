@@ -1,3 +1,14 @@
+xen (4.4.1-8) UNRELEASED; urgency=medium
+
+  * Fix uninitialized return from wrong-sized reads from system devices.
+    CVE-2015-2044
+  * Fix hypervisor memory leak in uninitialized structures.
+    CVE-2015-2045
+  * Fix hypervisor memory corruption in x86 emulation. (closes: #780227)
+    CVE-2015-2151
+
+ -- Bastian Blank <waldi@debian.org>  Tue, 10 Mar 2015 21:07:34 +0100
+
 xen (4.4.1-7) unstable; urgency=medium
 
   [ Bastian Blank ]
