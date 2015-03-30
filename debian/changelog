@@ -1,3 +1,12 @@
+xen (4.4.1-9) UNRELEASED; urgency=medium
+
+  * Explicitly disable graphics for qemu. (closes: #780975)
+    CVE-2015-2152
+  * Update fix for insufficient permissions checks on arm.
+    CVE-2014-3969
+
+ -- Bastian Blank <waldi@debian.org>  Mon, 30 Mar 2015 13:57:11 +0200
+
 xen (4.4.1-8) unstable; urgency=high
 
   * Fix uninitialized return from wrong-sized reads from system devices.
