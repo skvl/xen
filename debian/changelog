@@ -4,6 +4,10 @@ xen (4.4.1-9) UNRELEASED; urgency=medium
     CVE-2015-2152
   * Update fix for insufficient permissions checks on arm.
     CVE-2014-3969
+  * Break apart long latenty MMIO operations. (closes: #781620)
+    CVE-2015-2752
+  * Disallow certain domain control operations. (closes: #781620)
+    CVE-2015-2751
 
  -- Bastian Blank <waldi@debian.org>  Mon, 30 Mar 2015 13:57:11 +0200
 

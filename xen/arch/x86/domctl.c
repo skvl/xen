@@ -655,6 +655,11 @@ long arch_do_domctl(
              (gfn + nr_mfns - 1) < gfn ) /* wrap? */
             break;
 
+        ret = -E2BIG;
+        /* Must break hypercall up as this could take a while. */
+        if ( nr_mfns > 64 )
+            break;
+
         ret = -EPERM;
         if ( !iomem_access_permitted(current->domain, mfn, mfn + nr_mfns - 1) )
             break;
@@ -955,6 +960,10 @@ long arch_do_domctl(
     {
         xen_guest_tsc_info_t info;
 
+        ret = -EINVAL;
+        if ( d == current->domain ) /* no domain_pause() */
+            break;
+
         domain_pause(d);
         tsc_get_info(d, &info.tsc_mode,
                         &info.elapsed_nsec,
@@ -970,6 +979,10 @@ long arch_do_domctl(
 
     case XEN_DOMCTL_settscinfo:
     {
+        ret = -EINVAL;
+        if ( d == current->domain ) /* no domain_pause() */
+            break;
+
         domain_pause(d);
         tsc_set_info(d, domctl->u.tsc_info.info.tsc_mode,
                      domctl->u.tsc_info.info.elapsed_nsec,
