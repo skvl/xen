@@ -1,4 +1,4 @@
-xen (4.4.1-9) UNRELEASED; urgency=medium
+xen (4.4.1-9) unstable; urgency=high
 
   * Explicitly disable graphics for qemu. (closes: #780975)
     CVE-2015-2152
@@ -9,7 +9,7 @@ xen (4.4.1-9) UNRELEASED; urgency=medium
   * Disallow certain domain control operations. (closes: #781620)
     CVE-2015-2751
 
- -- Bastian Blank <waldi@debian.org>  Mon, 30 Mar 2015 13:57:11 +0200
+ -- Bastian Blank <waldi@debian.org>  Mon, 06 Apr 2015 20:22:59 +0200
 
 xen (4.4.1-8) unstable; urgency=high
 
