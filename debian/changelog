@@ -1,3 +1,16 @@
+xen (4.4.1-9) unstable; urgency=high
+
+  * Explicitly disable graphics for qemu. (closes: #780975)
+    CVE-2015-2152
+  * Update fix for insufficient permissions checks on arm.
+    CVE-2014-3969
+  * Break apart long latenty MMIO operations. (closes: #781620)
+    CVE-2015-2752
+  * Disallow certain domain control operations. (closes: #781620)
+    CVE-2015-2751
+
+ -- Bastian Blank <waldi@debian.org>  Mon, 06 Apr 2015 20:22:59 +0200
+
 xen (4.4.1-8) unstable; urgency=high
 
   * Fix uninitialized return from wrong-sized reads from system devices.
