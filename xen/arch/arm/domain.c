@@ -64,7 +64,7 @@ static void ctxt_switch_from(struct vcpu *p)
      * mode. Therefore we don't need to save the context of an idle VCPU.
      */
     if ( is_idle_vcpu(p) )
-        goto end_context;
+        return;
 
     p2m_save_state(p);
 
@@ -138,9 +138,6 @@ static void ctxt_switch_from(struct vcpu *p)
     gic_save_state(p);
 
     isb();
-
-end_context:
-    context_saved(p);
 }
 
 static void ctxt_switch_to(struct vcpu *n)
@@ -245,6 +242,8 @@ static void schedule_tail(struct vcpu *prev)
     ctxt_switch_to(current);
 
     local_irq_enable();
+
+    context_saved(prev);
 
     if ( prev != current )
         update_runstate_area(current);
@@ -357,29 +356,57 @@ unsigned long hypercall_create_continuation(
     }
     else
     {
-        regs      = guest_cpu_user_regs();
-        regs->r12 = op;
+        regs = guest_cpu_user_regs();
 
         /* Ensure the hypercall trap instruction is re-executed. */
         regs->pc -= 4;  /* re-execute 'hvc #XEN_HYPERCALL_TAG' */
 
-        for ( i = 0; *p != '\0'; i++ )
+#ifdef CONFIG_ARM_64
+        if ( !is_32bit_domain(current->domain) )
         {
-            arg = next_arg(p, args);
+            regs->x16 = op;
 
-            switch ( i )
+            for ( i = 0; *p != '\0'; i++ )
             {
-            case 0: regs->r0 = arg; break;
-            case 1: regs->r1 = arg; break;
-            case 2: regs->r2 = arg; break;
-            case 3: regs->r3 = arg; break;
-            case 4: regs->r4 = arg; break;
-            case 5: regs->r5 = arg; break;
-            }
-        }
+                arg = next_arg(p, args);
 
-        /* Return value gets written back to r0 */
-        rc = regs->r0;
+                switch ( i )
+                {
+                case 0: regs->x0 = arg; break;
+                case 1: regs->x1 = arg; break;
+                case 2: regs->x2 = arg; break;
+                case 3: regs->x3 = arg; break;
+                case 4: regs->x4 = arg; break;
+                case 5: regs->x5 = arg; break;
+                }
+            }
+
+            /* Return value gets written back to x0 */
+            rc = regs->x0;
+        }
+        else
+#endif
+        {
+            regs->r12 = op;
+
+            for ( i = 0; *p != '\0'; i++ )
+            {
+                arg = next_arg(p, args);
+
+                switch ( i )
+                {
+                case 0: regs->r0 = arg; break;
+                case 1: regs->r1 = arg; break;
+                case 2: regs->r2 = arg; break;
+                case 3: regs->r3 = arg; break;
+                case 4: regs->r4 = arg; break;
+                case 5: regs->r5 = arg; break;
+                }
+            }
+
+            /* Return value gets written back to r0 */
+            rc = regs->r0;
+        }
     }
 
     va_end(args);

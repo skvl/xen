@@ -1,4 +1,4 @@
-From ec8f599bb4d14c59bf7a8b4b5d6993c01610683e Mon Sep 17 00:00:00 2001
+From df9f1c2c05a08348650cc2231557109b412c6c5c Mon Sep 17 00:00:00 2001
 From: Bastian Blank <waldi@debian.org>
 Date: Sat, 5 Jul 2014 11:47:02 +0200
 Subject: tools-python-prefix.diff

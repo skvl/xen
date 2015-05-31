@@ -114,7 +114,7 @@
 #define TRAP_machine_check    18
 #define TRAP_simd_error       19
 #define TRAP_virtualisation   20
-#define TRAP_last_reserved    31
+#define TRAP_nr               32
 
 /* Set for entry via SYSCALL. Informs return code to use SYSRETQ not IRETQ. */
 /* NB. Same as VGCF_in_syscall. No bits in common with any other TRAP_ defn. */
@@ -492,6 +492,9 @@ extern void mtrr_bp_init(void);
 
 void mcheck_init(struct cpuinfo_x86 *c, bool_t bsp);
 
+/* Dispatch table for exceptions */
+extern void (* const exception_table[TRAP_nr])(struct cpu_user_regs *regs);
+
 #define DECLARE_TRAP_HANDLER(_name)                    \
     void _name(void);                                  \
     void do_ ## _name(struct cpu_user_regs *regs)
@@ -524,7 +527,6 @@ DECLARE_TRAP_HANDLER(alignment_check);
 
 void trap_nop(void);
 void enable_nmis(void);
-void noreturn do_nmi_crash(struct cpu_user_regs *regs);
 void do_reserved_trap(struct cpu_user_regs *regs);
 
 void syscall_enter(void);

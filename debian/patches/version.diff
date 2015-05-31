@@ -1,4 +1,4 @@
-From 1f5daf0e99d7e961baa22a61575506455b00bb46 Mon Sep 17 00:00:00 2001
+From bc6195d65e5765928d9ab890b1bff72701e9ff23 Mon Sep 17 00:00:00 2001
 From: Bastian Blank <waldi@debian.org>
 Date: Sat, 5 Jul 2014 11:46:43 +0200
 Subject: version
@@ -14,7 +14,7 @@ Patch-Name: version.diff
  6 files changed, 29 insertions(+), 32 deletions(-)
 
 diff --git a/xen/Makefile b/xen/Makefile
-index 5d70741..bc2d228 100644
+index 5720393..11c7369 100644
 --- a/xen/Makefile
 +++ b/xen/Makefile
 @@ -125,20 +125,19 @@ delete-unfresh-files:
@@ -44,12 +44,12 @@ index 5d70741..bc2d228 100644
  
  include/asm-$(TARGET_ARCH)/asm-offsets.h: arch/$(TARGET_ARCH)/asm-offsets.s
 diff --git a/xen/common/kernel.c b/xen/common/kernel.c
-index d23c422..0734a50 100644
+index bafd44f..4a140ad 100644
 --- a/xen/common/kernel.c
 +++ b/xen/common/kernel.c
-@@ -250,8 +250,8 @@ DO(xen_version)(int cmd, XEN_GUEST_HANDLE_PARAM(void) arg)
-     {
-         struct xen_compile_info info;
+@@ -254,8 +254,8 @@ DO(xen_version)(int cmd, XEN_GUEST_HANDLE_PARAM(void) arg)
+ 
+         memset(&info, 0, sizeof(info));
          safe_strcpy(info.compiler,       xen_compiler());
 -        safe_strcpy(info.compile_by,     xen_compile_by());
 -        safe_strcpy(info.compile_domain, xen_compile_domain());

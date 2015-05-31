@@ -1,8 +1,11 @@
-xen (4.5.0-2) UNRELEASED; urgency=medium
+xen (4.5.1~rc1-1) UNRELEASED; urgency=medium
 
   [ Ian Campbell ]
   * Use xen-init-dom0 from initscript when it is available.
   * Install some user facing docs in xen-utils-common. (Closes: #688308)
+
+  [ Bastian Blank ]
+  * New upstream release candidate.
 
  -- Ian Campbell <ijc@debian.org>  Tue, 27 Jan 2015 09:46:21 +0000
 

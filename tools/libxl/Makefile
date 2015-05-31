@@ -253,7 +253,7 @@ install: all
 	$(INSTALL_SHLIB) libxlutil-$(PACKAGE_VERSION).so $(DESTDIR)$(LIBDIR)
 	$(SYMLINK_SHLIB) libxlutil-$(PACKAGE_VERSION).so $(DESTDIR)$(LIBDIR)/libxlutil.so
 	$(INSTALL_DATA) libxlutil.a $(DESTDIR)$(LIBDIR)
-	$(INSTALL_DATA) libxl.h libxl_event.h libxl_json.h _libxl_types.h _libxl_types_json.h _libxl_list.h libxl_utils.h libxl_uuid.h $(DESTDIR)$(INCLUDEDIR)
+	$(INSTALL_DATA) libxl.h libxl_event.h libxl_json.h _libxl_types.h _libxl_types_json.h _libxl_list.h libxl_utils.h libxl_uuid.h libxlutil.h $(DESTDIR)$(INCLUDEDIR)
 	$(INSTALL_DATA) bash-completion $(DESTDIR)$(BASH_COMPLETION_DIR)/xl.sh
 
 .PHONY: clean

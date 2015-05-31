@@ -1,4 +1,4 @@
-From 37a1cad3e6ea62e26352f264432dd89f19d253b6 Mon Sep 17 00:00:00 2001
+From 6c4f6b7cf74c6a5f93b894096e8042c8bb64a64c Mon Sep 17 00:00:00 2001
 From: Bastian Blank <waldi@debian.org>
 Date: Sat, 5 Jul 2014 11:46:53 +0200
 Subject: tools-blktap2-prefix.diff
