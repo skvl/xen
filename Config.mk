@@ -252,7 +252,7 @@ QEMU_TRADITIONAL_URL ?= git://xenbits.xen.org/qemu-xen-4.5-testing.git
 SEABIOS_UPSTREAM_URL ?= git://xenbits.xen.org/seabios.git
 endif
 OVMF_UPSTREAM_REVISION ?= 447d264115c476142f884af0be287622cd244423
-QEMU_UPSTREAM_REVISION ?= qemu-xen-4.5.0
+QEMU_UPSTREAM_REVISION ?= qemu-xen-4.5.1-rc1
 SEABIOS_UPSTREAM_REVISION ?= rel-1.7.5
 # Thu May 22 16:59:16 2014 -0400
 # python3 fixes for vgabios and csm builds.
@@ -260,9 +260,9 @@ SEABIOS_UPSTREAM_REVISION ?= rel-1.7.5
 ETHERBOOT_NICS ?= rtl8139 8086100e
 
 
-QEMU_TRADITIONAL_REVISION ?= xen-4.5.0
-# Mon Oct 6 16:24:46 2014 +0100
-# qemu-xen-trad: Switch to $(LIBEXEC_BIN) from $(LIBEXEC)
+QEMU_TRADITIONAL_REVISION ?= xen-4.5.1-rc1
+# Tue Mar 31 16:27:45 2015 +0100
+# xen: limit guest control of PCI command register
 
 # Specify which qemu-dm to use. This may be `ioemu' to use the old
 # Mercurial in-tree version, or a local directory, or a git URL.

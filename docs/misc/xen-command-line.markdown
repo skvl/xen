@@ -237,6 +237,17 @@ and not running softirqs. Reduce this if softirqs are not being run frequently
 enough. Setting this to a high value may cause boot failure, particularly if
 the NMI watchdog is also enabled.
 
+### xenheap\_megabytes (arm32)
+> `= <size>`
+
+> Default: `0` (1/32 of RAM)
+
+Amount of RAM to set aside for the Xenheap.
+
+By default will use 1/32 of the RAM up to a maximum of 1GB and with a
+minimum of 32M, subject to a suitably aligned and sized contiguous
+region of memory being available.
+
 ### clocksource
 > `= pit | hpet | acpi`
 
@@ -550,7 +561,7 @@ Pin dom0 vcpus to their respective pcpus
 Flag that makes a 64bit dom0 boot in PVH mode. No 32bit support at present.
 
 ### dtuart (ARM)
-> `= path [,options]`
+> `= path [:options]`
 
 > Default: `""`
 
@@ -1091,7 +1102,7 @@ The following resources are available:
   * `rmid_max` indicates the max value for rmid.
 
 ### reboot
-> `= t[riple] | k[bd] | a[cpi] | p[ci] | n[o] [, [w]arm | [c]old]`
+> `= t[riple] | k[bd] | a[cpi] | p[ci] | e[fi] | n[o] [, [w]arm | [c]old]`
 
 > Default: `0`
 
@@ -1110,6 +1121,9 @@ Specify the host reboot method.
 `acpi` instructs Xen to reboot the host using RESET_REG in the ACPI FADT.
 
 `pci` instructs Xen to reboot the host using PCI reset register (port CF9).
+
+'efi' instructs Xen to reboot using the EFI reboot call (in EFI mode by
+ default it will use that method first).
 
 ### sched
 > `= credit | credit2 | sedf | arinc653`
@@ -1330,6 +1344,8 @@ wrong behaviour (see handle\_pmc\_quirk()).
 If 'vpmu=bts' is specified the virtualisation of the Branch Trace Store (BTS)
 feature is switched on on Intel processors supporting this feature.
 
+Note that if **watchdog** option is also specified vpmu will be turned off.
+
 *Warning:*
 As the BTS virtualisation is not 100% safe and because of the nehalem quirk
 don't use the vpmu flag on production systems with Intel cpus!
@@ -1362,9 +1378,11 @@ Permit use of x2apic setup for SMP environments.
 ### x2apic\_phys
 > `= <boolean>`
 
-> Default: `true`
+> Default: `true` if **FADT** mandates physical mode, `false` otherwise.
 
-Use the x2apic physical apic driver.  The alternative is the x2apic cluster driver.
+In the case that x2apic is in use, this option switches between physical and
+clustered mode.  The default, given no hint from the **FADT**, is cluster
+mode.
 
 ### xsave
 > `= <boolean>`
