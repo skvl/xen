@@ -772,7 +772,7 @@ void pv_cpuid(struct cpu_user_regs *regs)
 
         switch ( cpuid_leaf )
         {
-        case 0xd:
+        case XSTATE_CPUID:
         {
             unsigned int _eax, _ebx, _ecx, _edx;
             /* EBX value of main leaf 0 depends on enabled xsave features */
@@ -790,7 +790,7 @@ void pv_cpuid(struct cpu_user_regs *regs)
                         b = _eax + _ebx;
                 }
             }
-        break;
+            goto xstate;
         }
         }
         goto out;
@@ -816,7 +816,7 @@ void pv_cpuid(struct cpu_user_regs *regs)
         }
     }
 
-    switch ( (uint32_t)regs->eax )
+    switch ( regs->_eax )
     {
     case 0x00000001:
         /* Modify Feature Information. */
@@ -851,7 +851,7 @@ void pv_cpuid(struct cpu_user_regs *regs)
         break;
 
     case 0x00000007:
-        if ( regs->ecx == 0 )
+        if ( regs->_ecx == 0 )
             b &= (cpufeat_mask(X86_FEATURE_BMI1) |
                   cpufeat_mask(X86_FEATURE_HLE)  |
                   cpufeat_mask(X86_FEATURE_AVX2) |
@@ -866,9 +866,19 @@ void pv_cpuid(struct cpu_user_regs *regs)
         a = c = d = 0;
         break;
 
-    case 0x0000000d: /* XSAVE */
+    case XSTATE_CPUID:
+    xstate:
         if ( !cpu_has_xsave )
             goto unsupported;
+        if ( regs->_ecx == 1 )
+        {
+            a &= XSTATE_FEATURE_XSAVEOPT |
+                 XSTATE_FEATURE_XSAVEC |
+                 (cpu_has_xgetbv1 ? XSTATE_FEATURE_XGETBV1 : 0) |
+                 (cpu_has_xsaves ? XSTATE_FEATURE_XSAVES : 0);
+            if ( !cpu_has_xsaves )
+                b = c = d = 0;
+        }
         break;
 
     case 0x80000001:

@@ -522,8 +522,10 @@ long do_domctl(XEN_GUEST_HANDLE_PARAM(xen_domctl_t) u_domctl)
 
     case XEN_DOMCTL_resumedomain:
     {
-        domain_resume(d);
-        ret = 0;
+        if ( d == current->domain ) /* no domain_pause() */
+            ret = -EINVAL;
+        else
+            domain_resume(d);
     }
     break;
 
@@ -1034,6 +1036,11 @@ long do_domctl(XEN_GUEST_HANDLE_PARAM(xen_domctl_t) u_domctl)
         if ( mfn_end < mfn || /* wrap? */
              ((mfn | mfn_end) >> (paddr_bits - PAGE_SHIFT)) ||
              (gfn + nr_mfns - 1) < gfn ) /* wrap? */
+            break;
+
+        ret = -E2BIG;
+        /* Must break hypercall up as this could take a while. */
+        if ( nr_mfns > 64 )
             break;
 
         ret = -EPERM;

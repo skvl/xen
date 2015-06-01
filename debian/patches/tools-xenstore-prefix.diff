@@ -1,4 +1,4 @@
-From cfb373c7981b0b388cfe48a50a9856d13eecf9d5 Mon Sep 17 00:00:00 2001
+From 399dfec999c7fcfbf61913fb0373e2c3d5d8b66a Mon Sep 17 00:00:00 2001
 From: Bastian Blank <waldi@debian.org>
 Date: Sat, 5 Jul 2014 11:47:12 +0200
 Subject: tools-xenstore-prefix.diff

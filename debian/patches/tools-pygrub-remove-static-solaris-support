@@ -1,4 +1,4 @@
-From ac436b3e55847282cb157a0689cf42072a9b5e32 Mon Sep 17 00:00:00 2001
+From 79df6783a7445a237888a157267f9133e825e78b Mon Sep 17 00:00:00 2001
 From: Bastian Blank <waldi@debian.org>
 Date: Sat, 5 Jul 2014 11:47:29 +0200
 Subject: Remove static solaris support from pygrub

@@ -1,4 +1,4 @@
-From 34775f98180e8ba41296d267a0802d6214a7f690 Mon Sep 17 00:00:00 2001
+From 1c31520bc0d397c34468406503e47db42f3e3043 Mon Sep 17 00:00:00 2001
 From: Bastian Blank <waldi@debian.org>
 Date: Sat, 5 Jul 2014 11:46:55 +0200
 Subject: tools-libfsimage-prefix.diff

@@ -1,3 +1,14 @@
+xen (4.5.1~rc1-1) experimental; urgency=medium
+
+  [ Ian Campbell ]
+  * Use xen-init-dom0 from initscript when it is available.
+  * Install some user facing docs in xen-utils-common. (Closes: #688308)
+
+  [ Bastian Blank ]
+  * New upstream release candidate.
+
+ -- Bastian Blank <waldi@debian.org>  Sun, 31 May 2015 21:59:56 +0200
+
 xen (4.5.0-1) experimental; urgency=medium
 
   [ Ian Campbell ]

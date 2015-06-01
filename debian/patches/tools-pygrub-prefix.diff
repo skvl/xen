@@ -1,4 +1,4 @@
-From dadc3e25a33d401960914d30623a5e49aa038d54 Mon Sep 17 00:00:00 2001
+From bf8e9b6c1469a4c25f4ba1910b269fae50be84a0 Mon Sep 17 00:00:00 2001
 From: Bastian Blank <waldi@debian.org>
 Date: Sat, 5 Jul 2014 11:47:01 +0200
 Subject: tools-pygrub-prefix.diff

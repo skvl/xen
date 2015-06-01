@@ -1,4 +1,4 @@
-From 4ad8b98cb36d4900dd47485f553e1f18d042f2e2 Mon Sep 17 00:00:00 2001
+From 72b172f063b63df29fc61442fa64d74806b3a247 Mon Sep 17 00:00:00 2001
 From: Bastian Blank <waldi@debian.org>
 Date: Sat, 5 Jul 2014 11:47:36 +0200
 Subject: tools-xenstore-compatibility.diff
