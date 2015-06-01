@@ -1,4 +1,4 @@
-xen (4.5.1~rc1-1) UNRELEASED; urgency=medium
+xen (4.5.1~rc1-1) experimental; urgency=medium
 
   [ Ian Campbell ]
   * Use xen-init-dom0 from initscript when it is available.
@@ -7,7 +7,7 @@ xen (4.5.1~rc1-1) UNRELEASED; urgency=medium
   [ Bastian Blank ]
   * New upstream release candidate.
 
- -- Ian Campbell <ijc@debian.org>  Tue, 27 Jan 2015 09:46:21 +0000
+ -- Bastian Blank <waldi@debian.org>  Sun, 31 May 2015 21:59:56 +0200
 
 xen (4.5.0-1) experimental; urgency=medium
 
