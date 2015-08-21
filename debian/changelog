@@ -39,6 +39,8 @@ xen (4.8.0-1~) unstable; urgency=high
     (Closes: #763102)
   * Apply SELinux labels to directories created by initscripts. Patch from
     Russell Coker. (Closes: #764912)
+  * Include a reportbug control file to redirect bugs to src:xen for
+    packages which contain the Xen version in the name.  Closes:#796370.
 
   [ Lubomir Host ]
   * Fix xen-init-name to not fail looking for a nonexistent 'config'
