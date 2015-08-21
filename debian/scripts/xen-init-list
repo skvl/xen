@@ -51,7 +51,7 @@ class DataJSON(Data):
 
 class DataSXP(Data):
     def __init__(self, p):
-        s = SXPParser()(p)
+        s = SXPParser.loads(p)
         self.data = d = {}
         for i in s:
             if i and i[0] == 'domain':
