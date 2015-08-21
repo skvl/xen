@@ -35,6 +35,8 @@ xen (4.8.0-1~) unstable; urgency=high
   * Remove correct pidfile when stopping xenconsoled.
   * Check that xenstored has actually started before talking to it.
     Incorporate a timeout so as not to block boot (Mitigates #737613)
+  * Correct syntax error in xen-init-list when running with xend
+    (Closes: #763102)
 
   [ Lubomir Host ]
   * Fix xen-init-name to not fail looking for a nonexistent 'config'
