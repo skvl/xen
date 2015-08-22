@@ -14,7 +14,7 @@ class SXPParser(object):
     def loads(cls, input):
         data = []
         stack = []
-        for match in self.tokenizer_re.finditer(input):
+        for match in cls.tokenizer_re.finditer(input):
             if match.group('open'):
                 stack.append([])
             elif match.group('close'):
