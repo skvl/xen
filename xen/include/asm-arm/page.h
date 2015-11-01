@@ -2,7 +2,6 @@
 #define __ARM_PAGE_H__
 
 #include <xen/config.h>
-#include <xen/errno.h>
 #include <public/xen.h>
 #include <asm/processor.h>
 
@@ -65,7 +64,6 @@
 #define PAGE_HYPERVISOR         (WRITEALLOC)
 #define PAGE_HYPERVISOR_NOCACHE (DEV_SHARED)
 #define PAGE_HYPERVISOR_WC      (DEV_WC)
-#define MAP_SMALL_PAGES         PAGE_HYPERVISOR
 
 /*
  * Stage 2 Memory Type.
@@ -83,6 +81,7 @@
 
 #ifndef __ASSEMBLY__
 
+#include <xen/errno.h>
 #include <xen/types.h>
 #include <xen/lib.h>
 
@@ -265,6 +264,8 @@ static inline lpae_t mfn_to_xen_entry(unsigned long mfn, unsigned attr)
 /* Actual cacheline size on the boot CPU. */
 extern size_t cacheline_bytes;
 
+#define copy_page(dp, sp) memcpy(dp, sp, PAGE_SIZE)
+
 /* Functions for flushing medium-sized areas.
  * if 'range' is large enough we might want to use model-specific
  * full-cache flushes. */
@@ -423,9 +424,9 @@ static inline uint64_t va_to_par(vaddr_t va)
     return par;
 }
 
-static inline int gva_to_ipa(vaddr_t va, paddr_t *paddr)
+static inline int gva_to_ipa(vaddr_t va, paddr_t *paddr, unsigned int flags)
 {
-    uint64_t par = gva_to_ipa_par(va);
+    uint64_t par = gva_to_ipa_par(va, flags);
     if ( par & PAR_F )
         return -EFAULT;
     *paddr = (par & PADDR_MASK & PAGE_MASK) | ((unsigned long) va & ~PAGE_MASK);

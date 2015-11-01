@@ -59,8 +59,8 @@ struct libxl__yajl_ctx {
         const unsigned char *buf = NULL; \
         size_t len = 0; \
         yajl_gen_get_buf((yajl_ctx)->g, &buf, &len); \
-        LIBXL__LOG(libxl__gc_owner((yajl_ctx)->gc), \
-                   LIBXL__LOG_DEBUG, "response:\n%s", buf); \
+        LIBXL__LOG(libxl__gc_owner((yajl_ctx)->gc), LIBXL__LOG_DEBUG,
+		   "response:\n", buf); \
         yajl_gen_free((yajl_ctx)->g); \
         (yajl_ctx)->g = NULL; \
     } while (0)
@@ -247,7 +247,7 @@ int libxl__key_value_list_parse_json(libxl__gc *gc, const libxl__json_object *o,
 
     maps = libxl__json_object_get_map(o);
     size = maps->count * 2;
-    kvl = *p = libxl__calloc(NOGC, size, sizeof(char *));
+    kvl = *p = libxl__calloc(NOGC, size+1, sizeof(char *));
 
     for (i = 0; i < maps->count; i++) {
         int idx = i * 2;
@@ -487,7 +487,7 @@ int libxl__json_object_append_to(libxl__gc *gc, libxl__json_object *obj,
             break;
         default:
             LIBXL__LOG(libxl__gc_owner(gc), LIBXL__LOG_ERROR,
-                       "Try append an object is not a map/array (%i)\n",
+                       "Try append an object is not a map/array (%i)",
                        dst->type);
             return ERROR_FAIL;
         }
@@ -1013,7 +1013,7 @@ out:
 yajl_gen_status libxl__uint64_gen_json(yajl_gen hand, uint64_t val)
 {
     char *num;
-    unsigned int len;
+    int len;
     yajl_gen_status s;
 
 

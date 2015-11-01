@@ -32,6 +32,7 @@ static void run_helper(libxl__egc *egc, libxl__save_helper_state *shs,
                        const unsigned long *argnums, int num_argnums);
 
 static void helper_failed(libxl__egc*, libxl__save_helper_state *shs, int rc);
+static void helper_stop(libxl__egc *egc, libxl__ao_abortable*, int rc);
 static void helper_stdout_readable(libxl__egc *egc, libxl__ev_fd *ev,
                                    int fd, short events, short revents);
 static void helper_exited(libxl__egc *egc, libxl__ev_child *ch,
@@ -41,17 +42,18 @@ static void helper_done(libxl__egc *egc, libxl__save_helper_state *shs);
 /*----- entrypoints -----*/
 
 void libxl__xc_domain_restore(libxl__egc *egc, libxl__domain_create_state *dcs,
+                              libxl__save_helper_state *shs,
                               int hvm, int pae, int superpages)
 {
     STATE_AO_GC(dcs->ao);
 
     /* Convenience aliases */
     const uint32_t domid = dcs->guest_domid;
-    const int restore_fd = dcs->restore_fd;
+    const int restore_fd = dcs->libxc_fd;
     libxl__domain_build_state *const state = &dcs->build_state;
 
-    unsigned cbflags = libxl__srm_callout_enumcallbacks_restore
-        (&dcs->shs.callbacks.restore.a);
+    unsigned cbflags =
+        libxl__srm_callout_enumcallbacks_restore(&shs->callbacks.restore.a);
 
     const unsigned long argnums[] = {
         domid,
@@ -59,81 +61,44 @@ void libxl__xc_domain_restore(libxl__egc *egc, libxl__domain_create_state *dcs,
         state->store_domid, state->console_port,
         state->console_domid,
         hvm, pae, superpages,
-        cbflags, dcs->checkpointed_stream,
+        cbflags, dcs->restore_params.checkpointed_stream,
     };
 
-    dcs->shs.ao = ao;
-    dcs->shs.domid = domid;
-    dcs->shs.recv_callback = libxl__srm_callout_received_restore;
-    dcs->shs.completion_callback = libxl__xc_domain_restore_done;
-    dcs->shs.caller_state = dcs;
-    dcs->shs.need_results = 1;
-    dcs->shs.toolstack_data_file = 0;
+    shs->ao = ao;
+    shs->domid = domid;
+    shs->recv_callback = libxl__srm_callout_received_restore;
+    shs->completion_callback = libxl__xc_domain_restore_done;
+    shs->caller_state = dcs;
+    shs->need_results = 1;
 
-    run_helper(egc, &dcs->shs, "--restore-domain", restore_fd, 0,0,
+    run_helper(egc, shs, "--restore-domain", restore_fd, 0, 0,
                argnums, ARRAY_SIZE(argnums));
 }
 
-void libxl__xc_domain_save(libxl__egc *egc, libxl__domain_suspend_state *dss)
+void libxl__xc_domain_save(libxl__egc *egc, libxl__domain_suspend_state *dss,
+                           libxl__save_helper_state *shs)
 {
     STATE_AO_GC(dss->ao);
-    int r, rc, toolstack_data_fd = -1;
-    uint32_t toolstack_data_len = 0;
 
-    /* Resources we need to free */
-    uint8_t *toolstack_data_buf = 0;
-
-    unsigned cbflags = libxl__srm_callout_enumcallbacks_save
-        (&dss->shs.callbacks.save.a);
-
-    if (dss->shs.callbacks.save.toolstack_save) {
-        r = dss->shs.callbacks.save.toolstack_save
-            (dss->domid, &toolstack_data_buf, &toolstack_data_len, dss);
-        if (r) { rc = ERROR_FAIL; goto out; }
-
-        dss->shs.toolstack_data_file = tmpfile();
-        if (!dss->shs.toolstack_data_file) {
-            LOGE(ERROR, "cannot create toolstack data tmpfile");
-            rc = ERROR_FAIL;
-            goto out;
-        }
-        toolstack_data_fd = fileno(dss->shs.toolstack_data_file);
-
-        r = libxl_write_exactly(CTX, toolstack_data_fd,
-                                toolstack_data_buf, toolstack_data_len,
-                                "toolstack data tmpfile", 0);
-        if (r) { rc = ERROR_FAIL; goto out; }
-
-        /* file position must be reset before passing to libxl-save-helper. */
-        r = lseek(toolstack_data_fd, 0, SEEK_SET);
-        if (r) { rc = ERROR_FAIL; goto out; }
-    }
+    unsigned cbflags =
+        libxl__srm_callout_enumcallbacks_save(&shs->callbacks.save.a);
 
     const unsigned long argnums[] = {
         dss->domid, 0, 0, dss->xcflags, dss->hvm,
-        toolstack_data_fd, toolstack_data_len,
         cbflags,
     };
 
-    dss->shs.ao = ao;
-    dss->shs.domid = dss->domid;
-    dss->shs.recv_callback = libxl__srm_callout_received_save;
-    dss->shs.completion_callback = libxl__xc_domain_save_done;
-    dss->shs.caller_state = dss;
-    dss->shs.need_results = 0;
+    shs->ao = ao;
+    shs->domid = dss->domid;
+    shs->recv_callback = libxl__srm_callout_received_save;
+    shs->completion_callback = libxl__xc_domain_save_done;
+    shs->caller_state = dss;
+    shs->need_results = 0;
 
-    free(toolstack_data_buf);
-
-    run_helper(egc, &dss->shs, "--save-domain", dss->fd,
-               &toolstack_data_fd, 1,
+    run_helper(egc, shs, "--save-domain", dss->fd,
+               NULL, 0,
                argnums, ARRAY_SIZE(argnums));
     return;
-
- out:
-    free(toolstack_data_buf);
-    if (dss->shs.toolstack_data_file) fclose(dss->shs.toolstack_data_file);
-
-    libxl__xc_domain_save_done(egc, dss, rc, 0, 0);
 }
 
 
@@ -143,6 +108,13 @@ void libxl__xc_domain_saverestore_async_callback_done(libxl__egc *egc,
     shs->egc = egc;
     libxl__srm_callout_sendreply(return_value, shs);
     shs->egc = 0;
+}
+
+void libxl__save_helper_init(libxl__save_helper_state *shs)
+{
+    libxl__ao_abortable_init(&shs->abrt);
+    libxl__ev_fd_init(&shs->readable);
+    libxl__ev_child_init(&shs->child);
 }
 
 /*----- helper execution -----*/
@@ -166,8 +138,12 @@ static void run_helper(libxl__egc *egc, libxl__save_helper_state *shs,
     shs->rc = 0;
     shs->completed = 0;
     shs->pipes[0] = shs->pipes[1] = 0;
-    libxl__ev_fd_init(&shs->readable);
-    libxl__ev_child_init(&shs->child);
+    libxl__save_helper_init(shs);
+
+    shs->abrt.ao = shs->ao;
+    shs->abrt.callback = helper_stop;
+    rc = libxl__ao_abortable_register(&shs->abrt);
+    if (rc) goto out;
 
     shs->stdin_what = GCSPRINTF("domain %"PRIu32" save/restore helper"
                                 " stdin pipe", domid);
@@ -248,14 +224,34 @@ static void helper_failed(libxl__egc *egc, libxl__save_helper_state *shs,
 
     libxl__ev_fd_deregister(gc, &shs->readable);
 
-    if (!libxl__ev_child_inuse(&shs->child)) {
+    if (!libxl__save_helper_inuse(shs)) {
         helper_done(egc, shs);
         return;
     }
 
-    int r = kill(shs->child.pid, SIGKILL);
-    if (r) LOGE(WARN, "failed to kill save/restore helper [%lu]",
-                (unsigned long)shs->child.pid);
+    libxl__kill(gc, shs->child.pid, SIGKILL, "save/restore helper");
+}
+
+static void helper_stop(libxl__egc *egc, libxl__ao_abortable *abrt, int rc)
+{
+    libxl__save_helper_state *shs = CONTAINER_OF(abrt, *shs, abrt);
+    STATE_AO_GC(shs->ao);
+
+    if (!libxl__save_helper_inuse(shs)) {
+        helper_failed(egc, shs, rc);
+        return;
+    }
+
+    if (!shs->rc)
+        shs->rc = rc;
+
+    libxl__kill(gc, shs->child.pid, SIGTERM, "save/restore helper");
+}
+
+void libxl__save_helper_abort(libxl__egc *egc,
+                              libxl__save_helper_state *shs)
+{
+    helper_stop(egc, &shs->abrt, ERROR_FAIL);
 }
 
 static void helper_stdout_readable(libxl__egc *egc, libxl__ev_fd *ev,
@@ -305,19 +301,22 @@ static void helper_exited(libxl__egc *egc, libxl__ev_child *ch,
 
     if (status) {
         libxl_report_child_exitstatus(CTX, XTL_ERROR, what, pid, status);
-        shs->rc = ERROR_FAIL;
+        if (!shs->rc)
+            shs->rc = ERROR_FAIL;
     }
 
     if (shs->need_results) {
-        if (!shs->rc)
+        if (!shs->rc) {
             LOG(ERROR,"%s exited without providing results",what);
-        shs->rc = ERROR_FAIL;
+            shs->rc = ERROR_FAIL;
+        }
     }
 
     if (!shs->completed) {
-        if (!shs->rc)
+        if (!shs->rc) {
             LOG(ERROR,"%s exited without signaling completion",what);
-        shs->rc = ERROR_FAIL;
+            shs->rc = ERROR_FAIL;
+        }
     }
 
     helper_done(egc, shs);
@@ -328,11 +327,11 @@ static void helper_done(libxl__egc *egc, libxl__save_helper_state *shs)
 {
     STATE_AO_GC(shs->ao);
 
+    libxl__ao_abortable_deregister(&shs->abrt);
     libxl__ev_fd_deregister(gc, &shs->readable);
     libxl__carefd_close(shs->pipes[0]);  shs->pipes[0] = 0;
     libxl__carefd_close(shs->pipes[1]);  shs->pipes[1] = 0;
-    assert(!libxl__ev_child_inuse(&shs->child));
-    if (shs->toolstack_data_file) fclose(shs->toolstack_data_file);
+    assert(!libxl__save_helper_inuse(shs));
 
     shs->egc = egc;
     shs->completion_callback(egc, shs->caller_state,

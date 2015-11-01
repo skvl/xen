@@ -28,10 +28,13 @@ void libxl_cpuid_dispose(libxl_cpuid_policy_list *p_cpuid_list)
         return;
     for (i = 0; cpuid_list[i].input[0] != XEN_CPUID_INPUT_UNUSED; i++) {
         for (j = 0; j < 4; j++)
-            if (cpuid_list[i].policy[j] != NULL)
+            if (cpuid_list[i].policy[j] != NULL) {
                 free(cpuid_list[i].policy[j]);
+                cpuid_list[i].policy[j] = NULL;
+            }
     }
     free(cpuid_list);
+    *p_cpuid_list = NULL;
     return;
 }
 
@@ -220,9 +223,6 @@ int libxl_cpuid_parse_config(libxl_cpuid_policy_list *cpuid, const char* str)
     }
     entry = cpuid_find_match(cpuid, flag->leaf, flag->subleaf);
     resstr = entry->policy[flag->reg - 1];
-    if (resstr == NULL) {
-        resstr = strdup("xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx");
-    }
     num = strtoull(val, &endptr, 0);
     flags[flag->length] = 0;
     if (endptr != val) {
@@ -239,6 +239,11 @@ int libxl_cpuid_parse_config(libxl_cpuid_policy_list *cpuid, const char* str)
             return 3;
         }
     }
+
+    if (resstr == NULL) {
+        resstr = strdup("xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx");
+    }
+
     /* the family and model entry is potentially split up across
      * two fields in Fn0000_0001_EAX, so handle them here separately.
      */

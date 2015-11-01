@@ -16,14 +16,13 @@
  * GNU General Public License for more details.
  *
  * You should have received a copy of the GNU General Public License
- * along with this program; if not, write to the Free Software
- * Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
+ * along with this program; If not, see <http://www.gnu.org/licenses/>.
  */
 
 #include <xen/iommu.h>
-#include <xen/mem_event.h>
+#include <xen/vm_event.h>
 #include <xen/event.h>
-#include <public/mem_event.h>
+#include <public/vm_event.h>
 #include <asm/domain.h>
 #include <asm/page.h>
 #include <asm/paging.h>
@@ -109,7 +108,7 @@ p2m_pod_cache_add(struct p2m_domain *p2m,
      */
     for ( i = 0; i < (1 << order); i++ )
     {
-        char *b = map_domain_page(mfn_x(page_to_mfn(page)) + i);
+        char *b = map_domain_page(_mfn(mfn_x(page_to_mfn(page)) + i));
         clear_page(b);
         unmap_domain_page(b);
     }
@@ -536,7 +535,7 @@ recount:
         p2m_access_t a;
         p2m_type_t t;
 
-        (void)p2m->get_entry(p2m, gpfn + i, &t, &a, 0, NULL);
+        (void)p2m->get_entry(p2m, gpfn + i, &t, &a, 0, NULL, NULL);
 
         if ( t == p2m_populate_on_demand )
             pod++;
@@ -587,7 +586,7 @@ recount:
         p2m_type_t t;
         p2m_access_t a;
 
-        mfn = p2m->get_entry(p2m, gpfn + i, &t, &a, 0, NULL);
+        mfn = p2m->get_entry(p2m, gpfn + i, &t, &a, 0, NULL, NULL);
         if ( t == p2m_populate_on_demand )
         {
             p2m_set_entry(p2m, gpfn + i, _mfn(INVALID_MFN), 0, p2m_invalid,
@@ -676,7 +675,7 @@ p2m_pod_zero_check_superpage(struct p2m_domain *p2m, unsigned long gfn)
     for ( i=0; i<SUPERPAGE_PAGES; i++ )
     {
         p2m_access_t a; 
-        mfn = p2m->get_entry(p2m, gfn + i, &type, &a, 0, NULL);
+        mfn = p2m->get_entry(p2m, gfn + i, &type, &a, 0, NULL, NULL);
 
         if ( i == 0 )
         {
@@ -710,7 +709,7 @@ p2m_pod_zero_check_superpage(struct p2m_domain *p2m, unsigned long gfn)
     for ( i=0; i<SUPERPAGE_PAGES; i++ )
     {
         /* Quick zero-check */
-        map = map_domain_page(mfn_x(mfn0) + i);
+        map = map_domain_page(_mfn(mfn_x(mfn0) + i));
 
         for ( j=0; j<16; j++ )
             if( *(map+j) != 0 )
@@ -743,7 +742,7 @@ p2m_pod_zero_check_superpage(struct p2m_domain *p2m, unsigned long gfn)
     /* Finally, do a full zero-check */
     for ( i=0; i < SUPERPAGE_PAGES; i++ )
     {
-        map = map_domain_page(mfn_x(mfn0) + i);
+        map = map_domain_page(_mfn(mfn_x(mfn0) + i));
 
         for ( j=0; j<PAGE_SIZE/sizeof(*map); j++ )
             if( *(map+j) != 0 )
@@ -808,14 +807,14 @@ p2m_pod_zero_check(struct p2m_domain *p2m, unsigned long *gfns, int count)
     for ( i=0; i<count; i++ )
     {
         p2m_access_t a;
-        mfns[i] = p2m->get_entry(p2m, gfns[i], types + i, &a, 0, NULL);
+        mfns[i] = p2m->get_entry(p2m, gfns[i], types + i, &a, 0, NULL, NULL);
         /* If this is ram, and not a pagetable or from the xen heap, and probably not mapped
            elsewhere, map it; otherwise, skip. */
         if ( p2m_is_ram(types[i])
              && ( (mfn_to_page(mfns[i])->count_info & PGC_allocated) != 0 ) 
              && ( (mfn_to_page(mfns[i])->count_info & (PGC_page_table|PGC_xen_heap)) == 0 ) 
              && ( (mfn_to_page(mfns[i])->count_info & PGC_count_mask) <= max_ref ) )
-            map[i] = map_domain_page(mfn_x(mfns[i]));
+            map[i] = map_domain_page(mfns[i]);
         else
             map[i] = NULL;
     }
@@ -947,7 +946,7 @@ p2m_pod_emergency_sweep(struct p2m_domain *p2m)
     for ( i=p2m->pod.reclaim_single; i > 0 ; i-- )
     {
         p2m_access_t a;
-        (void)p2m->get_entry(p2m, i, &t, &a, 0, NULL);
+        (void)p2m->get_entry(p2m, i, &t, &a, 0, NULL, NULL);
         if ( p2m_is_ram(t) )
         {
             gfns[j] = i;
@@ -1135,7 +1134,7 @@ guest_physmap_mark_populate_on_demand(struct domain *d, unsigned long gfn,
     for ( i = 0; i < (1UL << order); i++ )
     {
         p2m_access_t a;
-        omfn = p2m->get_entry(p2m, gfn + i, &ot, &a, 0, NULL);
+        omfn = p2m->get_entry(p2m, gfn + i, &ot, &a, 0, NULL, NULL);
         if ( p2m_is_ram(ot) )
         {
             P2M_DEBUG("gfn_to_mfn returned type %d!\n", ot);

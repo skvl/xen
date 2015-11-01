@@ -11,12 +11,15 @@ all: xenpmd
 
 .PHONY: install
 install: all
-	$(INSTALL_DIR) $(DESTDIR)$(SBINDIR)
-	$(INSTALL_PROG) xenpmd $(DESTDIR)$(SBINDIR)
+	$(INSTALL_DIR) $(DESTDIR)$(sbindir)
+	$(INSTALL_PROG) xenpmd $(DESTDIR)$(sbindir)
 
 .PHONY: clean
 clean:
 	$(RM) -f xenpmd xenpmd.o $(DEPS)
+
+.PHONY: distclean
+distclean: clean
 
 xenpmd: xenpmd.o Makefile
 	$(CC) $(LDFLAGS) $< -o $@ $(LDLIBS) $(APPEND_LDFLAGS)

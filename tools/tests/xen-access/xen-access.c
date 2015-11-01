@@ -39,78 +39,34 @@
 #include <sys/poll.h>
 
 #include <xenctrl.h>
-#include <xen/mem_event.h>
+#include <xen/vm_event.h>
+
+#if defined(__arm__) || defined(__aarch64__)
+#include <xen/arch-arm.h>
+#define START_PFN (GUEST_RAM0_BASE >> 12)
+#elif defined(__i386__) || defined(__x86_64__)
+#define START_PFN 0ULL
+#endif
 
 #define DPRINTF(a, b...) fprintf(stderr, a, ## b)
 #define ERROR(a, b...) fprintf(stderr, a "\n", ## b)
 #define PERROR(a, b...) fprintf(stderr, a ": %s\n", ## b, strerror(errno))
 
-/* Spinlock and mem event definitions */
-
-#define SPIN_LOCK_UNLOCKED 0
-
-#define ADDR (*(volatile long *) addr)
-/**
- * test_and_set_bit - Set a bit and return its old value
- * @nr: Bit to set
- * @addr: Address to count from
- *
- * This operation is atomic and cannot be reordered.
- * It also implies a memory barrier.
- */
-static inline int test_and_set_bit(int nr, volatile void *addr)
-{
-    int oldbit;
-
-    asm volatile (
-        "btsl %2,%1\n\tsbbl %0,%0"
-        : "=r" (oldbit), "=m" (ADDR)
-        : "Ir" (nr), "m" (ADDR) : "memory");
-    return oldbit;
-}
-
-typedef int spinlock_t;
-
-static inline void spin_lock(spinlock_t *lock)
-{
-    while ( test_and_set_bit(1, lock) );
-}
-
-static inline void spin_lock_init(spinlock_t *lock)
-{
-    *lock = SPIN_LOCK_UNLOCKED;
-}
-
-static inline void spin_unlock(spinlock_t *lock)
-{
-    *lock = SPIN_LOCK_UNLOCKED;
-}
-
-static inline int spin_trylock(spinlock_t *lock)
-{
-    return !test_and_set_bit(1, lock);
-}
-
-#define mem_event_ring_lock_init(_m)  spin_lock_init(&(_m)->ring_lock)
-#define mem_event_ring_lock(_m)       spin_lock(&(_m)->ring_lock)
-#define mem_event_ring_unlock(_m)     spin_unlock(&(_m)->ring_lock)
-
-typedef struct mem_event {
+typedef struct vm_event {
     domid_t domain_id;
     xc_evtchn *xce_handle;
     int port;
-    mem_event_back_ring_t back_ring;
+    vm_event_back_ring_t back_ring;
     uint32_t evtchn_port;
     void *ring_page;
-    spinlock_t ring_lock;
-} mem_event_t;
+} vm_event_t;
 
 typedef struct xenaccess {
     xc_interface *xc_handle;
 
-    xc_domaininfo_t    *domain_info;
+    xen_pfn_t max_gpfn;
 
-    mem_event_t mem_event;
+    vm_event_t vm_event;
 } xenaccess_t;
 
 static int interrupted;
@@ -170,37 +126,40 @@ int xenaccess_teardown(xc_interface *xch, xenaccess_t *xenaccess)
         return 0;
 
     /* Tear down domain xenaccess in Xen */
-    if ( xenaccess->mem_event.ring_page )
-        munmap(xenaccess->mem_event.ring_page, XC_PAGE_SIZE);
+    if ( xenaccess->vm_event.ring_page )
+        munmap(xenaccess->vm_event.ring_page, XC_PAGE_SIZE);
 
     if ( mem_access_enable )
     {
-        rc = xc_mem_access_disable(xenaccess->xc_handle,
-                                   xenaccess->mem_event.domain_id);
+        rc = xc_monitor_disable(xenaccess->xc_handle,
+                                xenaccess->vm_event.domain_id);
         if ( rc != 0 )
         {
             ERROR("Error tearing down domain xenaccess in xen");
+            return rc;
         }
     }
 
     /* Unbind VIRQ */
     if ( evtchn_bind )
     {
-        rc = xc_evtchn_unbind(xenaccess->mem_event.xce_handle,
-                              xenaccess->mem_event.port);
+        rc = xc_evtchn_unbind(xenaccess->vm_event.xce_handle,
+                              xenaccess->vm_event.port);
         if ( rc != 0 )
         {
             ERROR("Error unbinding event port");
+            return rc;
         }
     }
 
     /* Close event channel */
     if ( evtchn_open )
     {
-        rc = xc_evtchn_close(xenaccess->mem_event.xce_handle);
+        rc = xc_evtchn_close(xenaccess->vm_event.xce_handle);
         if ( rc != 0 )
         {
             ERROR("Error closing event channel");
+            return rc;
         }
     }
 
@@ -209,10 +168,10 @@ int xenaccess_teardown(xc_interface *xch, xenaccess_t *xenaccess)
     if ( rc != 0 )
     {
         ERROR("Error closing connection to xen");
+        return rc;
     }
     xenaccess->xc_handle = NULL;
 
-    free(xenaccess->domain_info);
     free(xenaccess);
 
     return 0;
@@ -239,17 +198,14 @@ xenaccess_t *xenaccess_init(xc_interface **xch_r, domid_t domain_id)
     xenaccess->xc_handle = xch;
 
     /* Set domain id */
-    xenaccess->mem_event.domain_id = domain_id;
-
-    /* Initialise lock */
-    mem_event_ring_lock_init(&xenaccess->mem_event);
+    xenaccess->vm_event.domain_id = domain_id;
 
     /* Enable mem_access */
-    xenaccess->mem_event.ring_page =
-            xc_mem_access_enable(xenaccess->xc_handle,
-                                 xenaccess->mem_event.domain_id,
-                                 &xenaccess->mem_event.evtchn_port);
-    if ( xenaccess->mem_event.ring_page == NULL )
+    xenaccess->vm_event.ring_page =
+            xc_monitor_enable(xenaccess->xc_handle,
+                              xenaccess->vm_event.domain_id,
+                              &xenaccess->vm_event.evtchn_port);
+    if ( xenaccess->vm_event.ring_page == NULL )
     {
         switch ( errno ) {
             case EBUSY:
@@ -267,8 +223,8 @@ xenaccess_t *xenaccess_init(xc_interface **xch_r, domid_t domain_id)
     mem_access_enable = 1;
 
     /* Open event channel */
-    xenaccess->mem_event.xce_handle = xc_evtchn_open(NULL, 0);
-    if ( xenaccess->mem_event.xce_handle == NULL )
+    xenaccess->vm_event.xce_handle = xc_evtchn_open(NULL, 0);
+    if ( xenaccess->vm_event.xce_handle == NULL )
     {
         ERROR("Failed to open event channel");
         goto err;
@@ -276,58 +232,71 @@ xenaccess_t *xenaccess_init(xc_interface **xch_r, domid_t domain_id)
     evtchn_open = 1;
 
     /* Bind event notification */
-    rc = xc_evtchn_bind_interdomain(xenaccess->mem_event.xce_handle,
-                                    xenaccess->mem_event.domain_id,
-                                    xenaccess->mem_event.evtchn_port);
+    rc = xc_evtchn_bind_interdomain(xenaccess->vm_event.xce_handle,
+                                    xenaccess->vm_event.domain_id,
+                                    xenaccess->vm_event.evtchn_port);
     if ( rc < 0 )
     {
         ERROR("Failed to bind event channel");
         goto err;
     }
     evtchn_bind = 1;
-    xenaccess->mem_event.port = rc;
+    xenaccess->vm_event.port = rc;
 
     /* Initialise ring */
-    SHARED_RING_INIT((mem_event_sring_t *)xenaccess->mem_event.ring_page);
-    BACK_RING_INIT(&xenaccess->mem_event.back_ring,
-                   (mem_event_sring_t *)xenaccess->mem_event.ring_page,
+    SHARED_RING_INIT((vm_event_sring_t *)xenaccess->vm_event.ring_page);
+    BACK_RING_INIT(&xenaccess->vm_event.back_ring,
+                   (vm_event_sring_t *)xenaccess->vm_event.ring_page,
                    XC_PAGE_SIZE);
 
-    /* Get domaininfo */
-    xenaccess->domain_info = malloc(sizeof(xc_domaininfo_t));
-    if ( xenaccess->domain_info == NULL )
+    /* Get max_gpfn */
+    rc = xc_domain_maximum_gpfn(xenaccess->xc_handle,
+                                xenaccess->vm_event.domain_id,
+                                &xenaccess->max_gpfn);
+
+    if ( rc )
     {
-        ERROR("Error allocating memory for domain info");
+        ERROR("Failed to get max gpfn");
         goto err;
     }
 
-    rc = xc_domain_getinfolist(xenaccess->xc_handle, domain_id, 1,
-                               xenaccess->domain_info);
-    if ( rc != 1 )
-    {
-        ERROR("Error getting domain info");
-        goto err;
-    }
-
-    DPRINTF("max_pages = %"PRIx64"\n", xenaccess->domain_info->max_pages);
+    DPRINTF("max_gpfn = %"PRI_xen_pfn"\n", xenaccess->max_gpfn);
 
     return xenaccess;
 
  err:
-    xenaccess_teardown(xch, xenaccess);
+    rc = xenaccess_teardown(xch, xenaccess);
+    if ( rc )
+    {
+        ERROR("Failed to teardown xenaccess structure!\n");
+    }
 
  err_iface:
     return NULL;
 }
 
-int get_request(mem_event_t *mem_event, mem_event_request_t *req)
+static inline
+int control_singlestep(
+    xc_interface *xch,
+    domid_t domain_id,
+    unsigned long vcpu,
+    bool enable)
 {
-    mem_event_back_ring_t *back_ring;
+    uint32_t op = enable ?
+        XEN_DOMCTL_DEBUG_OP_SINGLE_STEP_ON : XEN_DOMCTL_DEBUG_OP_SINGLE_STEP_OFF;
+
+    return xc_domain_debug_control(xch, domain_id, op, vcpu);
+}
+
+/*
+ * Note that this function is not thread safe.
+ */
+static void get_request(vm_event_t *vm_event, vm_event_request_t *req)
+{
+    vm_event_back_ring_t *back_ring;
     RING_IDX req_cons;
 
-    mem_event_ring_lock(mem_event);
-
-    back_ring = &mem_event->back_ring;
+    back_ring = &vm_event->back_ring;
     req_cons = back_ring->req_cons;
 
     /* Copy request */
@@ -337,20 +306,17 @@ int get_request(mem_event_t *mem_event, mem_event_request_t *req)
     /* Update ring */
     back_ring->req_cons = req_cons;
     back_ring->sring->req_event = req_cons + 1;
-
-    mem_event_ring_unlock(mem_event);
-
-    return 0;
 }
 
-static int put_response(mem_event_t *mem_event, mem_event_response_t *rsp)
+/*
+ * Note that this function is not thread safe.
+ */
+static void put_response(vm_event_t *vm_event, vm_event_response_t *rsp)
 {
-    mem_event_back_ring_t *back_ring;
+    vm_event_back_ring_t *back_ring;
     RING_IDX rsp_prod;
 
-    mem_event_ring_lock(mem_event);
-
-    back_ring = &mem_event->back_ring;
+    back_ring = &vm_event->back_ring;
     rsp_prod = back_ring->rsp_prod_pvt;
 
     /* Copy response */
@@ -360,39 +326,19 @@ static int put_response(mem_event_t *mem_event, mem_event_response_t *rsp)
     /* Update ring */
     back_ring->rsp_prod_pvt = rsp_prod;
     RING_PUSH_RESPONSES(back_ring);
-
-    mem_event_ring_unlock(mem_event);
-
-    return 0;
-}
-
-static int xenaccess_resume_page(xenaccess_t *paging, mem_event_response_t *rsp)
-{
-    int ret;
-
-    /* Put the page info on the ring */
-    ret = put_response(&paging->mem_event, rsp);
-    if ( ret != 0 )
-        goto out;
-
-    /* Tell Xen page is ready */
-    ret = xc_mem_access_resume(paging->xc_handle, paging->mem_event.domain_id);
-    ret = xc_evtchn_notify(paging->mem_event.xce_handle,
-                           paging->mem_event.port);
-
- out:
-    return ret;
 }
 
 void usage(char* progname)
 {
-    fprintf(stderr,
-            "Usage: %s [-m] <domain_id> write|exec|int3\n"
+    fprintf(stderr, "Usage: %s [-m] <domain_id> write|exec", progname);
+#if defined(__i386__) || defined(__x86_64__)
+            fprintf(stderr, "|breakpoint|altp2m_write|altp2m_exec");
+#endif
+            fprintf(stderr,
             "\n"
-            "Logs first page writes, execs, or int3 traps that occur on the domain.\n"
+            "Logs first page writes, execs, or breakpoint traps that occur on the domain.\n"
             "\n"
-            "-m requires this program to run, or else the domain may pause\n",
-            progname);
+            "-m requires this program to run, or else the domain may pause\n");
 }
 
 int main(int argc, char *argv[])
@@ -400,16 +346,18 @@ int main(int argc, char *argv[])
     struct sigaction act;
     domid_t domain_id;
     xenaccess_t *xenaccess;
-    mem_event_request_t req;
-    mem_event_response_t rsp;
+    vm_event_request_t req;
+    vm_event_response_t rsp;
     int rc = -1;
     int rc1;
     xc_interface *xch;
     xenmem_access_t default_access = XENMEM_access_rwx;
     xenmem_access_t after_first_access = XENMEM_access_rwx;
     int required = 0;
-    int int3 = 0;
+    int breakpoint = 0;
     int shutting_down = 0;
+    int altp2m = 0;
+    uint16_t altp2m_view_id = 0;
 
     char* progname = argv[0];
     argv++;
@@ -448,10 +396,22 @@ int main(int argc, char *argv[])
         default_access = XENMEM_access_rw;
         after_first_access = XENMEM_access_rwx;
     }
-    else if ( !strcmp(argv[0], "int3") )
+#if defined(__i386__) || defined(__x86_64__)
+    else if ( !strcmp(argv[0], "breakpoint") )
     {
-        int3 = 1;
+        breakpoint = 1;
     }
+    else if ( !strcmp(argv[0], "altp2m_write") )
+    {
+        default_access = XENMEM_access_rx;
+        altp2m = 1;
+    }
+    else if ( !strcmp(argv[0], "altp2m_exec") )
+    {
+        default_access = XENMEM_access_rw;
+        altp2m = 1;
+    }
+#endif
     else
     {
         usage(argv[0]);
@@ -484,31 +444,83 @@ int main(int argc, char *argv[])
         goto exit;
     }
 
-    /* Set the default access type and convert all pages to it */
-    rc = xc_set_mem_access(xch, domain_id, default_access, ~0ull, 0);
-    if ( rc < 0 )
+    /* With altp2m we just create a new, restricted view of the memory */
+    if ( altp2m )
     {
-        ERROR("Error %d setting default mem access type\n", rc);
-        goto exit;
+        xen_pfn_t gfn = 0;
+        unsigned long perm_set = 0;
+
+        rc = xc_altp2m_set_domain_state( xch, domain_id, 1 );
+        if ( rc < 0 )
+        {
+            ERROR("Error %d enabling altp2m on domain!\n", rc);
+            goto exit;
+        }
+
+        rc = xc_altp2m_create_view( xch, domain_id, default_access, &altp2m_view_id );
+        if ( rc < 0 )
+        {
+            ERROR("Error %d creating altp2m view!\n", rc);
+            goto exit;
+        }
+
+        DPRINTF("altp2m view created with id %u\n", altp2m_view_id);
+        DPRINTF("Setting altp2m mem_access permissions.. ");
+
+        for(; gfn < xenaccess->max_gpfn; ++gfn)
+        {
+            rc = xc_altp2m_set_mem_access( xch, domain_id, altp2m_view_id, gfn,
+                                           default_access);
+            if ( !rc )
+                perm_set++;
+        }
+
+        DPRINTF("done! Permissions set on %lu pages.\n", perm_set);
+
+        rc = xc_altp2m_switch_to_view( xch, domain_id, altp2m_view_id );
+        if ( rc < 0 )
+        {
+            ERROR("Error %d switching to altp2m view!\n", rc);
+            goto exit;
+        }
+
+        rc = xc_monitor_singlestep( xch, domain_id, 1 );
+        if ( rc < 0 )
+        {
+            ERROR("Error %d failed to enable singlestep monitoring!\n", rc);
+            goto exit;
+        }
     }
 
-    rc = xc_set_mem_access(xch, domain_id, default_access, 0,
-                           xenaccess->domain_info->max_pages);
-    if ( rc < 0 )
+    if ( !altp2m )
     {
-        ERROR("Error %d setting all memory to access type %d\n", rc,
-              default_access);
-        goto exit;
+        /* Set the default access type and convert all pages to it */
+        rc = xc_set_mem_access(xch, domain_id, default_access, ~0ull, 0);
+        if ( rc < 0 )
+        {
+            ERROR("Error %d setting default mem access type\n", rc);
+            goto exit;
+        }
+
+        rc = xc_set_mem_access(xch, domain_id, default_access, START_PFN,
+                               (xenaccess->max_gpfn - START_PFN) );
+
+        if ( rc < 0 )
+        {
+            ERROR("Error %d setting all memory to access type %d\n", rc,
+                  default_access);
+            goto exit;
+        }
     }
 
-    if ( int3 )
-        rc = xc_hvm_param_set(xch, domain_id, HVM_PARAM_MEMORY_EVENT_INT3, HVMPME_mode_sync);
-    else
-        rc = xc_hvm_param_set(xch, domain_id, HVM_PARAM_MEMORY_EVENT_INT3, HVMPME_mode_disabled);
-    if ( rc < 0 )
+    if ( breakpoint )
     {
-        ERROR("Error %d setting int3 mem_event\n", rc);
-        goto exit;
+        rc = xc_monitor_software_breakpoint(xch, domain_id, 1);
+        if ( rc < 0 )
+        {
+            ERROR("Error %d setting breakpoint trapping with vm_event\n", rc);
+            goto exit;
+        }
     }
 
     /* Wait for access */
@@ -516,18 +528,34 @@ int main(int argc, char *argv[])
     {
         if ( interrupted )
         {
+            /* Unregister for every event */
             DPRINTF("xenaccess shutting down on signal %d\n", interrupted);
 
-            /* Unregister for every event */
-            rc = xc_set_mem_access(xch, domain_id, XENMEM_access_rwx, ~0ull, 0);
-            rc = xc_set_mem_access(xch, domain_id, XENMEM_access_rwx, 0,
-                                   xenaccess->domain_info->max_pages);
-            rc = xc_hvm_param_set(xch, domain_id, HVM_PARAM_MEMORY_EVENT_INT3, HVMPME_mode_disabled);
+            if ( breakpoint )
+                rc = xc_monitor_software_breakpoint(xch, domain_id, 0);
+
+            if ( altp2m )
+            {
+                uint32_t vcpu_id;
+
+                rc = xc_altp2m_switch_to_view( xch, domain_id, 0 );
+                rc = xc_altp2m_destroy_view(xch, domain_id, altp2m_view_id);
+                rc = xc_altp2m_set_domain_state(xch, domain_id, 0);
+                rc = xc_monitor_singlestep(xch, domain_id, 0);
+
+                for ( vcpu_id = 0; vcpu_id<XEN_LEGACY_MAX_VCPUS; vcpu_id++)
+                    rc = control_singlestep(xch, domain_id, vcpu_id, 0);
+
+            } else {
+                rc = xc_set_mem_access(xch, domain_id, XENMEM_access_rwx, ~0ull, 0);
+                rc = xc_set_mem_access(xch, domain_id, XENMEM_access_rwx, START_PFN,
+                                       (xenaccess->max_gpfn - START_PFN) );
+            }
 
             shutting_down = 1;
         }
 
-        rc = xc_wait_for_event_or_timeout(xch, xenaccess->mem_event.xce_handle, 100);
+        rc = xc_wait_for_event_or_timeout(xch, xenaccess->vm_event.xce_handle, 100);
         if ( rc < -1 )
         {
             ERROR("Error getting event");
@@ -539,25 +567,27 @@ int main(int argc, char *argv[])
             DPRINTF("Got event from Xen\n");
         }
 
-        while ( RING_HAS_UNCONSUMED_REQUESTS(&xenaccess->mem_event.back_ring) )
+        while ( RING_HAS_UNCONSUMED_REQUESTS(&xenaccess->vm_event.back_ring) )
         {
             xenmem_access_t access;
 
-            rc = get_request(&xenaccess->mem_event, &req);
-            if ( rc != 0 )
+            get_request(&xenaccess->vm_event, &req);
+
+            if ( req.version != VM_EVENT_INTERFACE_VERSION )
             {
-                ERROR("Error getting request");
+                ERROR("Error: vm_event interface version mismatch!\n");
                 interrupted = -1;
                 continue;
             }
 
             memset( &rsp, 0, sizeof (rsp) );
+            rsp.version = VM_EVENT_INTERFACE_VERSION;
             rsp.vcpu_id = req.vcpu_id;
             rsp.flags = req.flags;
 
             switch (req.reason) {
-            case MEM_EVENT_REASON_VIOLATION:
-                rc = xc_get_mem_access(xch, domain_id, req.gfn, &access);
+            case VM_EVENT_REASON_MEM_ACCESS:
+                rc = xc_get_mem_access(xch, domain_id, req.u.mem_access.gfn, &access);
                 if (rc < 0)
                 {
                     ERROR("Error %d getting mem_access event\n", rc);
@@ -566,22 +596,33 @@ int main(int argc, char *argv[])
                 }
 
                 printf("PAGE ACCESS: %c%c%c for GFN %"PRIx64" (offset %06"
-                       PRIx64") gla %016"PRIx64" (valid: %c; fault in gpt: %c; fault with gla: %c) (vcpu %u)\n",
-                       req.access_r ? 'r' : '-',
-                       req.access_w ? 'w' : '-',
-                       req.access_x ? 'x' : '-',
-                       req.gfn,
-                       req.offset,
-                       req.gla,
-                       req.gla_valid ? 'y' : 'n',
-                       req.fault_in_gpt ? 'y' : 'n',
-                       req.fault_with_gla ? 'y': 'n',
-                       req.vcpu_id);
+                       PRIx64") gla %016"PRIx64" (valid: %c; fault in gpt: %c; fault with gla: %c) (vcpu %u, altp2m view %u)\n",
+                       (req.u.mem_access.flags & MEM_ACCESS_R) ? 'r' : '-',
+                       (req.u.mem_access.flags & MEM_ACCESS_W) ? 'w' : '-',
+                       (req.u.mem_access.flags & MEM_ACCESS_X) ? 'x' : '-',
+                       req.u.mem_access.gfn,
+                       req.u.mem_access.offset,
+                       req.u.mem_access.gla,
+                       (req.u.mem_access.flags & MEM_ACCESS_GLA_VALID) ? 'y' : 'n',
+                       (req.u.mem_access.flags & MEM_ACCESS_FAULT_IN_GPT) ? 'y' : 'n',
+                       (req.u.mem_access.flags & MEM_ACCESS_FAULT_WITH_GLA) ? 'y': 'n',
+                       req.vcpu_id,
+                       req.altp2m_idx);
 
-                if ( default_access != after_first_access )
+                if ( altp2m && req.flags & VM_EVENT_FLAG_ALTERNATE_P2M)
+                {
+                    DPRINTF("\tSwitching back to default view!\n");
+
+                    rsp.reason = req.reason;
+                    rsp.flags = req.flags;
+                    rsp.altp2m_idx = 0;
+
+                    control_singlestep(xch, domain_id, rsp.vcpu_id, 1);
+                }
+                else if ( default_access != after_first_access )
                 {
                     rc = xc_set_mem_access(xch, domain_id, after_first_access,
-                                           req.gfn, 1);
+                                           req.u.mem_access.gfn, 1);
                     if (rc < 0)
                     {
                         ERROR("Error %d setting gfn to access_type %d\n", rc,
@@ -591,14 +632,12 @@ int main(int argc, char *argv[])
                     }
                 }
 
-
-                rsp.gfn = req.gfn;
-                rsp.p2mt = req.p2mt;
+                rsp.u.mem_access.gfn = req.u.mem_access.gfn;
                 break;
-            case MEM_EVENT_REASON_INT3:
-                printf("INT3: rip=%016"PRIx64", gfn=%"PRIx64" (vcpu %d)\n", 
-                       req.gla, 
-                       req.gfn,
+            case VM_EVENT_REASON_SOFTWARE_BREAKPOINT:
+                printf("Breakpoint: rip=%016"PRIx64", gfn=%"PRIx64" (vcpu %d)\n",
+                       req.data.regs.x86.rip,
+                       req.u.software_breakpoint.gfn,
                        req.vcpu_id);
 
                 /* Reinject */
@@ -607,23 +646,45 @@ int main(int argc, char *argv[])
                     HVMOP_TRAP_sw_exc, -1, 0, 0);
                 if (rc < 0)
                 {
-                    ERROR("Error %d injecting int3\n", rc);
+                    ERROR("Error %d injecting breakpoint\n", rc);
                     interrupted = -1;
                     continue;
                 }
+
+                break;
+            case VM_EVENT_REASON_SINGLESTEP:
+                printf("Singlestep: rip=%016"PRIx64", vcpu %d\n",
+                       req.data.regs.x86.rip,
+                       req.vcpu_id);
+
+                if ( altp2m )
+                {
+                    printf("\tSwitching altp2m to view %u!\n", altp2m_view_id);
+
+                    rsp.reason = req.reason;
+                    rsp.flags |= VM_EVENT_FLAG_ALTERNATE_P2M;
+                    rsp.altp2m_idx = altp2m_view_id;
+                }
+
+                control_singlestep(xch, domain_id, req.vcpu_id, 0);
 
                 break;
             default:
                 fprintf(stderr, "UNKNOWN REASON CODE %d\n", req.reason);
             }
 
-            rc = xenaccess_resume_page(xenaccess, &rsp);
-            if ( rc != 0 )
-            {
-                ERROR("Error resuming page");
-                interrupted = -1;
-                continue;
-            }
+            /* Put the response on the ring */
+            put_response(&xenaccess->vm_event, &rsp);
+        }
+
+        /* Tell Xen page is ready */
+        rc = xc_evtchn_notify(xenaccess->vm_event.xce_handle,
+                              xenaccess->vm_event.port);
+
+        if ( rc != 0 )
+        {
+            ERROR("Error resuming page");
+            interrupted = -1;
         }
 
         if ( shutting_down )

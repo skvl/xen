@@ -23,6 +23,7 @@
 #include <xen/cpu.h>
 #include <xen/pmstat.h>
 #include <xen/irq.h>
+#include <xen/symbols.h>
 #include <asm/current.h>
 #include <public/platform.h>
 #include <acpi/cpufreq/processor_perf.h>
@@ -61,7 +62,7 @@ long cpu_down_helper(void *data);
 long core_parking_helper(void *data);
 uint32_t get_cur_idle_nums(void);
 
-#define RESOURCE_ACCESS_MAX_ENTRIES 2
+#define RESOURCE_ACCESS_MAX_ENTRIES 3
 struct xen_resource_access {
     unsigned int nr_done;
     unsigned int nr_entries;
@@ -75,6 +76,7 @@ static bool_t allow_access_msr(unsigned int msr)
     /* MSR for CMT, refer to chapter 17.14 of Intel SDM. */
     case MSR_IA32_CMT_EVTSEL:
     case MSR_IA32_CMT_CTR:
+    case MSR_IA32_TSC:
         return 1;
     }
 
@@ -124,6 +126,7 @@ static void resource_access(void *info)
 {
     struct xen_resource_access *ra = info;
     unsigned int i;
+    u64 tsc = 0;
 
     for ( i = 0; i < ra->nr_done; i++ )
     {
@@ -133,10 +136,40 @@ static void resource_access(void *info)
         switch ( entry->u.cmd )
         {
         case XEN_RESOURCE_OP_MSR_READ:
-            ret = rdmsr_safe(entry->idx, entry->val);
+            if ( unlikely(entry->idx == MSR_IA32_TSC) )
+            {
+                /* Return obfuscated scaled time instead of raw timestamp */
+                entry->val = get_s_time_fixed(tsc)
+                             + SECONDS(boot_random) - boot_random;
+                ret = 0;
+            }
+            else
+            {
+                unsigned long flags = 0;
+                /*
+                 * If next entry is MSR_IA32_TSC read, then the actual rdtsc
+                 * is performed together with current entry, with IRQ disabled.
+                 */
+                bool_t read_tsc = (i < ra->nr_done - 1 &&
+                                   unlikely(entry[1].idx == MSR_IA32_TSC));
+
+                if ( unlikely(read_tsc) )
+                    local_irq_save(flags);
+
+                ret = rdmsr_safe(entry->idx, entry->val);
+
+                if ( unlikely(read_tsc) )
+                {
+                    tsc = rdtsc();
+                    local_irq_restore(flags);
+                }
+            }
             break;
         case XEN_RESOURCE_OP_MSR_WRITE:
-            ret = wrmsr_safe(entry->idx, entry->val);
+            if ( unlikely(entry->idx == MSR_IA32_TSC) )
+                ret = -EPERM;
+            else
+                ret = wrmsr_safe(entry->idx, entry->val);
             break;
         default:
             BUG();
@@ -155,7 +188,7 @@ static void resource_access(void *info)
 
 ret_t do_platform_op(XEN_GUEST_HANDLE_PARAM(xen_platform_op_t) u_xenpf_op)
 {
-    ret_t ret = 0;
+    ret_t ret;
     struct xen_platform_op curop, *op = &curop;
 
     if ( copy_from_guest(op, u_xenpf_op, 1) )
@@ -180,14 +213,20 @@ ret_t do_platform_op(XEN_GUEST_HANDLE_PARAM(xen_platform_op_t) u_xenpf_op)
 
     switch ( op->cmd )
     {
-    case XENPF_settime:
-    {
-        do_settime(op->u.settime.secs, 
-                   op->u.settime.nsecs, 
-                   op->u.settime.system_time);
-        ret = 0;
-    }
-    break;
+    case XENPF_settime32:
+        do_settime(op->u.settime32.secs,
+                   op->u.settime32.nsecs,
+                   op->u.settime32.system_time);
+        break;
+
+    case XENPF_settime64:
+        if ( likely(!op->u.settime64.mbz) )
+            do_settime(op->u.settime64.secs,
+                       op->u.settime64.nsecs,
+                       op->u.settime64.system_time);
+        else
+            ret = -EINVAL;
+        break;
 
     case XENPF_add_memtype:
     {
@@ -451,7 +490,7 @@ ret_t do_platform_op(XEN_GUEST_HANDLE_PARAM(xen_platform_op_t) u_xenpf_op)
 
             if ( !idletime )
             {
-                cpumask_clear_cpu(cpu, cpumap);
+                __cpumask_clear_cpu(cpu, cpumap);
                 continue;
             }
 
@@ -757,6 +796,33 @@ ret_t do_platform_op(XEN_GUEST_HANDLE_PARAM(xen_platform_op_t) u_xenpf_op)
             ret = ra.nr_done;
 
         xfree(ra.entries);
+    }
+    break;
+
+    case XENPF_get_symbol:
+    {
+        static char name[KSYM_NAME_LEN + 1]; /* protected by xenpf_lock */
+        XEN_GUEST_HANDLE(char) nameh;
+        uint32_t namelen, copylen;
+
+        guest_from_compat_handle(nameh, op->u.symdata.name);
+
+        ret = xensyms_read(&op->u.symdata.symnum, &op->u.symdata.type,
+                           &op->u.symdata.address, name);
+
+        namelen = strlen(name) + 1;
+
+        if ( namelen > op->u.symdata.namelen )
+            copylen = op->u.symdata.namelen;
+        else
+            copylen = namelen;
+
+        op->u.symdata.namelen = namelen;
+
+        if ( !ret && copy_to_guest(nameh, name, copylen) )
+            ret = -EFAULT;
+        if ( !ret && __copy_field_to_guest(u_xenpf_op, op, u.symdata) )
+            ret = -EFAULT;
     }
     break;
 

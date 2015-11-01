@@ -19,11 +19,11 @@
  
 int libxl__try_phy_backend(mode_t st_mode)
 {
-    if (!S_ISBLK(st_mode)) {
-        return 0;
+    if (S_ISBLK(st_mode) || S_ISREG(st_mode)) {
+        return 1;
     }
 
-    return 1;
+    return 0;
 }
 
 #define EXT_SHIFT 28
@@ -214,6 +214,7 @@ static int libxl__hotplug_disk(libxl__gc *gc, libxl__device *dev,
 
     *env = get_hotplug_env(gc, script, dev);
     if (!*env) {
+        LOG(ERROR, "Failed to get hotplug environment");
         rc = ERROR_FAIL;
         goto error;
     }
@@ -225,6 +226,7 @@ static int libxl__hotplug_disk(libxl__gc *gc, libxl__device *dev,
     (*args)[nr++] = NULL;
     assert(nr == arraysize);
 
+    LOG(DEBUG, "Args and environment ready");
     rc = 1;
 
 error:
@@ -236,18 +238,12 @@ int libxl__get_hotplug_script_info(libxl__gc *gc, libxl__device *dev,
                                    libxl__device_action action,
                                    int num_exec)
 {
-    char *disable_udev = libxl__xs_read(gc, XBT_NULL, DISABLE_UDEV_PATH);
     int rc;
-
-    /* Check if we have to run hotplug scripts */
-    if (!disable_udev) {
-        rc = 0;
-        goto out;
-    }
 
     switch (dev->backend_kind) {
     case LIBXL__DEVICE_KIND_VBD:
         if (num_exec != 0) {
+            LOG(DEBUG, "num_exec %d, not running hotplug scripts", num_exec);
             rc = 0;
             goto out;
         }
@@ -260,6 +256,7 @@ int libxl__get_hotplug_script_info(libxl__gc *gc, libxl__device *dev,
          */
         if ((num_exec > 1) ||
             (libxl_get_stubdom_id(CTX, dev->domid) && num_exec)) {
+            LOG(DEBUG, "num_exec %d, not running hotplug scripts", num_exec);
             rc = 0;
             goto out;
         }
@@ -267,6 +264,7 @@ int libxl__get_hotplug_script_info(libxl__gc *gc, libxl__device *dev,
         break;
     default:
         /* No need to execute any hotplug scripts */
+        LOG(DEBUG, "backend_kind %d, no need to execute scripts", dev->backend_kind);
         rc = 0;
         break;
     }
@@ -278,4 +276,74 @@ out:
 libxl_device_model_version libxl__default_device_model(libxl__gc *gc)
 {
     return LIBXL_DEVICE_MODEL_VERSION_QEMU_XEN;
+}
+
+int libxl__pci_numdevs(libxl__gc *gc)
+{
+    DIR *dir;
+    struct dirent *entry;
+    int num_devs = 0;
+
+    dir = opendir("/sys/bus/pci/devices");
+    if (!dir) {
+        LOGE(ERROR, "Cannot open /sys/bus/pci/devices");
+        return ERROR_FAIL;
+    }
+
+    while ((entry = readdir(dir))) {
+        if (entry->d_name[0] == '.')
+            continue;
+        num_devs++;
+    }
+    closedir(dir);
+
+    return num_devs;
+}
+
+int libxl__pci_topology_init(libxl__gc *gc,
+                             physdev_pci_device_t *devs,
+                             int num_devs)
+{
+
+    DIR *dir;
+    struct dirent *entry;
+    int i, err = 0;
+
+    dir = opendir("/sys/bus/pci/devices");
+    if (!dir) {
+        LOGE(ERROR, "Cannot open /sys/bus/pci/devices");
+        return ERROR_FAIL;
+    }
+
+    i = 0;
+    while ((entry = readdir(dir))) {
+        unsigned int dom, bus, dev, func;
+
+        if (entry->d_name[0] == '.')
+            continue;
+
+        if (i == num_devs) {
+            LOG(ERROR, "Too many devices");
+            err = ERROR_FAIL;
+            errno = -ENOSPC;
+            goto out;
+        }
+
+        if (sscanf(entry->d_name, "%x:%x:%x.%d", &dom, &bus, &dev, &func) < 4) {
+            LOGE(ERROR, "Error processing /sys/bus/pci/devices");
+            err = ERROR_FAIL;
+            goto out;
+        }
+
+        devs[i].seg = dom;
+        devs[i].bus = bus;
+        devs[i].devfn = ((dev & 0x1f) << 3) | (func & 7);
+
+        i++;
+    }
+
+ out:
+    closedir(dir);
+
+    return err;
 }

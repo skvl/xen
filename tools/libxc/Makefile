@@ -1,10 +1,16 @@
 XEN_ROOT = $(CURDIR)/../..
 include $(XEN_ROOT)/tools/Rules.mk
 
-MAJOR    = 4.5
+MAJOR    = 4.6
 MINOR    = 0
 
+ifeq ($(CONFIG_LIBXC_MINIOS),y)
+# Save/restore of a domain is currently incompatible with a stubdom environment
+override CONFIG_MIGRATE := n
+endif
+
 CTRL_SRCS-y       :=
+CTRL_SRCS-y       += xc_altp2m.c
 CTRL_SRCS-y       += xc_core.c
 CTRL_SRCS-$(CONFIG_X86) += xc_core_x86.c
 CTRL_SRCS-$(CONFIG_ARM) += xc_core_arm.c
@@ -16,7 +22,6 @@ CTRL_SRCS-y       += xc_misc.c
 CTRL_SRCS-y       += xc_flask.c
 CTRL_SRCS-y       += xc_physdev.c
 CTRL_SRCS-y       += xc_private.c
-CTRL_SRCS-y       += xc_sedf.c
 CTRL_SRCS-y       += xc_csched.c
 CTRL_SRCS-y       += xc_csched2.c
 CTRL_SRCS-y       += xc_arinc653.c
@@ -26,7 +31,8 @@ CTRL_SRCS-y       += xc_pm.c
 CTRL_SRCS-y       += xc_cpu_hotplug.c
 CTRL_SRCS-y       += xc_resume.c
 CTRL_SRCS-y       += xc_tmem.c
-CTRL_SRCS-y       += xc_mem_event.c
+CTRL_SRCS-y       += xc_vm_event.c
+CTRL_SRCS-y       += xc_monitor.c
 CTRL_SRCS-y       += xc_mem_paging.c
 CTRL_SRCS-y       += xc_mem_access.c
 CTRL_SRCS-y       += xc_memshr.c
@@ -42,12 +48,21 @@ CTRL_SRCS-$(CONFIG_Linux) += xc_linux.c xc_linux_osdep.c
 CTRL_SRCS-$(CONFIG_FreeBSD) += xc_freebsd.c xc_freebsd_osdep.c
 CTRL_SRCS-$(CONFIG_SunOS) += xc_solaris.c
 CTRL_SRCS-$(CONFIG_NetBSD) += xc_netbsd.c
+CTRL_SRCS-$(CONFIG_NetBSDRump) += xc_netbsd.c
 CTRL_SRCS-$(CONFIG_MiniOS) += xc_minios.c
 
 GUEST_SRCS-y :=
 GUEST_SRCS-y += xg_private.c xc_suspend.c
 ifeq ($(CONFIG_MIGRATE),y)
-GUEST_SRCS-y += xc_domain_restore.c xc_domain_save.c
+GUEST_SRCS-y += xc_sr_common.c
+GUEST_SRCS-$(CONFIG_X86) += xc_sr_common_x86.c
+GUEST_SRCS-$(CONFIG_X86) += xc_sr_common_x86_pv.c
+GUEST_SRCS-$(CONFIG_X86) += xc_sr_restore_x86_pv.c
+GUEST_SRCS-$(CONFIG_X86) += xc_sr_restore_x86_hvm.c
+GUEST_SRCS-$(CONFIG_X86) += xc_sr_save_x86_pv.c
+GUEST_SRCS-$(CONFIG_X86) += xc_sr_save_x86_hvm.c
+GUEST_SRCS-y += xc_sr_restore.c
+GUEST_SRCS-y += xc_sr_save.c
 GUEST_SRCS-y += xc_offline_page.c xc_compression.c
 else
 GUEST_SRCS-y += xc_nomigrate.c
@@ -145,18 +160,18 @@ libs: $(LIB)
 
 .PHONY: install
 install: build
-	$(INSTALL_DIR) $(DESTDIR)$(LIBDIR)
-	$(INSTALL_DIR) $(DESTDIR)$(INCLUDEDIR)
-	$(INSTALL_SHLIB) libxenctrl.so.$(MAJOR).$(MINOR) $(DESTDIR)$(LIBDIR)
-	$(INSTALL_DATA) libxenctrl.a $(DESTDIR)$(LIBDIR)
-	$(SYMLINK_SHLIB) libxenctrl.so.$(MAJOR).$(MINOR) $(DESTDIR)$(LIBDIR)/libxenctrl.so.$(MAJOR)
-	$(SYMLINK_SHLIB) libxenctrl.so.$(MAJOR) $(DESTDIR)$(LIBDIR)/libxenctrl.so
-	$(INSTALL_DATA) include/xenctrl.h include/xenctrlosdep.h include/xentoollog.h $(DESTDIR)$(INCLUDEDIR)
-	$(INSTALL_SHLIB) libxenguest.so.$(MAJOR).$(MINOR) $(DESTDIR)$(LIBDIR)
-	$(INSTALL_DATA) libxenguest.a $(DESTDIR)$(LIBDIR)
-	$(SYMLINK_SHLIB) libxenguest.so.$(MAJOR).$(MINOR) $(DESTDIR)$(LIBDIR)/libxenguest.so.$(MAJOR)
-	$(SYMLINK_SHLIB) libxenguest.so.$(MAJOR) $(DESTDIR)$(LIBDIR)/libxenguest.so
-	$(INSTALL_DATA) include/xenguest.h $(DESTDIR)$(INCLUDEDIR)
+	$(INSTALL_DIR) $(DESTDIR)$(libdir)
+	$(INSTALL_DIR) $(DESTDIR)$(includedir)
+	$(INSTALL_SHLIB) libxenctrl.so.$(MAJOR).$(MINOR) $(DESTDIR)$(libdir)
+	$(INSTALL_DATA) libxenctrl.a $(DESTDIR)$(libdir)
+	$(SYMLINK_SHLIB) libxenctrl.so.$(MAJOR).$(MINOR) $(DESTDIR)$(libdir)/libxenctrl.so.$(MAJOR)
+	$(SYMLINK_SHLIB) libxenctrl.so.$(MAJOR) $(DESTDIR)$(libdir)/libxenctrl.so
+	$(INSTALL_DATA) include/xenctrl.h include/xenctrlosdep.h include/xentoollog.h $(DESTDIR)$(includedir)
+	$(INSTALL_SHLIB) libxenguest.so.$(MAJOR).$(MINOR) $(DESTDIR)$(libdir)
+	$(INSTALL_DATA) libxenguest.a $(DESTDIR)$(libdir)
+	$(SYMLINK_SHLIB) libxenguest.so.$(MAJOR).$(MINOR) $(DESTDIR)$(libdir)/libxenguest.so.$(MAJOR)
+	$(SYMLINK_SHLIB) libxenguest.so.$(MAJOR) $(DESTDIR)$(libdir)/libxenguest.so
+	$(INSTALL_DATA) include/xenguest.h $(DESTDIR)$(includedir)
 
 .PHONY: TAGS
 TAGS:
@@ -169,6 +184,9 @@ clean:
             $(CTRL_LIB_OBJS) $(CTRL_PIC_OBJS) \
             $(GUEST_LIB_OBJS) $(GUEST_PIC_OBJS) \
             $(OSDEP_LIB_OBJS) $(OSDEP_PIC_OBJS)
+
+.PHONY: distclean
+distclean: clean
 
 .PHONY: rpm
 rpm: build

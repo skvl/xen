@@ -213,7 +213,7 @@ void dump_pt_walk(paddr_t ttbr, paddr_t addr,
     else
         root_table = 0;
 
-    mapping = map_domain_page(root_pfn + root_table);
+    mapping = map_domain_page(_mfn(root_pfn + root_table));
 
     for ( level = root_level; ; level++ )
     {
@@ -230,7 +230,7 @@ void dump_pt_walk(paddr_t ttbr, paddr_t addr,
 
         /* For next iteration */
         unmap_domain_page(mapping);
-        mapping = map_domain_page(pte.walk.base);
+        mapping = map_domain_page(_mfn(pte.walk.base));
     }
 
     unmap_domain_page(mapping);
@@ -271,7 +271,7 @@ void clear_fixmap(unsigned map)
 }
 
 #ifdef CONFIG_DOMAIN_PAGE
-void *map_domain_page_global(unsigned long mfn)
+void *map_domain_page_global(mfn_t mfn)
 {
     return vmap(&mfn, 1);
 }
@@ -282,11 +282,11 @@ void unmap_domain_page_global(const void *va)
 }
 
 /* Map a page of domheap memory */
-void *map_domain_page(unsigned long mfn)
+void *map_domain_page(mfn_t mfn)
 {
     unsigned long flags;
     lpae_t *map = this_cpu(xen_dommap);
-    unsigned long slot_mfn = mfn & ~LPAE_ENTRY_MASK;
+    unsigned long slot_mfn = mfn_x(mfn) & ~LPAE_ENTRY_MASK;
     vaddr_t va;
     lpae_t pte;
     int i, slot;
@@ -339,7 +339,7 @@ void *map_domain_page(unsigned long mfn)
 
     va = (DOMHEAP_VIRT_START
           + (slot << SECOND_SHIFT)
-          + ((mfn & LPAE_ENTRY_MASK) << THIRD_SHIFT));
+          + ((mfn_x(mfn) & LPAE_ENTRY_MASK) << THIRD_SHIFT));
 
     /*
      * We may not have flushed this specific subpage at map time,
@@ -386,7 +386,7 @@ unsigned long domain_page_map_to_mfn(const void *ptr)
 
 void flush_page_to_ram(unsigned long mfn)
 {
-    void *v = map_domain_page(mfn);
+    void *v = map_domain_page(_mfn(mfn));
 
     clean_and_invalidate_dcache_va_range(v, PAGE_SIZE);
     unmap_domain_page(v);
@@ -399,7 +399,7 @@ void __init arch_init_memory(void)
      * Any Xen-heap pages that we will allow to be mapped will have
      * their domain field set to dom_xen.
      */
-    dom_xen = domain_create(DOMID_XEN, DOMCRF_dummy, 0);
+    dom_xen = domain_create(DOMID_XEN, DOMCRF_dummy, 0, NULL);
     BUG_ON(IS_ERR(dom_xen));
 
     /*
@@ -407,14 +407,14 @@ void __init arch_init_memory(void)
      * This domain owns I/O pages that are within the range of the page_info
      * array. Mappings occur at the priv of the caller.
      */
-    dom_io = domain_create(DOMID_IO, DOMCRF_dummy, 0);
+    dom_io = domain_create(DOMID_IO, DOMCRF_dummy, 0, NULL);
     BUG_ON(IS_ERR(dom_io));
 
     /*
      * Initialise our COW domain.
      * This domain owns sharable pages.
      */
-    dom_cow = domain_create(DOMID_COW, DOMCRF_dummy, 0);
+    dom_cow = domain_create(DOMID_COW, DOMCRF_dummy, 0, NULL);
     BUG_ON(IS_ERR(dom_cow));
 }
 
@@ -794,10 +794,10 @@ void *__init arch_vmap_virt_end(void)
  */
 void *ioremap_attr(paddr_t pa, size_t len, unsigned int attributes)
 {
-    unsigned long pfn = PFN_DOWN(pa);
+    mfn_t mfn = _mfn(PFN_DOWN(pa));
     unsigned int offs = pa & (PAGE_SIZE - 1);
     unsigned int nr = PFN_UP(offs + len);
-    void *ptr = __vmap(&pfn, nr, 1, 1, attributes);
+    void *ptr = __vmap(&mfn, nr, 1, 1, attributes);
 
     if ( ptr == NULL )
         return NULL;
@@ -827,7 +827,8 @@ static int create_xen_table(lpae_t *entry)
 
 enum xenmap_operation {
     INSERT,
-    REMOVE
+    REMOVE,
+    RESERVE
 };
 
 static int create_xen_entries(enum xenmap_operation op,
@@ -859,12 +860,15 @@ static int create_xen_entries(enum xenmap_operation op,
 
         switch ( op ) {
             case INSERT:
+            case RESERVE:
                 if ( third[third_table_offset(addr)].pt.valid )
                 {
                     printk("create_xen_entries: trying to replace an existing mapping addr=%lx mfn=%lx\n",
                            addr, mfn);
                     return -EINVAL;
                 }
+                if ( op == RESERVE )
+                    break;
                 pte = mfn_to_xen_entry(mfn, ai);
                 pte.pt.table = 1;
                 write_pte(&third[third_table_offset(addr)], pte);
@@ -898,6 +902,13 @@ int map_pages_to_xen(unsigned long virt,
 {
     return create_xen_entries(INSERT, virt, mfn, nr_mfns, flags);
 }
+
+int populate_pt_range(unsigned long virt, unsigned long mfn,
+                      unsigned long nr_mfns)
+{
+    return create_xen_entries(RESERVE, virt, mfn, nr_mfns, 0);
+}
+
 void destroy_xen_mappings(unsigned long v, unsigned long e)
 {
     create_xen_entries(REMOVE, v, 0, (e - v) >> PAGE_SHIFT, 0);
@@ -985,7 +996,7 @@ int page_is_ram_type(unsigned long mfn, unsigned long mem_type)
 
 unsigned long domain_get_maximum_gpfn(struct domain *d)
 {
-    return -ENOSYS;
+    return d->arch.p2m.max_mapped_gfn;
 }
 
 void share_xen_page_with_guest(struct page_info *page,
@@ -1037,7 +1048,7 @@ int xenmem_add_to_physmap_one(
     switch ( space )
     {
     case XENMAPSPACE_grant_table:
-        spin_lock(&d->grant_table->lock);
+        write_lock(&d->grant_table->lock);
 
         if ( d->grant_table->gt_version == 0 )
             d->grant_table->gt_version = 1;
@@ -1067,7 +1078,7 @@ int xenmem_add_to_physmap_one(
 
         t = p2m_ram_rw;
 
-        spin_unlock(&d->grant_table->lock);
+        write_unlock(&d->grant_table->lock);
         break;
     case XENMAPSPACE_shared_info:
         if ( idx != 0 )
@@ -1103,7 +1114,6 @@ int xenmem_add_to_physmap_one(
         page = get_page_from_gfn(od, idx, &p2mt, P2M_ALLOC);
         if ( !page )
         {
-            dump_p2m_lookup(od, pfn_to_paddr(idx));
             rcu_unlock_domain(od);
             return -EINVAL;
         }
@@ -1159,6 +1169,7 @@ long arch_memory_op(int op, XEN_GUEST_HANDLE_PARAM(void) arg)
 struct domain *page_get_owner_and_reference(struct page_info *page)
 {
     unsigned long x, y = page->count_info;
+    struct domain *owner;
 
     do {
         x = y;
@@ -1171,7 +1182,10 @@ struct domain *page_get_owner_and_reference(struct page_info *page)
     }
     while ( (y = cmpxchg(&page->count_info, x, x + 1)) != x );
 
-    return page_get_owner(page);
+    owner = page_get_owner(page);
+    ASSERT(owner);
+
+    return owner;
 }
 
 void put_page(struct page_info *page)

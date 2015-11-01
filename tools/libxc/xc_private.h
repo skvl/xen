@@ -10,8 +10,7 @@
  * Lesser General Public License for more details.
  *
  * You should have received a copy of the GNU Lesser General Public
- * License along with this library; if not, write to the Free Software
- * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301  USA
+ * License along with this library; If not, see <http://www.gnu.org/licenses/>.
  */
 
 #ifndef XC_PRIVATE_H
@@ -40,6 +39,19 @@
 #include <valgrind/memcheck.h>
 #else
 #define VALGRIND_MAKE_MEM_UNDEFINED(addr, len) /* addr, len */
+#endif
+
+#if defined(__MINIOS__)
+/*
+ * MiniOS's libc doesn't know about sys/uio.h or writev().
+ * Declare enough of sys/uio.h to compile.
+ */
+struct iovec {
+    void *iov_base;
+    size_t iov_len;
+};
+#else
+#include <sys/uio.h>
 #endif
 
 #define DECLARE_HYPERCALL privcmd_hypercall_t hypercall
@@ -120,8 +132,8 @@ void xc_report(xc_interface *xch, xentoollog_logger *lg, xentoollog_level,
                int code, const char *fmt, ...)
      __attribute__((format(printf,5,6)));
 
-void xc_report_progress_start(xc_interface *xch, const char *doing,
-                              unsigned long total);
+const char *xc_set_progress_prefix(xc_interface *xch, const char *doing);
+void xc_report_progress_single(xc_interface *xch, const char *doing);
 void xc_report_progress_step(xc_interface *xch,
                              unsigned long done, unsigned long total);
 
@@ -395,6 +407,7 @@ int xc_flush_mmu_updates(xc_interface *xch, struct xc_mmu *mmu);
 /* Return 0 on success; -1 on error setting errno. */
 int read_exact(int fd, void *data, size_t size); /* EOF => -1, errno=0 */
 int write_exact(int fd, const void *data, size_t size);
+int writev_exact(int fd, const struct iovec *iov, int iovcnt);
 
 int xc_ffs8(uint8_t x);
 int xc_ffs16(uint16_t x);
@@ -421,18 +434,15 @@ int xc_ffs64(uint64_t x);
 #define DOMPRINTF_CALLED(xch) xc_dom_printf((xch), "%s: called", __FUNCTION__)
 
 /**
- * mem_event operations. Internal use only.
+ * vm_event operations. Internal use only.
  */
-int xc_mem_event_control(xc_interface *xch, domid_t domain_id, unsigned int op,
-                         unsigned int mode, uint32_t *port);
-int xc_mem_event_memop(xc_interface *xch, domid_t domain_id,
-                        unsigned int op, unsigned int mode,
-                        uint64_t gfn, void *buffer);
+int xc_vm_event_control(xc_interface *xch, domid_t domain_id, unsigned int op,
+                        unsigned int mode, uint32_t *port);
 /*
- * Enables mem_event and returns the mapped ring page indicated by param.
+ * Enables vm_event and returns the mapped ring page indicated by param.
  * param can be HVM_PARAM_PAGING/ACCESS/SHARING_RING_PFN
  */
-void *xc_mem_event_enable(xc_interface *xch, domid_t domain_id, int param,
-                          uint32_t *port, int enable_introspection);
+void *xc_vm_event_enable(xc_interface *xch, domid_t domain_id, int param,
+                         uint32_t *port);
 
 #endif /* __XC_PRIVATE_H__ */

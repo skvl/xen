@@ -187,12 +187,12 @@ int disable_nonboot_cpus(void)
 
         if ( (error = cpu_down(cpu)) )
         {
-            BUG_ON(error == -EBUSY);
             printk("Error taking CPU%d down: %d\n", cpu, error);
+            BUG_ON(error == -EBUSY);
             break;
         }
 
-        cpumask_set_cpu(cpu, &frozen_cpus);
+        __cpumask_set_cpu(cpu, &frozen_cpus);
     }
 
     BUG_ON(!error && (num_online_cpus() != 1));
@@ -209,8 +209,8 @@ void enable_nonboot_cpus(void)
     {
         if ( (error = cpu_up(cpu)) )
         {
+            printk("Error bringing CPU%d up: %d\n", cpu, error);
             BUG_ON(error == -EBUSY);
-            printk("Error taking CPU%d up: %d\n", cpu, error);
         }
     }
 

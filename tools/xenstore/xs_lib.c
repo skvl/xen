@@ -13,8 +13,7 @@
     Lesser General Public License for more details.
 
     You should have received a copy of the GNU Lesser General Public
-    License along with this library; if not, write to the Free Software
-    Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
+    License along with this library; If not, see <http://www.gnu.org/licenses/>.
 */
 
 #include <unistd.h>
@@ -82,6 +81,8 @@ const char *xs_domain_dev(void)
 #if defined(__RUMPUSER_XEN__) || defined(__RUMPRUN__)
 	return "/dev/xen/xenbus";
 #elif defined(__linux__)
+	if (access("/dev/xen/xenbus", F_OK) == 0)
+		return "/dev/xen/xenbus";
 	return "/proc/xen/xenbus";
 #elif defined(__NetBSD__)
 	return "/kern/xen/xenbus";

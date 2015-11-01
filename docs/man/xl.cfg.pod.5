@@ -41,8 +41,8 @@ value).
 
 =item B<[ VALUE, VALUE, ... ]>
 
-A list of C<VALUES> of the above types. Lists are homogeneous and are
-not nested.
+A list of C<VALUES> of the above types. Lists can be heterogeneous and
+nested.
 
 =back
 
@@ -198,7 +198,7 @@ For more details, see F<docs/misc/xl-numa-placement.markdown>.
 A domain with a weight of 512 will get twice as much CPU as a domain
 with a weight of 256 on a contended host.
 Legal weights range from 1 to 65535 and the default is 256.
-Honoured by the credit, credit2 and sedf schedulers.
+Honoured by the credit and credit2 schedulers.
 
 =item B<cap=N>
 
@@ -222,28 +222,6 @@ that your VM gets 25% of the available power (50% of 1GHz) rather than
 look at performance and cpufreq options in your operating system and
 your BIOS.
 
-=item B<period=NANOSECONDS>
-
-The normal EDF scheduling usage in nanoseconds. This means every period
-the domain gets cpu time defined in slice.
-Honoured by the sedf scheduler.
-
-=item B<slice=NANOSECONDS>
-
-The normal EDF scheduling usage in nanoseconds. it defines the time 
-a domain get every period time.
-Honoured by the sedf scheduler.
-
-=item B<latency=N>
-
-Scaled period if domain is doing heavy I/O.
-Honoured by the sedf scheduler.
-
-=item B<extratime=BOOLEAN>
-
-Flag for allowing domain to run in extra time.
-Honoured by the sedf scheduler.
-
 =back
 
 =head3 Memory Allocation
@@ -263,6 +241,73 @@ In combination with B<memory=> it will start the guest "pre-ballooned",
 if the values of B<memory=> and B<maxmem=> differ.
 A "pre-ballooned" HVM guest needs a balloon driver, without a balloon driver
 it will crash.
+
+NOTE: Because of the way ballooning works, the guest has to allocate
+memory to keep track of maxmem pages, regardless of how much memory it
+actually has available to it.  A guest with maxmem=262144 and
+memory=8096 will report significantly less memory available for use
+than a system with maxmem=8096 memory=8096 due to the memory overhead
+of having to track the unused pages.
+
+=back
+
+=head3 Guest Virtual NUMA Configuration
+
+=over 4
+
+=item B<vnuma=[ VNODE_SPEC, VNODE_SPEC, ... ]>
+
+Specify virtual NUMA configuration with positional arguments. The
+nth B<VNODE_SPEC> in the list specifies the configuration of nth
+virtual node.
+
+Note that virtual NUMA for PV guest is not yet supported, because
+there is an issue with cpuid handling that affects PV virtual NUMA.
+Furthermore, guests with virtual NUMA cannot be saved or migrated
+because the migration stream does not preserve node information.
+
+Each B<VNODE_SPEC> is a list, which has a form of
+"[VNODE_CONFIG_OPTION,VNODE_CONFIG_OPTION, ... ]"  (without quotes).
+
+For example vnuma = [ ["pnode=0","size=512","vcpus=0-4","vdistances=10,20"] ]
+means vnode 0 is mapped to pnode 0, has 512MB ram, has vcpus 0 to 4, the
+distance to itself is 10 and the distance to vnode 1 is 20.
+
+Each B<VNODE_CONFIG_OPTION> is a quoted key=value pair. Supported
+B<VNODE_CONFIG_OPTION>s are (they are all mandatory at the moment):
+
+=over 4
+
+=item B<pnode=NUMBER>
+
+Specify which physical node this virtual node maps to.
+
+=item B<size=MBYTES>
+
+Specify the size of this virtual node. The sum of memory size of all
+vnodes will become B<maxmem=>. If B<maxmem=> is specified separately,
+a check is performed to make sure the sum of all vnode memory matches
+B<maxmem=>.
+
+=item B<vcpus=CPU-STRING>
+
+Specify which vcpus belong to this node. B<CPU-STRING> is a string
+separated by comma. You can specify range and single cpu. An example
+is "vcpus=0-5,8", which means you specify vcpu 0 to vcpu 5, and vcpu
+8.
+
+=item B<vdistances=NUMBER, NUMBER, ... >
+
+Specify virtual distance from this node to all nodes (including
+itself) with positional arguments. For example, "vdistance=10,20"
+for vnode 0 means the distance from vnode 0 to vnode 0 is 10, from
+vnode 0 to vnode 1 is 20. The number of arguments supplied must match
+the total number of vnodes.
+
+Normally you can use the values from "xl info -n" or "numactl
+--hardware" to fill in vdistance list.
+
+=back
 
 =back
 
@@ -298,12 +343,12 @@ destroy`.
 
 =item B<coredump-destroy>
 
-write a "coredump" of the domain to F</var/xen/dump/NAME> and then
+write a "coredump" of the domain to F</var/lib/xen/dump/NAME> and then
 destroy the domain.
 
 =item B<coredump-restart>
 
-write a "coredump" of the domain to F</var/xen/dump/NAME> and then
+write a "coredump" of the domain to F</var/lib/xen/dump/NAME> and then
 restart the domain.
 
 =back
@@ -398,6 +443,19 @@ not emulated.
 Specify that this domain is a driver domain. This enables certain
 features needed in order to run a driver domain.
 
+=item B<device_tree=PATH>
+
+Specify a partial device tree (compiled via the Device Tree Compiler).
+Everything under the node "/passthrough" will be copied into the guest
+device tree. For convenience, the node "/aliases" is also copied to allow
+the user to defined aliases which can be used by the guest kernel.
+
+Given the complexity of verifying the validity of a device tree, this
+option should only be used with trusted device tree.
+
+Note that the partial device tree should avoid to use the phandle 65000
+which is reserved by the toolstack.
+
 =back
 
 =head2 Devices
@@ -453,7 +511,7 @@ value is optional if this is a guest domain.
 Specifies the paravirtual framebuffer devices which should be supplied
 to the domain.
 
-This options does not control the emulated graphics card presented to
+This option does not control the emulated graphics card presented to
 an HVM guest. See L<Emulated VGA Graphics Device> below for how to
 configure the emulated device. If L<Emulated VGA Graphics Device> options
 are used in a PV guest configuration, xl will pick up B<vnc>, B<vnclisten>,
@@ -502,15 +560,12 @@ Simple DirectMedia Layer). The default is to not enable this mode.
 =item C<display=DISPLAY>
 
 Specifies the X Window display that should be used when the sdl option
-is used. Note: passing this value to the device-model is not currently
-implemented, so providing this option will have no effect.
+is used.
 
 =item C<xauthority=XAUTHORITY>
 
 Specifies the path to the X authority file that should be used to
-connect to the X server when the sdl option is used. Note: passing
-this value to the device-model is not currently implemented, so
-providing this option will have no effect.
+connect to the X server when the sdl option is used.
 
 =item C<opengl=BOOLEAN>
 
@@ -583,6 +638,79 @@ assigned slave device.
 
 =back
 
+=item B<rdm="RDM_RESERVATION_STRING">
+
+(HVM/x86 only) Specifies information about Reserved Device Memory (RDM),
+which is necessary to enable robust device passthrough. One example of RDM
+is reported through ACPI Reserved Memory Region Reporting (RMRR) structure
+on x86 platform.
+
+B<RDM_RESERVE_STRING> has the form C<[KEY=VALUE,KEY=VALUE,...> where:
+
+=over 4
+
+=item B<KEY=VALUE>
+
+Possible B<KEY>s are:
+
+=over 4
+
+=item B<strategy="STRING">
+
+Currently there is only one valid type:
+
+"host" means all reserved device memory on this platform should be checked to
+reserve regions in this VM's guest address space. This global rdm parameter
+allows user to specify reserved regions explicitly, and using "host" includes
+all reserved regions reported on this platform, which is useful when doing
+hotplug.
+
+By default this isn't set so we don't check all rdms. Instead, we just check
+rdm specific to a given device if you're assigning this kind of device. Note
+this option is not recommended unless you can make sure any conflict does exist.
+
+For example, you're trying to set "memory = 2800" to allocate memory to one
+given VM but the platform owns two RDM regions like,
+
+Device A [sbdf_A]: RMRR region_A: base_addr ac6d3000 end_address ac6e6fff
+Device B [sbdf_B]: RMRR region_B: base_addr ad800000 end_address afffffff
+
+In this conflict case,
+
+#1. If B<strategy> is set to "host", for example,
+
+rdm = "strategy=host,policy=strict" or rdm = "strategy=host,policy=relaxed"
+
+It means all conflicts will be handled according to the policy
+introduced by B<policy> as described below.
+
+#2. If B<strategy> is not set at all, but
+
+pci = [ 'sbdf_A, rdm_policy=xxxxx' ]
+
+It means only one conflict of region_A will be handled according to the policy
+introduced by B<rdm_policy="STRING"> as described inside pci options.
+
+=item B<policy="STRING">
+
+Specifies how to deal with conflicts when reserving reserved device
+memory in guest address space.
+
+When that conflict is unsolved,
+
+"strict" means VM can't be created, or the associated device can't be
+attached in the case of hotplug.
+
+"relaxed" allows VM to be created but may cause VM to crash if
+pass-through device accesses RDM. For exampl,e Windows IGD GFX driver
+always accessed RDM regions so it leads to VM crash.
+
+Note this may be overridden by rdm_policy option in PCI device configuration.
+
+=back
+
+=back
+
 =item B<pci=[ "PCI_SPEC_STRING", "PCI_SPEC_STRING", ... ]>
 
 Specifies the host PCI devices to passthrough to this guest. Each B<PCI_SPEC_STRING>
@@ -644,6 +772,14 @@ dom0 without confirmation.  Please use with care.
 (HVM only) Specifies that the VM should be able to program the
 D0-D3hot power management states for the PCI device. False (0) by
 default.
+
+=item B<rdm_policy="STRING">
+
+(HVM/x86 only) This is same as policy option inside the rdm option but
+just specific to a given device. Therefore the default is "relaxed" as
+same as policy option as well.
+
+Note this would override global B<rdm> option.
 
 =back
 
@@ -713,6 +849,33 @@ primary adapter.
 More information about Xen gfx_passthru feature is available
 on the XenVGAPassthrough L<http://wiki.xen.org/wiki/XenVGAPassthrough>
 wiki page.
+
+=item B<rdm_mem_boundary=MBYTES>
+
+Number of megabytes to set a boundary for checking rdm conflict.
+
+When RDM conflicts with RAM, RDM probably scatter the whole RAM space.
+Especially multiple RDM entries would worsen this to lead a complicated
+memory layout. So here we're trying to figure out a simple solution to
+avoid breaking existing layout. So when a conflict occurs,
+
+    #1. Above a predefined boundary
+        - move lowmem_end below reserved region to solve conflict;
+
+    #2. Below a predefined boundary
+        - Check strict/relaxed policy.
+        "strict" policy leads to fail libxl. Note when both policies
+        are specified on a given region, 'strict' is always preferred.
+        "relaxed" policy issue a warning message and also mask this
+        entry INVALID to indicate we shouldn't expose this entry to
+        hvmloader.
+
+Here the default is 2G.
+
+=item B<dtdev=[ "DTDEV_PATH", "DTDEV_PATH", ... ]>
+
+Specifies the host device tree nodes to passthrough to this guest. Each
+DTDEV_PATH is the absolute path in the device tree.
 
 =item B<ioports=[ "IOPORT_RANGE", "IOPORT_RANGE", ... ]>
 
@@ -824,6 +987,20 @@ disk (B<c>), cd-rom (B<d>) or network/PXE (B<n>). Multiple options can be
 given and will be attempted in the order they are given. e.g. to boot
 from cd-rom but fallback to the hard disk you can give B<dc>. The
 default is B<cd>.
+
+=back
+
+=head3 Emulated disk controller type
+
+=over 4
+
+=item B<hdtype="STRING">
+
+Select the hd disk type (ide|ahci).
+If hdtype=ahci adds ich9 disk controller in AHCI mode and uses it with
+upstream qemu to emulate disks instead of IDE. It decreases boot time
+but may not be supported by default in Windows xp and older Windows.
+The default is ide.
 
 =back
 
@@ -957,6 +1134,18 @@ Enables or disables HPET (High Precision Event Timer). This option is
 enabled by default and you should usually omit it. It may be necessary
 to disable the HPET in order to improve compatibility with guest
 Operating Systems (X86 only)
+
+=item B<altp2mhvm=BOOLEAN>
+
+Enables or disables hvm guest access to alternate-p2m capability.
+Alternate-p2m allows a guest to manage multiple p2m guest physical
+"memory views" (as opposed to a single p2m). This option is
+disabled by default and is available only to hvm domains.
+You may want this option if you want to access-control/isolate
+access to specific guest physical memory pages accessed by
+the guest, e.g. for HVM domain memory introspection or
+for isolation/access-control of memory between components within
+a single guest hvm domain.
 
 =item B<nestedhvm=BOOLEAN>
 
@@ -1231,6 +1420,12 @@ This group incorporates Partition Time Reference Counter MSR. This
 enlightenment can improve performance of Windows 8 and Windows
 Server 2012 onwards.
 
+=item B<reference_tsc>
+
+This set incorporates the Partition Reference TSC MSR. This
+enlightenment can improve performance of Windows 7 and Windows
+Server 2008 R2 onwards.
+
 =item B<defaults>
 
 This is a special value that enables the default set of groups, which
@@ -1292,6 +1487,9 @@ qemu-xen-traditional device-model, the amount of video RAM is fixed at 4 MB,
 which is sufficient for 1024x768 at 32 bpp. For the upstream qemu-xen
 device-model, the default and minimum is 8 MB.
 
+For B<qxl> vga, the default is both default and minimal 128MB.
+If B<videoram> is set less than 128MB, an error will be triggered.
+
 =item B<stdvga=BOOLEAN>
 
 Select a standard VGA card with VBE (VESA BIOS Extensions) as the
@@ -1303,8 +1501,13 @@ This option is deprecated, use vga="stdvga" instead.
 
 =item B<vga="STRING">
 
-Selects the emulated video card (none|stdvga|cirrus).
+Selects the emulated video card (none|stdvga|cirrus|qxl).
 The default is cirrus.
+
+In general, QXL should work with the Spice remote display protocol
+for acceleration, and QXL driver is necessary in guest in this case.
+QXL can also work with the VNC protocol, but it will be like a standard
+VGA without acceleration.
 
 =item B<vnc=BOOLEAN>
 
@@ -1420,6 +1623,17 @@ Enables spice usbredirection. Creates NUMBER usbredirection channels
 for redirection of up to 4 usb devices from spice client to domU's qemu.
 It requires an usb controller and if not defined it will automatically adds
 an usb2 controller. The default is disabled (0).
+
+=item B<spice_image_compression=[auto_glz|auto_lz|quic|glz|lz|off]>
+
+Specifies what image compression is to be used by spice (if given), otherwise
+the qemu default will be used. Please see documentations of your current qemu
+version for details.
+
+=item B<spice_streaming_video=[filter|all|off]>
+
+Specifies what streaming video setting is to be used by spice (if given),
+otherwise the qemu default will be used.
 
 =back
 
@@ -1586,6 +1800,40 @@ The default is B<en-us>.
 
 See L<qemu(1)> for more information.
 
+=head2 Architecture Specific options
+
+=head3 ARM
+
+=over 4
+
+=item B<gic_version="vN">
+
+Version of the GIC emulated for the guest. Currently, the following
+versions are supported:
+
+=over 4
+
+=item B<v2>
+
+Emulate a GICv2
+
+=item B<v3>
+
+Emulate a GICv3. Note that the emulated GIC does not support the
+GICv2 compatibility mode.
+
+=item B<default>
+
+Emulate the same version as the native GIC hardware used by host where
+the domain was created.
+
+=back
+
+This requires hardware compatibility with the requested version. Either
+natively or via hardware backwards compatibility support.
+
+=back
+
 =head1 SEE ALSO
 
 =over 4
@@ -1605,7 +1853,7 @@ See L<qemu(1)> for more information.
 =head1 FILES
 
 F</etc/xen/NAME.cfg>
-F</var/xen/dump/NAME>
+F</var/lib/xen/dump/NAME>
 
 =head1 BUGS
 

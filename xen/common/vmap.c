@@ -40,7 +40,7 @@ void __init vm_init(void)
     bitmap_fill(vm_bitmap, vm_low);
 
     /* Populate page tables for the bitmap if necessary. */
-    map_pages_to_xen(va, 0, vm_low - nr, MAP_SMALL_PAGES);
+    populate_pt_range(va, 0, vm_low - nr);
 }
 
 void *vm_alloc(unsigned int nr, unsigned int align)
@@ -181,7 +181,7 @@ void vm_free(const void *va)
     spin_unlock(&vm_lock);
 }
 
-void *__vmap(const unsigned long *mfn, unsigned int granularity,
+void *__vmap(const mfn_t *mfn, unsigned int granularity,
              unsigned int nr, unsigned int align, unsigned int flags)
 {
     void *va = vm_alloc(nr * granularity, align);
@@ -189,7 +189,7 @@ void *__vmap(const unsigned long *mfn, unsigned int granularity,
 
     for ( ; va && nr--; ++mfn, cur += PAGE_SIZE * granularity )
     {
-        if ( map_pages_to_xen(cur, *mfn, granularity, flags) )
+        if ( map_pages_to_xen(cur, mfn_x(*mfn), granularity, flags) )
         {
             vunmap(va);
             va = NULL;
@@ -199,7 +199,7 @@ void *__vmap(const unsigned long *mfn, unsigned int granularity,
     return va;
 }
 
-void *vmap(const unsigned long *mfn, unsigned int nr)
+void *vmap(const mfn_t *mfn, unsigned int nr)
 {
     return __vmap(mfn, 1, nr, 1, PAGE_HYPERVISOR);
 }
@@ -214,5 +214,76 @@ void vunmap(const void *va)
     map_pages_to_xen((unsigned long)va, 0, vm_size(va), _PAGE_NONE);
 #endif
     vm_free(va);
+}
+
+void *vmalloc(size_t size)
+{
+    mfn_t *mfn;
+    size_t pages, i;
+    struct page_info *pg;
+    void *va;
+
+    ASSERT(size);
+
+    pages = PFN_UP(size);
+    mfn = xmalloc_array(mfn_t, pages);
+    if ( mfn == NULL )
+        return NULL;
+
+    for ( i = 0; i < pages; i++ )
+    {
+        pg = alloc_domheap_page(NULL, 0);
+        if ( pg == NULL )
+            goto error;
+        mfn[i] = _mfn(page_to_mfn(pg));
+    }
+
+    va = vmap(mfn, pages);
+    if ( va == NULL )
+        goto error;
+
+    xfree(mfn);
+    return va;
+
+ error:
+    while ( i-- )
+        free_domheap_page(mfn_to_page(mfn_x(mfn[i])));
+    xfree(mfn);
+    return NULL;
+}
+
+void *vzalloc(size_t size)
+{
+    void *p = vmalloc(size);
+    int i;
+
+    if ( p == NULL )
+        return NULL;
+
+    for ( i = 0; i < size; i += PAGE_SIZE )
+        clear_page(p + i);
+
+    return p;
+}
+
+void vfree(void *va)
+{
+    unsigned int i, pages;
+    struct page_info *pg;
+    PAGE_LIST_HEAD(pg_list);
+
+    if ( !va )
+        return;
+
+    pages = vm_size(va);
+    ASSERT(pages);
+
+    for ( i = 0; i < pages; i++ )
+        page_list_add(vmap_to_page(va + i * PAGE_SIZE), &pg_list);
+
+    vunmap(va);
+
+    while ( (pg = page_list_remove_head(&pg_list)) != NULL )
+        free_domheap_page(pg);
 }
 #endif

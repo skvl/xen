@@ -61,18 +61,20 @@ $(LIB_SHARED): $(CTL_PICS)
 	$(CC) $(LDFLAGS) -fPIC  -Wl,$(SONAME_LDFLAG) -Wl,$(LIBSONAME) $(SHLIB_LDFLAGS) -rdynamic $^ -o $@  $(APPEND_LDFLAGS)
 
 install: $(IBIN) $(LIB_STATIC) $(LIB_SHARED)
-	$(INSTALL_DIR) -p $(DESTDIR)$(SBINDIR)
-	$(INSTALL_PROG) $(IBIN) $(DESTDIR)$(SBINDIR)
-	$(INSTALL_DATA) $(LIB_STATIC) $(DESTDIR)$(LIBDIR)
-	$(INSTALL_PROG) $(LIB_SHARED) $(DESTDIR)$(LIBDIR)
-	ln -sf $(LIBSONAME) $(DESTDIR)$(LIBDIR)/$(LIBNAME).so
-	ln -sf $(LIB_SHARED) $(DESTDIR)$(LIBDIR)/$(LIBSONAME)
+	$(INSTALL_DIR) -p $(DESTDIR)$(sbindir)
+	$(INSTALL_PROG) $(IBIN) $(DESTDIR)$(sbindir)
+	$(INSTALL_DATA) $(LIB_STATIC) $(DESTDIR)$(libdir)
+	$(INSTALL_PROG) $(LIB_SHARED) $(DESTDIR)$(libdir)
+	ln -sf $(LIBSONAME) $(DESTDIR)$(libdir)/$(LIBNAME).so
+	ln -sf $(LIB_SHARED) $(DESTDIR)$(libdir)/$(LIBSONAME)
 
 clean:
 	rm -f $(OBJS) $(PICS) $(DEPS) $(IBIN) $(LIB_STATIC) $(LIB_SHARED)
 	rm -f $(LIBNAME).so $(LIBSONAME)
 	rm -f *~
 
-.PHONY: all build clean install
+distclean: clean
+
+.PHONY: all build clean distclean install
 
 -include $(DEPS)

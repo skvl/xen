@@ -1,9 +1,9 @@
 #include <xen/event.h>
-#include <xen/mem_event.h>
 #include <xen/mem_access.h>
 #include <xen/multicall.h>
 #include <compat/memory.h>
 #include <compat/xen.h>
+#include <asm/mem_paging.h>
 #include <asm/mem_sharing.h>
 
 int compat_set_gdt(XEN_GUEST_HANDLE_PARAM(uint) frame_list, unsigned int entries)
@@ -187,28 +187,10 @@ int compat_arch_memory_op(unsigned long cmd, XEN_GUEST_HANDLE_PARAM(void) arg)
         return mem_sharing_get_nr_shared_mfns();
 
     case XENMEM_paging_op:
-    {
-        xen_mem_event_op_t meo;
-        if ( copy_from_guest(&meo, arg, 1) )
-            return -EFAULT;
-        rc = do_mem_event_op(cmd, meo.domain, &meo);
-        if ( !rc && __copy_to_guest(arg, &meo, 1) )
-            return -EFAULT;
-        break;
-    }
+        return mem_paging_memop(guest_handle_cast(arg, xen_mem_paging_op_t));
 
     case XENMEM_sharing_op:
-    {
-        xen_mem_sharing_op_t mso;
-        if ( copy_from_guest(&mso, arg, 1) )
-            return -EFAULT;
-        if ( mso.op == XENMEM_sharing_op_audit )
-            return mem_sharing_audit(); 
-        rc = do_mem_event_op(cmd, mso.domain, &mso);
-        if ( !rc && __copy_to_guest(arg, &mso, 1) )
-            return -EFAULT;
-        break;
-    }
+        return mem_sharing_memop(guest_handle_cast(arg, xen_mem_sharing_op_t));
 
     default:
         rc = -ENOSYS;
@@ -292,6 +274,7 @@ int compat_mmuext_op(XEN_GUEST_HANDLE_PARAM(mmuext_op_compat_t) cmp_uops,
                 break;
             case MMUEXT_NEW_USER_BASEPTR:
                 rc = -EINVAL;
+                /* fallthrough */
             case MMUEXT_TLB_FLUSH_LOCAL:
             case MMUEXT_TLB_FLUSH_MULTI:
             case MMUEXT_TLB_FLUSH_ALL:

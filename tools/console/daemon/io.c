@@ -14,8 +14,7 @@
  *  GNU General Public License for more details.
  * 
  *  You should have received a copy of the GNU General Public License
- *  along with this program; if not, write to the Free Software
- *  Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
+ *  along with this program; If not, see <http://www.gnu.org/licenses/>.
  */
 
 #define _GNU_SOURCE
@@ -523,7 +522,7 @@ static void domain_unmap_interface(struct domain *dom)
 	if (xcg_handle && dom->ring_ref == -1)
 		xc_gnttab_munmap(xcg_handle, dom->interface, 1);
 	else
-		munmap(dom->interface, getpagesize());
+		munmap(dom->interface, XC_PAGE_SIZE);
 	dom->interface = NULL;
 	dom->ring_ref = -1;
 }
@@ -562,7 +561,7 @@ static int domain_create_ring(struct domain *dom)
 	if (!dom->interface) {
 		/* Fall back to xc_map_foreign_range */
 		dom->interface = xc_map_foreign_range(
-			xc, dom->domid, getpagesize(),
+			xc, dom->domid, XC_PAGE_SIZE,
 			PROT_READ|PROT_WRITE,
 			(unsigned long)ring_ref);
 		if (dom->interface == NULL) {

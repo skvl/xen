@@ -89,8 +89,14 @@ int libxl_bitmap_is_empty(const libxl_bitmap *bitmap);
 int libxl_bitmap_test(const libxl_bitmap *bitmap, int bit);
 void libxl_bitmap_set(libxl_bitmap *bitmap, int bit);
 void libxl_bitmap_reset(libxl_bitmap *bitmap, int bit);
-int libxl_bitmap_count_set(const libxl_bitmap *cpumap);
-char *libxl_bitmap_to_hex_string(libxl_ctx *ctx, const libxl_bitmap *cpumap);
+int libxl_bitmap_count_set(const libxl_bitmap *bitmap);
+int libxl_bitmap_or(libxl_ctx *ctx, libxl_bitmap *or_map,
+                    const libxl_bitmap *map1,
+                    const libxl_bitmap *map2);
+int libxl_bitmap_and(libxl_ctx *ctx, libxl_bitmap *and_map,
+                     const libxl_bitmap *map1,
+                     const libxl_bitmap *map2);
+char *libxl_bitmap_to_hex_string(libxl_ctx *ctx, const libxl_bitmap *bitmap);
 static inline void libxl_bitmap_set_any(libxl_bitmap *bitmap)
 {
     memset(bitmap->map, -1, bitmap->size);
@@ -135,6 +141,10 @@ static inline int libxl_bitmap_equal(const libxl_bitmap *ba,
 int libxl_cpu_bitmap_alloc(libxl_ctx *ctx, libxl_bitmap *cpumap, int max_cpus);
 int libxl_node_bitmap_alloc(libxl_ctx *ctx, libxl_bitmap *nodemap,
                             int max_nodes);
+int libxl_socket_bitmap_alloc(libxl_ctx *ctx, libxl_bitmap *socketmap,
+                              int max_sockets);
+/* Fill socketmap with the CPU topology information on the system. */
+int libxl_get_online_socketmap(libxl_ctx *ctx, libxl_bitmap *socketmap);
 
 /* Populate cpumap with the cpus spanned by the nodes in nodemap */
 int libxl_nodemap_to_cpumap(libxl_ctx *ctx,
@@ -145,7 +155,7 @@ int libxl_node_to_cpumap(libxl_ctx *ctx, int node,
                          libxl_bitmap *cpumap);
 /* Populate nodemap with the nodes of the cpus in cpumap */
 int libxl_cpumap_to_nodemap(libxl_ctx *ctx,
-                            const libxl_bitmap *cpuemap,
+                            const libxl_bitmap *cpumap,
                             libxl_bitmap *nodemap);
 
  static inline uint32_t libxl__sizekb_to_mb(uint32_t s) {
@@ -153,6 +163,9 @@ int libxl_cpumap_to_nodemap(libxl_ctx *ctx,
 }
 
 void libxl_string_copy(libxl_ctx *ctx, char **dst, char **src);
+
+
+#define LIBXL_FILLZERO(object) (memset(&(object), 0, sizeof((object))))
 
 #endif
 

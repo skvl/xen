@@ -12,6 +12,7 @@
 #include <xen/event.h>
 #include <xsm/xsm.h>
 #include <xen/guest_access.h>
+#include <xen/err.h>
 
 #include <public/xsm/flask_op.h>
 
@@ -24,15 +25,12 @@
 #define _copy_to_guest copy_to_guest
 #define _copy_from_guest copy_from_guest
 
-#ifdef FLASK_DEVELOP
-int flask_enforcing = 0;
-integer_param("flask_enforcing", flask_enforcing);
-#endif
+enum flask_bootparam_t __read_mostly flask_bootparam = FLASK_BOOTPARAM_PERMISSIVE;
+static void parse_flask_param(char *s);
+custom_param("flask", parse_flask_param);
 
-#ifdef FLASK_BOOTPARAM
-int flask_enabled = 1;
-integer_param("flask_enabled", flask_enabled);
-#endif
+bool_t __read_mostly flask_enforcing = 0;
+boolean_param("flask_enforcing", flask_enforcing);
 
 #define MAX_POLICY_SIZE 0x4000000
 
@@ -57,12 +55,31 @@ static DEFINE_SPINLOCK(sel_sem);
 /* global data for booleans */
 static int bool_num = 0;
 static int *bool_pending_values = NULL;
-static size_t bool_maxstr;
 static int flask_security_make_bools(void);
 
 extern int ss_initialized;
 
 extern struct xsm_operations *original_ops;
+
+static void __init parse_flask_param(char *s)
+{
+    if ( !strcmp(s, "enforcing") )
+    {
+        flask_enforcing = 1;
+        flask_bootparam = FLASK_BOOTPARAM_ENFORCING;
+    }
+    else if ( !strcmp(s, "late") )
+    {
+        flask_enforcing = 1;
+        flask_bootparam = FLASK_BOOTPARAM_LATELOAD;
+    }
+    else if ( !strcmp(s, "disabled") )
+        flask_bootparam = FLASK_BOOTPARAM_DISABLED;
+    else if ( !strcmp(s, "permissive") )
+        flask_bootparam = FLASK_BOOTPARAM_PERMISSIVE;
+    else
+        flask_bootparam = FLASK_BOOTPARAM_INVALID;
+}
 
 static int domain_has_security(struct domain *d, u32 perms)
 {
@@ -74,29 +91,6 @@ static int domain_has_security(struct domain *d, u32 perms)
         
     return avc_has_perm(dsec->sid, SECINITSID_SECURITY, SECCLASS_SECURITY, 
                         perms, NULL);
-}
-
-static int flask_copyin_string(XEN_GUEST_HANDLE(char) u_buf, char **buf,
-                               size_t size, size_t max_size)
-{
-    char *tmp;
-
-    if ( size > max_size )
-        return -ENOENT;
-
-    tmp = xmalloc_array(char, size + 1);
-    if ( !tmp )
-        return -ENOMEM;
-
-    if ( copy_from_guest(tmp, u_buf, size) )
-    {
-        xfree(tmp);
-        return -EFAULT;
-    }
-    tmp[size] = 0;
-
-    *buf = tmp;
-    return 0;
 }
 
 #endif /* COMPAT */
@@ -112,9 +106,9 @@ static int flask_security_user(struct xen_flask_userlist *arg)
     if ( rv )
         return rv;
 
-    rv = flask_copyin_string(arg->u.user, &user, arg->size, PAGE_SIZE);
-    if ( rv )
-        return rv;
+    user = safe_copy_string_from_guest(arg->u.user, arg->size, PAGE_SIZE);
+    if ( IS_ERR(user) )
+        return PTR_ERR(user);
 
     rv = security_get_user_sids(arg->start_sid, user, &sids, &nsids);
     if ( rv < 0 )
@@ -227,9 +221,9 @@ static int flask_security_context(struct xen_flask_sid_context *arg)
     if ( rv )
         return rv;
 
-    rv = flask_copyin_string(arg->context, &buf, arg->size, PAGE_SIZE);
-    if ( rv )
-        return rv;
+    buf = safe_copy_string_from_guest(arg->context, arg->size, PAGE_SIZE);
+    if ( IS_ERR(buf) )
+        return PTR_ERR(buf);
 
     rv = security_context_to_sid(buf, arg->size, &arg->sid);
     if ( rv < 0 )
@@ -319,14 +313,13 @@ static int flask_security_setavc_threshold(struct xen_flask_setavc_threshold *ar
 static int flask_security_resolve_bool(struct xen_flask_boolean *arg)
 {
     char *name;
-    int rv;
 
     if ( arg->bool_id != -1 )
         return 0;
 
-    rv = flask_copyin_string(arg->name, &name, arg->size, bool_maxstr);
-    if ( rv )
-        return rv;
+    name = safe_copy_string_from_guest(arg->name, arg->size, PAGE_SIZE);
+    if ( IS_ERR(name) )
+        return PTR_ERR(name);
 
     arg->bool_id = security_find_bool(name);
     arg->size = 0;
@@ -465,7 +458,7 @@ static int flask_security_make_bools(void)
     
     xfree(bool_pending_values);
     
-    ret = security_get_bools(&num, NULL, &values, &bool_maxstr);
+    ret = security_get_bools(&num, NULL, &values, NULL);
     if ( ret != 0 )
         goto out;
 
@@ -506,6 +499,7 @@ static int flask_security_load(struct xen_flask_load *load)
 {
     int ret;
     void *buf = NULL;
+    bool_t is_reload = ss_initialized;
 
     ret = domain_has_security(current->domain, SECURITY__LOAD_POLICY);
     if ( ret )
@@ -530,6 +524,10 @@ static int flask_security_load(struct xen_flask_load *load)
     if ( ret )
         goto out;
 
+    if ( !is_reload )
+        printk(XENLOG_INFO "Flask: Policy loaded, continuing in %s mode.\n",
+            flask_enforcing ? "enforcing" : "permissive");
+
     xfree(bool_pending_values);
     bool_pending_values = NULL;
     ret = 0;
@@ -539,6 +537,27 @@ static int flask_security_load(struct xen_flask_load *load)
  out_free:
     xfree(buf);
     return ret;
+}
+
+static int flask_devicetree_label(struct xen_flask_devicetree_label *arg)
+{
+    int rv;
+    char *buf;
+    u32 sid = arg->sid;
+    u32 perm = sid ? SECURITY__ADD_OCONTEXT : SECURITY__DEL_OCONTEXT;
+
+    rv = domain_has_security(current->domain, perm);
+    if ( rv )
+        return rv;
+
+    buf = safe_copy_string_from_guest(arg->path, arg->length, PAGE_SIZE);
+    if ( IS_ERR(buf) )
+        return PTR_ERR(buf);
+
+    /* buf is consumed or freed by this function */
+    rv = security_devicetree_setlabel(buf, sid);
+
+    return rv;
 }
 
 #ifndef COMPAT
@@ -768,6 +787,10 @@ ret_t do_flask_op(XEN_GUEST_HANDLE_PARAM(xsm_op_t) u_flask_op)
         rv = flask_relabel_domain(&op.u.relabel);
         break;
 
+    case FLASK_DEVICETREE_LABEL:
+        rv = flask_devicetree_label(&op.u.devicetree_label);
+        break;
+
     default:
         rv = -ENOSYS;
     }
@@ -805,10 +828,10 @@ CHECK_flask_setenforce;
 CHECK_flask_transition;
 
 #define COMPAT
-#define flask_copyin_string(ch, pb, sz, mx) ({ \
-	XEN_GUEST_HANDLE_PARAM(char) gh; \
-	guest_from_compat_handle(gh, ch); \
-	flask_copyin_string(gh, pb, sz, mx); \
+#define safe_copy_string_from_guest(ch, sz, mx) ({ \
+    XEN_GUEST_HANDLE_PARAM(char) gh; \
+    guest_from_compat_handle(gh, ch); \
+    safe_copy_string_from_guest(gh, sz, mx); \
 })
 
 #define xen_flask_load compat_flask_load
@@ -825,6 +848,9 @@ CHECK_flask_transition;
 #define flask_security_resolve_bool compat_security_resolve_bool
 #define flask_security_get_bool compat_security_get_bool
 #define flask_security_set_bool compat_security_set_bool
+
+#define xen_flask_devicetree_label compat_flask_devicetree_label
+#define flask_devicetree_label compat_devicetree_label
 
 #define xen_flask_op_t compat_flask_op_t
 #undef ret_t

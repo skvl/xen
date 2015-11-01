@@ -15,7 +15,7 @@
 #include <xen/domain.h>
 #include <xen/mm.h>
 #include <xen/event.h>
-#include <xen/mem_event.h>
+#include <xen/vm_event.h>
 #include <xen/time.h>
 #include <xen/console.h>
 #include <xen/softirq.h>
@@ -42,6 +42,7 @@
 #include <xsm/xsm.h>
 #include <xen/trace.h>
 #include <xen/tmem.h>
+#include <asm/setup.h>
 
 /* Linux config option: propageted to domain0 */
 /* xen_processor_pmbits: xen control Cx, Px, ... */
@@ -69,7 +70,7 @@ integer_param("hardware_dom", hardware_domid);
 
 struct vcpu *idle_vcpu[NR_CPUS] __read_mostly;
 
-vcpu_info_t dummy_vcpu_info;
+static vcpu_info_t dummy_vcpu_info;
 
 static void __domain_finalise_shutdown(struct domain *d)
 {
@@ -125,6 +126,8 @@ struct vcpu *alloc_vcpu(
     spin_lock_init(&v->virq_lock);
 
     tasklet_init(&v->continue_hypercall_tasklet, NULL, 0);
+
+    grant_table_init_vcpu(v);
 
     if ( !zalloc_cpumask_var(&v->cpu_hard_affinity) ||
          !zalloc_cpumask_var(&v->cpu_hard_affinity_tmp) ||
@@ -219,6 +222,8 @@ static int late_hwdom_init(struct domain *d)
     rangeset_swap(d->iomem_caps, dom0->iomem_caps);
 #ifdef CONFIG_X86
     rangeset_swap(d->arch.ioport_caps, dom0->arch.ioport_caps);
+    setup_io_bitmap(d);
+    setup_io_bitmap(dom0);
 #endif
 
     rcu_unlock_domain(dom0);
@@ -242,8 +247,9 @@ static void __init parse_extra_guest_irqs(const char *s)
 }
 custom_param("extra_guest_irqs", parse_extra_guest_irqs);
 
-struct domain *domain_create(
-    domid_t domid, unsigned int domcr_flags, uint32_t ssidref)
+struct domain *domain_create(domid_t domid, unsigned int domcr_flags,
+                             uint32_t ssidref,
+                             struct xen_arch_domainconfig *config)
 {
     struct domain *d, **pd, *old_hwdom = NULL;
     enum { INIT_xsm = 1u<<0, INIT_watchdog = 1u<<1, INIT_rangeset = 1u<<2,
@@ -344,8 +350,8 @@ struct domain *domain_create(
         poolid = 0;
 
         err = -ENOMEM;
-        d->mem_event = xzalloc(struct mem_event_per_domain);
-        if ( !d->mem_event )
+        d->vm_event = xzalloc(struct vm_event_per_domain);
+        if ( !d->vm_event )
             goto fail;
 
         d->pbuf = xzalloc_array(char, DOMAIN_PBUF_SIZE);
@@ -353,7 +359,7 @@ struct domain *domain_create(
             goto fail;
     }
 
-    if ( (err = arch_domain_create(d, domcr_flags)) != 0 )
+    if ( (err = arch_domain_create(d, domcr_flags, config)) != 0 )
         goto fail;
     init_status |= INIT_arch;
 
@@ -387,7 +393,7 @@ struct domain *domain_create(
     if ( hardware_domain == d )
         hardware_domain = old_hwdom;
     atomic_set(&d->refcnt, DOMAIN_DESTROYED);
-    xfree(d->mem_event);
+    xfree(d->vm_event);
     xfree(d->pbuf);
     if ( init_status & INIT_arch )
         arch_domain_destroy(d);
@@ -617,19 +623,15 @@ int domain_kill(struct domain *d)
     case DOMDYING_dying:
         rc = domain_relinquish_resources(d);
         if ( rc != 0 )
-        {
-            if ( rc == -ERESTART )
-                rc = -EAGAIN;
             break;
-        }
         if ( cpupool_move_domain(d, cpupool0) )
-            return -EAGAIN;
+            return -ERESTART;
         for_each_vcpu ( d, v )
             unmap_vcpu_info(v);
         d->is_dying = DOMDYING_dead;
         /* Mem event cleanup has to go here because the rings 
          * have to be put before we call put_domain. */
-        mem_event_cleanup(d);
+        vm_event_cleanup(d);
         put_domain(d);
         send_global_virq(VIRQ_DOM_EXC);
         /* fallthrough */
@@ -808,7 +810,7 @@ static void complete_domain_destroy(struct rcu_head *head)
     free_xenoprof_pages(d);
 #endif
 
-    xfree(d->mem_event);
+    xfree(d->vm_event);
     xfree(d->pbuf);
 
     for ( i = d->max_vcpus - 1; i >= 0; i-- )
@@ -898,7 +900,7 @@ int vcpu_pause_by_systemcontroller(struct vcpu *v)
         new = old + 1;
 
         if ( new > 255 )
-            return -EUSERS;
+            return -EOVERFLOW;
 
         prev = cmpxchg(&v->controller_pause_count, old, new);
     } while ( prev != old );
@@ -978,7 +980,7 @@ int __domain_pause_by_systemcontroller(struct domain *d,
          * toolstack overflowing d->pause_count with many repeated hypercalls.
          */
         if ( new > 255 )
-            return -EUSERS;
+            return -EOVERFLOW;
 
         prev = cmpxchg(&d->controller_pause_count, old, new);
     } while ( prev != old );
@@ -1006,6 +1008,34 @@ int domain_unpause_by_systemcontroller(struct domain *d)
     domain_unpause(d);
 
     return 0;
+}
+
+void domain_pause_except_self(struct domain *d)
+{
+    struct vcpu *v, *curr = current;
+
+    if ( curr->domain == d )
+    {
+        for_each_vcpu( d, v )
+            if ( likely(v != curr) )
+                vcpu_pause(v);
+    }
+    else
+        domain_pause(d);
+}
+
+void domain_unpause_except_self(struct domain *d)
+{
+    struct vcpu *v, *curr = current;
+
+    if ( curr->domain == d )
+    {
+        for_each_vcpu( d, v )
+            if ( likely(v != curr) )
+                vcpu_unpause(v);
+    }
+    else
+        domain_unpause(d);
 }
 
 int vcpu_reset(struct vcpu *v)
@@ -1139,15 +1169,12 @@ void unmap_vcpu_info(struct vcpu *v)
     put_page_and_type(mfn_to_page(mfn));
 }
 
-long do_vcpu_op(int cmd, int vcpuid, XEN_GUEST_HANDLE_PARAM(void) arg)
+long do_vcpu_op(int cmd, unsigned int vcpuid, XEN_GUEST_HANDLE_PARAM(void) arg)
 {
     struct domain *d = current->domain;
     struct vcpu *v;
     struct vcpu_guest_context *ctxt;
     long rc = 0;
-
-    if ( (vcpuid < 0) || (vcpuid >= MAX_VIRT_CPUS) )
-        return -EINVAL;
 
     if ( vcpuid >= d->max_vcpus || (v = d->vcpu[vcpuid]) == NULL )
         return -ENOENT;
@@ -1174,7 +1201,7 @@ long do_vcpu_op(int cmd, int vcpuid, XEN_GUEST_HANDLE_PARAM(void) arg)
         free_vcpu_guest_context(ctxt);
 
         if ( rc == -ERESTART )
-            rc = hypercall_create_continuation(__HYPERVISOR_vcpu_op, "iih",
+            rc = hypercall_create_continuation(__HYPERVISOR_vcpu_op, "iuh",
                                                cmd, vcpuid, arg);
 
         break;
@@ -1325,9 +1352,11 @@ long do_vcpu_op(int cmd, int vcpuid, XEN_GUEST_HANDLE_PARAM(void) arg)
     return rc;
 }
 
-long vm_assist(struct domain *p, unsigned int cmd, unsigned int type)
+#ifdef VM_ASSIST_VALID
+long vm_assist(struct domain *p, unsigned int cmd, unsigned int type,
+               unsigned long valid)
 {
-    if ( type > MAX_VMASST_TYPE )
+    if ( type >= BITS_PER_LONG || !test_bit(type, &valid) )
         return -EINVAL;
 
     switch ( cmd )
@@ -1342,6 +1371,7 @@ long vm_assist(struct domain *p, unsigned int cmd, unsigned int type)
 
     return -ENOSYS;
 }
+#endif
 
 struct pirq *pirq_get_info(struct domain *d, int pirq)
 {

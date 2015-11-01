@@ -172,9 +172,9 @@ static inline l4_pgentry_t l4e_from_paddr(paddr_t pa, unsigned int flags)
 #define l3e_to_l2e(x)              ((l2_pgentry_t *)__va(l3e_get_paddr(x)))
 #define l4e_to_l3e(x)              ((l3_pgentry_t *)__va(l4e_get_paddr(x)))
 
-#define map_l1t_from_l2e(x)        ((l1_pgentry_t *)map_domain_page(l2e_get_pfn(x)))
-#define map_l2t_from_l3e(x)        ((l2_pgentry_t *)map_domain_page(l3e_get_pfn(x)))
-#define map_l3t_from_l4e(x)        ((l3_pgentry_t *)map_domain_page(l4e_get_pfn(x)))
+#define map_l1t_from_l2e(x)        ((l1_pgentry_t *)map_domain_page(_mfn(l2e_get_pfn(x))))
+#define map_l2t_from_l3e(x)        ((l2_pgentry_t *)map_domain_page(_mfn(l3e_get_pfn(x))))
+#define map_l3t_from_l4e(x)        ((l3_pgentry_t *)map_domain_page(_mfn(l4e_get_pfn(x))))
 
 /* Given a virtual address, get an entry offset into a page table. */
 #define l1_table_offset(a)         \
@@ -234,6 +234,7 @@ void copy_page_sse2(void *, const void *);
 #define __pfn_to_paddr(pfn) ((paddr_t)(pfn) << PAGE_SHIFT)
 #define __paddr_to_pfn(pa)  ((unsigned long)((pa) >> PAGE_SHIFT))
 
+
 /* Convert between machine frame numbers and spage-info structures. */
 #define __mfn_to_spage(mfn)  (spage_table + pfn_to_sdx(mfn))
 #define __spage_to_mfn(pg)   sdx_to_pfn((unsigned long)((pg) - spage_table))
@@ -262,6 +263,8 @@ void copy_page_sse2(void *, const void *);
 #define pfn_to_paddr(pfn)   __pfn_to_paddr(pfn)
 #define paddr_to_pfn(pa)    __paddr_to_pfn(pa)
 #define paddr_to_pdx(pa)    pfn_to_pdx(paddr_to_pfn(pa))
+#define vmap_to_mfn(va)     l1e_get_pfn(*virt_to_xen_l1e((unsigned long)(va)))
+#define vmap_to_page(va)    mfn_to_page(vmap_to_mfn(va))
 
 #endif /* !defined(__ASSEMBLY__) */
 
@@ -286,6 +289,7 @@ extern l2_pgentry_t l2_identmap[4*L2_PAGETABLE_ENTRIES];
 extern l1_pgentry_t l1_identmap[L1_PAGETABLE_ENTRIES],
     l1_fixmap[L1_PAGETABLE_ENTRIES];
 void paging_init(void);
+void efi_update_l4_pgtable(unsigned int l4idx, l4_pgentry_t);
 #endif /* !defined(__ASSEMBLY__) */
 
 #define _PAGE_NONE     _AC(0x000,U)
@@ -303,7 +307,8 @@ void paging_init(void);
 #define _PAGE_AVAIL1   _AC(0x400,U)
 #define _PAGE_AVAIL2   _AC(0x800,U)
 #define _PAGE_AVAIL    _AC(0xE00,U)
-#define _PAGE_PSE_PAT _AC(0x1000,U)
+#define _PAGE_PSE_PAT  _AC(0x1000,U)
+#define _PAGE_NX       (cpu_has_nx ? _PAGE_NX_BIT : 0)
 /* non-architectural flags */
 #define _PAGE_PAGED   0x2000U
 #define _PAGE_SHARED  0x4000U
@@ -320,10 +325,13 @@ void paging_init(void);
 #define _PAGE_GNTTAB   0
 #endif
 
-#define __PAGE_HYPERVISOR \
-    (_PAGE_PRESENT | _PAGE_RW | _PAGE_DIRTY | _PAGE_ACCESSED)
-#define __PAGE_HYPERVISOR_NOCACHE \
-    (_PAGE_PRESENT | _PAGE_RW | _PAGE_DIRTY | _PAGE_PCD | _PAGE_ACCESSED)
+#define __PAGE_HYPERVISOR_RO      (_PAGE_PRESENT | _PAGE_ACCESSED | _PAGE_NX)
+#define __PAGE_HYPERVISOR_RW      (__PAGE_HYPERVISOR_RO | \
+                                   _PAGE_DIRTY | _PAGE_RW)
+#define __PAGE_HYPERVISOR_RX      (_PAGE_PRESENT | _PAGE_ACCESSED)
+#define __PAGE_HYPERVISOR         (__PAGE_HYPERVISOR_RX | \
+                                   _PAGE_DIRTY | _PAGE_RW)
+#define __PAGE_HYPERVISOR_NOCACHE (__PAGE_HYPERVISOR | _PAGE_PCD)
 
 #define MAP_SMALL_PAGES _PAGE_AVAIL0 /* don't use superpages mappings */
 

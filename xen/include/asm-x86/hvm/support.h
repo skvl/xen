@@ -14,8 +14,7 @@
  * more details.
  *
  * You should have received a copy of the GNU General Public License along with
- * this program; if not, write to the Free Software Foundation, Inc., 59 Temple
- * Place - Suite 330, Boston, MA 02111-1307 USA.
+ * this program; If not, see <http://www.gnu.org/licenses/>.
  */
 
 #ifndef __ASM_X86_HVM_SUPPORT_H__
@@ -124,11 +123,12 @@ void hvm_shadow_handle_cd(struct vcpu *v, unsigned long value);
 
 /* These functions all return X86EMUL return codes. */
 int hvm_set_efer(uint64_t value);
-int hvm_set_cr0(unsigned long value);
-int hvm_set_cr3(unsigned long value);
-int hvm_set_cr4(unsigned long value);
+int hvm_set_cr0(unsigned long value, bool_t may_defer);
+int hvm_set_cr3(unsigned long value, bool_t may_defer);
+int hvm_set_cr4(unsigned long value, bool_t may_defer);
 int hvm_msr_read_intercept(unsigned int msr, uint64_t *msr_content);
-int hvm_msr_write_intercept(unsigned int msr, uint64_t msr_content);
+int hvm_msr_write_intercept(
+    unsigned int msr, uint64_t msr_content, bool_t may_defer);
 int hvm_mov_to_cr(unsigned int cr, unsigned int gpr);
 int hvm_mov_from_cr(unsigned int cr, unsigned int gpr);
 

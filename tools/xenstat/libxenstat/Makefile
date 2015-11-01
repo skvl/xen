@@ -24,7 +24,7 @@ MINOR=0
 LIB=src/libxenstat.a
 SHLIB=src/libxenstat.so.$(MAJOR).$(MINOR)
 SHLIB_LINKS=src/libxenstat.so.$(MAJOR) src/libxenstat.so
-OBJECTS-y=src/xenstat.o
+OBJECTS-y=src/xenstat.o src/xenstat_qmp.o
 OBJECTS-$(CONFIG_Linux) += src/xenstat_linux.o
 OBJECTS-$(CONFIG_SunOS) += src/xenstat_solaris.o
 OBJECTS-$(CONFIG_NetBSD) += src/xenstat_netbsd.o
@@ -32,7 +32,7 @@ OBJECTS-$(CONFIG_FreeBSD) += src/xenstat_freebsd.o
 SONAME_FLAGS=-Wl,$(SONAME_LDFLAG) -Wl,libxenstat.so.$(MAJOR)
 
 CFLAGS+=-fPIC
-CFLAGS+=-Isrc $(CFLAGS_libxenctrl) $(CFLAGS_libxenstore) $(CFLAGS_xeninclude)
+CFLAGS+=-Isrc $(CFLAGS_libxenctrl) $(CFLAGS_libxenstore) $(CFLAGS_xeninclude) -include $(XEN_ROOT)/tools/config.h
 
 LDLIBS-y = $(LDLIBS_libxenstore) $(LDLIBS_libxenctrl)
 LDLIBS-$(CONFIG_SunOS) += -lkstat
@@ -56,11 +56,11 @@ src/libxenstat.so: src/libxenstat.so.$(MAJOR)
 
 .PHONY: install
 install: all
-	$(INSTALL_DATA) src/xenstat.h $(DESTDIR)$(INCLUDEDIR)
-	$(INSTALL_DATA) $(LIB) $(DESTDIR)$(LIBDIR)/libxenstat.a
-	$(INSTALL_PROG) src/libxenstat.so.$(MAJOR).$(MINOR) $(DESTDIR)$(LIBDIR)
-	ln -sf libxenstat.so.$(MAJOR).$(MINOR) $(DESTDIR)$(LIBDIR)/libxenstat.so.$(MAJOR)
-	ln -sf libxenstat.so.$(MAJOR) $(DESTDIR)$(LIBDIR)/libxenstat.so
+	$(INSTALL_DATA) src/xenstat.h $(DESTDIR)$(includedir)
+	$(INSTALL_DATA) $(LIB) $(DESTDIR)$(libdir)/libxenstat.a
+	$(INSTALL_PROG) src/libxenstat.so.$(MAJOR).$(MINOR) $(DESTDIR)$(libdir)
+	ln -sf libxenstat.so.$(MAJOR).$(MINOR) $(DESTDIR)$(libdir)/libxenstat.so.$(MAJOR)
+	ln -sf libxenstat.so.$(MAJOR) $(DESTDIR)$(libdir)/libxenstat.so
 
 PYLIB=bindings/swig/python/_xenstat.so
 PYMOD=bindings/swig/python/xenstat.py
@@ -136,5 +136,8 @@ endif
 clean:
 	rm -f $(LIB) $(SHLIB) $(SHLIB_LINKS) $(OBJECTS-y) \
 	      $(BINDINGS) $(BINDINGSRC) $(DEPS)
+
+.PHONY: distclean
+distclean: clean
 
 -include $(DEPS)

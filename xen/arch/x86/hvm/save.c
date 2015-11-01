@@ -17,8 +17,7 @@
  * more details.
  *
  * You should have received a copy of the GNU General Public License along with
- * this program; if not, write to the Free Software Foundation, Inc., 59 Temple
- * Place - Suite 330, Boston, MA 02111-1307 USA.
+ * this program; If not, see <http://www.gnu.org/licenses/>.
  */
 
 #include <asm/hvm/support.h>
@@ -36,7 +35,7 @@ void arch_hvm_save(struct domain *d, struct hvm_save_header *hdr)
     hdr->gtsc_khz = d->arch.tsc_khz;
 
     /* Time when saving started */
-    rdtscll(d->arch.hvm_domain.sync_tsc);
+    d->arch.hvm_domain.sync_tsc = rdtsc();
 }
 
 int arch_hvm_load(struct domain *d, struct hvm_save_header *hdr)
@@ -71,7 +70,7 @@ int arch_hvm_load(struct domain *d, struct hvm_save_header *hdr)
         hvm_set_rdtsc_exiting(d, 1);
 
     /* Time when restore started  */
-    rdtscll(d->arch.hvm_domain.sync_tsc);
+    d->arch.hvm_domain.sync_tsc = rdtsc();
 
     /* VGA state is not saved/restored, so we nobble the cache. */
     d->arch.hvm_domain.stdvga.cache = 0;

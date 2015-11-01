@@ -36,6 +36,7 @@
 #include <asm/bzimage.h> /* for bzimage_parse */
 #include <asm/io_apic.h>
 #include <asm/hap.h>
+#include <asm/hpet.h>
 
 #include <public/version.h>
 
@@ -77,8 +78,6 @@ static void __init parse_dom0_mem(const char *s)
             dom0_max_nrpages = parse_amt(s+4, &s);
         else
             dom0_nrpages = parse_amt(s, &s);
-        if ( *s != ',' )
-            break;
     } while ( *s++ == ',' );
 }
 custom_param("dom0_mem", parse_dom0_mem);
@@ -88,24 +87,85 @@ static unsigned int __initdata opt_dom0_max_vcpus_max = UINT_MAX;
 
 static void __init parse_dom0_max_vcpus(const char *s)
 {
-    if (*s == '-')              /* -M */
+    if ( *s == '-' )                   /* -M */
         opt_dom0_max_vcpus_max = simple_strtoul(s + 1, &s, 0);
-    else                        /* N, N-, or N-M */
+    else                               /* N, N-, or N-M */
     {
         opt_dom0_max_vcpus_min = simple_strtoul(s, &s, 0);
-        if (*s++ == '\0')       /* N */
+        if ( opt_dom0_max_vcpus_min == 0 )
+            opt_dom0_max_vcpus_min = 1;
+        if ( !*s )                    /* N */
             opt_dom0_max_vcpus_max = opt_dom0_max_vcpus_min;
-        else if (*s != '\0')    /* N-M */
+        else if ( *s++ == '-' && *s ) /* N-M */
             opt_dom0_max_vcpus_max = simple_strtoul(s, &s, 0);
     }
 }
 custom_param("dom0_max_vcpus", parse_dom0_max_vcpus);
 
+static __initdata unsigned int dom0_nr_pxms;
+static __initdata unsigned int dom0_pxms[MAX_NUMNODES] =
+    { [0 ... MAX_NUMNODES - 1] = ~0 };
+static __initdata bool_t dom0_affinity_relaxed;
+
+static void __init parse_dom0_nodes(const char *s)
+{
+    do {
+        if ( isdigit(*s) )
+            dom0_pxms[dom0_nr_pxms] = simple_strtoul(s, &s, 0);
+        else if ( !strncmp(s, "relaxed", 7) && (!s[7] || s[7] == ',') )
+        {
+            dom0_affinity_relaxed = 1;
+            s += 7;
+        }
+        else if ( !strncmp(s, "strict", 6) && (!s[6] || s[6] == ',') )
+        {
+            dom0_affinity_relaxed = 0;
+            s += 6;
+        }
+        else
+            break;
+    } while ( ++dom0_nr_pxms < ARRAY_SIZE(dom0_pxms) && *s++ == ',' );
+}
+custom_param("dom0_nodes", parse_dom0_nodes);
+
+static cpumask_t __initdata dom0_cpus;
+
+static struct vcpu *__init setup_dom0_vcpu(struct domain *d,
+                                           unsigned int vcpu_id,
+                                           unsigned int cpu)
+{
+    struct vcpu *v = alloc_vcpu(d, vcpu_id, cpu);
+
+    if ( v )
+    {
+        if ( !d->is_pinned && !dom0_affinity_relaxed )
+            cpumask_copy(v->cpu_hard_affinity, &dom0_cpus);
+        cpumask_copy(v->cpu_soft_affinity, &dom0_cpus);
+    }
+
+    return v;
+}
+
+static nodemask_t __initdata dom0_nodes;
+
 unsigned int __init dom0_max_vcpus(void)
 {
-    unsigned max_vcpus;
+    unsigned int i, max_vcpus;
+    nodeid_t node;
 
-    max_vcpus = num_cpupool_cpus(cpupool0);
+    for ( i = 0; i < dom0_nr_pxms; ++i )
+        if ( (node = pxm_to_node(dom0_pxms[i])) != NUMA_NO_NODE )
+            node_set(node, dom0_nodes);
+    nodes_and(dom0_nodes, dom0_nodes, node_online_map);
+    if ( nodes_empty(dom0_nodes) )
+        dom0_nodes = node_online_map;
+    for_each_node_mask ( node, dom0_nodes )
+        cpumask_or(&dom0_cpus, &dom0_cpus, &node_to_cpumask(node));
+    cpumask_and(&dom0_cpus, &dom0_cpus, cpupool0->cpu_valid);
+    if ( cpumask_empty(&dom0_cpus) )
+        cpumask_copy(&dom0_cpus, cpupool0->cpu_valid);
+
+    max_vcpus = cpumask_weight(&dom0_cpus);
     if ( opt_dom0_max_vcpus_min > max_vcpus )
         max_vcpus = opt_dom0_max_vcpus_min;
     if ( opt_dom0_max_vcpus_max < max_vcpus )
@@ -120,19 +180,29 @@ struct vcpu *__init alloc_dom0_vcpu0(struct domain *dom0)
 {
     unsigned int max_vcpus = dom0_max_vcpus();
 
+    dom0->node_affinity = dom0_nodes;
+    dom0->auto_node_affinity = !dom0_nr_pxms;
+
     dom0->vcpu = xzalloc_array(struct vcpu *, max_vcpus);
     if ( !dom0->vcpu )
         return NULL;
     dom0->max_vcpus = max_vcpus;
 
-    return alloc_vcpu(dom0, 0, 0);
+    return setup_dom0_vcpu(dom0, 0, cpumask_first(&dom0_cpus));
 }
 
+#ifdef CONFIG_SHADOW_PAGING
 static bool_t __initdata opt_dom0_shadow;
 boolean_param("dom0_shadow", opt_dom0_shadow);
+#else
+#define opt_dom0_shadow 0
+#endif
 
 static char __initdata opt_dom0_ioports_disable[200] = "";
 string_param("dom0_ioports_disable", opt_dom0_ioports_disable);
+
+static bool_t __initdata ro_hpet = 1;
+boolean_param("ro-hpet", ro_hpet);
 
 /* Allow ring-3 access in long mode as guest cannot use ring 1 ... */
 #define BASE_PROT (_PAGE_PRESENT|_PAGE_RW|_PAGE_ACCESSED|_PAGE_USER)
@@ -150,7 +220,7 @@ static struct page_info * __init alloc_chunk(
     struct domain *d, unsigned long max_pages)
 {
     static unsigned int __initdata last_order = MAX_ORDER;
-    static unsigned int __initdata memflags = MEMF_no_dma;
+    static unsigned int __initdata memflags = MEMF_no_dma|MEMF_exact_node;
     struct page_info *page;
     unsigned int order = get_order_from_pages(max_pages), free_order;
 
@@ -184,7 +254,7 @@ static struct page_info * __init alloc_chunk(
 
         if ( d->tot_pages + (1 << order) > d->max_pages )
             continue;
-        pg2 = alloc_domheap_pages(d, order, 0);
+        pg2 = alloc_domheap_pages(d, order, MEMF_exact_node);
         if ( pg2 > page )
         {
             free_domheap_pages(page, free_order);
@@ -197,19 +267,33 @@ static struct page_info * __init alloc_chunk(
     return page;
 }
 
+static unsigned long __init dom0_paging_pages(const struct domain *d,
+                                              unsigned long nr_pages)
+{
+    /* Copied from: libxl_get_required_shadow_memory() */
+    unsigned long memkb = nr_pages * (PAGE_SIZE / 1024);
+
+    memkb = 4 * (256 * d->max_vcpus + 2 * (memkb / 1024));
+
+    return ((memkb + 1023) / 1024) << (20 - PAGE_SHIFT);
+}
+
 static unsigned long __init compute_dom0_nr_pages(
     struct domain *d, struct elf_dom_parms *parms, unsigned long initrd_len)
 {
-    unsigned long avail = avail_domheap_pages() + initial_images_nrpages();
-    unsigned long nr_pages = dom0_nrpages;
-    unsigned long min_pages = dom0_min_nrpages;
-    unsigned long max_pages = dom0_max_nrpages;
+    nodeid_t node;
+    unsigned long avail = 0, nr_pages, min_pages, max_pages;
+    bool_t need_paging;
+
+    for_each_node_mask ( node, dom0_nodes )
+        avail += avail_domheap_pages_region(node, 0, 0) +
+                 initial_images_nrpages(node);
 
     /* Reserve memory for further dom0 vcpu-struct allocations... */
     avail -= (d->max_vcpus - 1UL)
              << get_order_from_bytes(sizeof(struct vcpu));
     /* ...and compat_l4's, if needed. */
-    if ( is_pv_32on64_domain(d) )
+    if ( is_pv_32bit_domain(d) )
         avail -= d->max_vcpus - 1;
 
     /* Reserve memory for iommu_dom0_init() (rough estimate). */
@@ -221,23 +305,37 @@ static unsigned long __init compute_dom0_nr_pages(
             avail -= max_pdx >> s;
     }
 
-    /*
-     * If domain 0 allocation isn't specified, reserve 1/16th of available
-     * memory for things like DMA buffers. This reservation is clamped to 
-     * a maximum of 128MB.
-     */
-    if ( nr_pages == 0 )
-        nr_pages = -min(avail / 16, 128UL << (20 - PAGE_SHIFT));
+    need_paging = opt_dom0_shadow || (is_pvh_domain(d) && !iommu_hap_pt_share);
+    for ( ; ; need_paging = 0 )
+    {
+        nr_pages = dom0_nrpages;
+        min_pages = dom0_min_nrpages;
+        max_pages = dom0_max_nrpages;
 
-    /* Negative memory specification means "all memory - specified amount". */
-    if ( (long)nr_pages  < 0 ) nr_pages  += avail;
-    if ( (long)min_pages < 0 ) min_pages += avail;
-    if ( (long)max_pages < 0 ) max_pages += avail;
+        /*
+         * If allocation isn't specified, reserve 1/16th of available memory
+         * for things like DMA buffers. This reservation is clamped to a
+         * maximum of 128MB.
+         */
+        if ( nr_pages == 0 )
+            nr_pages = -min(avail / 16, 128UL << (20 - PAGE_SHIFT));
 
-    /* Clamp dom0 memory according to min/max limits and available memory. */
-    nr_pages = max(nr_pages, min_pages);
-    nr_pages = min(nr_pages, max_pages);
-    nr_pages = min(nr_pages, avail);
+        /* Negative specification means "all memory - specified amount". */
+        if ( (long)nr_pages  < 0 ) nr_pages  += avail;
+        if ( (long)min_pages < 0 ) min_pages += avail;
+        if ( (long)max_pages < 0 ) max_pages += avail;
+
+        /* Clamp according to min/max limits and available memory. */
+        nr_pages = max(nr_pages, min_pages);
+        nr_pages = min(nr_pages, max_pages);
+        nr_pages = min(nr_pages, avail);
+
+        if ( !need_paging )
+            break;
+
+        /* Reserve memory for shadow or HAP. */
+        avail -= dom0_paging_pages(d, nr_pages);
+    }
 
     if ( (parms->p2m_base == UNSET_ADDR) && (dom0_nrpages <= 0) &&
          ((dom0_min_nrpages <= 0) || (nr_pages > min_pages)) )
@@ -319,11 +417,26 @@ static __init void pvh_add_mem_mapping(struct domain *d, unsigned long gfn,
                                        unsigned long mfn, unsigned long nr_mfns)
 {
     unsigned long i;
+    p2m_access_t a;
+    mfn_t omfn;
+    p2m_type_t t;
     int rc;
 
     for ( i = 0; i < nr_mfns; i++ )
     {
-        if ( (rc = set_mmio_p2m_entry(d, gfn + i, _mfn(mfn + i))) )
+        if ( !iomem_access_permitted(d, mfn + i, mfn + i) )
+        {
+            omfn = get_gfn_query_unlocked(d, gfn + i, &t);
+            guest_physmap_remove_page(d, gfn + i, mfn_x(omfn), PAGE_ORDER_4K);
+            continue;
+        }
+
+        if ( rangeset_contains_singleton(mmio_ro_ranges, mfn + i) )
+            a = p2m_access_r;
+        else
+            a = p2m_access_rw;
+
+        if ( (rc = set_mmio_p2m_entry(d, gfn + i, _mfn(mfn + i), a)) )
             panic("pvh_add_mem_mapping: gfn:%lx mfn:%lx i:%ld rc:%d\n",
                   gfn, mfn, i, rc);
         if ( !(i & 0xfffff) )
@@ -495,7 +608,7 @@ static __init void dom0_update_physmap(struct domain *d, unsigned long pfn,
         BUG_ON(rc);
         return;
     }
-    if ( !is_pv_32on64_domain(d) )
+    if ( !is_pv_32bit_domain(d) )
         ((unsigned long *)vphysmap_s)[pfn] = mfn;
     else
         ((unsigned int *)vphysmap_s)[pfn] = mfn;
@@ -517,7 +630,7 @@ static __init void pvh_fixup_page_tables_for_hap(struct vcpu *v,
 
     ASSERT(paging_mode_enabled(v->domain));
 
-    l4start = map_domain_page(pagetable_get_pfn(v->arch.guest_table));
+    l4start = map_domain_page(_mfn(pagetable_get_pfn(v->arch.guest_table)));
 
     /* Clear entries prior to guest L4 start */
     pl4e = l4start + l4_table_offset(v_start);
@@ -605,7 +718,7 @@ static __init void mark_pv_pt_pages_rdonly(struct domain *d,
 
         /* Top-level p.t. is pinned. */
         if ( (page->u.inuse.type_info & PGT_type_mask) ==
-             (!is_pv_32on64_domain(d) ?
+             (!is_pv_32bit_domain(d) ?
               PGT_l4_page_table : PGT_l3_page_table) )
         {
             page->count_info        += 1;
@@ -633,7 +746,7 @@ static __init void setup_pv_physmap(struct domain *d, unsigned long pgtbl_pfn,
                                     unsigned long nr_pages)
 {
     struct page_info *page = NULL;
-    l4_pgentry_t *pl4e, *l4start = map_domain_page(pgtbl_pfn);
+    l4_pgentry_t *pl4e, *l4start = map_domain_page(_mfn(pgtbl_pfn));
     l3_pgentry_t *pl3e = NULL;
     l2_pgentry_t *pl2e = NULL;
     l1_pgentry_t *pl1e = NULL;
@@ -676,7 +789,7 @@ static __init void setup_pv_physmap(struct domain *d, unsigned long pgtbl_pfn,
             clear_page(pl3e);
             *pl4e = l4e_from_page(page, L4_PROT);
         } else
-            pl3e = map_domain_page(l4e_get_pfn(*pl4e));
+            pl3e = map_domain_page(_mfn(l4e_get_pfn(*pl4e)));
 
         pl3e += l3_table_offset(vphysmap_start);
         if ( !l3e_get_intpte(*pl3e) )
@@ -703,7 +816,7 @@ static __init void setup_pv_physmap(struct domain *d, unsigned long pgtbl_pfn,
             *pl3e = l3e_from_page(page, L3_PROT);
         }
         else
-           pl2e = map_domain_page(l3e_get_pfn(*pl3e));
+            pl2e = map_domain_page(_mfn(l3e_get_pfn(*pl3e)));
 
         pl2e += l2_table_offset(vphysmap_start);
         if ( !l2e_get_intpte(*pl2e) )
@@ -731,7 +844,7 @@ static __init void setup_pv_physmap(struct domain *d, unsigned long pgtbl_pfn,
             *pl2e = l2e_from_page(page, L2_PROT);
         }
         else
-            pl1e = map_domain_page(l2e_get_pfn(*pl2e));
+            pl1e = map_domain_page(_mfn(l2e_get_pfn(*pl2e)));
 
         pl1e += l1_table_offset(vphysmap_start);
         BUG_ON(l1e_get_intpte(*pl1e));
@@ -816,6 +929,8 @@ int __init construct_dom0(
     BUG_ON(d->domain_id != 0);
     BUG_ON(d->vcpu[0] == NULL);
     BUG_ON(v->is_initialised);
+
+    process_pending_softirqs();
 
     printk("*** LOADING DOMAIN 0 ***\n");
 
@@ -933,7 +1048,7 @@ int __init construct_dom0(
         vinitrd_end    = vinitrd_start + initrd_len;
         vphysmap_start = round_pgup(vinitrd_end);
     }
-    vphysmap_end     = vphysmap_start + (nr_pages * (!is_pv_32on64_domain(d) ?
+    vphysmap_end     = vphysmap_start + (nr_pages * (!is_pv_32bit_domain(d) ?
                                                      sizeof(unsigned long) :
                                                      sizeof(unsigned int)));
     if ( parms.p2m_base != UNSET_ADDR )
@@ -961,9 +1076,9 @@ int __init construct_dom0(
 #define NR(_l,_h,_s) \
     (((((_h) + ((1UL<<(_s))-1)) & ~((1UL<<(_s))-1)) - \
        ((_l) & ~((1UL<<(_s))-1))) >> (_s))
-        if ( (!is_pv_32on64_domain(d) + /* # L4 */
+        if ( (!is_pv_32bit_domain(d) + /* # L4 */
               NR(v_start, v_end, L4_PAGETABLE_SHIFT) + /* # L3 */
-              (!is_pv_32on64_domain(d) ?
+              (!is_pv_32bit_domain(d) ?
                NR(v_start, v_end, L3_PAGETABLE_SHIFT) : /* # L2 */
                4) + /* # compat L2 */
               NR(v_start, v_end, L2_PAGETABLE_SHIFT))  /* # L1 */
@@ -1054,12 +1169,14 @@ int __init construct_dom0(
            _p(v_start), _p(v_end));
     printk(" ENTRY ADDRESS: %p\n", _p(parms.virt_entry));
 
+    process_pending_softirqs();
+
     mpt_alloc = (vpt_start - v_start) + pfn_to_paddr(alloc_spfn);
     if ( vinitrd_start )
         mpt_alloc -= PAGE_ALIGN(initrd_len);
 
     /* Overlap with Xen protected area? */
-    if ( !is_pv_32on64_domain(d) ?
+    if ( !is_pv_32bit_domain(d) ?
          ((v_start < HYPERVISOR_VIRT_END) &&
           (v_end > HYPERVISOR_VIRT_START)) :
          (v_end > HYPERVISOR_COMPAT_VIRT_START(d)) )
@@ -1069,21 +1186,21 @@ int __init construct_dom0(
         goto out;
     }
 
-    if ( is_pv_32on64_domain(d) )
+    if ( is_pv_32bit_domain(d) )
     {
         v->arch.pv_vcpu.failsafe_callback_cs = FLAT_COMPAT_KERNEL_CS;
         v->arch.pv_vcpu.event_callback_cs    = FLAT_COMPAT_KERNEL_CS;
     }
 
     /* WARNING: The new domain must have its 'processor' field filled in! */
-    if ( !is_pv_32on64_domain(d) )
+    if ( !is_pv_32bit_domain(d) )
     {
         maddr_to_page(mpt_alloc)->u.inuse.type_info = PGT_l4_page_table;
         l4start = l4tab = __va(mpt_alloc); mpt_alloc += PAGE_SIZE;
     }
     else
     {
-        page = alloc_domheap_page(NULL, 0);
+        page = alloc_domheap_page(d, MEMF_no_owner);
         if ( !page )
             panic("Not enough RAM for domain 0 PML4");
         page->u.inuse.type_info = PGT_l4_page_table|PGT_validated|1;
@@ -1092,9 +1209,9 @@ int __init construct_dom0(
         l3start = __va(mpt_alloc); mpt_alloc += PAGE_SIZE;
     }
     clear_page(l4tab);
-    init_guest_l4_table(l4tab, d);
+    init_guest_l4_table(l4tab, d, 0);
     v->arch.guest_table = pagetable_from_paddr(__pa(l4start));
-    if ( is_pv_32on64_domain(d) )
+    if ( is_pv_32bit_domain(d) )
         v->arch.guest_table_user = v->arch.guest_table;
 
     l4tab += l4_table_offset(v_start);
@@ -1140,7 +1257,7 @@ int __init construct_dom0(
             mfn = pfn++;
         else
             mfn = initrd_mfn++;
-        *l1tab = l1e_from_pfn(mfn, (!is_pv_32on64_domain(d) ?
+        *l1tab = l1e_from_pfn(mfn, (!is_pv_32bit_domain(d) ?
                                     L1_PROT : COMPAT_L1_PROT));
         l1tab++;
 
@@ -1153,7 +1270,7 @@ int __init construct_dom0(
         }
     }
 
-    if ( is_pv_32on64_domain(d) )
+    if ( is_pv_32bit_domain(d) )
     {
         /* Ensure the first four L3 entries are all populated. */
         for ( i = 0, l3tab = l3start; i < 4; ++i, ++l3tab )
@@ -1185,11 +1302,11 @@ int __init construct_dom0(
 
     printk("Dom0 has maximum %u VCPUs\n", d->max_vcpus);
 
-    cpu = cpumask_first(cpupool0->cpu_valid);
+    cpu = v->processor;
     for ( i = 1; i < d->max_vcpus; i++ )
     {
-        cpu = cpumask_cycle(cpu, cpupool0->cpu_valid);
-        (void)alloc_vcpu(d, i, cpu);
+        cpu = cpumask_cycle(cpu, &dom0_cpus);
+        setup_dom0_vcpu(d, i, cpu);
     }
 
     /*
@@ -1266,14 +1383,7 @@ int __init construct_dom0(
     }
 
     if ( is_pvh_domain(d) )
-    {
-        unsigned long hap_pages, memkb = nr_pages * (PAGE_SIZE / 1024);
-
-        /* Copied from: libxl_get_required_shadow_memory() */
-        memkb = 4 * (256 * d->max_vcpus + 2 * (memkb / 1024));
-        hap_pages = ( (memkb + 1023) / 1024) << (20 - PAGE_SHIFT);
-        hap_set_alloc_for_pvh_dom0(d, hap_pages);
-    }
+        hap_set_alloc_for_pvh_dom0(d, dom0_paging_pages(d, nr_pages));
 
     /*
      * We enable paging mode again so guest_physmap_add_page will do the
@@ -1367,7 +1477,7 @@ int __init construct_dom0(
     if ( is_pvh_domain(d) )
         si->shared_info = shared_info_paddr;
 
-    if ( is_pv_32on64_domain(d) )
+    if ( is_pv_32bit_domain(d) )
         xlat_start_info(si, XLAT_start_info_console_dom0);
 
     /* Return to idle domain's page tables. */
@@ -1389,16 +1499,17 @@ int __init construct_dom0(
      */
     regs = &v->arch.user_regs;
     regs->ds = regs->es = regs->fs = regs->gs =
-        !is_pv_32on64_domain(d) ? FLAT_KERNEL_DS : FLAT_COMPAT_KERNEL_DS;
-    regs->ss = (!is_pv_32on64_domain(d) ?
+        !is_pv_32bit_domain(d) ? FLAT_KERNEL_DS : FLAT_COMPAT_KERNEL_DS;
+    regs->ss = (!is_pv_32bit_domain(d) ?
                 FLAT_KERNEL_SS : FLAT_COMPAT_KERNEL_SS);
-    regs->cs = (!is_pv_32on64_domain(d) ?
+    regs->cs = (!is_pv_32bit_domain(d) ?
                 FLAT_KERNEL_CS : FLAT_COMPAT_KERNEL_CS);
     regs->eip = parms.virt_entry;
     regs->esp = vstack_end;
     regs->esi = vstartinfo_start;
     regs->eflags = X86_EFLAGS_IF;
 
+#ifdef CONFIG_SHADOW_PAGING
     if ( opt_dom0_shadow )
     {
         if ( is_pvh_domain(d) )
@@ -1409,25 +1520,14 @@ int __init construct_dom0(
         if ( paging_enable(d, PG_SH_enable) == 0 ) 
             paging_update_paging_modes(v);
     }
+#endif
 
-    if ( supervisor_mode_kernel )
-    {
-        v->arch.pv_vcpu.kernel_ss &= ~3;
-        v->arch.user_regs.ss &= ~3;
-        v->arch.user_regs.es &= ~3;
-        v->arch.user_regs.ds &= ~3;
-        v->arch.user_regs.fs &= ~3;
-        v->arch.user_regs.gs &= ~3;
-        printk("Dom0 runs in ring 0 (supervisor mode)\n");
-        if ( !test_bit(XENFEAT_supervisor_mode_kernel,
-                       parms.f_supported) )
-            panic("Dom0 does not support supervisor-mode execution");
-    }
-    else
-    {
-        if ( test_bit(XENFEAT_supervisor_mode_kernel, parms.f_required) )
-            panic("Dom0 requires supervisor-mode execution");
-    }
+    /*
+     * PVH Fixme: XENFEAT_supervisor_mode_kernel has been reused in PVH with a
+     * different meaning.
+     */
+    if ( test_bit(XENFEAT_supervisor_mode_kernel, parms.f_required) )
+        panic("Dom0 requires supervisor-mode execution");
 
     rc = 0;
 
@@ -1490,6 +1590,20 @@ int __init construct_dom0(
              (e820.map[i].size != 0) &&
              (sfn <= efn) )
             rc |= iomem_deny_access(d, sfn, efn);
+    }
+
+    /* Prevent access to HPET */
+    if ( hpet_address )
+    {
+        u8 prot_flags = hpet_flags & ACPI_HPET_PAGE_PROTECT_MASK;
+
+        mfn = paddr_to_pfn(hpet_address);
+        if ( prot_flags == ACPI_HPET_PAGE_PROTECT4 )
+            rc |= iomem_deny_access(d, mfn, mfn);
+        else if ( prot_flags == ACPI_HPET_PAGE_PROTECT64 )
+            rc |= iomem_deny_access(d, mfn, mfn + 15);
+        else if ( ro_hpet )
+            rc |= rangeset_add_singleton(mmio_ro_ranges, mfn);
     }
 
     BUG_ON(rc != 0);

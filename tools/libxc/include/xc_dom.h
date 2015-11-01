@@ -10,8 +10,7 @@
  * Lesser General Public License for more details.
  *
  * You should have received a copy of the GNU Lesser General Public
- * License along with this library; if not, write to the Free Software
- * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301  USA
+ * License along with this library; If not, see <http://www.gnu.org/licenses/>.
  */
 
 #include <xen/libelf/libelf.h>
@@ -119,8 +118,10 @@ struct xc_dom_image {
 
     /* physical memory
      *
-     * An x86 PV guest has a single contiguous block of physical RAM,
-     * consisting of total_pages starting at rambase_pfn.
+     * An x86 PV guest has one or more blocks of physical RAM,
+     * consisting of total_pages starting at rambase_pfn. The start
+     * address and size of each block is controlled by vNUMA
+     * structures.
      *
      * An ARM guest has GUEST_RAM_BANKS regions of RAM, with
      * rambank_size[i] pages in each. The lowest RAM address
@@ -129,6 +130,7 @@ struct xc_dom_image {
      */
     xen_pfn_t rambase_pfn;
     xen_pfn_t total_pages;
+    xen_pfn_t p2m_size;         /* number of pfns covered by p2m */
     struct xc_dom_phys *phys_pages;
     int realmodearea_log;
 #if defined (__arm__) || defined(__aarch64__)
@@ -166,6 +168,12 @@ struct xc_dom_image {
     /* kernel loader, arch hooks */
     struct xc_dom_loader *kernel_loader;
     void *private_loader;
+
+    /* vNUMA information */
+    xen_vmemrange_t *vmemranges;
+    unsigned int nr_vmemranges;
+    unsigned int *vnode_to_pnode;
+    unsigned int nr_vnodes;
 
     /* kernel loader */
     struct xc_dom_arch *arch_hooks;

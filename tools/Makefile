@@ -16,7 +16,6 @@ SUBDIRS-y += console
 SUBDIRS-y += xenmon
 SUBDIRS-y += xenstat
 SUBDIRS-$(CONFIG_Linux) += memshr 
-SUBDIRS-$(CONFIG_BLKTAP1) += blktap
 SUBDIRS-$(CONFIG_BLKTAP2) += blktap2
 SUBDIRS-$(CONFIG_NetBSD) += xenbackendd
 SUBDIRS-y += libfsimage
@@ -59,7 +58,7 @@ build all: subdirs-all
 
 .PHONY: install
 install: subdirs-install
-	$(INSTALL_DIR) $(DESTDIR)/var/xen/dump
+	$(INSTALL_DIR) $(DESTDIR)$(XEN_DUMP_DIR)
 	$(INSTALL_DIR) $(DESTDIR)/var/log/xen
 	$(INSTALL_DIR) $(DESTDIR)/var/lib/xen
 
@@ -72,30 +71,30 @@ uninstall:
 	rm -f  $(D)$(CONFIG_DIR)/udev/rules.d/xen-backend.rules
 	rm -f  $(D)$(CONFIG_DIR)/udev/rules.d/xend.rules
 	rm -f  $(D)$(SYSCONFIG_DIR)/xendomains
-	rm -f  $(D)$(SBINDIR)/xendomains
+	rm -f  $(D)$(sbindir)/xendomains
 	rm -f  $(D)$(SYSCONFIG_DIR)/xencommons
 	rm -rf $(D)/var/lib/xen*
-	rm -rf $(D)$(BINDIR)/cpuperf-perfcntr $(D)$(BINDIR)/cpuperf-xen
-	rm -rf $(D)$(BINDIR)/xc_shadow
-	rm -rf $(D)$(BINDIR)/pygrub
-	rm -rf $(D)$(BINDIR)/setsize $(D)$(BINDIR)/tbctl
-	rm -rf $(D)$(BINDIR)/xsls
-	rm -rf $(D)$(BINDIR)/xenstore* $(D)$(BINDIR)/xentrace*
-	rm -rf $(D)$(BINDIR)/xen-detect $(D)$(BINDIR)/xencons
-	rm -rf $(D)$(BINDIR)/xenpvnetboot $(D)$(BINDIR)/qemu-*-xen
-	rm -rf $(D)$(INCLUDEDIR)/xenctrl* $(D)$(INCLUDEDIR)/xenguest.h
-	rm -rf $(D)$(INCLUDEDIR)/xs_lib.h $(D)$(INCLUDEDIR)/xs.h
-	rm -rf $(D)$(INCLUDEDIR)/xenstore-compat/xs_lib.h $(D)$(INCLUDEDIR)/xenstore-compat/xs.h
-	rm -rf $(D)$(INCLUDEDIR)/xenstore_lib.h $(D)$(INCLUDEDIR)/xenstore.h
-	rm -rf $(D)$(INCLUDEDIR)/xen
-	rm -rf $(D)$(INCLUDEDIR)/_libxl* $(D)$(INCLUDEDIR)/libxl*
-	rm -rf $(D)$(INCLUDEDIR)/xenstat.h $(D)$(INCLUDEDIR)/xentoollog.h
-	rm -rf $(D)$(LIBDIR)/libxenctrl* $(D)$(LIBDIR)/libxenguest*
-	rm -rf $(D)$(LIBDIR)/libxenstore* $(D)$(LIBDIR)/libxlutil*
-	rm -rf $(D)$(LIBDIR)/python/xen $(D)$(LIBDIR)/python/grub
+	rm -rf $(D)$(bindir)/cpuperf-perfcntr $(D)$(bindir)/cpuperf-xen
+	rm -rf $(D)$(bindir)/xc_shadow
+	rm -rf $(D)$(bindir)/pygrub
+	rm -rf $(D)$(bindir)/setsize $(D)$(bindir)/tbctl
+	rm -rf $(D)$(bindir)/xsls
+	rm -rf $(D)$(bindir)/xenstore* $(D)$(bindir)/xentrace*
+	rm -rf $(D)$(bindir)/xen-detect $(D)$(bindir)/xencons
+	rm -rf $(D)$(bindir)/xenpvnetboot $(D)$(bindir)/qemu-*-xen
+	rm -rf $(D)$(includedir)/xenctrl* $(D)$(includedir)/xenguest.h
+	rm -rf $(D)$(includedir)/xs_lib.h $(D)$(includedir)/xs.h
+	rm -rf $(D)$(includedir)/xenstore-compat/xs_lib.h $(D)$(includedir)/xenstore-compat/xs.h
+	rm -rf $(D)$(includedir)/xenstore_lib.h $(D)$(includedir)/xenstore.h
+	rm -rf $(D)$(includedir)/xen
+	rm -rf $(D)$(includedir)/_libxl* $(D)$(includedir)/libxl*
+	rm -rf $(D)$(includedir)/xenstat.h $(D)$(includedir)/xentoollog.h
+	rm -rf $(D)$(libdir)/libxenctrl* $(D)$(libdir)/libxenguest*
+	rm -rf $(D)$(libdir)/libxenstore* $(D)$(libdir)/libxlutil*
+	rm -rf $(D)$(libdir)/python/xen $(D)$(libdir)/python/grub
 	rm -rf $(D)$(LIBEXEC)
-	rm -rf $(D)$(SBINDIR)/setmask
-	rm -rf $(D)$(SBINDIR)/xen* $(D)$(SBINDIR)/netfix $(D)$(SBINDIR)/xm
+	rm -rf $(D)$(sbindir)/setmask
+	rm -rf $(D)$(sbindir)/xen* $(D)$(sbindir)/netfix $(D)$(sbindir)/xm
 	rm -rf $(D)$(SHAREDIR)/doc/xen
 	rm -rf $(D)$(SHAREDIR)/xen
 	rm -rf $(D)$(SHAREDIR)/qemu-xen
@@ -118,8 +117,8 @@ IOEMU_CONFIGURE_CROSS ?= --cross-prefix=$(CROSS_COMPILE) \
 endif
 
 ifeq ($(XEN_TOOLS_RPATH),y)
-QEMU_UPSTREAM_RPATH := -Wl,-rpath,$(LIBEXEC_LIB):$(LIBDIR)
-IOEMU_EXTRA_LDFLAGS := --extra-ldflags="-Wl,-rpath,$(LIBDIR)"
+QEMU_UPSTREAM_RPATH := -Wl,-rpath,$(LIBEXEC_LIB):$(libdir)
+IOEMU_EXTRA_LDFLAGS := --extra-ldflags="-Wl,-rpath,$(libdir)"
 else
 QEMU_UPSTREAM_RPATH := -Wl,-rpath,$(LIBEXEC_LIB)
 IOEMU_EXTRA_LDFLAGS :=
@@ -130,6 +129,41 @@ ifneq ($(QEMU_ROOT),.)
 export QEMU_ROOT
 endif
 
+# Targets for external trees:
+#  ${target}-dir-find
+#    See if the directory exists and check it out if not.
+#  ${target}-dir-force-update
+#    Pull to the most recent update (as if you had checked it out for the
+#    first time)
+#  subdir-all-${target}-dir
+#    Do "make all" for ${target}, including all prerequisites (such as 
+#    configure)
+#  subdir-install-${target}-dir
+#    Do "make install" for $TARGET
+#  subdir-clean-${target}-dir
+#    Do "make clean" for $TARGET
+#
+# Directories for external trees:
+#  ${target}-dir
+#    Used for local builds.  Usually a link to ${target}-dir-remote
+#  ${target}-dir-remote
+#    Where remote repositories are cloned
+#  ${target}
+#    Where a copy of the source files are put when building a source 
+#    tarball for release
+#
+# Expected variables:
+#   ${TARGET}_URL
+#     A url from which to clone a git repo
+#   ${TARGET}_REVISION
+#     The target revision to check out when doing "find" or "force-update"
+#   ${TARGET}_INTREE
+#     The directory where the subtree can be found (usually used when building
+#     a source tarball)
+#   ${TARGET}_LOC
+#     The ultimate location of the source (either a local dir or remote URL)
+
+# External target: qemu-xen-traditional
 qemu-xen-traditional-dir-find:
 	set -ex; \
 	if test -d $(QEMU_TRADITIONAL_LOC); then \
@@ -137,14 +171,6 @@ qemu-xen-traditional-dir-find:
 	else \
 		export GIT=$(GIT); \
 		$(XEN_ROOT)/scripts/git-checkout.sh $(QEMU_TRADITIONAL_LOC) $(QEMU_TRADITIONAL_REVISION) qemu-xen-traditional-dir; \
-	fi
-
-qemu-xen-dir-find:
-	if test -d $(QEMU_UPSTREAM_LOC) ; then \
-		mkdir -p qemu-xen-dir; \
-	else \
-		export GIT=$(GIT); \
-		$(XEN_ROOT)/scripts/git-checkout.sh $(QEMU_UPSTREAM_LOC) $(QEMU_UPSTREAM_REVISION) qemu-xen-dir ; \
 	fi
 
 .PHONY: qemu-xen-traditional-dir-force-update
@@ -159,6 +185,7 @@ qemu-xen-traditional-dir-force-update: qemu-xen-traditional-dir-find
 subdir-all-qemu-xen-traditional-dir: qemu-xen-traditional-dir-find
 	set -e; \
 		$(buildmakevars2shellvars); \
+		export CONFIG_BLKTAP1=n; \
 		cd qemu-xen-traditional-dir; \
 		$(QEMU_ROOT)/xen-setup \
 		$(IOEMU_EXTRA_LDFLAGS) \
@@ -169,6 +196,7 @@ subdir-all-qemu-xen-traditional-dir: qemu-xen-traditional-dir-find
 subdir-install-qemu-xen-traditional-dir: qemu-xen-traditional-dir-find
 	set -e; \
 		$(buildmakevars2shellvars); \
+		export CONFIG_BLKTAP1=n; \
 		cd qemu-xen-traditional-dir; \
 		$(QEMU_ROOT)/xen-setup \
 		--extra-cflags="$(EXTRA_CFLAGS_QEMU_TRADITIONAL)" \
@@ -180,6 +208,15 @@ subdir-install-qemu-xen-traditional-dir: qemu-xen-traditional-dir-find
 subdir-clean-qemu-xen-traditional-dir:
 	set -e; if test -d qemu-xen-traditional-dir/.; then \
 		$(MAKE) -C qemu-xen-traditional-dir clean; \
+	fi
+
+# External target: qemu-xen
+qemu-xen-dir-find:
+	if test -d $(QEMU_UPSTREAM_LOC) ; then \
+		mkdir -p qemu-xen-dir; \
+	else \
+		export GIT=$(GIT); \
+		$(XEN_ROOT)/scripts/git-checkout.sh $(QEMU_UPSTREAM_LOC) $(QEMU_UPSTREAM_REVISION) qemu-xen-dir ; \
 	fi
 
 .PHONY: qemu-xen-dir-force-update
@@ -268,7 +305,9 @@ endif
 ifeq ($(CONFIG_QEMU_TRAD),y)
 	$(MAKE) qemu-xen-traditional-dir-force-update
 endif
+ifeq ($(CONFIG_X86),y)
 	$(MAKE) -C firmware subtree-force-update
+endif
 
 subtree-force-update-all:
 	$(MAKE) qemu-xen-dir-force-update

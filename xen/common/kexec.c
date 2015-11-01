@@ -78,7 +78,7 @@ static paddr_t __initdata crashinfo_maxaddr = 4ULL << 30;
 
 /* = log base 2 of crashinfo_maxaddr after checking for sanity. Default to
  * larger than the entire physical address space. */
-paddr_t crashinfo_maxaddr_bits = 64;
+unsigned int __initdata crashinfo_maxaddr_bits = 64;
 
 /* Pointers to keep track of the crash heap region. */
 static void *crash_heap_current = NULL, *crash_heap_end = NULL;
@@ -454,8 +454,7 @@ static int kexec_init_cpu_notes(const unsigned long cpu)
         spin_unlock(&crash_notes_lock);
         /* Always return ok, because whether we successfully allocated or not,
          * another CPU has successfully allocated. */
-        if ( note )
-            xfree(note);
+        xfree(note);
     }
     else
     {
@@ -532,7 +531,7 @@ void __init kexec_early_calculations(void)
         low_crashinfo_mode = LOW_CRASHINFO_NONE;
 
     if ( low_crashinfo_mode > LOW_CRASHINFO_NONE )
-        crashinfo_maxaddr_bits = fls(crashinfo_maxaddr) - 1;
+        crashinfo_maxaddr_bits = fls64(crashinfo_maxaddr) - 1;
 }
 
 static int __init kexec_init(void)
@@ -663,8 +662,8 @@ static int kexec_get_range(XEN_GUEST_HANDLE_PARAM(void) uarg)
 
     ret = kexec_get_range_internal(&range);
 
-    if ( ret == 0 && unlikely(copy_to_guest(uarg, &range, 1)) )
-        return -EFAULT;
+    if ( ret == 0 && unlikely(__copy_to_guest(uarg, &range, 1)) )
+        ret = -EFAULT;
 
     return ret;
 }
@@ -687,10 +686,11 @@ static int kexec_get_range_compat(XEN_GUEST_HANDLE_PARAM(void) uarg)
     if ( (range.start | range.size) & ~(unsigned long)(~0u) )
         return -ERANGE;
 
-    if ( ret == 0 ) {
+    if ( ret == 0 )
+    {
         XLAT_kexec_range(&compat_range, &range);
-        if ( unlikely(copy_to_guest(uarg, &compat_range, 1)) )
-             return -EFAULT;
+        if ( unlikely(__copy_to_guest(uarg, &compat_range, 1)) )
+             ret = -EFAULT;
     }
 
     return ret;
@@ -872,7 +872,7 @@ static int kexec_load_slot(struct kexec_image *kimage)
 static uint16_t kexec_load_v1_arch(void)
 {
 #ifdef CONFIG_X86
-    return is_pv_32on64_domain(hardware_domain) ? EM_386 : EM_X86_64;
+    return is_pv_32bit_domain(hardware_domain) ? EM_386 : EM_X86_64;
 #else
     return EM_NONE;
 #endif
@@ -912,7 +912,7 @@ static int kexec_segments_from_ind_page(unsigned long mfn,
     kimage_entry_t *entry;
     int ret = 0;
 
-    page = map_domain_page(mfn);
+    page = map_domain_page(_mfn(mfn));
 
     /*
      * Walk the indirection page list, adding destination pages to the
@@ -934,7 +934,7 @@ static int kexec_segments_from_ind_page(unsigned long mfn,
             break;
         case IND_INDIRECTION:
             unmap_domain_page(page);
-            entry = page = map_domain_page(mfn);
+            entry = page = map_domain_page(_mfn(mfn));
             continue;
         case IND_DONE:
             goto done;
@@ -1002,6 +1002,24 @@ static int kexec_do_load_v1(xen_kexec_load_v1_t *load, int compat)
     ret = kimage_build_ind(kimage, ind_mfn, compat);
     if ( ret < 0 )
         goto error;
+
+    if ( arch == EM_386 || arch == EM_X86_64 )
+    {
+        /*
+         * Ensure 0 - 1 MiB is mapped and accessible by the image.
+         *
+         * This allows access to VGA memory and the region purgatory copies
+         * in the crash case.
+         */
+        unsigned long addr;
+
+        for ( addr = 0; addr < MB(1); addr += PAGE_SIZE )
+        {
+            ret = machine_kexec_add_page(kimage, addr, addr);
+            if ( ret < 0 )
+                goto error;
+        }
+    }
 
     ret = kexec_load_slot(kimage);
     if ( ret < 0 )

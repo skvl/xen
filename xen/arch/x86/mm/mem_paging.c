@@ -16,47 +16,63 @@
  * GNU General Public License for more details.
  *
  * You should have received a copy of the GNU General Public License
- * along with this program; if not, write to the Free Software
- * Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
+ * along with this program; If not, see <http://www.gnu.org/licenses/>.
  */
 
 
 #include <asm/p2m.h>
-#include <xen/mem_event.h>
+#include <xen/guest_access.h>
+#include <xsm/xsm.h>
 
-
-int mem_paging_memop(struct domain *d, xen_mem_event_op_t *mec)
+int mem_paging_memop(XEN_GUEST_HANDLE_PARAM(xen_mem_paging_op_t) arg)
 {
-    if ( unlikely(!d->mem_event->paging.ring_page) )
-        return -ENODEV;
+    int rc;
+    xen_mem_paging_op_t mpo;
+    struct domain *d;
+    bool_t copyback = 0;
 
-    switch( mec->op )
+    if ( copy_from_guest(&mpo, arg, 1) )
+        return -EFAULT;
+
+    rc = rcu_lock_live_remote_domain_by_id(mpo.domain, &d);
+    if ( rc )
+        return rc;
+
+    rc = xsm_mem_paging(XSM_DM_PRIV, d);
+    if ( rc )
+        goto out;
+
+    rc = -ENODEV;
+    if ( unlikely(!d->vm_event->paging.ring_page) )
+        goto out;
+
+    switch( mpo.op )
     {
     case XENMEM_paging_op_nominate:
-    {
-        unsigned long gfn = mec->gfn;
-        return p2m_mem_paging_nominate(d, gfn);
-    }
-    break;
+        rc = p2m_mem_paging_nominate(d, mpo.gfn);
+        break;
 
     case XENMEM_paging_op_evict:
-    {
-        unsigned long gfn = mec->gfn;
-        return p2m_mem_paging_evict(d, gfn);
-    }
-    break;
+        rc = p2m_mem_paging_evict(d, mpo.gfn);
+        break;
 
     case XENMEM_paging_op_prep:
-    {
-        unsigned long gfn = mec->gfn;
-        return p2m_mem_paging_prep(d, gfn, mec->buffer);
-    }
-    break;
+        rc = p2m_mem_paging_prep(d, mpo.gfn, mpo.buffer);
+        if ( !rc )
+            copyback = 1;
+        break;
 
     default:
-        return -ENOSYS;
+        rc = -ENOSYS;
         break;
     }
+
+    if ( copyback && __copy_to_guest(arg, &mpo, 1) )
+        rc = -EFAULT;
+
+out:
+    rcu_unlock_domain(d);
+    return rc;
 }
 
 

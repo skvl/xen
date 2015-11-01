@@ -9,8 +9,7 @@
  * more details.
  *
  * You should have received a copy of the GNU General Public License along with
- * this program; if not, write to the Free Software Foundation, Inc., 59 Temple
- * Place - Suite 330, Boston, MA 02111-1307 USA.
+ * this program; If not, see <http://www.gnu.org/licenses/>.
  */
 
 #include <xen/sched.h>
@@ -56,13 +55,20 @@ int arch_iommu_populate_page_table(struct domain *d)
 
     while ( !rc && (page = page_list_remove_head(&d->page_list)) )
     {
-        if ( is_hvm_domain(d) ||
+        if ( has_hvm_container_domain(d) ||
             (page->u.inuse.type_info & PGT_type_mask) == PGT_writable_page )
         {
-            BUG_ON(SHARED_M2P(mfn_to_gmfn(d, page_to_mfn(page))));
-            rc = hd->platform_ops->map_page(
-                d, mfn_to_gmfn(d, page_to_mfn(page)), page_to_mfn(page),
-                IOMMUF_readable|IOMMUF_writable);
+            unsigned long mfn = page_to_mfn(page);
+            unsigned long gfn = mfn_to_gmfn(d, mfn);
+
+            if ( gfn != INVALID_MFN )
+            {
+                ASSERT(!(gfn >> DEFAULT_DOMAIN_ADDRESS_WIDTH));
+                BUG_ON(SHARED_M2P(gfn));
+                rc = hd->platform_ops->map_page(d, gfn, mfn,
+                                                IOMMUF_readable |
+                                                IOMMUF_writable);
+            }
             if ( rc )
             {
                 page_list_add(page, &d->page_list);
@@ -85,8 +91,9 @@ int arch_iommu_populate_page_table(struct domain *d)
          * first few entries.
          */
         page_list_move(&d->page_list, &d->arch.relmem_list);
-        while ( (page = page_list_first(&d->page_list)) != NULL &&
-                (page->count_info & (PGC_state|PGC_broken)) )
+        while ( !page_list_empty(&d->page_list) &&
+                (page = page_list_first(&d->page_list),
+                 (page->count_info & (PGC_state|PGC_broken))) )
         {
             page_list_del(page, &d->page_list);
             page_list_add_tail(page, &d->arch.relmem_list);

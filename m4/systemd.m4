@@ -13,8 +13,7 @@
 # General Public License for more details.
 #
 # You should have received a copy of the GNU General Public License
-# along with this program; if not, write to the Free Software Foundation, Inc.,
-# 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
+# along with this program; If not, see <http://www.gnu.org/licenses/>.
 
 dnl Some optional path options
 AC_DEFUN([AX_SYSTEMD_OPTIONS], [
@@ -86,7 +85,11 @@ AC_DEFUN([AX_CHECK_SYSTEMD], [
 		AC_DEFINE([HAVE_SYSTEMD], [1], [Systemd available and enabled])
 			systemd=y
 			AX_CHECK_SYSTEMD_LIBS()
-	    ],[systemd=n])
+	    ],[
+		AS_IF([test "x$enable_systemd" = "xyes"],
+			[AC_MSG_ERROR([Unable to find systemd development library])],
+			[systemd=n])
+	    ])
 	],[systemd=n])
 ])
 

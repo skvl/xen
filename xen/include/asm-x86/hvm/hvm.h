@@ -14,8 +14,7 @@
  * more details.
  *
  * You should have received a copy of the GNU General Public License along with
- * this program; if not, write to the Free Software Foundation, Inc., 59 Temple
- * Place - Suite 330, Boston, MA 02111-1307 USA.
+ * this program; If not, see <http://www.gnu.org/licenses/>.
  */
 
 #ifndef __ASM_X86_HVM_HVM_H__
@@ -94,6 +93,9 @@ struct hvm_function_table {
     /* Necessary hardware support for PVH mode? */
     int pvh_supported;
 
+    /* Necessary hardware support for alternate p2m's? */
+    bool_t altp2m_supported;
+
     /* Indicate HAP capabilities. */
     int hap_capabilities;
 
@@ -164,6 +166,7 @@ struct hvm_function_table {
     int (*msr_read_intercept)(unsigned int msr, uint64_t *msr_content);
     int (*msr_write_intercept)(unsigned int msr, uint64_t msr_content);
     void (*invlpg_intercept)(unsigned long vaddr);
+    int (*vmfunc_intercept)(struct cpu_user_regs *regs);
     void (*handle_cd)(struct vcpu *v, unsigned long value);
     void (*set_info_guest)(struct vcpu *v);
     void (*set_rdtsc_exiting)(struct vcpu *v, bool_t);
@@ -172,16 +175,11 @@ struct hvm_function_table {
     int (*nhvm_vcpu_initialise)(struct vcpu *v);
     void (*nhvm_vcpu_destroy)(struct vcpu *v);
     int (*nhvm_vcpu_reset)(struct vcpu *v);
-    int (*nhvm_vcpu_hostrestore)(struct vcpu *v,
-                                struct cpu_user_regs *regs);
-    int (*nhvm_vcpu_vmexit)(struct vcpu *v, struct cpu_user_regs *regs,
-                                uint64_t exitcode);
     int (*nhvm_vcpu_vmexit_trap)(struct vcpu *v, struct hvm_trap *trap);
-    uint64_t (*nhvm_vcpu_guestcr3)(struct vcpu *v);
     uint64_t (*nhvm_vcpu_p2m_base)(struct vcpu *v);
-    uint32_t (*nhvm_vcpu_asid)(struct vcpu *v);
-    int (*nhvm_vmcx_guest_intercepts_trap)(struct vcpu *v, 
-                               unsigned int trapnr, int errcode);
+    bool_t (*nhvm_vmcx_guest_intercepts_trap)(struct vcpu *v,
+                                              unsigned int trapnr,
+                                              int errcode);
 
     bool_t (*nhvm_vmcx_hap_enabled)(struct vcpu *v);
 
@@ -207,6 +205,13 @@ struct hvm_function_table {
                                   uint32_t *ecx, uint32_t *edx);
 
     void (*enable_msr_exit_interception)(struct domain *d);
+    bool_t (*is_singlestep_supported)(void);
+
+    /* Alternate p2m */
+    void (*altp2m_vcpu_update_p2m)(struct vcpu *v);
+    void (*altp2m_vcpu_update_vmfunc_ve)(struct vcpu *v);
+    bool_t (*altp2m_vcpu_emulate_ve)(struct vcpu *v);
+    int (*altp2m_vcpu_emulate_vmfunc)(struct cpu_user_regs *regs);
 };
 
 extern struct hvm_function_table hvm_funcs;
@@ -228,8 +233,10 @@ int hvm_vcpu_cacheattr_init(struct vcpu *v);
 void hvm_vcpu_cacheattr_destroy(struct vcpu *v);
 void hvm_vcpu_reset_state(struct vcpu *v, uint16_t cs, uint16_t ip);
 
-bool_t hvm_send_assist_req(ioreq_t *p);
-void hvm_broadcast_assist_req(ioreq_t *p);
+struct hvm_ioreq_server *hvm_select_ioreq_server(struct domain *d,
+                                                 ioreq_t *p);
+int hvm_send_ioreq(struct hvm_ioreq_server *s, ioreq_t *p, bool_t buffered);
+unsigned int hvm_broadcast_ioreq(ioreq_t *p, bool_t buffered);
 
 void hvm_get_guest_pat(struct vcpu *v, u64 *guest_pat);
 int hvm_set_guest_pat(struct vcpu *v, u64 guest_pat);
@@ -359,7 +366,6 @@ void hvm_hypervisor_cpuid_leaf(uint32_t sub_idx,
 void hvm_cpuid(unsigned int input, unsigned int *eax, unsigned int *ebx,
                                    unsigned int *ecx, unsigned int *edx);
 void hvm_migrate_timers(struct vcpu *v);
-bool_t hvm_has_dm(struct domain *d);
 bool_t hvm_io_pending(struct vcpu *v);
 void hvm_do_resume(struct vcpu *v);
 void hvm_migrate_pirqs(struct vcpu *v);
@@ -434,7 +440,8 @@ int hvm_virtual_to_linear_addr(
     unsigned int addr_size,
     unsigned long *linear_addr);
 
-void *hvm_map_guest_frame_rw(unsigned long gfn, bool_t permanent);
+void *hvm_map_guest_frame_rw(unsigned long gfn, bool_t permanent,
+                             bool_t *writable);
 void *hvm_map_guest_frame_ro(unsigned long gfn, bool_t permanent);
 void hvm_unmap_guest_frame(void *p, bool_t permanent);
 
@@ -445,6 +452,9 @@ static inline void hvm_set_info_guest(struct vcpu *v)
 }
 
 int hvm_debug_op(struct vcpu *v, int32_t op);
+
+/* Caller should pause vcpu before calling this function */
+void hvm_toggle_singlestep(struct vcpu *v);
 
 static inline void hvm_invalidate_regs_fields(struct cpu_user_regs *regs)
 {
@@ -473,50 +483,68 @@ int hvm_hap_nested_page_fault(paddr_t gpa, unsigned long gla,
 int hvm_x2apic_msr_read(struct vcpu *v, unsigned int msr, uint64_t *msr_content);
 int hvm_x2apic_msr_write(struct vcpu *v, unsigned int msr, uint64_t msr_content);
 
-/* Called for current VCPU on crX changes by guest */
-void hvm_memory_event_cr0(unsigned long value, unsigned long old);
-void hvm_memory_event_cr3(unsigned long value, unsigned long old);
-void hvm_memory_event_cr4(unsigned long value, unsigned long old);
-void hvm_memory_event_msr(unsigned long msr, unsigned long value);
-/* Called for current VCPU on int3: returns -1 if no listener */
-int hvm_memory_event_int3(unsigned long gla);
-
-/* Called for current VCPU on single step: returns -1 if no listener */
-int hvm_memory_event_single_step(unsigned long gla);
-
 /*
  * Nested HVM
  */
 
-/* Restores l1 guest state */
-int nhvm_vcpu_hostrestore(struct vcpu *v, struct cpu_user_regs *regs);
-/* Fill l1 guest's VMCB/VMCS with data provided by generic exit codes
- * (do conversion as needed), other misc SVM/VMX specific tweaks to make
- * it work */
-int nhvm_vcpu_vmexit(struct vcpu *v, struct cpu_user_regs *regs,
-                     uint64_t exitcode);
 /* inject vmexit into l1 guest. l1 guest will see a VMEXIT due to
  * 'trapnr' exception.
  */ 
-int nhvm_vcpu_vmexit_trap(struct vcpu *v, struct hvm_trap *trap);
+static inline int nhvm_vcpu_vmexit_trap(struct vcpu *v, struct hvm_trap *trap)
+{
+    return hvm_funcs.nhvm_vcpu_vmexit_trap(v, trap);
+}
 
-/* returns l2 guest cr3 in l2 guest physical address space. */
-uint64_t nhvm_vcpu_guestcr3(struct vcpu *v);
 /* returns l1 guest's cr3 that points to the page table used to
  * translate l2 guest physical address to l1 guest physical address.
  */
-uint64_t nhvm_vcpu_p2m_base(struct vcpu *v);
-/* returns the asid number l1 guest wants to use to run the l2 guest */
-uint32_t nhvm_vcpu_asid(struct vcpu *v);
+static inline uint64_t nhvm_vcpu_p2m_base(struct vcpu *v)
+{
+    return hvm_funcs.nhvm_vcpu_p2m_base(v);
+}
 
 /* returns true, when l1 guest intercepts the specified trap */
-int nhvm_vmcx_guest_intercepts_trap(struct vcpu *v, 
-                                    unsigned int trapnr, int errcode);
+static inline bool_t nhvm_vmcx_guest_intercepts_trap(struct vcpu *v,
+                                                     unsigned int trap,
+                                                     int errcode)
+{
+    return hvm_funcs.nhvm_vmcx_guest_intercepts_trap(v, trap, errcode);
+}
 
 /* returns true when l1 guest wants to use hap to run l2 guest */
-bool_t nhvm_vmcx_hap_enabled(struct vcpu *v);
+static inline bool_t nhvm_vmcx_hap_enabled(struct vcpu *v)
+{
+    return hvm_funcs.nhvm_vmcx_hap_enabled(v);
+}
+
 /* interrupt */
-enum hvm_intblk nhvm_interrupt_blocked(struct vcpu *v);
+static inline enum hvm_intblk nhvm_interrupt_blocked(struct vcpu *v)
+{
+    return hvm_funcs.nhvm_intr_blocked(v);
+}
+
+static inline bool_t hvm_enable_msr_exit_interception(struct domain *d)
+{
+    if ( hvm_funcs.enable_msr_exit_interception )
+    {
+        hvm_funcs.enable_msr_exit_interception(d);
+        return 1;
+    }
+
+    return 0;
+}
+
+static inline bool_t hvm_is_singlestep_supported(void)
+{
+    return (hvm_funcs.is_singlestep_supported &&
+            hvm_funcs.is_singlestep_supported());
+}
+
+/* returns true if hardware supports alternate p2m's */
+static inline bool_t hvm_altp2m_supported(void)
+{
+    return hvm_funcs.altp2m_supported;
+}
 
 #ifndef NDEBUG
 /* Permit use of the Forced Emulation Prefix in HVM guests */
@@ -524,6 +552,15 @@ extern bool_t opt_hvm_fep;
 #else
 #define opt_hvm_fep 0
 #endif
+
+/* updates the current hardware p2m */
+void altp2m_vcpu_update_p2m(struct vcpu *v);
+
+/* updates VMCS fields related to VMFUNC and #VE */
+void altp2m_vcpu_update_vmfunc_ve(struct vcpu *v);
+
+/* emulates #VE */
+bool_t altp2m_vcpu_emulate_ve(struct vcpu *v);
 
 #endif /* __ASM_X86_HVM_HVM_H__ */
 

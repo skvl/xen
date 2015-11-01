@@ -17,12 +17,13 @@
  * GNU General Public License for more details.
  * 
  * You should have received a copy of the GNU General Public License
- * along with this program; if not, write to the Free Software
- * Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
+ * along with this program; If not, see <http://www.gnu.org/licenses/>.
  */
 
 #ifndef __X86_EMULATE_H__
 #define __X86_EMULATE_H__
+
+#define MAX_INST_LEN 15
 
 struct x86_emulate_ctxt;
 
@@ -241,6 +242,20 @@ struct x86_emulate_ops
         struct x86_emulate_ctxt *ctxt);
 
     /*
+     * rep_stos: Emulate STOS: <*p_data> -> <seg:offset>.
+     *  @bytes_per_rep: [IN ] Bytes transferred per repetition.
+     *  @reps:  [IN ] Maximum repetitions to be emulated.
+     *          [OUT] Number of repetitions actually emulated.
+     */
+    int (*rep_stos)(
+        void *p_data,
+        enum x86_segment seg,
+        unsigned long offset,
+        unsigned int bytes_per_rep,
+        unsigned long *reps,
+        struct x86_emulate_ctxt *ctxt);
+
+    /*
      * read_segment: Emulate a read of full context of a segment register.
      *  @reg:   [OUT] Contents of segment register (visible and hidden state).
      */
@@ -368,7 +383,11 @@ struct x86_emulate_ops
         enum x86_emulate_fpu_type type,
         struct x86_emulate_ctxt *ctxt);
 
-    /* put_fpu: Relinquish the FPU. Unhook from FPU/SIMD exception handlers. */
+    /*
+     * put_fpu: Relinquish the FPU. Unhook from FPU/SIMD exception handlers.
+     *  The handler, if installed, must be prepared to get called without
+     *  the get_fpu one having got called before!
+     */
     void (*put_fpu)(
         struct x86_emulate_ctxt *ctxt);
 
@@ -376,6 +395,10 @@ struct x86_emulate_ops
     int (*invlpg)(
         enum x86_segment seg,
         unsigned long offset,
+        struct x86_emulate_ctxt *ctxt);
+
+    /* vmfunc: Emulate VMFUNC via given set of EAX ECX inputs */
+    int (*vmfunc)(
         struct x86_emulate_ctxt *ctxt);
 };
 
@@ -407,6 +430,19 @@ struct x86_emulate_ctxt
         } flags;
         uint8_t byte;
     } retire;
+};
+
+struct x86_emulate_stub {
+    union {
+        void (*func)(void);
+        uintptr_t addr;
+    };
+#ifdef __XEN__
+    void *ptr;
+#else
+    /* Room for one insn and a (single byte) RET. */
+    uint8_t buf[MAX_INST_LEN + 1];
+#endif
 };
 
 /*

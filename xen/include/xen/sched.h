@@ -23,7 +23,7 @@
 #include <public/domctl.h>
 #include <public/sysctl.h>
 #include <public/vcpu.h>
-#include <public/mem_event.h>
+#include <public/vm_event.h>
 #include <public/event_channel.h>
 
 #ifdef CONFIG_COMPAT
@@ -79,6 +79,7 @@ extern domid_t hardware_domid;
 
 struct evtchn
 {
+    spinlock_t lock;
 #define ECS_FREE         0 /* Channel is available for use.                  */
 #define ECS_RESERVED     1 /* Channel is reserved.                           */
 #define ECS_UNBOUND      2 /* Channel is waiting to bind to a remote domain. */
@@ -128,7 +129,7 @@ struct evtchn
 #endif
     } ssid;
 #endif
-};
+} __attribute__((aligned(64)));
 
 int  evtchn_init(struct domain *d); /* from domain_create */
 void evtchn_destroy(struct domain *d); /* from domain_kill */
@@ -214,10 +215,14 @@ struct vcpu
     unsigned long    pause_flags;
     atomic_t         pause_count;
 
-    /* VCPU paused for mem_event replies. */
-    atomic_t         mem_event_pause_count;
+    /* VCPU paused for vm_event replies. */
+    atomic_t         vm_event_pause_count;
     /* VCPU paused by system controller. */
     int              controller_pause_count;
+
+    /* Maptrack */
+    unsigned int     maptrack_head;
+    unsigned int     maptrack_tail;
 
     /* IRQ-safe virq_lock protects against delivering VIRQ to stale evtchn. */
     evtchn_port_t    virq_to_evtchn[NR_VIRQS];
@@ -257,8 +262,8 @@ struct vcpu
 #define domain_unlock(d) spin_unlock_recursive(&(d)->domain_lock)
 #define domain_is_locked(d) spin_is_locked(&(d)->domain_lock)
 
-/* Memory event */
-struct mem_event_domain
+/* VM event */
+struct vm_event_domain
 {
     /* ring lock */
     spinlock_t ring_lock;
@@ -269,10 +274,10 @@ struct mem_event_domain
     void *ring_page;
     struct page_info *ring_pg_struct;
     /* front-end ring */
-    mem_event_front_ring_t front_ring;
+    vm_event_front_ring_t front_ring;
     /* event channel port (vcpu0 only) */
     int xen_port;
-    /* mem_event bit for vcpu->pause_flags */
+    /* vm_event bit for vcpu->pause_flags */
     int pause_flag;
     /* list of vcpus waiting for room in the ring */
     struct waitqueue_head wq;
@@ -282,14 +287,14 @@ struct mem_event_domain
     unsigned int last_vcpu_wake_up;
 };
 
-struct mem_event_per_domain
+struct vm_event_per_domain
 {
     /* Memory sharing support */
-    struct mem_event_domain share;
+    struct vm_event_domain share;
     /* Memory paging support */
-    struct mem_event_domain paging;
-    /* Memory access support */
-    struct mem_event_domain access;
+    struct vm_event_domain paging;
+    /* VM event monitor support */
+    struct vm_event_domain monitor;
 };
 
 struct evtchn_port_ops;
@@ -306,6 +311,9 @@ struct domain
 {
     domid_t          domain_id;
 
+    unsigned int     max_vcpus;
+    struct vcpu    **vcpu;
+
     shared_info_t   *shared_info;     /* shared data area */
 
     spinlock_t       domain_lock;
@@ -314,13 +322,11 @@ struct domain
     struct page_list_head page_list;  /* linked list */
     struct page_list_head xenpage_list; /* linked list (size xenheap_pages) */
     unsigned int     tot_pages;       /* number of pages currently possesed */
+    unsigned int     xenheap_pages;   /* # pages allocated from Xen heap    */
     unsigned int     outstanding_pages; /* pages claimed but not possessed  */
     unsigned int     max_pages;       /* maximum value for tot_pages        */
     atomic_t         shr_pages;       /* number of shared pages             */
     atomic_t         paged_pages;     /* number of paged-out pages          */
-    unsigned int     xenheap_pages;   /* # pages allocated from Xen heap    */
-
-    unsigned int     max_vcpus;
 
     /* Scheduling. */
     void            *sched_priv;    /* scheduler-specific data */
@@ -335,8 +341,9 @@ struct domain
     /* Event channel information. */
     struct evtchn   *evtchn;                         /* first bucket only */
     struct evtchn  **evtchn_group[NR_EVTCHN_GROUPS]; /* all other buckets */
-    unsigned int     max_evtchns;
-    unsigned int     max_evtchn_port;
+    unsigned int     max_evtchns;     /* number supported by ABI */
+    unsigned int     max_evtchn_port; /* max permitted port number */
+    unsigned int     valid_evtchns;   /* number of allocated event channels */
     spinlock_t       event_lock;
     const struct evtchn_port_ops *evtchn_port_ops;
     struct evtchn_fifo_domain *evtchn_fifo;
@@ -347,14 +354,18 @@ struct domain
      * Interrupt to event-channel mappings and other per-guest-pirq data.
      * Protected by the domain's event-channel spinlock.
      */
-    unsigned int     nr_pirqs;
     struct radix_tree_root pirq_tree;
-
-    /* I/O capabilities (access to IRQs and memory-mapped I/O). */
-    struct rangeset *iomem_caps;
-    struct rangeset *irq_caps;
+    unsigned int     nr_pirqs;
 
     enum guest_type guest_type;
+
+    /* Is this guest dying (i.e., a zombie)? */
+    enum { DOMDYING_alive, DOMDYING_dying, DOMDYING_dead } is_dying;
+
+    /* Domain is paused by controller software? */
+    int              controller_pause_count;
+
+    int64_t          time_offset_seconds;
 
 #ifdef HAS_PASSTHROUGH
     /* Does this guest need iommu mappings (-1 meaning "being set up")? */
@@ -364,16 +375,14 @@ struct domain
     bool_t           auto_node_affinity;
     /* Is this guest fully privileged (aka dom0)? */
     bool_t           is_privileged;
-    /* Which guest this guest has privileges on */
-    struct domain   *target;
-    /* Is this guest being debugged by dom0? */
-    bool_t           debugger_attached;
-    /* Is this guest dying (i.e., a zombie)? */
-    enum { DOMDYING_alive, DOMDYING_dying, DOMDYING_dead } is_dying;
-    /* Domain is paused by controller software? */
-    int              controller_pause_count;
     /* Domain's VCPUs are pinned 1:1 to physical CPUs? */
     bool_t           is_pinned;
+    /* Non-migratable and non-restoreable? */
+    bool_t           disable_migrate;
+    /* Is this guest being debugged by dom0? */
+    bool_t           debugger_attached;
+    /* Which guest this guest has privileges on */
+    struct domain   *target;
 
     /* Are any VCPUs polling event channels (SCHEDOP_poll)? */
 #if MAX_VIRT_CPUS <= BITS_PER_LONG
@@ -381,6 +390,10 @@ struct domain
 #else
     unsigned long   *poll_mask;
 #endif
+
+    /* I/O capabilities (access to IRQs and memory-mapped I/O). */
+    struct rangeset *iomem_caps;
+    struct rangeset *irq_caps;
 
     /* Guest has shut down (inc. reason code)? */
     spinlock_t       shutdown_lock;
@@ -390,15 +403,12 @@ struct domain
 
     /* If this is not 0, send suspend notification here instead of
      * raising DOM_EXC */
-    int              suspend_evtchn;
+    evtchn_port_t    suspend_evtchn;
 
     atomic_t         pause_count;
-
-    unsigned long    vm_assist;
-
     atomic_t         refcnt;
 
-    struct vcpu    **vcpu;
+    unsigned long    vm_assist;
 
     /* Bitmask of CPUs which are holding onto this domain's state. */
     cpumask_var_t    domain_dirty_cpumask;
@@ -418,7 +428,6 @@ struct domain
 
     /* OProfile support. */
     struct xenoprof *xenoprof;
-    int32_t time_offset_seconds;
 
     /* Domain watchdog. */
 #define NR_DOMAIN_WATCHDOG_TIMERS 2
@@ -439,11 +448,8 @@ struct domain
 
     struct lock_profile_qhead profile_head;
 
-    /* Non-migratable and non-restoreable? */
-    bool_t disable_migrate;
-
-    /* Various mem_events */
-    struct mem_event_per_domain *mem_event;
+    /* Various vm_events */
+    struct vm_event_per_domain *vm_event;
 
     /*
      * Can be specified by the user. If that is not the case, it is
@@ -525,8 +531,13 @@ static inline void get_knownalive_domain(struct domain *d)
 int domain_set_node_affinity(struct domain *d, const nodemask_t *affinity);
 void domain_update_node_affinity(struct domain *d);
 
-struct domain *domain_create(
-    domid_t domid, unsigned int domcr_flags, uint32_t ssidref);
+/*
+ * Create a domain: the configuration is only necessary for real domain
+ * (i.e !DOMCRF_dummy, excluded idle domain).
+ */
+struct domain *domain_create(domid_t domid, unsigned int domcr_flags,
+                             uint32_t ssidref,
+                             struct xen_arch_domainconfig *config);
  /* DOMCRF_hvm: Create an HVM domain, as opposed to a PV domain. */
 #define _DOMCRF_hvm           0
 #define DOMCRF_hvm            (1U<<_DOMCRF_hvm)
@@ -793,6 +804,11 @@ static inline int domain_pause_by_systemcontroller_nosync(struct domain *d)
 {
     return __domain_pause_by_systemcontroller(d, domain_pause_nosync);
 }
+
+/* domain_pause() but safe against trying to pause current. */
+void domain_pause_except_self(struct domain *d);
+void domain_unpause_except_self(struct domain *d);
+
 void cpu_init(void);
 
 struct scheduler;
@@ -833,7 +849,7 @@ void watchdog_domain_destroy(struct domain *d);
 /* This check is for functionality specific to a control domain */
 #define is_control_domain(_d) ((_d)->is_privileged)
 
-#define VM_ASSIST(_d,_t) (test_bit((_t), &(_d)->vm_assist))
+#define VM_ASSIST(d, t) (test_bit(VMASST_TYPE_ ## t, &(d)->vm_assist))
 
 #define is_pv_domain(d) ((d)->guest_type == guest_type_pv)
 #define is_pv_vcpu(v)   (is_pv_domain((v)->domain))

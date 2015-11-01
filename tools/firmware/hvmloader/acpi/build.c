@@ -12,8 +12,7 @@
  * details.
  *
  * You should have received a copy of the GNU General Public License along with
- * this program; if not, write to the Free Software Foundation, Inc., 59 Temple
- * Place - Suite 330, Boston, MA 02111-1307 USA.
+ * this program; If not, see <http://www.gnu.org/licenses/>.
  */
 
 #include "acpi2_0.h"
@@ -23,6 +22,7 @@
 #include "ssdt_pm.h"
 #include "../config.h"
 #include "../util.h"
+#include "../vnuma.h"
 #include <xen/hvm/hvm_xs_strings.h>
 #include <xen/hvm/params.h>
 
@@ -203,6 +203,95 @@ static struct acpi_20_waet *construct_waet(void)
     return waet;
 }
 
+static struct acpi_20_srat *construct_srat(void)
+{
+    struct acpi_20_srat *srat;
+    struct acpi_20_srat_processor *processor;
+    struct acpi_20_srat_memory *memory;
+    unsigned int size;
+    void *p;
+    unsigned int i;
+
+    size = sizeof(*srat) + sizeof(*processor) * hvm_info->nr_vcpus +
+           sizeof(*memory) * nr_vmemranges;
+
+    p = mem_alloc(size, 16);
+    if ( !p )
+        return NULL;
+
+    srat = memset(p, 0, size);
+    srat->header.signature    = ACPI_2_0_SRAT_SIGNATURE;
+    srat->header.revision     = ACPI_2_0_SRAT_REVISION;
+    fixed_strcpy(srat->header.oem_id, ACPI_OEM_ID);
+    fixed_strcpy(srat->header.oem_table_id, ACPI_OEM_TABLE_ID);
+    srat->header.oem_revision = ACPI_OEM_REVISION;
+    srat->header.creator_id   = ACPI_CREATOR_ID;
+    srat->header.creator_revision = ACPI_CREATOR_REVISION;
+    srat->table_revision      = ACPI_SRAT_TABLE_REVISION;
+
+    processor = (struct acpi_20_srat_processor *)(srat + 1);
+    for ( i = 0; i < hvm_info->nr_vcpus; i++ )
+    {
+        processor->type     = ACPI_PROCESSOR_AFFINITY;
+        processor->length   = sizeof(*processor);
+        processor->domain   = vcpu_to_vnode[i];
+        processor->apic_id  = LAPIC_ID(i);
+        processor->flags    = ACPI_LOCAL_APIC_AFFIN_ENABLED;
+        processor++;
+    }
+
+    memory = (struct acpi_20_srat_memory *)processor;
+    for ( i = 0; i < nr_vmemranges; i++ )
+    {
+        memory->type          = ACPI_MEMORY_AFFINITY;
+        memory->length        = sizeof(*memory);
+        memory->domain        = vmemrange[i].nid;
+        memory->flags         = ACPI_MEM_AFFIN_ENABLED;
+        memory->base_address  = vmemrange[i].start;
+        memory->mem_length    = vmemrange[i].end - vmemrange[i].start;
+        memory++;
+    }
+
+    ASSERT(((unsigned long)memory) - ((unsigned long)p) == size);
+
+    srat->header.length = size;
+    set_checksum(srat, offsetof(struct acpi_header, checksum), size);
+
+    return srat;
+}
+
+static struct acpi_20_slit *construct_slit(void)
+{
+    struct acpi_20_slit *slit;
+    unsigned int i, num, size;
+
+    num = nr_vnodes * nr_vnodes;
+    size = sizeof(*slit) + num * sizeof(uint8_t);
+
+    slit = mem_alloc(size, 16);
+    if ( !slit )
+        return NULL;
+
+    memset(slit, 0, size);
+    slit->header.signature    = ACPI_2_0_SLIT_SIGNATURE;
+    slit->header.revision     = ACPI_2_0_SLIT_REVISION;
+    fixed_strcpy(slit->header.oem_id, ACPI_OEM_ID);
+    fixed_strcpy(slit->header.oem_table_id, ACPI_OEM_TABLE_ID);
+    slit->header.oem_revision = ACPI_OEM_REVISION;
+    slit->header.creator_id   = ACPI_CREATOR_ID;
+    slit->header.creator_revision = ACPI_CREATOR_REVISION;
+
+    for ( i = 0; i < num; i++ )
+        slit->entry[i] = vdistance[i];
+
+    slit->localities = nr_vnodes;
+
+    slit->header.length = size;
+    set_checksum(slit, offsetof(struct acpi_header, checksum), size);
+
+    return slit;
+}
+
 static int construct_passthrough_tables(unsigned long *table_ptrs,
                                         int nr_tables)
 {
@@ -344,6 +433,22 @@ static int construct_secondary_tables(unsigned long *table_ptrs,
                          offsetof(struct acpi_header, checksum),
                          tcpa->header.length);
         }
+    }
+
+    /* SRAT and SLIT */
+    if ( nr_vnodes > 0 )
+    {
+        struct acpi_20_srat *srat = construct_srat();
+        struct acpi_20_slit *slit = construct_slit();
+
+        if ( srat )
+            table_ptrs[nr_tables++] = (unsigned long)srat;
+        else
+            printf("Failed to build SRAT, skipping...\n");
+        if ( slit )
+            table_ptrs[nr_tables++] = (unsigned long)slit;
+        else
+            printf("Failed to build SLIT, skipping...\n");
     }
 
     /* Load any additional tables passed through. */

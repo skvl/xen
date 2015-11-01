@@ -25,15 +25,12 @@ our @msgs = (
                                                 'unsigned long', 'total'] ],
     [  3, 'scxA',   "suspend", [] ],
     [  4, 'scxA',   "postcopy", [] ],
-    [  5, 'scxA',   "checkpoint", [] ],
+    [  5, 'srcxA',  "checkpoint", [] ],
     [  6, 'scxA',   "switch_qemu_logdirty",  [qw(int domid
                                               unsigned enable)] ],
-    #                toolstack_save          done entirely `by hand'
-    [  7, 'rcxW',   "toolstack_restore",     [qw(uint32_t domid
-                                                BLOCK tsdata)] ],
-    [  8, 'r',      "restore_results",       ['unsigned long', 'store_mfn',
+    [  7, 'r',      "restore_results",       ['unsigned long', 'store_mfn',
                                               'unsigned long', 'console_mfn'] ],
-    [  9, 'srW',    "complete",              [qw(int retval
+    [  8, 'srW',    "complete",              [qw(int retval
                                                  int errnoval)] ],
 );
 

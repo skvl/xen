@@ -10,8 +10,8 @@
 #include <xen/errno.h>
 #include <xen/sched.h>
 #include <xen/hypercall.h>
-#include <asm/gic.h>
-#include <xen/guest_access.h>
+#include <xen/iocap.h>
+#include <xsm/xsm.h>
 #include <public/domctl.h>
 
 long arch_do_domctl(struct xen_domctl *domctl, struct domain *d,
@@ -32,42 +32,93 @@ long arch_do_domctl(struct xen_domctl *domctl, struct domain *d,
 
         return p2m_cache_flush(d, s, e);
     }
-    case XEN_DOMCTL_arm_configure_domain:
+    case XEN_DOMCTL_bind_pt_irq:
     {
-        uint8_t gic_version;
+        int rc;
+        xen_domctl_bind_pt_irq_t *bind = &domctl->u.bind_pt_irq;
+        uint32_t irq = bind->u.spi.spi;
+        uint32_t virq = bind->machine_irq;
 
-        /*
-         * Currently the vGIC is emulating the same version of the
-         * hardware GIC. Only the value XEN_DOMCTL_CONFIG_GIC_DEFAULT
-         * is allowed. The DOMCTL will return the actual version of the
-         * GIC.
-         */
-        if ( domctl->u.configuredomain.gic_version != XEN_DOMCTL_CONFIG_GIC_DEFAULT )
+        /* We only support PT_IRQ_TYPE_SPI */
+        if ( bind->irq_type != PT_IRQ_TYPE_SPI )
             return -EOPNOTSUPP;
 
-        switch ( gic_hw_version() )
-        {
-        case GIC_V3:
-            gic_version = XEN_DOMCTL_CONFIG_GIC_V3;
-            break;
-        case GIC_V2:
-            gic_version = XEN_DOMCTL_CONFIG_GIC_V2;
-            break;
-        default:
-            BUG();
-        }
+        /*
+         * XXX: For now map the interrupt 1:1. Other support will require to
+         * modify domain_pirq_to_irq macro.
+         */
+        if ( irq != virq )
+            return -EINVAL;
 
-        domctl->u.configuredomain.gic_version = gic_version;
+        /*
+         * ARM doesn't require separating IRQ assignation into 2
+         * hypercalls (PHYSDEVOP_map_pirq and DOMCTL_bind_pt_irq).
+         *
+         * Call xsm_map_domain_irq in order to keep the same XSM checks
+         * done by the 2 hypercalls for consistency with other
+         * architectures.
+         */
+        rc = xsm_map_domain_irq(XSM_HOOK, d, irq, NULL);
+        if ( rc )
+            return rc;
 
-        /* TODO: Make the copy generic for all ARCH domctl */
-        if ( __copy_to_guest(u_domctl, domctl, 1) )
-            return -EFAULT;
+        rc = xsm_bind_pt_irq(XSM_HOOK, d, bind);
+        if ( rc )
+            return rc;
+
+        if ( !irq_access_permitted(current->domain, irq) )
+            return -EPERM;
+
+        if ( !vgic_reserve_virq(d, virq) )
+            return -EBUSY;
+
+        rc = route_irq_to_guest(d, virq, irq, "routed IRQ");
+        if ( rc )
+            vgic_free_virq(d, virq);
+
+        return rc;
+    }
+    case XEN_DOMCTL_unbind_pt_irq:
+    {
+        int rc;
+        xen_domctl_bind_pt_irq_t *bind = &domctl->u.bind_pt_irq;
+        uint32_t irq = bind->u.spi.spi;
+        uint32_t virq = bind->machine_irq;
+
+        /* We only support PT_IRQ_TYPE_SPI */
+        if ( bind->irq_type != PT_IRQ_TYPE_SPI )
+            return -EOPNOTSUPP;
+
+        /* For now map the interrupt 1:1 */
+        if ( irq != virq )
+            return -EINVAL;
+
+        rc = xsm_unbind_pt_irq(XSM_HOOK, d, bind);
+        if ( rc )
+            return rc;
+
+        if ( !irq_access_permitted(current->domain, irq) )
+            return -EPERM;
+
+        rc = release_guest_irq(d, virq);
+        if ( rc )
+            return rc;
+
+        vgic_free_virq(d, virq);
 
         return 0;
     }
-
     default:
-        return subarch_do_domctl(domctl, d, u_domctl);
+    {
+        int rc;
+
+        rc = subarch_do_domctl(domctl, d, u_domctl);
+
+        if ( rc == -ENOSYS )
+            rc = iommu_do_domctl(domctl, d, u_domctl);
+
+        return rc;
+    }
     }
 }
 

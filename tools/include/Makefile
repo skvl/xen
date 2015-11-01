@@ -1,8 +1,11 @@
 XEN_ROOT = $(CURDIR)/../..
 include $(XEN_ROOT)/tools/Rules.mk
 
+# Relative to $(XEN_ROOT)/xen/xsm/flask
+FLASK_H_DEPEND := policy/initial_sids
+
 .PHONY: all
-all: xen-foreign xen/.dir
+all: xen-foreign xen/.dir xen-xsm/.dir
 
 .PHONY: xen-foreign
 xen-foreign:
@@ -19,34 +22,46 @@ xen/.dir:
 	ln -s ../xen-foreign xen/foreign
 	touch $@
 
+# Not xen/xsm as that clashes with link to
+# $(XEN_ROOT)/xen/include/public/xsm above.
+xen-xsm/.dir: $(XEN_ROOT)/xen/xsm/flask/policy/mkflask.sh \
+	      $(patsubst %,$(XEN_ROOT)/xen/xsm/flask/%,$(FLASK_H_DEPEND))
+	mkdir -p xen-xsm/flask
+	cd $(XEN_ROOT)/xen/xsm/flask/ && \
+		$(SHELL) policy/mkflask.sh $(AWK) $(CURDIR)/xen-xsm/flask $(FLASK_H_DEPEND)
+	touch $@
+
 .PHONY: install
 install: all
-	$(INSTALL_DIR) $(DESTDIR)$(INCLUDEDIR)/xen/arch-x86
-	$(INSTALL_DIR) $(DESTDIR)$(INCLUDEDIR)/xen/arch-x86/hvm
-	$(INSTALL_DIR) $(DESTDIR)$(INCLUDEDIR)/xen/arch-arm
-	$(INSTALL_DIR) $(DESTDIR)$(INCLUDEDIR)/xen/arch-arm/hvm
-	$(INSTALL_DIR) $(DESTDIR)$(INCLUDEDIR)/xen/foreign
-	$(INSTALL_DIR) $(DESTDIR)$(INCLUDEDIR)/xen/hvm
-	$(INSTALL_DIR) $(DESTDIR)$(INCLUDEDIR)/xen/io
-	$(INSTALL_DIR) $(DESTDIR)$(INCLUDEDIR)/xen/sys
-	$(INSTALL_DIR) $(DESTDIR)$(INCLUDEDIR)/xen/xsm
-	$(INSTALL_DATA) xen/COPYING $(DESTDIR)$(INCLUDEDIR)/xen
-	$(INSTALL_DATA) xen/*.h $(DESTDIR)$(INCLUDEDIR)/xen
-	$(INSTALL_DATA) xen/arch-x86/*.h $(DESTDIR)$(INCLUDEDIR)/xen/arch-x86
-	$(INSTALL_DATA) xen/arch-x86/hvm/*.h $(DESTDIR)$(INCLUDEDIR)/xen/arch-x86/hvm
+	$(INSTALL_DIR) $(DESTDIR)$(includedir)/xen/arch-x86
+	$(INSTALL_DIR) $(DESTDIR)$(includedir)/xen/arch-x86/hvm
+	$(INSTALL_DIR) $(DESTDIR)$(includedir)/xen/arch-arm
+	$(INSTALL_DIR) $(DESTDIR)$(includedir)/xen/arch-arm/hvm
+	$(INSTALL_DIR) $(DESTDIR)$(includedir)/xen/foreign
+	$(INSTALL_DIR) $(DESTDIR)$(includedir)/xen/hvm
+	$(INSTALL_DIR) $(DESTDIR)$(includedir)/xen/io
+	$(INSTALL_DIR) $(DESTDIR)$(includedir)/xen/sys
+	$(INSTALL_DIR) $(DESTDIR)$(includedir)/xen/xsm
+	$(INSTALL_DATA) xen/COPYING $(DESTDIR)$(includedir)/xen
+	$(INSTALL_DATA) xen/*.h $(DESTDIR)$(includedir)/xen
+	$(INSTALL_DATA) xen/arch-x86/*.h $(DESTDIR)$(includedir)/xen/arch-x86
+	$(INSTALL_DATA) xen/arch-x86/hvm/*.h $(DESTDIR)$(includedir)/xen/arch-x86/hvm
 
 # 	xen/arch-arm doesn't contains headers for now. Uncommented the line
 # 	as soon as a new header is added
-#	$(INSTALL_DATA) xen/arch-arm/*.h $(DESTDIR)$(INCLUDEDIR)/xen/arch-arm
-	$(INSTALL_DATA) xen/arch-arm/hvm/*.h $(DESTDIR)$(INCLUDEDIR)/xen/arch-arm/hvm
-	$(INSTALL_DATA) xen/foreign/*.h $(DESTDIR)$(INCLUDEDIR)/xen/foreign
-	$(INSTALL_DATA) xen/hvm/*.h $(DESTDIR)$(INCLUDEDIR)/xen/hvm
-	$(INSTALL_DATA) xen/io/*.h $(DESTDIR)$(INCLUDEDIR)/xen/io
-	$(INSTALL_DATA) xen/sys/*.h $(DESTDIR)$(INCLUDEDIR)/xen/sys
-	$(INSTALL_DATA) xen/xsm/*.h $(DESTDIR)$(INCLUDEDIR)/xen/xsm
+#	$(INSTALL_DATA) xen/arch-arm/*.h $(DESTDIR)$(includedir)/xen/arch-arm
+	$(INSTALL_DATA) xen/arch-arm/hvm/*.h $(DESTDIR)$(includedir)/xen/arch-arm/hvm
+	$(INSTALL_DATA) xen/foreign/*.h $(DESTDIR)$(includedir)/xen/foreign
+	$(INSTALL_DATA) xen/hvm/*.h $(DESTDIR)$(includedir)/xen/hvm
+	$(INSTALL_DATA) xen/io/*.h $(DESTDIR)$(includedir)/xen/io
+	$(INSTALL_DATA) xen/sys/*.h $(DESTDIR)$(includedir)/xen/sys
+	$(INSTALL_DATA) xen/xsm/*.h $(DESTDIR)$(includedir)/xen/xsm
 
 .PHONY: clean
 clean:
-	rm -rf xen
+	rm -rf xen xen-xsm
 	$(MAKE) -C xen-foreign clean
 
+
+.PHONY: distclean
+distclean: clean

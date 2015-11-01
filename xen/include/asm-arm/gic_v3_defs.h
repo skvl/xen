@@ -147,11 +147,20 @@
 
 #define ICH_SGI_IRQMODE_SHIFT        40
 #define ICH_SGI_IRQMODE_MASK         0x1
-#define ICH_SGI_TARGET_OTHERS        1
+#define ICH_SGI_TARGET_OTHERS        1UL
 #define ICH_SGI_TARGET_LIST          0
 #define ICH_SGI_IRQ_SHIFT            24
 #define ICH_SGI_IRQ_MASK             0xf
 #define ICH_SGI_TARGETLIST_MASK      0xffff
+#define ICH_SGI_AFFx_MASK            0xff
+#define ICH_SGI_AFFINITY_LEVEL(x)    (16 * (x))
+
+struct rdist_region {
+    paddr_t base;
+    paddr_t size;
+    void __iomem *map_base;
+};
+
 #endif /* __ASM_ARM_GIC_V3_DEFS_H__ */
 
 /*

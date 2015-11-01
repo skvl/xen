@@ -12,8 +12,7 @@
  * Lesser General Public License for more details.
  *
  * You should have received a copy of the GNU Lesser General Public
- * License along with this library; if not, write to the Free Software
- * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301  USA
+ * License along with this library; If not, see <http://www.gnu.org/licenses/>.
  */
 
 #include "xc_private.h"
@@ -191,6 +190,12 @@ int xc_flask_getbool_byname(xc_interface *xch, char *name, int *curr, int *pend)
     DECLARE_FLASK_OP;
     DECLARE_HYPERCALL_BOUNCE(name, strlen(name), XC_HYPERCALL_BUFFER_BOUNCE_IN);
 
+    if ( xc_hypercall_bounce_pre(xch, name) )
+    {
+        PERROR("Could not bounce memory for flask op hypercall");
+        return -1;
+    }
+
     op.cmd = FLASK_GETBOOL;
     op.u.boolean.bool_id = -1;
     op.u.boolean.size = strlen(name);
@@ -216,6 +221,12 @@ int xc_flask_setbool(xc_interface *xch, char *name, int value, int commit)
     int rv;
     DECLARE_FLASK_OP;
     DECLARE_HYPERCALL_BOUNCE(name, strlen(name), XC_HYPERCALL_BUFFER_BOUNCE_IN);
+
+    if ( xc_hypercall_bounce_pre(xch, name) )
+    {
+        PERROR("Could not bounce memory for flask op hypercall");
+        return -1;
+    }
 
     op.cmd = FLASK_SETBOOL;
     op.u.boolean.bool_id = -1;

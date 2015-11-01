@@ -1,11 +1,19 @@
 XEN_ROOT = $(CURDIR)/..
 MINI_OS = $(XEN_ROOT)/extras/mini-os
 
+export XEN_ROOT
 export XEN_OS=MiniOS
 
 export stubdom=y
 export debug=y
-include $(XEN_ROOT)/Config.mk
+
+ifeq (,$(findstring clean,$(MAKECMDGOALS)))
+  ifeq ($(wildcard $(MINI_OS)/Config.mk),)
+    $(error Please run `make mini-os-dir' in top-level directory)
+  endif
+  include $(XEN_ROOT)/Config.mk
+endif
+
 -include $(XEN_ROOT)/config/Stubdom.mk
 
 GNU_TARGET_ARCH:=$(XEN_TARGET_ARCH)
@@ -211,6 +219,7 @@ tpm_emulator-$(XEN_TARGET_ARCH): tpm_emulator-$(TPMEMU_VERSION).tar.gz
 	patch -d $@ -p1 < vtpm-locality.patch
 	patch -d $@ -p1 < vtpm-parent-sign-ek.patch
 	patch -d $@ -p1 < vtpm-deepquote.patch
+	patch -d $@ -p1 < vtpm-deepquote-anyloc.patch
 	patch -d $@ -p1 < vtpm-cmake-Wextra.patch
 	mkdir $@/build
 	cd $@/build; CC=${CC} $(CMAKE) .. -DCMAKE_C_FLAGS:STRING="-std=c99 -DTPM_NO_EXTERN $(TARGET_CPPFLAGS) $(TARGET_CFLAGS) -Wno-declaration-after-statement"
@@ -333,6 +342,8 @@ $(TARGETS_MINIOS): mini-os-%:
 .PHONY: libxc
 libxc: libxc-$(XEN_TARGET_ARCH)/libxenctrl.a libxc-$(XEN_TARGET_ARCH)/libxenguest.a
 libxc-$(XEN_TARGET_ARCH)/libxenctrl.a: cross-zlib
+	$(MAKE) -C $(XEN_ROOT)/tools/include
+	$(MAKE) DESTDIR= -C $(MINI_OS) links
 	CPPFLAGS="$(TARGET_CPPFLAGS)" CFLAGS="$(TARGET_CFLAGS)" $(MAKE) DESTDIR= CONFIG_LIBXC_MINIOS=y -C libxc-$(XEN_TARGET_ARCH)
 
  libxc-$(XEN_TARGET_ARCH)/libxenguest.a: libxc-$(XEN_TARGET_ARCH)/libxenctrl.a
@@ -452,14 +463,10 @@ xenstore-stubdom: mini-os-$(XEN_TARGET_ARCH)-xenstore libxc xenstore
 #########
 
 ifeq ($(STUBDOM_SUPPORTED),1)
-install: $(STUBDOMPATH) install-readme $(STUBDOM_INSTALL)
+install: $(STUBDOMPATH) $(STUBDOM_INSTALL)
 else
 install: $(STUBDOMPATH)
 endif
-
-install-readme:
-	$(INSTALL_DIR) $(DESTDIR)$(DOCDIR)
-	$(INSTALL_DATA) README $(DESTDIR)$(DOCDIR)/README.stubdom
 
 install-ioemu: ioemu-stubdom
 	$(INSTALL_DIR) "$(DESTDIR)$(LIBEXEC_BIN)"
@@ -502,7 +509,6 @@ clean:
 	rm -fr mini-os-$(XEN_TARGET_ARCH)-xenstore
 	rm -fr mini-os-$(XEN_TARGET_ARCH)-vtpm
 	rm -fr mini-os-$(XEN_TARGET_ARCH)-vtpmmgr
-	$(MAKE) DESTDIR= -C $(MINI_OS) clean
 	$(MAKE) DESTDIR= -C caml clean
 	$(MAKE) DESTDIR= -C c clean
 	$(MAKE) -C vtpm clean

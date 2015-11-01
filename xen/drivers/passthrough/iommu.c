@@ -9,8 +9,7 @@
  * more details.
  *
  * You should have received a copy of the GNU General Public License along with
- * this program; if not, write to the Free Software Foundation, Inc., 59 Temple
- * Place - Suite 330, Boston, MA 02111-1307 USA.
+ * this program; If not, see <http://www.gnu.org/licenses/>.
  */
 
 #include <xen/sched.h>
@@ -47,6 +46,7 @@ bool_t __read_mostly force_iommu;
 bool_t __hwdom_initdata iommu_dom0_strict;
 bool_t __read_mostly iommu_verbose;
 bool_t __read_mostly iommu_workaround_bios_bug;
+bool_t __read_mostly iommu_igfx = 1;
 bool_t __read_mostly iommu_passthrough;
 bool_t __read_mostly iommu_snoop = 1;
 bool_t __read_mostly iommu_qinval = 1;
@@ -87,6 +87,8 @@ static void __init parse_iommu_param(char *s)
             force_iommu = val;
         else if ( !strcmp(s, "workaround_bios_bug") )
             iommu_workaround_bios_bug = val;
+        else if ( !strcmp(s, "igfx") )
+            iommu_igfx = val;
         else if ( !strcmp(s, "verbose") )
             iommu_verbose = val;
         else if ( !strcmp(s, "snoop") )
@@ -185,6 +187,32 @@ void iommu_teardown(struct domain *d)
     d->need_iommu = 0;
     hd->platform_ops->teardown(d);
     tasklet_schedule(&iommu_pt_cleanup_tasklet);
+}
+
+int iommu_construct(struct domain *d)
+{
+    if ( need_iommu(d) > 0 )
+        return 0;
+
+    if ( !iommu_use_hap_pt(d) )
+    {
+        int rc;
+
+        rc = arch_iommu_populate_page_table(d);
+        if ( rc )
+            return rc;
+    }
+
+    d->need_iommu = 1;
+    /*
+     * There may be dirty cache lines when a device is assigned
+     * and before need_iommu(d) becoming true, this will cause
+     * memory_type_changed lose effect if memory type changes.
+     * Call memory_type_changed here to amend this.
+     */
+    memory_type_changed(d);
+
+    return 0;
 }
 
 void iommu_domain_destroy(struct domain *d)
@@ -309,13 +337,18 @@ int iommu_do_domctl(
     struct xen_domctl *domctl, struct domain *d,
     XEN_GUEST_HANDLE_PARAM(xen_domctl_t) u_domctl)
 {
-    int ret = -ENOSYS;
+    int ret = -ENODEV;
 
     if ( !iommu_enabled )
         return -ENOSYS;
 
 #ifdef HAS_PCI
     ret = iommu_do_pci_domctl(domctl, d, u_domctl);
+#endif
+
+#ifdef HAS_DEVICE_TREE
+    if ( ret == -ENODEV )
+        ret = iommu_do_dt_domctl(domctl, d, u_domctl);
 #endif
 
     return ret;
@@ -332,7 +365,7 @@ void iommu_share_p2m_table(struct domain* d)
 {
     const struct iommu_ops *ops = iommu_get_ops();
 
-    if ( iommu_enabled && is_hvm_domain(d) )
+    if ( iommu_enabled && iommu_use_hap_pt(d) )
         ops->share_p2m(d);
 }
 
@@ -342,6 +375,16 @@ void iommu_crash_shutdown(void)
     if ( iommu_enabled )
         ops->crash_shutdown();
     iommu_enabled = iommu_intremap = 0;
+}
+
+int iommu_get_reserved_device_memory(iommu_grdm_t *func, void *ctxt)
+{
+    const struct iommu_ops *ops = iommu_get_ops();
+
+    if ( !iommu_enabled || !ops->get_reserved_device_memory )
+        return 0;
+
+    return ops->get_reserved_device_memory(func, ctxt);
 }
 
 bool_t iommu_has_feature(struct domain *d, enum iommu_feature feature)
@@ -368,7 +411,7 @@ static void iommu_dump_p2m_table(unsigned char key)
     ops = iommu_get_ops();
     for_each_domain(d)
     {
-        if ( is_hardware_domain(d) )
+        if ( is_hardware_domain(d) || need_iommu(d) <= 0 )
             continue;
 
         if ( iommu_use_hap_pt(d) )

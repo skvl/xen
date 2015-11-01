@@ -667,7 +667,7 @@ static PyObject *pyxc_assign_device(XcObject *self,
         sbdf |= (dev & 0x1f) << 3;
         sbdf |= (func & 0x7);
 
-        if ( xc_assign_device(self->xc_handle, dom, sbdf) != 0 )
+        if ( xc_assign_device(self->xc_handle, dom, sbdf, 0) != 0 )
         {
             if (errno == ENOSYS)
                 sbdf = -1;
@@ -1210,6 +1210,7 @@ static PyObject *pyxc_getcpuinfo(XcObject *self, PyObject *args, PyObject *kwds)
     for (i = 0; i < nr_cpus; i++) {
         cpuinfo_obj = Py_BuildValue("{s:k}", "idletime", cpuinfo_ptr->idletime);
         PyList_Append(cpuinfo_list_obj, cpuinfo_obj);
+        Py_DECREF(cpuinfo_obj);
         cpuinfo_ptr++;
     }
 
@@ -1220,78 +1221,62 @@ static PyObject *pyxc_getcpuinfo(XcObject *self, PyObject *args, PyObject *kwds)
 
 static PyObject *pyxc_topologyinfo(XcObject *self)
 {
-#define MAX_CPU_INDEX 255
-    xc_topologyinfo_t tinfo = { 0 };
-    int i, max_cpu_index;
+    xc_cputopo_t *cputopo = NULL;
+    unsigned i, num_cpus = 0;
     PyObject *ret_obj = NULL;
     PyObject *cpu_to_core_obj, *cpu_to_socket_obj, *cpu_to_node_obj;
-    DECLARE_HYPERCALL_BUFFER(xc_cpu_to_core_t, coremap);
-    DECLARE_HYPERCALL_BUFFER(xc_cpu_to_socket_t, socketmap);
-    DECLARE_HYPERCALL_BUFFER(xc_cpu_to_node_t, nodemap);
 
-    coremap = xc_hypercall_buffer_alloc(self->xc_handle, coremap, sizeof(*coremap) * (MAX_CPU_INDEX+1));
-    if ( coremap == NULL )
-        goto out;
-    socketmap = xc_hypercall_buffer_alloc(self->xc_handle, socketmap, sizeof(*socketmap) * (MAX_CPU_INDEX+1));
-    if ( socketmap == NULL  )
-        goto out;
-    nodemap = xc_hypercall_buffer_alloc(self->xc_handle, nodemap, sizeof(*nodemap) * (MAX_CPU_INDEX+1));
-    if ( nodemap == NULL )
+    if ( xc_cputopoinfo(self->xc_handle, &num_cpus, NULL) != 0 )
         goto out;
 
-    set_xen_guest_handle(tinfo.cpu_to_core, coremap);
-    set_xen_guest_handle(tinfo.cpu_to_socket, socketmap);
-    set_xen_guest_handle(tinfo.cpu_to_node, nodemap);
-    tinfo.max_cpu_index = MAX_CPU_INDEX;
+    cputopo = calloc(num_cpus, sizeof(*cputopo));
+    if ( cputopo == NULL )
+    	goto out;
 
-    if ( xc_topologyinfo(self->xc_handle, &tinfo) != 0 )
+    if ( xc_cputopoinfo(self->xc_handle, &num_cpus, cputopo) != 0 )
         goto out;
-
-    max_cpu_index = tinfo.max_cpu_index;
-    if ( max_cpu_index > MAX_CPU_INDEX )
-        max_cpu_index = MAX_CPU_INDEX;
 
     /* Construct cpu-to-* lists. */
     cpu_to_core_obj = PyList_New(0);
     cpu_to_socket_obj = PyList_New(0);
     cpu_to_node_obj = PyList_New(0);
-    for ( i = 0; i <= max_cpu_index; i++ )
+    for ( i = 0; i < num_cpus; i++ )
     {
-        if ( coremap[i] == INVALID_TOPOLOGY_ID )
+        if ( cputopo[i].core == XEN_INVALID_CORE_ID )
         {
             PyList_Append(cpu_to_core_obj, Py_None);
         }
         else
         {
-            PyObject *pyint = PyInt_FromLong(coremap[i]);
+            PyObject *pyint = PyInt_FromLong(cputopo[i].core);
             PyList_Append(cpu_to_core_obj, pyint);
             Py_DECREF(pyint);
         }
 
-        if ( socketmap[i] == INVALID_TOPOLOGY_ID )
+        if ( cputopo[i].socket == XEN_INVALID_SOCKET_ID )
         {
             PyList_Append(cpu_to_socket_obj, Py_None);
         }
         else
         {
-            PyObject *pyint = PyInt_FromLong(socketmap[i]);
+            PyObject *pyint = PyInt_FromLong(cputopo[i].socket);
             PyList_Append(cpu_to_socket_obj, pyint);
             Py_DECREF(pyint);
         }
 
-        if ( nodemap[i] == INVALID_TOPOLOGY_ID )
+        if ( cputopo[i].node == XEN_INVALID_NODE_ID )
         {
             PyList_Append(cpu_to_node_obj, Py_None);
         }
         else
         {
-            PyObject *pyint = PyInt_FromLong(nodemap[i]);
+            PyObject *pyint = PyInt_FromLong(cputopo[i].node);
             PyList_Append(cpu_to_node_obj, pyint);
             Py_DECREF(pyint);
         }
     }
 
-    ret_obj = Py_BuildValue("{s:i}", "max_cpu_index", max_cpu_index);
+    ret_obj = Py_BuildValue("{s:i}", "max_cpu_index", num_cpus + 1);
 
     PyDict_SetItemString(ret_obj, "cpu_to_core", cpu_to_core_obj);
     Py_DECREF(cpu_to_core_obj);
@@ -1303,64 +1288,48 @@ static PyObject *pyxc_topologyinfo(XcObject *self)
     Py_DECREF(cpu_to_node_obj);
 
 out:
-    xc_hypercall_buffer_free(self->xc_handle, coremap);
-    xc_hypercall_buffer_free(self->xc_handle, socketmap);
-    xc_hypercall_buffer_free(self->xc_handle, nodemap);
+    free(cputopo);
     return ret_obj ? ret_obj : pyxc_error_to_exception(self->xc_handle);
-#undef MAX_CPU_INDEX
 }
 
 static PyObject *pyxc_numainfo(XcObject *self)
 {
-#define MAX_NODE_INDEX 31
-    xc_numainfo_t ninfo = { 0 };
-    int i, j, max_node_index;
+    unsigned i, j, num_nodes = 0;
     uint64_t free_heap;
     PyObject *ret_obj = NULL, *node_to_node_dist_list_obj;
     PyObject *node_to_memsize_obj, *node_to_memfree_obj;
     PyObject *node_to_dma32_mem_obj, *node_to_node_dist_obj;
-    DECLARE_HYPERCALL_BUFFER(xc_node_to_memsize_t, node_memsize);
-    DECLARE_HYPERCALL_BUFFER(xc_node_to_memfree_t, node_memfree);
-    DECLARE_HYPERCALL_BUFFER(xc_node_to_node_dist_t, nodes_dist);
+    xc_meminfo_t *meminfo = NULL;
+    uint32_t *distance = NULL;
 
-    node_memsize = xc_hypercall_buffer_alloc(self->xc_handle, node_memsize, sizeof(*node_memsize)*(MAX_NODE_INDEX+1));
-    if ( node_memsize == NULL )
-        goto out;
-    node_memfree = xc_hypercall_buffer_alloc(self->xc_handle, node_memfree, sizeof(*node_memfree)*(MAX_NODE_INDEX+1));
-    if ( node_memfree == NULL )
-        goto out;
-    nodes_dist = xc_hypercall_buffer_alloc(self->xc_handle, nodes_dist, sizeof(*nodes_dist)*(MAX_NODE_INDEX+1)*(MAX_NODE_INDEX+1));
-    if ( nodes_dist == NULL )
+    if ( xc_numainfo(self->xc_handle, &num_nodes, NULL, NULL) != 0 )
         goto out;
 
-    set_xen_guest_handle(ninfo.node_to_memsize, node_memsize);
-    set_xen_guest_handle(ninfo.node_to_memfree, node_memfree);
-    set_xen_guest_handle(ninfo.node_to_node_distance, nodes_dist);
-    ninfo.max_node_index = MAX_NODE_INDEX;
-
-    if ( xc_numainfo(self->xc_handle, &ninfo) != 0 )
+    meminfo = calloc(num_nodes, sizeof(*meminfo));
+    distance = calloc(num_nodes * num_nodes, sizeof(*distance));
+    if ( (meminfo == NULL) || (distance == NULL) )
         goto out;
 
-    max_node_index = ninfo.max_node_index;
-    if ( max_node_index > MAX_NODE_INDEX )
-        max_node_index = MAX_NODE_INDEX;
+    if ( xc_numainfo(self->xc_handle, &num_nodes, meminfo, distance) != 0 )
+        goto out;
 
     /* Construct node-to-* lists. */
     node_to_memsize_obj = PyList_New(0);
     node_to_memfree_obj = PyList_New(0);
     node_to_dma32_mem_obj = PyList_New(0);
     node_to_node_dist_list_obj = PyList_New(0);
-    for ( i = 0; i <= max_node_index; i++ )
+    for ( i = 0; i < num_nodes; i++ )
     {
         PyObject *pyint;
+        unsigned invalid_node;
 
         /* Total Memory */
-        pyint = PyInt_FromLong(node_memsize[i] >> 20); /* MB */
+        pyint = PyInt_FromLong(meminfo[i].memsize >> 20); /* MB */
         PyList_Append(node_to_memsize_obj, pyint);
         Py_DECREF(pyint);
 
         /* Free Memory */
-        pyint = PyInt_FromLong(node_memfree[i] >> 20); /* MB */
+        pyint = PyInt_FromLong(meminfo[i].memfree >> 20); /* MB */
         PyList_Append(node_to_memfree_obj, pyint);
         Py_DECREF(pyint);
 
@@ -1372,10 +1341,11 @@ static PyObject *pyxc_numainfo(XcObject *self)
 
         /* Node to Node Distance */
         node_to_node_dist_obj = PyList_New(0);
-        for ( j = 0; j <= max_node_index; j++ )
+        invalid_node = (meminfo[i].memsize == XEN_INVALID_MEM_SZ);
+        for ( j = 0; j < num_nodes; j++ )
         {
-            uint32_t dist = nodes_dist[i*(max_node_index+1) + j];
-            if ( dist == INVALID_TOPOLOGY_ID )
+            uint32_t dist = distance[i * num_nodes + j];
+            if ( invalid_node || (dist == XEN_INVALID_NODE_DIST) )
             {
                 PyList_Append(node_to_node_dist_obj, Py_None);
             }
@@ -1390,7 +1360,7 @@ static PyObject *pyxc_numainfo(XcObject *self)
         Py_DECREF(node_to_node_dist_obj);
     }
 
-    ret_obj = Py_BuildValue("{s:i}", "max_node_index", max_node_index);
+    ret_obj = Py_BuildValue("{s:i}", "max_node_index", num_nodes + 1);
 
     PyDict_SetItemString(ret_obj, "node_memsize", node_to_memsize_obj);
     Py_DECREF(node_to_memsize_obj);
@@ -1406,11 +1376,9 @@ static PyObject *pyxc_numainfo(XcObject *self)
     Py_DECREF(node_to_node_dist_list_obj);
 
 out:
-    xc_hypercall_buffer_free(self->xc_handle, node_memsize);
-    xc_hypercall_buffer_free(self->xc_handle, node_memfree);
-    xc_hypercall_buffer_free(self->xc_handle, nodes_dist);
+    free(meminfo);
+    free(distance);
     return ret_obj ? ret_obj : pyxc_error_to_exception(self->xc_handle);
-#undef MAX_NODE_INDEX
 }
 
 static PyObject *pyxc_xeninfo(XcObject *self)
@@ -1464,51 +1432,6 @@ static PyObject *pyxc_xeninfo(XcObject *self)
                          "cc_compile_by", xen_cc.compile_by,
                          "cc_compile_domain", xen_cc.compile_domain,
                          "cc_compile_date", xen_cc.compile_date);
-}
-
-
-static PyObject *pyxc_sedf_domain_set(XcObject *self,
-                                      PyObject *args,
-                                      PyObject *kwds)
-{
-    uint32_t domid;
-    uint64_t period, slice, latency;
-    uint16_t extratime, weight;
-    static char *kwd_list[] = { "domid", "period", "slice",
-                                "latency", "extratime", "weight",NULL };
-    
-    if( !PyArg_ParseTupleAndKeywords(args, kwds, "iLLLhh", kwd_list, 
-                                     &domid, &period, &slice,
-                                     &latency, &extratime, &weight) )
-        return NULL;
-   if ( xc_sedf_domain_set(self->xc_handle, domid, period,
-                           slice, latency, extratime,weight) != 0 )
-        return pyxc_error_to_exception(self->xc_handle);
-
-    Py_INCREF(zero);
-    return zero;
-}
-
-static PyObject *pyxc_sedf_domain_get(XcObject *self, PyObject *args)
-{
-    uint32_t domid;
-    uint64_t period, slice,latency;
-    uint16_t weight, extratime;
-    
-    if(!PyArg_ParseTuple(args, "i", &domid))
-        return NULL;
-    
-    if (xc_sedf_domain_get(self->xc_handle, domid, &period,
-                           &slice,&latency,&extratime,&weight))
-        return pyxc_error_to_exception(self->xc_handle);
-
-    return Py_BuildValue("{s:i,s:L,s:L,s:L,s:i,s:i}",
-                         "domid",    domid,
-                         "period",    period,
-                         "slice",     slice,
-                         "latency",   latency,
-                         "extratime", extratime,
-                         "weight",    weight);
 }
 
 static PyObject *pyxc_shadow_control(PyObject *self,
@@ -1876,36 +1799,35 @@ static PyObject *pyxc_tmem_control(XcObject *self,
     uint32_t cli_id;
     uint32_t arg1;
     uint32_t arg2;
-    uint64_t arg3;
     char *buf;
     char _buffer[32768], *buffer = _buffer;
     int rc;
 
-    static char *kwd_list[] = { "pool_id", "subop", "cli_id", "arg1", "arg2", "arg3", "buf", NULL };
+    static char *kwd_list[] = { "pool_id", "subop", "cli_id", "arg1", "arg2", "buf", NULL };
 
     if ( !PyArg_ParseTupleAndKeywords(args, kwds, "iiiiiis", kwd_list,
-                        &pool_id, &subop, &cli_id, &arg1, &arg2, &arg3, &buf) )
+                        &pool_id, &subop, &cli_id, &arg1, &arg2, &buf) )
         return NULL;
 
-    if ( (subop == TMEMC_LIST) && (arg1 > 32768) )
+    if ( (subop == XEN_SYSCTL_TMEM_OP_LIST) && (arg1 > 32768) )
         arg1 = 32768;
 
-    if ( (rc = xc_tmem_control(self->xc_handle, pool_id, subop, cli_id, arg1, arg2, arg3, buffer)) < 0 )
+    if ( (rc = xc_tmem_control(self->xc_handle, pool_id, subop, cli_id, arg1, arg2, buffer)) < 0 )
         return Py_BuildValue("i", rc);
 
     switch (subop) {
-        case TMEMC_LIST:
+        case XEN_SYSCTL_TMEM_OP_LIST:
             return Py_BuildValue("s", buffer);
-        case TMEMC_FLUSH:
+        case XEN_SYSCTL_TMEM_OP_FLUSH:
             return Py_BuildValue("i", rc);
-        case TMEMC_QUERY_FREEABLE_MB:
+        case XEN_SYSCTL_TMEM_OP_QUERY_FREEABLE_MB:
             return Py_BuildValue("i", rc);
-        case TMEMC_THAW:
-        case TMEMC_FREEZE:
-        case TMEMC_DESTROY:
-        case TMEMC_SET_WEIGHT:
-        case TMEMC_SET_CAP:
-        case TMEMC_SET_COMPRESS:
+        case XEN_SYSCTL_TMEM_OP_THAW:
+        case XEN_SYSCTL_TMEM_OP_FREEZE:
+        case XEN_SYSCTL_TMEM_OP_DESTROY:
+        case XEN_SYSCTL_TMEM_OP_SET_WEIGHT:
+        case XEN_SYSCTL_TMEM_OP_SET_CAP:
+        case XEN_SYSCTL_TMEM_OP_SET_COMPRESS:
         default:
             break;
     }
@@ -2523,30 +2445,6 @@ static PyMethodDef pyxc_methods[] = {
       "Get the current scheduler type in use.\n"
       "Returns: [int] sched_id.\n" },    
 
-    { "sedf_domain_set",
-      (PyCFunction)pyxc_sedf_domain_set,
-      METH_KEYWORDS, "\n"
-      "Set the scheduling parameters for a domain when running with Atropos.\n"
-      " dom       [int]:  domain to set\n"
-      " period    [long]: domain's scheduling period\n"
-      " slice     [long]: domain's slice per period\n"
-      " latency   [long]: domain's wakeup latency hint\n"
-      " extratime [int]:  domain aware of extratime?\n"
-      "Returns: [int] 0 on success; -1 on error.\n" },
-
-    { "sedf_domain_get",
-      (PyCFunction)pyxc_sedf_domain_get,
-      METH_VARARGS, "\n"
-      "Get the current scheduling parameters for a domain when running with\n"
-      "the Atropos scheduler."
-      " dom       [int]: domain to query\n"
-      "Returns:   [dict]\n"
-      " domain    [int]: domain ID\n"
-      " period    [long]: scheduler period\n"
-      " slice     [long]: CPU reservation per period\n"
-      " latency   [long]: domain's wakeup latency hint\n"
-      " extratime [int]:  domain aware of extratime?\n"},
-    
     { "sched_credit_domain_set",
       (PyCFunction)pyxc_sched_credit_domain_set,
       METH_KEYWORDS, "\n"
@@ -3066,7 +2964,6 @@ PyMODINIT_FUNC initxc(void)
     PyModule_AddObject(m, "Error", xc_error_obj);
 
     /* Expose some libxc constants to Python */
-    PyModule_AddIntConstant(m, "XEN_SCHEDULER_SEDF", XEN_SCHEDULER_SEDF);
     PyModule_AddIntConstant(m, "XEN_SCHEDULER_CREDIT", XEN_SCHEDULER_CREDIT);
     PyModule_AddIntConstant(m, "XEN_SCHEDULER_CREDIT2", XEN_SCHEDULER_CREDIT2);
 

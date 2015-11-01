@@ -14,8 +14,7 @@
  * more details.
  *
  * You should have received a copy of the GNU General Public License along with
- * this program; if not, write to the Free Software Foundation, Inc., 59 Temple
- * Place - Suite 330, Boston, MA 02111-1307 USA.
+ * this program; If not, see <http://www.gnu.org/licenses/>.
  */
 
 #include <asm/hvm/vpt.h>
@@ -142,7 +141,7 @@ static void pmt_timer_callback(void *opaque)
 
 /* Handle port I/O to the PM1a_STS and PM1a_EN registers */
 static int handle_evt_io(
-    int dir, uint32_t port, uint32_t bytes, uint32_t *val)
+    int dir, unsigned int port, unsigned int bytes, uint32_t *val)
 {
     struct vcpu *v = current;
     PMTState *s = &v->domain->arch.hvm_domain.pl_time.vpmt;
@@ -205,7 +204,7 @@ static int handle_evt_io(
 
 /* Handle port I/O to the TMR_VAL register */
 static int handle_pmt_io(
-    int dir, uint32_t port, uint32_t bytes, uint32_t *val)
+    int dir, unsigned int port, unsigned int bytes, uint32_t *val)
 {
     struct vcpu *v = current;
     PMTState *s = &v->domain->arch.hvm_domain.pl_time.vpmt;
@@ -250,10 +249,12 @@ static int pmtimer_save(struct domain *d, hvm_domain_context_t *h)
 
     spin_lock(&s->lock);
 
-    /* Update the counter to the guest's current time.  We always save
-     * with the domain paused, so the saved time should be after the
-     * last_gtime, but just in case, make sure we only go forwards */
-    x = ((s->vcpu->arch.hvm_vcpu.guest_time - s->last_gtime) * s->scale) >> 32;
+    /*
+     * Update the counter to the guest's current time.  Make sure it only
+     * goes forwards.
+     */
+    x = (((s->vcpu->arch.hvm_vcpu.guest_time ?: hvm_get_guest_time(s->vcpu)) -
+          s->last_gtime) * s->scale) >> 32;
     if ( x < 1UL<<31 )
         s->pm.tmr_val += x;
     if ( (s->pm.tmr_val & TMR_VAL_MSB) != msb )

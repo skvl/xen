@@ -12,8 +12,7 @@
  * more details.
  *
  * You should have received a copy of the GNU General Public License along with
- * this program; if not, write to the Free Software Foundation, Inc., 59 Temple
- * Place - Suite 330, Boston, MA 02111-1307 USA.
+ * this program; If not, see <http://www.gnu.org/licenses/>.
  *
  */
 #ifndef __ASM_X86_HVM_VMX_VMX_H__
@@ -37,7 +36,8 @@ typedef union {
         emt         :   3,  /* bits 5:3 - EPT Memory type */
         ipat        :   1,  /* bit 6 - Ignore PAT memory type */
         sp          :   1,  /* bit 7 - Is this a superpage? */
-        rsvd1       :   2,  /* bits 9:8 - Reserved for future use */
+        a           :   1,  /* bit 8 - Access bit */
+        d           :   1,  /* bit 9 - Dirty bit */
         recalc      :   1,  /* bit 10 - Software available 1 */
         snp         :   1,  /* bit 11 - VT-d snoop control in shared
                                EPT/VT-d usage */
@@ -46,7 +46,7 @@ typedef union {
         access      :   4,  /* bits 61:58 - p2m_access_t */
         tm          :   1,  /* bit 62 - VT-d transient-mapping hint in
                                shared EPT/VT-d usage */
-        avail3      :   1;  /* bit 63 - Software available 3 */
+        suppress_ve :   1;  /* bit 63 - suppress #VE */
     };
     u64 epte;
 } ept_entry_t;
@@ -93,6 +93,7 @@ void vmx_asm_do_vmentry(void);
 void vmx_intr_assist(void);
 void noreturn vmx_do_resume(struct vcpu *);
 void vmx_vlapic_msr_changed(struct vcpu *v);
+void vmx_realmode_emulate_one(struct hvm_emulate_ctxt *hvmemul_ctxt);
 void vmx_realmode(struct cpu_user_regs *regs);
 void vmx_update_debug_state(struct vcpu *v);
 void vmx_update_exception_bitmap(struct vcpu *v);
@@ -185,6 +186,8 @@ static inline unsigned long pi_get_pir(struct pi_desc *pi_desc, int group)
 #define EXIT_REASON_XSETBV              55
 #define EXIT_REASON_APIC_WRITE          56
 #define EXIT_REASON_INVPCID             58
+#define EXIT_REASON_VMFUNC              59
+#define EXIT_REASON_PML_FULL            62
 
 /*
  * Interruption-information format
@@ -207,8 +210,10 @@ static inline unsigned long pi_get_pir(struct pi_desc *pi_desc, int group)
 # define VMX_CONTROL_REG_ACCESS_TYPE_MOV_FROM_CR 1
 # define VMX_CONTROL_REG_ACCESS_TYPE_CLTS        2
 # define VMX_CONTROL_REG_ACCESS_TYPE_LMSW        3
- /* 10:8 - general purpose register operand */
+ /* 11:8 - general purpose register operand */
 #define VMX_CONTROL_REG_ACCESS_GPR(eq)  (((eq) >> 8) & 0xf)
+ /* 31:16 - LMSW source data */
+#define VMX_CONTROL_REG_ACCESS_DATA(eq)  ((uint32_t)(eq) >> 16)
 
 /*
  * Access Rights
@@ -257,6 +262,7 @@ extern uint8_t posted_intr_vector;
     (vmx_ept_vpid_cap & VMX_EPT_SUPERPAGE_1GB)
 #define cpu_has_vmx_ept_2mb                     \
     (vmx_ept_vpid_cap & VMX_EPT_SUPERPAGE_2MB)
+#define cpu_has_vmx_ept_ad (vmx_ept_vpid_cap & VMX_EPT_AD_BIT)
 #define cpu_has_vmx_ept_invept_single_context   \
     (vmx_ept_vpid_cap & VMX_EPT_INVEPT_SINGLE_CONTEXT)
 
@@ -549,5 +555,15 @@ void p2m_init_hap_data(struct p2m_domain *p2m);
 
 #define EPT_L4_PAGETABLE_SHIFT      39
 #define EPT_PAGETABLE_ENTRIES       512
+
+/* #VE information page */
+typedef struct {
+    u32 exit_reason;
+    u32 semaphore;
+    u64 exit_qualification;
+    u64 gla;
+    u64 gpa;
+    u16 eptp_index;
+} ve_info_t;
 
 #endif /* __ASM_X86_HVM_VMX_VMX_H__ */

@@ -109,7 +109,10 @@ static const char migrate_report[]=
    */
 
 #define XL_MANDATORY_FLAG_JSON (1U << 0) /* config data is in JSON format */
-#define XL_MANDATORY_FLAG_ALL  (XL_MANDATORY_FLAG_JSON)
+#define XL_MANDATORY_FLAG_STREAMv2 (1U << 1) /* stream is v2 */
+#define XL_MANDATORY_FLAG_ALL  (XL_MANDATORY_FLAG_JSON |        \
+                                XL_MANDATORY_FLAG_STREAMv2)
+
 struct save_file_header {
     char magic[32]; /* savefileheader_magic */
     /* All uint32_ts are in domain's byte order. */
@@ -151,7 +154,7 @@ struct domain_create {
     int console_autoconnect;
     int checkpointed_stream;
     const char *config_file;
-    const char *extra_config; /* extra config string */
+    char *extra_config; /* extra config string */
     const char *restore_file;
     int migrate_fd; /* -1 means none */
     char **migration_domname_r; /* from malloc */
@@ -289,6 +292,16 @@ static void *xmalloc(size_t sz) {
     return r;
 }
 
+static void *xcalloc(size_t n, size_t sz) __attribute__((unused));
+static void *xcalloc(size_t n, size_t sz) {
+    void *r = calloc(n, sz);
+    if (!r) {
+        fprintf(stderr,"xl: Unable to calloc %zu bytes.\n", sz*n);
+        exit(-ERROR_FAIL);
+    }
+    return r;
+}
+
 static void *xrealloc(void *ptr, size_t sz) {
     void *r;
     if (!sz) { free(ptr); return 0; }
@@ -313,15 +326,23 @@ static char *xstrdup(const char *x)
     return r;
 }
 
-#define ARRAY_EXTEND_INIT(array,count,initfn)                           \
+#define ARRAY_EXTEND_INIT__CORE(array,count,initfn,more)                \
     ({                                                                  \
         typeof((count)) array_extend_old_count = (count);               \
         (count)++;                                                      \
         (array) = xrealloc((array), sizeof(*array) * (count));          \
         (initfn)(&(array)[array_extend_old_count]);                     \
-        (array)[array_extend_old_count].devid = array_extend_old_count; \
+        more;                                                           \
         &(array)[array_extend_old_count];                               \
     })
+
+#define ARRAY_EXTEND_INIT(array,count,initfn)                           \
+    ARRAY_EXTEND_INIT__CORE((array),(count),(initfn), ({                \
+        (array)[array_extend_old_count].devid = array_extend_old_count; \
+        }))
+
+#define ARRAY_EXTEND_INIT_NODEVID(array,count,initfn) \
+    ARRAY_EXTEND_INIT__CORE((array),(count),(initfn), /* nothing */ )
 
 #define LOG(_f, _a...)   dolog(__FILE__, __LINE__, __func__, _f "\n", ##_a)
 
@@ -342,6 +363,27 @@ static void dolog(const char *file, int line, const char *func, char *fmt, ...)
          * the alternative would be to abort the whole program */
         libxl_write_exactly(NULL, logfile, s, rc, NULL, NULL);
     free(s);
+}
+
+static void xvasprintf(char **strp, const char *fmt, va_list ap)
+    __attribute__((format(printf,2,0)));
+static void xvasprintf(char **strp, const char *fmt, va_list ap)
+{
+    int r = vasprintf(strp, fmt, ap);
+    if (r == -1) {
+        perror("asprintf failed");
+        exit(-ERROR_FAIL);
+    }
+}
+
+static void xasprintf(char **strp, const char *fmt, ...)
+    __attribute__((format(printf,2,3)));
+static void xasprintf(char **strp, const char *fmt, ...)
+{
+    va_list ap;
+    va_start(ap, fmt);
+    xvasprintf(strp, fmt, ap);
+    va_end(ap);
 }
 
 static yajl_gen_status printf_info_one_json(yajl_gen hand, int domid,
@@ -379,6 +421,20 @@ static yajl_gen_status printf_info_one_json(yajl_gen hand, int domid,
 out:
     return s;
 }
+
+static void flush_stream(FILE *fh)
+{
+    const char *fh_name =
+        fh == stdout ? "stdout" :
+        fh == stderr ? "stderr" :
+        (abort(), (const char*)0);
+
+    if (ferror(fh) || fflush(fh)) {
+        perror(fh_name);
+        exit(-1);
+    }
+}
+
 static void printf_info(enum output_format output_format,
                         int domid,
                         libxl_domain_config *d_config, FILE *fh)
@@ -414,16 +470,10 @@ out:
         fprintf(stderr,
                 "unable to format domain config as JSON (YAJL:%d)\n", s);
 
-    if (ferror(fh) || fflush(fh)) {
-        if (fh == stdout)
-            perror("stdout");
-        else
-            perror("stderr");
-        exit(-1);
-    }
+    flush_stream(fh);
 }
 
-static int do_daemonize(char *name)
+static int do_daemonize(char *name, const char *pidfile)
 {
     char *fullname;
     pid_t child1;
@@ -454,6 +504,33 @@ static int do_daemonize(char *name)
     dup2(logfile, 2);
 
     CHK_SYSCALL(daemon(0, 1));
+
+    if (pidfile) {
+        int fd = open(pidfile, O_RDWR | O_CREAT, S_IRUSR|S_IWUSR);
+        char *pid = NULL;
+
+        if (fd == -1) {
+            perror("Unable to open pidfile");
+            exit(1);
+        }
+
+        if (asprintf(&pid, "%ld\n", (long)getpid()) == -1) {
+            perror("Formatting pid");
+            exit(1);
+        }
+
+        if (write(fd, pid, strlen(pid)) < 0) {
+            perror("Writing pid");
+            exit(1);
+        }
+
+        if (close(fd) < 0) {
+            perror("Closing pidfile");
+            exit(1);
+        }
+
+        free(pid);
+    }
 
 out:
     return ret;
@@ -600,26 +677,25 @@ typedef int (*char_predicate_t)(const int c);
 
 static void trim(char_predicate_t predicate, const char *input, char **output)
 {
-    char *p, *q, *tmp;
+    const char *first, *after;
 
-    *output = NULL;
-    if (*input == '\000')
-        return;
-    /* Input has length >= 1 */
+    for (first = input;
+         *first && predicate((unsigned char)first[0]);
+         first++)
+        ;
 
-    p = tmp = xstrdup(input);
-    /* Skip past the characters for which predicate is true */
-    while ((*p != '\000') && (predicate((unsigned char)*p)))
-        p ++;
-    q = p + strlen(p) - 1;
-    /* q points to the last non-NULL character */
-    while ((q > p) && (predicate((unsigned char)*q)))
-        q --;
-    /* q points to the last character we want */
-    q ++;
-    *q = '\000';
-    *output = xstrdup(p);
-    free(tmp);
+    for (after = first + strlen(first);
+         after > first && predicate((unsigned char)after[-1]);
+         after--)
+        ;
+
+    size_t len_nonnull = after - first;
+    char *result = xmalloc(len_nonnull + 1);
+
+    memcpy(result, first, len_nonnull);
+    result[len_nonnull] = 0;
+
+    *output = result;
 }
 
 static int split_string_into_pair(const char *str,
@@ -760,7 +836,7 @@ static int update_cpumap_range(const char *str, libxl_bitmap *cpumap)
  * single cpus or as eintire NUMA nodes) and turns it into the
  * corresponding libxl_bitmap (in cpumap).
  */
-static int vcpupin_parse(const char *cpu, libxl_bitmap *cpumap)
+static int cpurange_parse(const char *cpu, libxl_bitmap *cpumap)
 {
     char *ptr, *saveptr = NULL, *buf = strdup(cpu);
     int rc = 0;
@@ -813,9 +889,10 @@ static char *parse_cmdline(XLU_Config *config)
             fprintf(stderr, "Warning: ignoring root= and extra= "
                     "in favour of cmdline=\n");
     } else {
-        if (root) {
-            if (asprintf(&cmdline, "root=%s %s", root, extra) == -1)
-                cmdline = NULL;
+        if (root && extra) {
+            xasprintf(&cmdline, "root=%s %s", root, extra);
+        } else if (root) {
+            xasprintf(&cmdline, "root=%s", root);
         } else if (extra) {
             cmdline = strdup(extra);
         }
@@ -870,7 +947,7 @@ static void parse_vcpu_affinity(libxl_domain_build_info *b_info,
                 exit(1);
             }
 
-            if (vcpupin_parse(buf, &vcpu_affinity_array[j]))
+            if (cpurange_parse(buf, &vcpu_affinity_array[j]))
                 exit(1);
 
             j++;
@@ -887,7 +964,7 @@ static void parse_vcpu_affinity(libxl_domain_build_info *b_info,
             exit(1);
         }
 
-        if (vcpupin_parse(buf, &vcpu_affinity_array[0]))
+        if (cpurange_parse(buf, &vcpu_affinity_array[0]))
             exit(1);
 
         for (i = 1; i < b_info->max_vcpus; i++) {
@@ -910,16 +987,282 @@ static void replace_string(char **str, const char *val)
     *str = xstrdup(val);
 }
 
+static int match_option_size(const char *prefix, size_t len,
+        char *arg, char **argopt)
+{
+    int rc = strncmp(prefix, arg, len);
+    if (!rc) *argopt = arg+len;
+    return !rc;
+}
+#define MATCH_OPTION(prefix, arg, oparg) \
+    match_option_size((prefix "="), sizeof((prefix)), (arg), &(oparg))
+
+/* Parses network data and adds info into nic
+ * Returns 1 if the input token does not match one of the keys
+ * or parsed values are not correct. Successful parse returns 0 */
+static int parse_nic_config(libxl_device_nic *nic, XLU_Config **config, char *token)
+{
+    char *endptr, *oparg;
+    int i;
+    unsigned int val;
+
+    if (MATCH_OPTION("type", token, oparg)) {
+        if (!strcmp("vif", oparg)) {
+            nic->nictype = LIBXL_NIC_TYPE_VIF;
+        } else if (!strcmp("ioemu", oparg)) {
+            nic->nictype = LIBXL_NIC_TYPE_VIF_IOEMU;
+        } else {
+            fprintf(stderr, "Invalid parameter `type'.\n");
+            return 1;
+        }
+    } else if (MATCH_OPTION("mac", token, oparg)) {
+        for (i = 0; i < 6; i++) {
+            val = strtoul(oparg, &endptr, 16);
+            if ((oparg == endptr) || (val > 255)) {
+                fprintf(stderr, "Invalid parameter `mac'.\n");
+                return 1;
+            }
+            nic->mac[i] = val;
+            oparg = endptr + 1;
+        }
+    } else if (MATCH_OPTION("bridge", token, oparg)) {
+        replace_string(&nic->bridge, oparg);
+    } else if (MATCH_OPTION("netdev", token, oparg)) {
+        fprintf(stderr, "the netdev parameter is deprecated, "
+                        "please use gatewaydev instead\n");
+        replace_string(&nic->gatewaydev, oparg);
+    } else if (MATCH_OPTION("gatewaydev", token, oparg)) {
+        replace_string(&nic->gatewaydev, oparg);
+    } else if (MATCH_OPTION("ip", token, oparg)) {
+        replace_string(&nic->ip, oparg);
+    } else if (MATCH_OPTION("script", token, oparg)) {
+        replace_string(&nic->script, oparg);
+    } else if (MATCH_OPTION("backend", token, oparg)) {
+        replace_string(&nic->backend_domname, oparg);
+    } else if (MATCH_OPTION("vifname", token, oparg)) {
+        replace_string(&nic->ifname, oparg);
+    } else if (MATCH_OPTION("model", token, oparg)) {
+        replace_string(&nic->model, oparg);
+    } else if (MATCH_OPTION("rate", token, oparg)) {
+        parse_vif_rate(config, oparg, nic);
+    } else if (MATCH_OPTION("accel", token, oparg)) {
+        fprintf(stderr, "the accel parameter for vifs is currently not supported\n");
+    } else {
+        fprintf(stderr, "unrecognized argument `%s'\n", token);
+        return 1;
+    }
+    return 0;
+}
+
+static unsigned long parse_ulong(const char *str)
+{
+    char *endptr;
+    unsigned long val;
+
+    val = strtoul(str, &endptr, 10);
+    if (endptr == str || val == ULONG_MAX) {
+        fprintf(stderr, "xl: failed to convert \"%s\" to number\n", str);
+        exit(1);
+    }
+    return val;
+}
+
+static void parse_vnuma_config(const XLU_Config *config,
+                               libxl_domain_build_info *b_info)
+{
+    libxl_physinfo physinfo;
+    uint32_t nr_nodes;
+    XLU_ConfigList *vnuma;
+    int i, j, len, num_vnuma;
+    unsigned long max_vcpus = 0, max_memkb = 0;
+    /* Temporary storage for parsed vcpus information to avoid
+     * parsing config twice. This array has num_vnuma elements.
+     */
+    libxl_bitmap *vcpu_parsed;
+
+    libxl_physinfo_init(&physinfo);
+    if (libxl_get_physinfo(ctx, &physinfo) != 0) {
+        libxl_physinfo_dispose(&physinfo);
+        fprintf(stderr, "libxl_get_physinfo failed\n");
+        exit(1);
+    }
+
+    nr_nodes = physinfo.nr_nodes;
+    libxl_physinfo_dispose(&physinfo);
+
+    if (xlu_cfg_get_list(config, "vnuma", &vnuma, &num_vnuma, 1))
+        return;
+
+    if (!num_vnuma)
+        return;
+
+    b_info->num_vnuma_nodes = num_vnuma;
+    b_info->vnuma_nodes = xcalloc(num_vnuma, sizeof(libxl_vnode_info));
+    vcpu_parsed = xcalloc(num_vnuma, sizeof(libxl_bitmap));
+    for (i = 0; i < num_vnuma; i++) {
+        libxl_bitmap_init(&vcpu_parsed[i]);
+        if (libxl_cpu_bitmap_alloc(ctx, &vcpu_parsed[i], b_info->max_vcpus)) {
+            fprintf(stderr, "libxl_node_bitmap_alloc failed.\n");
+            exit(1);
+        }
+    }
+
+    for (i = 0; i < b_info->num_vnuma_nodes; i++) {
+        libxl_vnode_info *p = &b_info->vnuma_nodes[i];
+
+        libxl_vnode_info_init(p);
+        p->distances = xcalloc(b_info->num_vnuma_nodes,
+                               sizeof(*p->distances));
+        p->num_distances = b_info->num_vnuma_nodes;
+    }
+
+    for (i = 0; i < num_vnuma; i++) {
+        XLU_ConfigValue *vnode_spec, *conf_option;
+        XLU_ConfigList *vnode_config_list;
+        int conf_count;
+        libxl_vnode_info *p = &b_info->vnuma_nodes[i];
+
+        vnode_spec = xlu_cfg_get_listitem2(vnuma, i);
+        assert(vnode_spec);
+
+        xlu_cfg_value_get_list(config, vnode_spec, &vnode_config_list, 0);
+        if (!vnode_config_list) {
+            fprintf(stderr, "xl: cannot get vnode config option list\n");
+            exit(1);
+        }
+
+        for (conf_count = 0;
+             (conf_option =
+              xlu_cfg_get_listitem2(vnode_config_list, conf_count));
+             conf_count++) {
+
+            if (xlu_cfg_value_type(conf_option) == XLU_STRING) {
+                char *buf, *option_untrimmed, *value_untrimmed;
+                char *option, *value;
+                unsigned long val;
+
+                xlu_cfg_value_get_string(config, conf_option, &buf, 0);
+
+                if (!buf) continue;
+
+                if (split_string_into_pair(buf, "=",
+                                           &option_untrimmed,
+                                           &value_untrimmed)) {
+                    fprintf(stderr, "xl: failed to split \"%s\" into pair\n",
+                            buf);
+                    exit(1);
+                }
+                trim(isspace, option_untrimmed, &option);
+                trim(isspace, value_untrimmed, &value);
+
+                if (!strcmp("pnode", option)) {
+                    val = parse_ulong(value);
+                    if (val >= nr_nodes) {
+                        fprintf(stderr,
+                                "xl: invalid pnode number: %lu\n", val);
+                        exit(1);
+                    }
+                    p->pnode = val;
+                    libxl_defbool_set(&b_info->numa_placement, false);
+                } else if (!strcmp("size", option)) {
+                    val = parse_ulong(value);
+                    p->memkb = val << 10;
+                    max_memkb += p->memkb;
+                } else if (!strcmp("vcpus", option)) {
+                    libxl_string_list cpu_spec_list;
+                    unsigned long s, e;
+
+                    split_string_into_string_list(value, ",", &cpu_spec_list);
+                    len = libxl_string_list_length(&cpu_spec_list);
+
+                    for (j = 0; j < len; j++) {
+                        parse_range(cpu_spec_list[j], &s, &e);
+                        for (; s <= e; s++) {
+                            /*
+                             * Note that if we try to set a bit beyond
+                             * the size of bitmap, libxl_bitmap_set
+                             * has no effect. The resulted bitmap
+                             * doesn't reflect what user wants. The
+                             * fallout is dealt with later after
+                             * parsing.
+                             */
+                            libxl_bitmap_set(&vcpu_parsed[i], s);
+                            max_vcpus++;
+                        }
+                    }
+
+                    libxl_string_list_dispose(&cpu_spec_list);
+                } else if (!strcmp("vdistances", option)) {
+                    libxl_string_list vdist;
+
+                    split_string_into_string_list(value, ",", &vdist);
+                    len = libxl_string_list_length(&vdist);
+
+                    for (j = 0; j < len; j++) {
+                        val = parse_ulong(vdist[j]);
+                        p->distances[j] = val;
+                    }
+                    libxl_string_list_dispose(&vdist);
+                }
+                free(option);
+                free(value);
+                free(option_untrimmed);
+                free(value_untrimmed);
+            }
+        }
+    }
+
+    /* User has specified maxvcpus= */
+    if (b_info->max_vcpus != 0) {
+        if (b_info->max_vcpus != max_vcpus) {
+            fprintf(stderr, "xl: vnuma vcpus and maxvcpus= mismatch\n");
+            exit(1);
+        }
+    } else {
+        int host_cpus = libxl_get_online_cpus(ctx);
+
+        if (host_cpus < 0) {
+            fprintf(stderr, "Failed to get online cpus\n");
+            exit(1);
+        }
+
+        if (host_cpus < max_vcpus) {
+            fprintf(stderr, "xl: vnuma specifies more vcpus than pcpus, "\
+                    "use maxvcpus= to override this check.\n");
+            exit(1);
+        }
+
+        b_info->max_vcpus = max_vcpus;
+    }
+
+    /* User has specified maxmem= */
+    if (b_info->max_memkb != LIBXL_MEMKB_DEFAULT &&
+        b_info->max_memkb != max_memkb) {
+        fprintf(stderr, "xl: maxmem and vnuma memory size mismatch\n");
+        exit(1);
+    } else
+        b_info->max_memkb = max_memkb;
+
+    for (i = 0; i < b_info->num_vnuma_nodes; i++) {
+        libxl_vnode_info *p = &b_info->vnuma_nodes[i];
+
+        libxl_bitmap_copy_alloc(ctx, &p->vcpus, &vcpu_parsed[i]);
+        libxl_bitmap_dispose(&vcpu_parsed[i]);
+    }
+
+    free(vcpu_parsed);
+}
+
 static void parse_config_data(const char *config_source,
                               const char *config_data,
                               int config_len,
                               libxl_domain_config *d_config)
 {
     const char *buf;
-    long l;
+    long l, vcpus = 0;
     XLU_Config *config;
     XLU_ConfigList *cpus, *vbds, *nics, *pcis, *cvfbs, *cpuids, *vtpms;
-    XLU_ConfigList *channels, *ioports, *irqs, *iomem, *viridian;
+    XLU_ConfigList *channels, *ioports, *irqs, *iomem, *viridian, *dtdevs;
     int num_ioports, num_irqs, num_iomem, num_cpus, num_viridian;
     int pci_power_mgmt = 0;
     int pci_msitranslate = 0;
@@ -1003,9 +1346,14 @@ static void parse_config_data(const char *config_source,
     if (!xlu_cfg_get_long (config, "extratime", &l, 0))
         b_info->sched_params.extratime = l;
 
-    if (!xlu_cfg_get_long (config, "vcpus", &l, 0)) {
-        b_info->max_vcpus = l;
+    if (!xlu_cfg_get_long (config, "memory", &l, 0))
+        b_info->target_memkb = l * 1024;
 
+    if (!xlu_cfg_get_long (config, "maxmem", &l, 0))
+        b_info->max_memkb = l * 1024;
+
+    if (!xlu_cfg_get_long (config, "vcpus", &l, 0)) {
+        vcpus = l;
         if (libxl_cpu_bitmap_alloc(ctx, &b_info->avail_vcpus, l)) {
             fprintf(stderr, "Unable to allocate cpumap\n");
             exit(1);
@@ -1018,6 +1366,21 @@ static void parse_config_data(const char *config_source,
     if (!xlu_cfg_get_long (config, "maxvcpus", &l, 0))
         b_info->max_vcpus = l;
 
+    parse_vnuma_config(config, b_info);
+
+    /* Set max_memkb to target_memkb and max_vcpus to avail_vcpus if
+     * they are not set by user specified config option or vnuma.
+     */
+    if (b_info->max_memkb == LIBXL_MEMKB_DEFAULT)
+        b_info->max_memkb = b_info->target_memkb;
+    if (b_info->max_vcpus == 0)
+        b_info->max_vcpus = vcpus;
+
+    if (b_info->max_vcpus < vcpus) {
+        fprintf(stderr, "xl: maxvcpus < vcpus\n");
+        exit(1);
+    }
+
     buf = NULL;
     if (!xlu_cfg_get_list (config, "cpus", &cpus, &num_cpus, 1) ||
         !xlu_cfg_get_string (config, "cpus", &buf, 0))
@@ -1027,14 +1390,6 @@ static void parse_config_data(const char *config_source,
     if (!xlu_cfg_get_list (config, "cpus_soft", &cpus, &num_cpus, 1) ||
         !xlu_cfg_get_string (config, "cpus_soft", &buf, 0))
         parse_vcpu_affinity(b_info, cpus, buf, num_cpus, false);
-
-    if (!xlu_cfg_get_long (config, "memory", &l, 0)) {
-        b_info->max_memkb = l * 1024;
-        b_info->target_memkb = b_info->max_memkb;
-    }
-
-    if (!xlu_cfg_get_long (config, "maxmem", &l, 0))
-        b_info->max_memkb = l * 1024;
 
     libxl_defbool_set(&b_info->claim_mode, claim_mode);
 
@@ -1117,6 +1472,7 @@ static void parse_config_data(const char *config_source,
 
     xlu_cfg_replace_string (config, "kernel", &b_info->kernel, 0);
     xlu_cfg_replace_string (config, "ramdisk", &b_info->ramdisk, 0);
+    xlu_cfg_replace_string (config, "device_tree", &b_info->device_tree, 0);
     b_info->cmdline = parse_cmdline(config);
 
     xlu_cfg_get_defbool(config, "driver_domain", &c_info->driver_domain, 0);
@@ -1237,6 +1593,8 @@ static void parse_config_data(const char *config_source,
 
         xlu_cfg_get_defbool(config, "nestedhvm", &b_info->u.hvm.nested_hvm, 0);
 
+        xlu_cfg_get_defbool(config, "altp2mhvm", &b_info->u.hvm.altp2m, 0);
+
         xlu_cfg_replace_string(config, "smbios_firmware",
                                &b_info->u.hvm.smbios_firmware, 0);
         xlu_cfg_replace_string(config, "acpi_firmware",
@@ -1256,6 +1614,9 @@ static void parse_config_data(const char *config_source,
                     exit(1);
             }
         }
+
+        if (!xlu_cfg_get_long (config, "rdm_mem_boundary", &l, 0))
+            b_info->u.hvm.rdm_mem_boundary_memkb = l * 1024;
         break;
     case LIBXL_DOMAIN_TYPE_PV:
     {
@@ -1412,12 +1773,12 @@ static void parse_config_data(const char *config_source,
             libxl_device_disk *disk;
             char *buf2 = strdup(buf);
 
-            d_config->disks = (libxl_device_disk *) realloc(d_config->disks, sizeof (libxl_device_disk) * (d_config->num_disks + 1));
-            disk = d_config->disks + d_config->num_disks;
+            disk = ARRAY_EXTEND_INIT_NODEVID(d_config->disks,
+                                             d_config->num_disks,
+                                             libxl_device_disk_init);
             parse_disk_config(&config, buf2, disk);
 
             free(buf2);
-            d_config->num_disks++;
         }
     }
 
@@ -1430,11 +1791,9 @@ static void parse_config_data(const char *config_source,
             char *p, *p2;
             bool got_backend = false;
 
-            d_config->vtpms = (libxl_device_vtpm *) realloc(d_config->vtpms,
-                  sizeof(libxl_device_vtpm) * (d_config->num_vtpms+1));
-            vtpm = d_config->vtpms + d_config->num_vtpms;
-            libxl_device_vtpm_init(vtpm);
-            vtpm->devid = d_config->num_vtpms;
+            vtpm = ARRAY_EXTEND_INIT(d_config->vtpms,
+                                     d_config->num_vtpms,
+                                     libxl_device_vtpm_init);
 
             p = strtok(buf2, ",");
             if(p) {
@@ -1464,7 +1823,6 @@ static void parse_config_data(const char *config_source,
                exit(1);
             }
             free(buf2);
-            d_config->num_vtpms++;
         }
     }
 
@@ -1552,12 +1910,11 @@ static void parse_config_data(const char *config_source,
         while ((buf = xlu_cfg_get_listitem (nics, d_config->num_nics)) != NULL) {
             libxl_device_nic *nic;
             char *buf2 = strdup(buf);
-            char *p, *p2;
+            char *p;
 
-            d_config->nics = (libxl_device_nic *) realloc(d_config->nics, sizeof (libxl_device_nic) * (d_config->num_nics+1));
-            nic = d_config->nics + d_config->num_nics;
-            libxl_device_nic_init(nic);
-            nic->devid = d_config->num_nics;
+            nic = ARRAY_EXTEND_INIT(d_config->nics,
+                                    d_config->num_nics,
+                                    libxl_device_nic_init);
             set_default_nic_values(nic);
 
             p = strtok(buf2, ",");
@@ -1566,68 +1923,10 @@ static void parse_config_data(const char *config_source,
             do {
                 while (*p == ' ')
                     p++;
-                if ((p2 = strchr(p, '=')) == NULL)
-                    break;
-                *p2 = '\0';
-                if (!strcmp(p, "model")) {
-                    free(nic->model);
-                    nic->model = strdup(p2 + 1);
-                } else if (!strcmp(p, "mac")) {
-                    char *p3 = p2 + 1;
-                    *(p3 + 2) = '\0';
-                    nic->mac[0] = strtol(p3, NULL, 16);
-                    p3 = p3 + 3;
-                    *(p3 + 2) = '\0';
-                    nic->mac[1] = strtol(p3, NULL, 16);
-                    p3 = p3 + 3;
-                    *(p3 + 2) = '\0';
-                    nic->mac[2] = strtol(p3, NULL, 16);
-                    p3 = p3 + 3;
-                    *(p3 + 2) = '\0';
-                    nic->mac[3] = strtol(p3, NULL, 16);
-                    p3 = p3 + 3;
-                    *(p3 + 2) = '\0';
-                    nic->mac[4] = strtol(p3, NULL, 16);
-                    p3 = p3 + 3;
-                    *(p3 + 2) = '\0';
-                    nic->mac[5] = strtol(p3, NULL, 16);
-                } else if (!strcmp(p, "bridge")) {
-                    free(nic->bridge);
-                    nic->bridge = strdup(p2 + 1);
-                } else if (!strcmp(p, "type")) {
-                    if (!strcmp(p2 + 1, "ioemu"))
-                        nic->nictype = LIBXL_NIC_TYPE_VIF_IOEMU;
-                    else
-                        nic->nictype = LIBXL_NIC_TYPE_VIF;
-                } else if (!strcmp(p, "ip")) {
-                    free(nic->ip);
-                    nic->ip = strdup(p2 + 1);
-                } else if (!strcmp(p, "script")) {
-                    free(nic->script);
-                    nic->script = strdup(p2 + 1);
-                } else if (!strcmp(p, "vifname")) {
-                    free(nic->ifname);
-                    nic->ifname = strdup(p2 + 1);
-                } else if (!strcmp(p, "backend")) {
-                    free(nic->backend_domname);
-                    nic->backend_domname = strdup(p2 + 1);
-                } else if (!strcmp(p, "rate")) {
-                    parse_vif_rate(&config, (p2 + 1), nic);
-                } else if (!strcmp(p, "accel")) {
-                    fprintf(stderr, "the accel parameter for vifs is currently not supported\n");
-                } else if (!strcmp(p, "netdev")) {
-                    fprintf(stderr, "the netdev parameter is deprecated, "
-                                    "please use gatewaydev instead\n");
-                    free(nic->gatewaydev);
-                    nic->gatewaydev = strdup(p2 + 1);
-                } else if (!strcmp(p, "gatewaydev")) {
-                    free(nic->gatewaydev);
-                    nic->gatewaydev = strdup(p2 + 1);
-                }
+                parse_nic_config(nic, &config, p);
             } while ((p = strtok(NULL, ",")) != NULL);
 skip_nic:
             free(buf2);
-            d_config->num_nics++;
         }
     }
 
@@ -1714,25 +2013,60 @@ skip_vfb:
         xlu_cfg_get_defbool(config, "e820_host", &b_info->u.pv.e820_host, 0);
     }
 
+    if (!xlu_cfg_get_string(config, "rdm", &buf, 0)) {
+        libxl_rdm_reserve rdm;
+        if (!xlu_rdm_parse(config, &rdm, buf)) {
+            b_info->u.hvm.rdm.strategy = rdm.strategy;
+            b_info->u.hvm.rdm.policy = rdm.policy;
+        }
+    }
+
     if (!xlu_cfg_get_list (config, "pci", &pcis, 0, 0)) {
         d_config->num_pcidevs = 0;
         d_config->pcidevs = NULL;
         for(i = 0; (buf = xlu_cfg_get_listitem (pcis, i)) != NULL; i++) {
             libxl_device_pci *pcidev;
 
-            d_config->pcidevs = (libxl_device_pci *) realloc(d_config->pcidevs, sizeof (libxl_device_pci) * (d_config->num_pcidevs + 1));
-            pcidev = d_config->pcidevs + d_config->num_pcidevs;
-            libxl_device_pci_init(pcidev);
-
+            pcidev = ARRAY_EXTEND_INIT_NODEVID(d_config->pcidevs,
+                                               d_config->num_pcidevs,
+                                               libxl_device_pci_init);
             pcidev->msitranslate = pci_msitranslate;
             pcidev->power_mgmt = pci_power_mgmt;
             pcidev->permissive = pci_permissive;
             pcidev->seize = pci_seize;
-            if (!xlu_pci_parse_bdf(config, pcidev, buf))
-                d_config->num_pcidevs++;
+            /*
+             * Like other pci option, the per-device policy always follows
+             * the global policy by default.
+             */
+            pcidev->rdm_policy = b_info->u.hvm.rdm.policy;
+            e = xlu_pci_parse_bdf(config, pcidev, buf);
+            if (e) {
+                fprintf(stderr,
+                        "unable to parse PCI BDF `%s' for passthrough\n",
+                        buf);
+                exit(-e);
+            }
         }
         if (d_config->num_pcidevs && c_info->type == LIBXL_DOMAIN_TYPE_PV)
             libxl_defbool_set(&b_info->u.pv.e820_host, true);
+    }
+
+    if (!xlu_cfg_get_list (config, "dtdev", &dtdevs, 0, 0)) {
+        d_config->num_dtdevs = 0;
+        d_config->dtdevs = NULL;
+        for (i = 0; (buf = xlu_cfg_get_listitem(dtdevs, i)) != NULL; i++) {
+            libxl_device_dtdev *dtdev;
+
+            dtdev = ARRAY_EXTEND_INIT_NODEVID(d_config->dtdevs,
+                                              d_config->num_dtdevs,
+                                              libxl_device_dtdev_init);
+
+            dtdev->path = strdup(buf);
+            if (dtdev->path == NULL) {
+                fprintf(stderr, "unable to duplicate string for dtdevs\n");
+                exit(-1);
+            }
+        }
     }
 
     switch (xlu_cfg_get_list(config, "cpuid", &cpuids, 0, 1)) {
@@ -1910,6 +2244,8 @@ skip_vfb:
                 b_info->u.hvm.vga.kind = LIBXL_VGA_INTERFACE_TYPE_CIRRUS;
             } else if (!strcmp(buf, "none")) {
                 b_info->u.hvm.vga.kind = LIBXL_VGA_INTERFACE_TYPE_NONE;
+            } else if (!strcmp(buf, "qxl")) {
+                b_info->u.hvm.vga.kind = LIBXL_VGA_INTERFACE_TYPE_QXL;
             } else {
                 fprintf(stderr, "Unknown vga \"%s\" specified\n", buf);
                 exit(1);
@@ -1917,6 +2253,13 @@ skip_vfb:
         } else if (!xlu_cfg_get_long(config, "stdvga", &l, 0))
             b_info->u.hvm.vga.kind = l ? LIBXL_VGA_INTERFACE_TYPE_STD :
                                          LIBXL_VGA_INTERFACE_TYPE_CIRRUS;
+
+        if (!xlu_cfg_get_string(config, "hdtype", &buf, 0) &&
+            libxl_hdtype_from_string(buf, &b_info->u.hvm.hdtype)) {
+                fprintf(stderr, "ERROR: invalid value \"%s\" for \"hdtype\"\n",
+                    buf);
+                exit (1);
+        }
 
         xlu_cfg_replace_string (config, "keymap", &b_info->u.hvm.keymap, 0);
         xlu_cfg_get_defbool (config, "spice", &b_info->u.hvm.spice.enable, 0);
@@ -1938,6 +2281,10 @@ skip_vfb:
                             &b_info->u.hvm.spice.clipboard_sharing, 0);
         if (!xlu_cfg_get_long (config, "spiceusbredirection", &l, 0))
             b_info->u.hvm.spice.usbredirection = l;
+        xlu_cfg_replace_string (config, "spice_image_compression",
+                                &b_info->u.hvm.spice.image_compression, 0);
+        xlu_cfg_replace_string (config, "spice_streaming_video",
+                                &b_info->u.hvm.spice.streaming_video, 0);
         xlu_cfg_get_defbool(config, "nographic", &b_info->u.hvm.nographic, 0);
         xlu_cfg_get_defbool(config, "gfx_passthru",
                             &b_info->u.hvm.gfx_passthru, 0);
@@ -2009,6 +2356,15 @@ skip_vfb:
             b_info->u.hvm.vendor_device = d;
         }
     }
+
+    if (!xlu_cfg_get_string (config, "gic_version", &buf, 1)) {
+        e = libxl_gic_version_from_string(buf, &b_info->arch_arm.gic_version);
+        if (e) {
+            fprintf(stderr,
+                    "Unknown gic_version \"%s\" specified\n", buf);
+            exit(-ERROR_FAIL);
+        }
+     }
 
     xlu_cfg_destroy(config);
 }
@@ -2092,14 +2448,11 @@ static int handle_domain_death(uint32_t *r_domid,
         char *corefile;
         int rc;
 
-        if (asprintf(&corefile, "/var/xen/dump/%s", d_config->c_info.name) < 0) {
-            LOG("failed to construct core dump path");
-        } else {
-            LOG("dumping core to %s", corefile);
-            rc=libxl_domain_core_dump(ctx, *r_domid, corefile, NULL);
-            if (rc) LOG("core dump failed (rc=%d).", rc);
-            free(corefile);
-        }
+        xasprintf(&corefile, XEN_DUMP_DIR "/%s", d_config->c_info.name);
+        LOG("dumping core to %s", corefile);
+        rc = libxl_domain_core_dump(ctx, *r_domid, corefile, NULL);
+        if (rc) LOG("core dump failed (rc=%d).", rc);
+        free(corefile);
         /* No point crying over spilled milk, continue on failure. */
 
         if (action == LIBXL_ACTION_ON_SHUTDOWN_COREDUMP_DESTROY)
@@ -2136,17 +2489,6 @@ static int handle_domain_death(uint32_t *r_domid,
 
     return restart;
 }
-
-/* for now used only by main_networkattach, but can be reused elsewhere */
-static int match_option_size(const char *prefix, size_t len,
-        char *arg, char **argopt)
-{
-    int rc = strncmp(prefix, arg, len);
-    if (!rc) *argopt = arg+len;
-    return !rc;
-}
-#define MATCH_OPTION(prefix, arg, oparg) \
-    match_option_size((prefix "="), sizeof((prefix)), (arg), &(oparg))
 
 /* Preserve a copy of a domain under a new name. Updates *r_domid */
 static int preserve_domain(uint32_t *r_domid, libxl_event *event,
@@ -2217,15 +2559,9 @@ static int freemem(uint32_t domid, libxl_domain_build_info *b_info)
         if (rc < 0)
             return rc;
 
-        rc = libxl_wait_for_free_memory(ctx, domid, need_memkb, 10);
-        if (!rc)
-            return 0;
-        else if (rc != ERROR_NOMEM)
-            return rc;
-
-        /* the memory target has been reached but the free memory is still
-         * not enough: loop over again */
-        rc = libxl_wait_for_memory_target(ctx, 0, 1);
+        /* wait until dom0 reaches its target, as long as we are making
+         * progress */
+        rc = libxl_wait_for_memory_target(ctx, 0, 10);
         if (rc < 0)
             return rc;
 
@@ -2318,6 +2654,7 @@ static uint32_t create_domain(struct domain_create *dom_info)
     void *config_data = 0;
     int config_len = 0;
     int restore_fd = -1;
+    int restore_fd_to_close = -1;
     const libxl_asyncprogress_how *autoconnect_console_how;
     struct save_file_header hdr;
 
@@ -2341,6 +2678,7 @@ static uint32_t create_domain(struct domain_create *dom_info)
                 fprintf(stderr, "Can't open restore file: %s\n", strerror(errno));
                 return ERROR_INVAL;
             }
+            restore_fd_to_close = restore_fd;
             rc = libxl_fd_set_cloexec(ctx, restore_fd, 1);
             if (rc) return rc;
         }
@@ -2419,7 +2757,7 @@ static uint32_t create_domain(struct domain_create *dom_info)
         }
         if (!restoring && extra_config && strlen(extra_config)) {
             if (config_len > INT_MAX - (strlen(extra_config) + 2 + 1)) {
-                fprintf(stderr, "Failed to attach extra configration\n");
+                fprintf(stderr, "Failed to attach extra configuration\n");
                 return ERROR_FAIL;
             }
             /* allocate space for the extra config plus two EOLs plus \0 */
@@ -2463,18 +2801,28 @@ static uint32_t create_domain(struct domain_create *dom_info)
             common_domname = d_config.c_info.name;
             d_config.c_info.name = 0; /* steals allocation from config */
 
-            if (asprintf(&d_config.c_info.name,
-                         "%s--incoming", common_domname) < 0) {
-                fprintf(stderr, "Failed to allocate memory in asprintf\n");
-                exit(1);
-            }
+            xasprintf(&d_config.c_info.name, "%s--incoming", common_domname);
             *dom_info->migration_domname_r = strdup(d_config.c_info.name);
         }
     }
 
-    if (debug || dom_info->dryrun)
-        printf_info(default_output_format, -1, &d_config,
-                    debug ? stderr : stdout);
+    if (debug || dom_info->dryrun) {
+        FILE *cfg_print_fh = (debug && !dom_info->dryrun) ? stderr : stdout;
+        if (default_output_format == OUTPUT_FORMAT_SXP) {
+            printf_info_sexp(-1, &d_config, cfg_print_fh);
+        } else {
+            char *json = libxl_domain_config_to_json(ctx, &d_config);
+            if (!json) {
+                fprintf(stderr,
+                        "Failed to convert domain configuration to JSON\n");
+                exit(1);
+            }
+            fputs(json, cfg_print_fh);
+            free(json);
+            flush_stream(cfg_print_fh);
+        }
+    }
+
 
     ret = 0;
     if (dom_info->dryrun)
@@ -2508,6 +2856,9 @@ start:
         libxl_domain_restore_params_init(&params);
 
         params.checkpointed_stream = dom_info->checkpointed_stream;
+        params.stream_version =
+            (hdr.mandatory_flags & XL_MANDATORY_FLAG_STREAMv2) ? 2 : 1;
+
         ret = libxl_domain_create_restore(ctx, &d_config,
                                           &domid, restore_fd,
                                           &params,
@@ -2529,6 +2880,13 @@ start:
 
     release_lock();
 
+    if (restore_fd_to_close >= 0) {
+        if (close(restore_fd_to_close))
+            fprintf(stderr, "Failed to close restoring file, fd %d, errno %d\n",
+                    restore_fd_to_close, errno);
+        restore_fd_to_close = -1;
+    }
+
     if (!paused)
         libxl_domain_unpause(ctx, domid);
 
@@ -2542,11 +2900,8 @@ start:
     if (need_daemon) {
         char *name;
 
-        if (asprintf(&name, "xl-%s", d_config.c_info.name) < 0) {
-            LOG("Failed to allocate memory in asprintf");
-            exit(1);
-        }
-        ret = do_daemonize(name);
+        xasprintf(&name, "xl-%s", d_config.c_info.name);
+        ret = do_daemonize(name, NULL);
         free(name);
         if (ret) {
             ret = (ret == 1) ? domid : ret;
@@ -2738,11 +3093,14 @@ static int64_t parse_mem_size_kb(const char *mem)
     switch (tolower((uint8_t)*endptr)) {
     case 't':
         kbytes <<= 10;
+        /* fallthrough */
     case 'g':
         kbytes <<= 10;
+        /* fallthrough */
     case '\0':
     case 'm':
         kbytes <<= 10;
+        /* fallthrough */
     case 'k':
         break;
     case 'b':
@@ -2755,7 +3113,9 @@ static int64_t parse_mem_size_kb(const char *mem)
     return kbytes;
 }
 
-#define COMMON_LONG_OPTS {"help", 0, 0, 'h'}
+/* Must be last in list */
+#define COMMON_LONG_OPTS {"help", 0, 0, 'h'}, \
+                         {0, 0, 0, 0}
 
 /*
  * Callers should use SWITCH_FOREACH_OPT in preference to calling this
@@ -2768,8 +3128,7 @@ static int def_getopt(int argc, char * const argv[],
 {
     int opt;
     const struct option def_options[] = {
-        COMMON_LONG_OPTS,
-        {0, 0, 0, 0}
+        COMMON_LONG_OPTS
     };
 
     if (!longopts)
@@ -2803,14 +3162,15 @@ static int def_getopt(int argc, char * const argv[],
  * Wraps def_getopt into a convenient loop+switch to process all
  * arguments. This macro is intended to be called from main_XXX().
  *
- *   SWITCH_FOREACH_OPT(int *opt, const char *opts,
+ *   SWITCH_FOREACH_OPT(int *opt, "OPTS",
  *                      const struct option *longopts,
  *                      const char *commandname,
  *                      int num_opts_req) { ...
  *
  * opt:               pointer to an int variable, holds the current option
  *                    during processing.
- * opts:              short options, as per getopt_long(3)'s optstring argument.
+ * OPTS:              short options, as per getopt_long(3)'s optstring argument.
+ *                    do not include "h"; will be provided automatically
  * longopts:          long options, as per getopt_long(3)'s longopts argument.
  *                    May be null.
  * commandname:       name of this command, for usage string.
@@ -2854,7 +3214,7 @@ static int def_getopt(int argc, char * const argv[],
  */
 #define SWITCH_FOREACH_OPT(opt, opts, longopts,                         \
                            commandname, num_required_opts)              \
-    while (((opt) = def_getopt(argc, argv, (opts), (longopts),          \
+    while (((opt) = def_getopt(argc, argv, "h" opts, (longopts),          \
                                 (commandname), (num_required_opts))) != -1) \
         switch (opt)
 
@@ -2935,11 +3295,8 @@ static int cd_insert(uint32_t domid, const char *virtdev, char *phys)
     struct stat b;
     int rc = 0;
 
-    if (asprintf(&buf, "vdev=%s,access=r,devtype=cdrom,target=%s",
-                 virtdev, phys ? phys : "") < 0) {
-        fprintf(stderr, "out of memory\n");
-        return 1;
-    }
+    xasprintf(&buf, "vdev=%s,access=r,devtype=cdrom,target=%s",
+              virtdev, phys ? phys : "");
 
     parse_disk_config(&config, buf, &disk);
 
@@ -3037,13 +3394,12 @@ int main_vncviewer(int argc, char **argv)
     static const struct option opts[] = {
         {"autopass", 0, 0, 'a'},
         {"vncviewer-autopass", 0, 0, 'a'},
-        COMMON_LONG_OPTS,
-        {0, 0, 0, 0}
+        COMMON_LONG_OPTS
     };
     uint32_t domid;
     int opt, autopass = 0;
 
-    SWITCH_FOREACH_OPT(opt, "ah", opts, "vncviewer", 1) {
+    SWITCH_FOREACH_OPT(opt, "a", opts, "vncviewer", 1) {
     case 'a':
         autopass = 1;
         break;
@@ -3503,8 +3859,8 @@ static void print_bitmap(uint8_t *map, int maplen, FILE *stream)
     }
 }
 
-static void list_domains(int verbose, int context, int claim, int numa,
-                         const libxl_dominfo *info, int nb_domain)
+static void list_domains(bool verbose, bool context, bool claim, bool numa,
+                         bool cpupool, const libxl_dominfo *info, int nb_domain)
 {
     int i;
     static const char shutdown_reason_letters[]= "-rscw";
@@ -3518,6 +3874,7 @@ static void list_domains(int verbose, int context, int claim, int numa,
     if (verbose) printf("   UUID                            Reason-Code\tSecurity Label");
     if (context && !verbose) printf("   Security Label");
     if (claim) printf("  Claimed");
+    if (cpupool) printf("         Cpupool");
     if (numa) {
         if (libxl_node_bitmap_alloc(ctx, &nodemap, 0)) {
             fprintf(stderr, "libxl_node_bitmap_alloc_failed.\n");
@@ -3562,6 +3919,11 @@ static void list_domains(int verbose, int context, int claim, int numa,
             printf(" %5lu", (unsigned long)info[i].outstanding_memkb / 1024);
         if (verbose || context)
             printf(" %16s", info[i].ssid_label ? : "-");
+        if (cpupool) {
+            char *poolname = libxl_cpupoolid_to_name(ctx, info[i].cpupool);
+            printf("%16s", poolname);
+            free(poolname);
+        }
         if (numa) {
             libxl_domain_get_nodeaffinity(ctx, info[i].domid, &nodemap);
 
@@ -3659,6 +4021,7 @@ static void save_domain_core_writeconfig(int fd, const char *source,
     memset(&hdr, 0, sizeof(hdr));
     memcpy(hdr.magic, savefileheader_magic, sizeof(hdr.magic));
     hdr.byteorder = SAVEFILE_BYTEORDER_VALUE;
+    hdr.mandatory_flags = XL_MANDATORY_FLAG_STREAMv2;
 
     optdata_begin= 0;
 
@@ -3737,7 +4100,7 @@ static pid_t create_migration_child(const char *rune, int *send_fd,
                                         int *recv_fd)
 {
     int sendpipe[2], recvpipe[2];
-    pid_t child = -1;
+    pid_t child;
 
     if (!rune || !send_fd || !recv_fd)
         return -1;
@@ -3934,8 +4297,7 @@ static void migrate_domain(uint32_t domid, const char *rune, int debug,
     fprintf(stderr, "migration sender: Target has acknowledged transfer.\n");
 
     if (common_domname) {
-        if (asprintf(&away_domname, "%s--migratedaway", common_domname) < 0)
-            goto failed_resume;
+        xasprintf(&away_domname, "%s--migratedaway", common_domname);
         rc = libxl_domain_rename(ctx, domid, common_domname, away_domname);
         if (rc) goto failed_resume;
     }
@@ -4165,11 +4527,10 @@ int main_restore(int argc, char **argv)
     static struct option opts[] = {
         {"vncviewer", 0, 0, 'V'},
         {"vncviewer-autopass", 0, 0, 'A'},
-        COMMON_LONG_OPTS,
-        {0, 0, 0, 0}
+        COMMON_LONG_OPTS
     };
 
-    SWITCH_FOREACH_OPT(opt, "FhcpdeVA", opts, "restore", 1) {
+    SWITCH_FOREACH_OPT(opt, "FcpdeVA", opts, "restore", 1) {
     case 'c':
         console_autoconnect = 1;
         break;
@@ -4297,8 +4658,8 @@ int main_migrate(int argc, char **argv)
     int opt, daemonize = 1, monitor = 1, debug = 0;
     static struct option opts[] = {
         {"debug", 0, 0, 0x100},
-        COMMON_LONG_OPTS,
-        {0, 0, 0, 0}
+        {"live", 0, 0, 0x200},
+        COMMON_LONG_OPTS
     };
 
     SWITCH_FOREACH_OPT(opt, "FC:s:e", opts, "migrate", 2) {
@@ -4315,8 +4676,11 @@ int main_migrate(int argc, char **argv)
         daemonize = 0;
         monitor = 0;
         break;
-    case 0x100:
+    case 0x100: /* --debug */
         debug = 1;
+        break;
+    case 0x200: /* --live */
+        /* ignored for compatibility with xm */
         break;
     }
 
@@ -4339,13 +4703,12 @@ int main_migrate(int argc, char **argv)
         } else {
             verbose_len = (minmsglevel_default - minmsglevel) + 2;
         }
-        if (asprintf(&rune, "exec %s %s xl%s%.*s migrate-receive%s%s",
-                     ssh_command, host,
-                     pass_tty_arg ? " -t" : "",
-                     verbose_len, verbose_buf,
-                     daemonize ? "" : " -e",
-                     debug ? " -d" : "") < 0)
-            return 1;
+        xasprintf(&rune, "exec %s %s xl%s%.*s migrate-receive%s%s",
+                  ssh_command, host,
+                  pass_tty_arg ? " -t" : "",
+                  verbose_len, verbose_buf,
+                  daemonize ? "" : " -e",
+                  debug ? " -d" : "");
     }
 
     migrate_domain(domid, rune, debug, config_filename);
@@ -4418,8 +4781,7 @@ static int main_shutdown_or_reboot(int do_reboot, int argc, char **argv)
     static struct option opts[] = {
         {"all", 0, 0, 'a'},
         {"wait", 0, 0, 'w'},
-        COMMON_LONG_OPTS,
-        {0, 0, 0, 0}
+        COMMON_LONG_OPTS
     };
 
     SWITCH_FOREACH_OPT(opt, "awF", opts, what, 0) {
@@ -4457,8 +4819,10 @@ static int main_shutdown_or_reboot(int do_reboot, int argc, char **argv)
                fallback_trigger);
         }
 
-        if (wait_for_it)
+        if (wait_for_it) {
             wait_for_domain_deaths(deathws, nb_domain - 1 /* not dom 0 */);
+            free(deathws);
+        }
 
         libxl_dominfo_list_free(dominfo, nb_domain);
     } else {
@@ -4487,37 +4851,44 @@ int main_reboot(int argc, char **argv)
 
 int main_list(int argc, char **argv)
 {
-    int opt, verbose = 0;
-    int context = 0;
-    int details = 0;
-    int numa = 0;
+    int opt;
+    bool verbose = false;
+    bool context = false;
+    bool details = false;
+    bool cpupool = false;
+    bool numa = false;
     static struct option opts[] = {
         {"long", 0, 0, 'l'},
         {"verbose", 0, 0, 'v'},
         {"context", 0, 0, 'Z'},
+        {"cpupool", 0, 0, 'c'},
         {"numa", 0, 0, 'n'},
-        COMMON_LONG_OPTS,
-        {0, 0, 0, 0}
+        COMMON_LONG_OPTS
     };
 
     libxl_dominfo info_buf;
     libxl_dominfo *info, *info_free=0;
     int nb_domain, rc;
 
-    SWITCH_FOREACH_OPT(opt, "lvhZn", opts, "list", 0) {
+    SWITCH_FOREACH_OPT(opt, "lvhZcn", opts, "list", 0) {
     case 'l':
-        details = 1;
+        details = true;
         break;
     case 'v':
-        verbose = 1;
+        verbose = true;
         break;
     case 'Z':
-        context = 1;
+        context = true;
+        break;
+    case 'c':
+        cpupool = true;
         break;
     case 'n':
-        numa = 1;
+        numa = true;
         break;
     }
+
+    libxl_dominfo_init(&info_buf);
 
     if (optind >= argc) {
         info = libxl_list_domain(ctx, &nb_domain);
@@ -4529,7 +4900,7 @@ int main_list(int argc, char **argv)
     } else if (optind == argc-1) {
         uint32_t domid = find_domain(argv[optind]);
         rc = libxl_domain_info(ctx, &info_buf, domid);
-        if (rc == ERROR_INVAL) {
+        if (rc == ERROR_DOMAIN_NOTFOUND) {
             fprintf(stderr, "Error: Domain \'%s\' does not exist.\n",
                 argv[optind]);
             return -rc;
@@ -4548,12 +4919,13 @@ int main_list(int argc, char **argv)
     if (details)
         list_domains_details(info, nb_domain);
     else
-        list_domains(verbose, context, 0 /* claim */, numa, info, nb_domain);
+        list_domains(verbose, context, false /* claim */, numa, cpupool,
+                     info, nb_domain);
 
     if (info_free)
         libxl_dominfo_list_free(info, nb_domain);
-    else
-        libxl_dominfo_dispose(info);
+
+    libxl_dominfo_dispose(&info_buf);
 
     return 0;
 }
@@ -4570,11 +4942,25 @@ int main_vm_list(int argc, char **argv)
     return 0;
 }
 
+static void string_realloc_append(char **accumulate, const char *more)
+{
+    /* Appends more to accumulate.  Accumulate is either NULL, or
+     * points (always) to a malloc'd nul-terminated string. */
+
+    size_t oldlen = *accumulate ? strlen(*accumulate) : 0;
+    size_t morelen = strlen(more) + 1/*nul*/;
+    if (oldlen > SSIZE_MAX || morelen > SSIZE_MAX - oldlen) {
+        fprintf(stderr,"Additional config data far too large\n");
+        exit(-ERROR_FAIL);
+    }
+
+    *accumulate = xrealloc(*accumulate, oldlen + morelen);
+    memcpy(*accumulate + oldlen, more, morelen);
+}
+
 int main_create(int argc, char **argv)
 {
     const char *filename = NULL;
-    char *p;
-    char extra_config[1024];
     struct domain_create dom_info;
     int paused = 0, debug = 0, daemonize = 1, console_autoconnect = 0,
         quiet = 0, monitor = 1, vnc = 0, vncautopass = 0;
@@ -4585,16 +4971,17 @@ int main_create(int argc, char **argv)
         {"defconfig", 1, 0, 'f'},
         {"vncviewer", 0, 0, 'V'},
         {"vncviewer-autopass", 0, 0, 'A'},
-        COMMON_LONG_OPTS,
-        {0, 0, 0, 0}
+        COMMON_LONG_OPTS
     };
+
+    dom_info.extra_config = NULL;
 
     if (argv[1] && argv[1][0] != '-' && !strchr(argv[1], '=')) {
         filename = argv[1];
         argc--; argv++;
     }
 
-    SWITCH_FOREACH_OPT(opt, "Fhnqf:pcdeVA", opts, "create", 0) {
+    SWITCH_FOREACH_OPT(opt, "Fnqf:pcdeVA", opts, "create", 0) {
     case 'f':
         filename = optarg;
         break;
@@ -4628,20 +5015,21 @@ int main_create(int argc, char **argv)
         break;
     }
 
-    extra_config[0] = '\0';
-    for (p = extra_config; optind < argc; optind++) {
+    memset(&dom_info, 0, sizeof(dom_info));
+
+    for (; optind < argc; optind++) {
         if (strchr(argv[optind], '=') != NULL) {
-            p += snprintf(p, sizeof(extra_config) - (p - extra_config),
-                "%s\n", argv[optind]);
+            string_realloc_append(&dom_info.extra_config, argv[optind]);
+            string_realloc_append(&dom_info.extra_config, "\n");
         } else if (!filename) {
             filename = argv[optind];
         } else {
             help("create");
+            free(dom_info.extra_config);
             return 2;
         }
     }
 
-    memset(&dom_info, 0, sizeof(dom_info));
     dom_info.debug = debug;
     dom_info.daemonize = daemonize;
     dom_info.monitor = monitor;
@@ -4649,16 +5037,18 @@ int main_create(int argc, char **argv)
     dom_info.dryrun = dryrun_only;
     dom_info.quiet = quiet;
     dom_info.config_file = filename;
-    dom_info.extra_config = extra_config;
     dom_info.migrate_fd = -1;
     dom_info.vnc = vnc;
     dom_info.vncautopass = vncautopass;
     dom_info.console_autoconnect = console_autoconnect;
 
     rc = create_domain(&dom_info);
-    if (rc < 0)
+    if (rc < 0) {
+        free(dom_info.extra_config);
         return -rc;
+    }
 
+    free(dom_info.extra_config);
     return 0;
 }
 
@@ -4666,8 +5056,7 @@ int main_config_update(int argc, char **argv)
 {
     uint32_t domid;
     const char *filename = NULL;
-    char *p;
-    char extra_config[1024];
+    char *extra_config = NULL;
     void *config_data = 0;
     int config_len = 0;
     libxl_domain_config d_config;
@@ -4675,8 +5064,7 @@ int main_config_update(int argc, char **argv)
     int debug = 0;
     static struct option opts[] = {
         {"defconfig", 1, 0, 'f'},
-        COMMON_LONG_OPTS,
-        {0, 0, 0, 0}
+        COMMON_LONG_OPTS
     };
 
     if (argc < 2) {
@@ -4696,7 +5084,7 @@ int main_config_update(int argc, char **argv)
         argc--; argv++;
     }
 
-    SWITCH_FOREACH_OPT(opt, "dhqf:", opts, "config_update", 0) {
+    SWITCH_FOREACH_OPT(opt, "dqf:", opts, "config_update", 0) {
     case 'd':
         debug = 1;
         break;
@@ -4705,15 +5093,15 @@ int main_config_update(int argc, char **argv)
         break;
     }
 
-    extra_config[0] = '\0';
-    for (p = extra_config; optind < argc; optind++) {
+    for (; optind < argc; optind++) {
         if (strchr(argv[optind], '=') != NULL) {
-            p += snprintf(p, sizeof(extra_config) - (p - extra_config),
-                "%s\n", argv[optind]);
+            string_realloc_append(&extra_config, argv[optind]);
+            string_realloc_append(&extra_config, "\n");
         } else if (!filename) {
             filename = argv[optind];
         } else {
             help("create");
+            free(extra_config);
             return 2;
         }
     }
@@ -4722,10 +5110,11 @@ int main_config_update(int argc, char **argv)
         rc = libxl_read_file_contents(ctx, filename,
                                       &config_data, &config_len);
         if (rc) { fprintf(stderr, "Failed to read config file: %s: %s\n",
-                           filename, strerror(errno)); return ERROR_FAIL; }
-        if (strlen(extra_config)) {
+                           filename, strerror(errno));
+                  free(extra_config); return ERROR_FAIL; }
+        if (extra_config && strlen(extra_config)) {
             if (config_len > INT_MAX - (strlen(extra_config) + 2 + 1)) {
-                fprintf(stderr, "Failed to attach extra configration\n");
+                fprintf(stderr, "Failed to attach extra configuration\n");
                 exit(1);
             }
             /* allocate space for the extra config plus two EOLs plus \0 */
@@ -4763,7 +5152,7 @@ int main_config_update(int argc, char **argv)
     libxl_domain_config_dispose(&d_config);
 
     free(config_data);
-
+    free(extra_config);
     return 0;
 }
 
@@ -4949,7 +5338,7 @@ int main_vcpupin(int argc, char **argv)
      */
     if (!strcmp(hard_str, "-"))
         hard = NULL;
-    else if (vcpupin_parse(hard_str, hard))
+    else if (cpurange_parse(hard_str, hard))
         goto out;
     /*
      * Soft affinity is handled similarly. Only difference: we also want
@@ -4957,7 +5346,7 @@ int main_vcpupin(int argc, char **argv)
      */
     if (argc <= optind+3 || !strcmp(soft_str, "-"))
         soft = NULL;
-    else if (vcpupin_parse(soft_str, soft))
+    else if (cpurange_parse(soft_str, soft))
         goto out;
 
     if (dryrun_only) {
@@ -5010,16 +5399,18 @@ int main_vcpupin(int argc, char **argv)
     return rc;
 }
 
-static void vcpuset(uint32_t domid, const char* nr_vcpus, int check_host)
+static int vcpuset(uint32_t domid, const char* nr_vcpus, int check_host)
 {
     char *endptr;
     unsigned int max_vcpus, i;
     libxl_bitmap cpumap;
+    int rc;
 
+    libxl_bitmap_init(&cpumap);
     max_vcpus = strtoul(nr_vcpus, &endptr, 10);
     if (nr_vcpus == endptr) {
         fprintf(stderr, "Error: Invalid argument.\n");
-        return;
+        return 1;
     }
 
     /*
@@ -5028,33 +5419,46 @@ static void vcpuset(uint32_t domid, const char* nr_vcpus, int check_host)
      */
     if (check_host) {
         unsigned int host_cpu = libxl_get_max_cpus(ctx);
-        if (max_vcpus > host_cpu) {
-            fprintf(stderr, "You are overcommmitting! You have %d physical " \
-                    " CPUs and want %d vCPUs! Aborting, use --ignore-host to " \
+        libxl_dominfo dominfo;
+
+        rc = libxl_domain_info(ctx, &dominfo, domid);
+        if (rc)
+            return 1;
+
+        if (max_vcpus > dominfo.vcpu_online && max_vcpus > host_cpu) {
+            fprintf(stderr, "You are overcommmitting! You have %d physical" \
+                    " CPUs and want %d vCPUs! Aborting, use --ignore-host to" \
                     " continue\n", host_cpu, max_vcpus);
-            return;
+            rc = 1;
         }
-        /* NB: This also limits how many are set in the bitmap */
-        max_vcpus = (max_vcpus > host_cpu ? host_cpu : max_vcpus);
+        libxl_dominfo_dispose(&dominfo);
+        if (rc)
+            return 1;
     }
-    if (libxl_cpu_bitmap_alloc(ctx, &cpumap, max_vcpus)) {
-        fprintf(stderr, "libxl_cpu_bitmap_alloc failed\n");
-        return;
+    rc = libxl_cpu_bitmap_alloc(ctx, &cpumap, max_vcpus);
+    if (rc) {
+        fprintf(stderr, "libxl_cpu_bitmap_alloc failed, rc: %d\n", rc);
+        return 1;
     }
     for (i = 0; i < max_vcpus; i++)
         libxl_bitmap_set(&cpumap, i);
 
-    if (libxl_set_vcpuonline(ctx, domid, &cpumap) < 0)
-        fprintf(stderr, "libxl_set_vcpuonline failed domid=%d max_vcpus=%d\n", domid, max_vcpus);
+    rc = libxl_set_vcpuonline(ctx, domid, &cpumap);
+    if (rc == ERROR_DOMAIN_NOTFOUND)
+        fprintf(stderr, "Domain %u does not exist.\n", domid);
+    else if (rc)
+        fprintf(stderr, "libxl_set_vcpuonline failed domid=%d max_vcpus=%d," \
+                " rc: %d\n", domid, max_vcpus, rc);
 
     libxl_bitmap_dispose(&cpumap);
+    return rc ? 1 : 0;
 }
 
 int main_vcpuset(int argc, char **argv)
 {
     static struct option opts[] = {
         {"ignore-host", 0, 0, 'i'},
-        {0, 0, 0, 0}
+        COMMON_LONG_OPTS
     };
     int opt, check_host = 1;
 
@@ -5066,8 +5470,7 @@ int main_vcpuset(int argc, char **argv)
         break;
     }
 
-    vcpuset(find_domain(argv[optind]), argv[optind + 1], check_host);
-    return 0;
+    return vcpuset(find_domain(argv[optind]), argv[optind + 1], check_host);
 }
 
 static void output_xeninfo(void)
@@ -5196,12 +5599,15 @@ static void output_numainfo(void)
 
 static void output_topologyinfo(void)
 {
-    libxl_cputopology *info;
+    libxl_cputopology *cpuinfo;
     int i, nr;
+    libxl_pcitopology *pciinfo;
+    int valid_devs = 0;
 
-    info = libxl_get_cpu_topology(ctx, &nr);
-    if (info == NULL) {
-        fprintf(stderr, "libxl_get_topologyinfo failed.\n");
+
+    cpuinfo = libxl_get_cpu_topology(ctx, &nr);
+    if (cpuinfo == NULL) {
+        fprintf(stderr, "libxl_get_cpu_topology failed.\n");
         return;
     }
 
@@ -5209,12 +5615,35 @@ static void output_topologyinfo(void)
     printf("cpu:    core    socket     node\n");
 
     for (i = 0; i < nr; i++) {
-        if (info[i].core != LIBXL_CPUTOPOLOGY_INVALID_ENTRY)
+        if (cpuinfo[i].core != LIBXL_CPUTOPOLOGY_INVALID_ENTRY)
             printf("%3d:    %4d     %4d     %4d\n", i,
-                   info[i].core, info[i].socket, info[i].node);
+                   cpuinfo[i].core, cpuinfo[i].socket, cpuinfo[i].node);
     }
 
-    libxl_cputopology_list_free(info, nr);
+    libxl_cputopology_list_free(cpuinfo, nr);
+
+    pciinfo = libxl_get_pci_topology(ctx, &nr);
+    if (pciinfo == NULL) {
+        fprintf(stderr, "libxl_get_pci_topology failed.\n");
+        return;
+    }
+
+    printf("device topology        :\n");
+    printf("device           node\n");
+    for (i = 0; i < nr; i++) {
+        if (pciinfo[i].node != LIBXL_PCITOPOLOGY_INVALID_ENTRY) {
+            printf("%04x:%02x:%02x.%01x      %d\n", pciinfo[i].seg,
+                   pciinfo[i].bus,
+                   ((pciinfo[i].devfn >> 3) & 0x1f), (pciinfo[i].devfn & 7),
+                   pciinfo[i].node);
+            valid_devs++;
+        }
+    }
+
+    if (valid_devs == 0)
+        printf("No device topology data available\n");
+
+    libxl_pcitopology_list_free(pciinfo, nr);
 
     return;
 }
@@ -5241,12 +5670,11 @@ int main_info(int argc, char **argv)
     int opt;
     static struct option opts[] = {
         {"numa", 0, 0, 'n'},
-        COMMON_LONG_OPTS,
-        {0, 0, 0, 0}
+        COMMON_LONG_OPTS
     };
     int numa = 0;
 
-    SWITCH_FOREACH_OPT(opt, "hn", opts, "info", 0) {
+    SWITCH_FOREACH_OPT(opt, "n", opts, "info", 0) {
     case 'n':
         numa = 1;
         break;
@@ -5298,7 +5726,7 @@ int main_sharing(int argc, char **argv)
     } else if (optind == argc-1) {
         uint32_t domid = find_domain(argv[optind]);
         rc = libxl_domain_info(ctx, &info_buf, domid);
-        if (rc == ERROR_INVAL) {
+        if (rc == ERROR_DOMAIN_NOTFOUND) {
             fprintf(stderr, "Error: Domain \'%s\' does not exist.\n",
                 argv[optind]);
             return -rc;
@@ -5387,6 +5815,8 @@ static int sched_credit_domain_output(int domid)
         printf("%-33s %4s %6s %4s\n", "Name", "ID", "Weight", "Cap");
         return 0;
     }
+
+    libxl_domain_sched_params_init(&scinfo);
     rc = sched_domain_get(LIBXL_SCHEDULER_CREDIT, domid, &scinfo);
     if (rc)
         return rc;
@@ -5433,6 +5863,8 @@ static int sched_credit2_domain_output(
         printf("%-33s %4s %6s\n", "Name", "ID", "Weight");
         return 0;
     }
+
+    libxl_domain_sched_params_init(&scinfo);
     rc = sched_domain_get(LIBXL_SCHEDULER_CREDIT2, domid, &scinfo);
     if (rc)
         return rc;
@@ -5440,35 +5872,6 @@ static int sched_credit2_domain_output(
     printf("%-33s %4d %6d\n",
         domname,
         domid,
-        scinfo.weight);
-    free(domname);
-    libxl_domain_sched_params_dispose(&scinfo);
-    return 0;
-}
-
-static int sched_sedf_domain_output(
-    int domid)
-{
-    char *domname;
-    libxl_domain_sched_params scinfo;
-    int rc;
-
-    if (domid < 0) {
-        printf("%-33s %4s %6s %-6s %7s %5s %6s\n", "Name", "ID", "Period",
-               "Slice", "Latency", "Extra", "Weight");
-        return 0;
-    }
-    rc = sched_domain_get(LIBXL_SCHEDULER_SEDF, domid, &scinfo);
-    if (rc)
-        return rc;
-    domname = libxl_domid_to_name(ctx, domid);
-    printf("%-33s %4d %6d %6d %7d %5d %6d\n",
-        domname,
-        domid,
-        scinfo.period,
-        scinfo.slice,
-        scinfo.latency,
-        scinfo.extratime,
         scinfo.weight);
     free(domname);
     libxl_domain_sched_params_dispose(&scinfo);
@@ -5605,11 +6008,10 @@ int main_sched_credit(int argc, char **argv)
         {"tslice_ms", 1, 0, 't'},
         {"ratelimit_us", 1, 0, 'r'},
         {"cpupool", 1, 0, 'p'},
-        COMMON_LONG_OPTS,
-        {0, 0, 0, 0}
+        COMMON_LONG_OPTS
     };
 
-    SWITCH_FOREACH_OPT(opt, "d:w:c:p:t:r:hs", opts, "sched-credit", 0) {
+    SWITCH_FOREACH_OPT(opt, "d:w:c:p:t:r:s", opts, "sched-credit", 0) {
     case 'd':
         dom = optarg;
         break;
@@ -5721,11 +6123,10 @@ int main_sched_credit2(int argc, char **argv)
         {"domain", 1, 0, 'd'},
         {"weight", 1, 0, 'w'},
         {"cpupool", 1, 0, 'p'},
-        COMMON_LONG_OPTS,
-        {0, 0, 0, 0}
+        COMMON_LONG_OPTS
     };
 
-    SWITCH_FOREACH_OPT(opt, "d:w:p:h", opts, "sched-credit2", 0) {
+    SWITCH_FOREACH_OPT(opt, "d:w:p:", opts, "sched-credit2", 0) {
     case 'd':
         dom = optarg;
         break;
@@ -5775,114 +6176,6 @@ int main_sched_credit2(int argc, char **argv)
     return 0;
 }
 
-int main_sched_sedf(int argc, char **argv)
-{
-    const char *dom = NULL;
-    const char *cpupool = NULL;
-    int period = 0, opt_p = 0;
-    int slice = 0, opt_s = 0;
-    int latency = 0, opt_l = 0;
-    int extra = 0, opt_e = 0;
-    int weight = 0, opt_w = 0;
-    int opt, rc;
-    static struct option opts[] = {
-        {"period", 1, 0, 'p'},
-        {"slice", 1, 0, 's'},
-        {"latency", 1, 0, 'l'},
-        {"extra", 1, 0, 'e'},
-        {"weight", 1, 0, 'w'},
-        {"cpupool", 1, 0, 'c'},
-        COMMON_LONG_OPTS,
-        {0, 0, 0, 0}
-    };
-
-    SWITCH_FOREACH_OPT(opt, "d:p:s:l:e:w:c:h", opts, "sched-sedf", 0) {
-    case 'd':
-        dom = optarg;
-        break;
-    case 'p':
-        period = strtol(optarg, NULL, 10);
-        opt_p = 1;
-        break;
-    case 's':
-        slice = strtol(optarg, NULL, 10);
-        opt_s = 1;
-        break;
-    case 'l':
-        latency = strtol(optarg, NULL, 10);
-        opt_l = 1;
-        break;
-    case 'e':
-        extra = strtol(optarg, NULL, 10);
-        opt_e = 1;
-        break;
-    case 'w':
-        weight = strtol(optarg, NULL, 10);
-        opt_w = 1;
-        break;
-    case 'c':
-        cpupool = optarg;
-        break;
-    }
-
-    if (cpupool && (dom || opt_p || opt_s || opt_l || opt_e || opt_w)) {
-        fprintf(stderr, "Specifying a cpupool is not allowed with other "
-                "options.\n");
-        return 1;
-    }
-    if (!dom && (opt_p || opt_s || opt_l || opt_e || opt_w)) {
-        fprintf(stderr, "Must specify a domain.\n");
-        return 1;
-    }
-    if (opt_w && (opt_p || opt_s)) {
-        fprintf(stderr, "Specifying a weight AND period or slice is not "
-                "allowed.\n");
-    }
-
-    if (!dom) { /* list all domain's credit scheduler info */
-        return -sched_domain_output(LIBXL_SCHEDULER_SEDF,
-                                    sched_sedf_domain_output,
-                                    sched_default_pool_output,
-                                    cpupool);
-    } else {
-        uint32_t domid = find_domain(dom);
-
-        if (!opt_p && !opt_s && !opt_l && !opt_e && !opt_w) {
-            /* output sedf scheduler info */
-            sched_sedf_domain_output(-1);
-            return -sched_sedf_domain_output(domid);
-        } else { /* set sedf scheduler paramaters */
-            libxl_domain_sched_params scinfo;
-            libxl_domain_sched_params_init(&scinfo);
-            scinfo.sched = LIBXL_SCHEDULER_SEDF;
-
-            if (opt_p) {
-                scinfo.period = period;
-                scinfo.weight = 0;
-            }
-            if (opt_s) {
-                scinfo.slice = slice;
-                scinfo.weight = 0;
-            }
-            if (opt_l)
-                scinfo.latency = latency;
-            if (opt_e)
-                scinfo.extratime = extra;
-            if (opt_w) {
-                scinfo.weight = weight;
-                scinfo.period = 0;
-                scinfo.slice = 0;
-            }
-            rc = sched_domain_set(domid, &scinfo);
-            libxl_domain_sched_params_dispose(&scinfo);
-            if (rc)
-                return -rc;
-        }
-    }
-
-    return 0;
-}
-
 /*
  * <nothing>            : List all domain paramters and sched params
  * -d [domid]           : List domain params for domain
@@ -5902,11 +6195,10 @@ int main_sched_rtds(int argc, char **argv)
         {"period", 1, 0, 'p'},
         {"budget", 1, 0, 'b'},
         {"cpupool", 1, 0, 'c'},
-        COMMON_LONG_OPTS,
-        {0, 0, 0, 0}
+        COMMON_LONG_OPTS
     };
 
-    SWITCH_FOREACH_OPT(opt, "d:p:b:c:h", opts, "sched-rtds", 0) {
+    SWITCH_FOREACH_OPT(opt, "d:p:b:c:", opts, "sched-rtds", 0) {
     case 'd':
         dom = optarg;
         break;
@@ -6159,18 +6451,9 @@ int main_networkattach(int argc, char **argv)
     int opt;
     libxl_device_nic nic;
     XLU_Config *config = 0;
-    char *endptr, *oparg;
-    const char *tok;
-    int i;
-    unsigned int val;
 
     SWITCH_FOREACH_OPT(opt, "", NULL, "network-attach", 1) {
         /* No options */
-    }
-
-    if (argc-optind > 11) {
-        help("network-attach");
-        return 0;
     }
 
     domid = find_domain(argv[optind]);
@@ -6185,50 +6468,8 @@ int main_networkattach(int argc, char **argv)
     set_default_nic_values(&nic);
 
     for (argv += optind+1, argc -= optind+1; argc > 0; ++argv, --argc) {
-        if (MATCH_OPTION("type", *argv, oparg)) {
-            if (!strcmp("vif", oparg)) {
-                nic.nictype = LIBXL_NIC_TYPE_VIF;
-            } else if (!strcmp("ioemu", oparg)) {
-                nic.nictype = LIBXL_NIC_TYPE_VIF_IOEMU;
-            } else {
-                fprintf(stderr, "Invalid parameter `type'.\n");
-                return 1;
-            }
-        } else if (MATCH_OPTION("mac", *argv, oparg)) {
-            tok = strtok(oparg, ":");
-            for (i = 0; tok && i < 6; tok = strtok(NULL, ":"), ++i) {
-                val = strtoul(tok, &endptr, 16);
-                if ((tok == endptr) || (val > 255)) {
-                    fprintf(stderr, "Invalid parameter `mac'.\n");
-                    return 1;
-                }
-                nic.mac[i] = val;
-            }
-        } else if (MATCH_OPTION("bridge", *argv, oparg)) {
-            replace_string(&nic.bridge, oparg);
-        } else if (MATCH_OPTION("netdev", *argv, oparg)) {
-            fprintf(stderr, "the netdev parameter is deprecated, "
-                            "please use gatewaydev instead\n");
-            replace_string(&nic.gatewaydev, oparg);
-        } else if (MATCH_OPTION("gatewaydev", *argv, oparg)) {
-            replace_string(&nic.gatewaydev, oparg);
-        } else if (MATCH_OPTION("ip", *argv, oparg)) {
-            replace_string(&nic.ip, oparg);
-        } else if (MATCH_OPTION("script", *argv, oparg)) {
-            replace_string(&nic.script, oparg);
-        } else if (MATCH_OPTION("backend", *argv, oparg)) {
-            replace_string(&nic.backend_domname, oparg);
-        } else if (MATCH_OPTION("vifname", *argv, oparg)) {
-            replace_string(&nic.ifname, oparg);
-        } else if (MATCH_OPTION("model", *argv, oparg)) {
-            replace_string(&nic.model, oparg);
-        } else if (MATCH_OPTION("rate", *argv, oparg)) {
-            parse_vif_rate(&config, oparg, &nic);
-        } else if (MATCH_OPTION("accel", *argv, oparg)) {
-        } else {
-            fprintf(stderr, "unrecognized argument `%s'\n", *argv);
+        if (parse_nic_config(&nic, &config, *argv))
             return 1;
-        }
     }
 
     if (dryrun_only) {
@@ -6588,7 +6829,6 @@ static char *uptime_to_string(unsigned long uptime, int short_mode)
 {
     int sec, min, hour, day;
     char *time_string;
-    int ret;
 
     day = (int)(uptime / 86400);
     uptime -= (day * 86400);
@@ -6600,21 +6840,19 @@ static char *uptime_to_string(unsigned long uptime, int short_mode)
 
     if (short_mode)
         if (day > 1)
-            ret = asprintf(&time_string, "%d days, %2d:%02d", day, hour, min);
+            xasprintf(&time_string, "%d days, %2d:%02d", day, hour, min);
         else if (day == 1)
-            ret = asprintf(&time_string, "%d day, %2d:%02d", day, hour, min);
+            xasprintf(&time_string, "%d day, %2d:%02d", day, hour, min);
         else
-            ret = asprintf(&time_string, "%2d:%02d", hour, min);
+            xasprintf(&time_string, "%2d:%02d", hour, min);
     else
         if (day > 1)
-            ret = asprintf(&time_string, "%d days, %2d:%02d:%02d", day, hour, min, sec);
+            xasprintf(&time_string, "%d days, %2d:%02d:%02d", day, hour, min, sec);
         else if (day == 1)
-            ret = asprintf(&time_string, "%d day, %2d:%02d:%02d", day, hour, min, sec);
+            xasprintf(&time_string, "%d day, %2d:%02d:%02d", day, hour, min, sec);
         else
-            ret = asprintf(&time_string, "%2d:%02d:%02d", hour, min, sec);
+            xasprintf(&time_string, "%2d:%02d:%02d", hour, min, sec);
 
-    if (ret < 0)
-        return NULL;
     return time_string;
 }
 
@@ -6637,8 +6875,8 @@ int main_claims(int argc, char **argv)
         return 1;
     }
 
-    list_domains(0 /* verbose */, 0 /* context */, 1 /* claim */,
-                 0 /* numa */, info, nb_domain);
+    list_domains(false /* verbose */, false /* context */, true /* claim */,
+                 false /* numa */, false /* cpupool */, info, nb_domain);
 
     libxl_dominfo_list_free(info, nb_domain);
     return 0;
@@ -7020,13 +7258,12 @@ int main_cpupoolcreate(int argc, char **argv)
 {
     const char *filename = NULL, *config_src=NULL;
     const char *p;
-    char extra_config[1024];
+    char *extra_config = NULL;
     int opt;
     static struct option opts[] = {
         {"defconfig", 1, 0, 'f'},
         {"dryrun", 0, 0, 'n'},
-        COMMON_LONG_OPTS,
-        {0, 0, 0, 0}
+        COMMON_LONG_OPTS
     };
     int ret;
     char *config_data = 0;
@@ -7043,9 +7280,9 @@ int main_cpupoolcreate(int argc, char **argv)
     libxl_bitmap cpumap;
     libxl_uuid uuid;
     libxl_cputopology *topology;
-    int rc = -ERROR_FAIL;
+    int rc = 1;
 
-    SWITCH_FOREACH_OPT(opt, "hnf:", opts, "cpupool-create", 0) {
+    SWITCH_FOREACH_OPT(opt, "nf:", opts, "cpupool-create", 0) {
     case 'f':
         filename = optarg;
         break;
@@ -7054,13 +7291,13 @@ int main_cpupoolcreate(int argc, char **argv)
         break;
     }
 
-    memset(extra_config, 0, sizeof(extra_config));
+    libxl_bitmap_init(&freemap);
+    libxl_bitmap_init(&cpumap);
+
     while (optind < argc) {
         if ((p = strchr(argv[optind], '='))) {
-            if (strlen(extra_config) + 1 + strlen(argv[optind]) < sizeof(extra_config)) {
-                strcat(extra_config, "\n");
-                strcat(extra_config, argv[optind]);
-            }
+            string_realloc_append(&extra_config, "\n");
+            string_realloc_append(&extra_config, argv[optind]);
         } else if (!filename) {
             filename = argv[optind];
         } else {
@@ -7083,9 +7320,9 @@ int main_cpupoolcreate(int argc, char **argv)
     else
         config_src="command line";
 
-    if (strlen(extra_config)) {
+    if (extra_config && strlen(extra_config)) {
         if (config_len > INT_MAX - (strlen(extra_config) + 2)) {
-            fprintf(stderr, "Failed to attach extra configration\n");
+            fprintf(stderr, "Failed to attach extra configuration\n");
             goto out;
         }
         config_data = xrealloc(config_data,
@@ -7172,16 +7409,27 @@ int main_cpupoolcreate(int argc, char **argv)
             fprintf(stderr, "no free cpu found\n");
             goto out_cfg;
         }
-    } else if (!xlu_cfg_get_list(config, "cpus", &cpus, 0, 0)) {
+    } else if (!xlu_cfg_get_list(config, "cpus", &cpus, 0, 1)) {
         n_cpus = 0;
         while ((buf = xlu_cfg_get_listitem(cpus, n_cpus)) != NULL) {
             i = atoi(buf);
-            if ((i < 0) || (i >= freemap.size * 8) ||
-                !libxl_bitmap_test(&freemap, i)) {
+            if ((i < 0) || !libxl_bitmap_test(&freemap, i)) {
                 fprintf(stderr, "cpu %d illegal or not free\n", i);
                 goto out_cfg;
             }
             libxl_bitmap_set(&cpumap, i);
+            n_cpus++;
+        }
+    } else if (!xlu_cfg_get_string(config, "cpus", &buf, 0)) {
+        if (cpurange_parse(buf, &cpumap))
+            goto out_cfg;
+
+        n_cpus = 0;
+        libxl_for_each_set_bit(i, cpumap) {
+            if (!libxl_bitmap_test(&freemap, i)) {
+                fprintf(stderr, "cpu %d illegal or not free\n", i);
+                goto out_cfg;
+            }
             n_cpus++;
         }
     } else
@@ -7207,8 +7455,11 @@ int main_cpupoolcreate(int argc, char **argv)
 out_cfg:
     xlu_cfg_destroy(config);
 out:
+    libxl_bitmap_dispose(&freemap);
+    libxl_bitmap_dispose(&cpumap);
     free(name);
     free(config_data);
+    free(extra_config);
     return rc;
 }
 
@@ -7217,8 +7468,7 @@ int main_cpupoollist(int argc, char **argv)
     int opt;
     static struct option opts[] = {
         {"cpus", 0, 0, 'c'},
-        COMMON_LONG_OPTS,
-        {0, 0, 0, 0}
+        COMMON_LONG_OPTS
     };
     int opt_cpus = 0;
     const char *pool = NULL;
@@ -7226,9 +7476,8 @@ int main_cpupoollist(int argc, char **argv)
     int n_pools, p, c, n;
     uint32_t poolid;
     char *name;
-    int ret = 0;
 
-    SWITCH_FOREACH_OPT(opt, "hc", opts, "cpupool-list", 0) {
+    SWITCH_FOREACH_OPT(opt, "c", opts, "cpupool-list", 0) {
     case 'c':
         opt_cpus = 1;
         break;
@@ -7238,14 +7487,14 @@ int main_cpupoollist(int argc, char **argv)
         pool = argv[optind];
         if (libxl_name_to_cpupoolid(ctx, pool, &poolid)) {
             fprintf(stderr, "Pool \'%s\' does not exist\n", pool);
-            return -ERROR_FAIL;
+            return 1;
         }
     }
 
     poolinfo = libxl_list_cpupool(ctx, &n_pools);
     if (!poolinfo) {
         fprintf(stderr, "error getting cpupool info\n");
-        return -ERROR_NOMEM;
+        return 1;
     }
 
     printf("%-19s", "Name");
@@ -7255,7 +7504,7 @@ int main_cpupoollist(int argc, char **argv)
         printf("CPUs   Sched     Active   Domain count\n");
 
     for (p = 0; p < n_pools; p++) {
-        if (!ret && (!pool || (poolinfo[p].poolid == poolid))) {
+        if (!pool || (poolinfo[p].poolid == poolid)) {
             name = poolinfo[p].pool_name;
             printf("%-19s", name);
             n = 0;
@@ -7276,7 +7525,7 @@ int main_cpupoollist(int argc, char **argv)
 
     libxl_cpupoolinfo_list_free(poolinfo, n_pools);
 
-    return ret;
+    return 0;
 }
 
 int main_cpupooldestroy(int argc, char **argv)
@@ -7293,11 +7542,14 @@ int main_cpupooldestroy(int argc, char **argv)
 
     if (libxl_cpupool_qualifier_to_cpupoolid(ctx, pool, &poolid, NULL) ||
         !libxl_cpupoolid_is_valid(ctx, poolid)) {
-        fprintf(stderr, "unknown cpupool \'%s\'\n", pool);
-        return -ERROR_FAIL;
+        fprintf(stderr, "unknown cpupool '%s'\n", pool);
+        return 1;
     }
 
-    return -libxl_cpupool_destroy(ctx, poolid);
+    if (libxl_cpupool_destroy(ctx, poolid))
+        return 1;
+
+    return 0;
 }
 
 int main_cpupoolrename(int argc, char **argv)
@@ -7315,14 +7567,14 @@ int main_cpupoolrename(int argc, char **argv)
 
     if (libxl_cpupool_qualifier_to_cpupoolid(ctx, pool, &poolid, NULL) ||
         !libxl_cpupoolid_is_valid(ctx, poolid)) {
-        fprintf(stderr, "unknown cpupool \'%s\'\n", pool);
-        return -ERROR_FAIL;
+        fprintf(stderr, "unknown cpupool '%s'\n", pool);
+        return 1;
     }
 
     new_name = argv[optind];
 
     if (libxl_cpupool_rename(ctx, new_name, poolid)) {
-        fprintf(stderr, "Can't rename cpupool '%s'.\n", pool);
+        fprintf(stderr, "Can't rename cpupool '%s'\n", pool);
         return 1;
     }
 
@@ -7334,44 +7586,37 @@ int main_cpupoolcpuadd(int argc, char **argv)
     int opt;
     const char *pool;
     uint32_t poolid;
-    int cpu;
-    int node;
-    int n;
+    libxl_bitmap cpumap;
+    int rc = 1;
 
     SWITCH_FOREACH_OPT(opt, "", NULL, "cpupool-cpu-add", 2) {
         /* No options */
     }
 
-    pool = argv[optind++];
-    node = -1;
-    cpu = -1;
-    if (strncmp(argv[optind], "node:", 5) == 0) {
-        node = atoi(argv[optind] + 5);
-    } else {
-        cpu = atoi(argv[optind]);
+    libxl_bitmap_init(&cpumap);
+    if (libxl_cpu_bitmap_alloc(ctx, &cpumap, 0)) {
+        fprintf(stderr, "Unable to allocate cpumap");
+        return 1;
     }
+
+    pool = argv[optind++];
+    if (cpurange_parse(argv[optind], &cpumap))
+        goto out;
 
     if (libxl_cpupool_qualifier_to_cpupoolid(ctx, pool, &poolid, NULL) ||
         !libxl_cpupoolid_is_valid(ctx, poolid)) {
         fprintf(stderr, "unknown cpupool \'%s\'\n", pool);
-        return -ERROR_FAIL;
+        goto out;
     }
 
-    if (cpu >= 0) {
-        return -libxl_cpupool_cpuadd(ctx, poolid, cpu);
-    }
+    if (libxl_cpupool_cpuadd_cpumap(ctx, poolid, &cpumap))
+        fprintf(stderr, "some cpus may not have been added to %s\n", pool);
 
-    if (libxl_cpupool_cpuadd_node(ctx, poolid, node, &n)) {
-        fprintf(stderr, "libxl_cpupool_cpuadd_node failed\n");
-        return -ERROR_FAIL;
-    }
+    rc = 0;
 
-    if (n > 0) {
-        return 0;
-    }
-
-    fprintf(stderr, "no free cpu found\n");
-    return -ERROR_FAIL;
+out:
+    libxl_bitmap_dispose(&cpumap);
+    return rc;
 }
 
 int main_cpupoolcpuremove(int argc, char **argv)
@@ -7379,44 +7624,37 @@ int main_cpupoolcpuremove(int argc, char **argv)
     int opt;
     const char *pool;
     uint32_t poolid;
-    int cpu;
-    int node;
-    int n;
+    libxl_bitmap cpumap;
+    int rc = 1;
+
+    libxl_bitmap_init(&cpumap);
+    if (libxl_cpu_bitmap_alloc(ctx, &cpumap, 0)) {
+        fprintf(stderr, "Unable to allocate cpumap");
+        return 1;
+    }
 
     SWITCH_FOREACH_OPT(opt, "", NULL, "cpupool-cpu-remove", 2) {
         /* No options */
     }
 
     pool = argv[optind++];
-    node = -1;
-    cpu = -1;
-    if (strncmp(argv[optind], "node:", 5) == 0) {
-        node = atoi(argv[optind] + 5);
-    } else {
-        cpu = atoi(argv[optind]);
-    }
+    if (cpurange_parse(argv[optind], &cpumap))
+        goto out;
 
     if (libxl_cpupool_qualifier_to_cpupoolid(ctx, pool, &poolid, NULL) ||
         !libxl_cpupoolid_is_valid(ctx, poolid)) {
         fprintf(stderr, "unknown cpupool \'%s\'\n", pool);
-        return -ERROR_FAIL;
+        goto out;
     }
 
-    if (cpu >= 0) {
-        return -libxl_cpupool_cpuremove(ctx, poolid, cpu);
-    }
+    if (libxl_cpupool_cpuremove_cpumap(ctx, poolid, &cpumap))
+        fprintf(stderr, "some cpus may not have been removed from %s\n", pool);
 
-    if (libxl_cpupool_cpuremove_node(ctx, poolid, node, &n)) {
-        fprintf(stderr, "libxl_cpupool_cpuremove_node failed\n");
-        return -ERROR_FAIL;
-    }
+    rc = 0;
 
-    if (n == 0) {
-        fprintf(stderr, "no cpu of node found in cpupool\n");
-        return -ERROR_FAIL;
-    }
-
-    return 0;
+out:
+    libxl_bitmap_dispose(&cpumap);
+    return rc;
 }
 
 int main_cpupoolmigrate(int argc, char **argv)
@@ -7436,22 +7674,25 @@ int main_cpupoolmigrate(int argc, char **argv)
 
     if (libxl_domain_qualifier_to_domid(ctx, dom, &domid) ||
         !libxl_domid_to_name(ctx, domid)) {
-        fprintf(stderr, "unknown domain \'%s\'\n", dom);
-        return -ERROR_FAIL;
+        fprintf(stderr, "unknown domain '%s'\n", dom);
+        return 1;
     }
 
     if (libxl_cpupool_qualifier_to_cpupoolid(ctx, pool, &poolid, NULL) ||
         !libxl_cpupoolid_is_valid(ctx, poolid)) {
-        fprintf(stderr, "unknown cpupool \'%s\'\n", pool);
-        return -ERROR_FAIL;
+        fprintf(stderr, "unknown cpupool '%s'\n", pool);
+        return 1;
     }
 
-    return -libxl_cpupool_movedomain(ctx, poolid, domid);
+    if (libxl_cpupool_movedomain(ctx, poolid, domid))
+        return 1;
+
+    return 0;
 }
 
 int main_cpupoolnumasplit(int argc, char **argv)
 {
-    int ret;
+    int rc;
     int opt;
     int p;
     int c;
@@ -7461,7 +7702,7 @@ int main_cpupoolnumasplit(int argc, char **argv)
     int n_pools;
     int node;
     int n_cpus;
-    char name[16];
+    char *name = NULL;
     libxl_uuid uuid;
     libxl_bitmap cpumap;
     libxl_cpupoolinfo *poolinfo;
@@ -7472,33 +7713,34 @@ int main_cpupoolnumasplit(int argc, char **argv)
         /* No options */
     }
 
-    ret = 0;
+    libxl_dominfo_init(&info);
 
+    rc = 1;
+
+    libxl_bitmap_init(&cpumap);
     poolinfo = libxl_list_cpupool(ctx, &n_pools);
     if (!poolinfo) {
         fprintf(stderr, "error getting cpupool info\n");
-        return -ERROR_NOMEM;
+        return 1;
     }
     poolid = poolinfo[0].poolid;
     sched = poolinfo[0].sched;
-    for (p = 0; p < n_pools; p++) {
-        libxl_cpupoolinfo_dispose(poolinfo + p);
-    }
+    libxl_cpupoolinfo_list_free(poolinfo, n_pools);
+
     if (n_pools > 1) {
         fprintf(stderr, "splitting not possible, already cpupools in use\n");
-        return -ERROR_FAIL;
+        return 1;
     }
 
     topology = libxl_get_cpu_topology(ctx, &n_cpus);
     if (topology == NULL) {
         fprintf(stderr, "libxl_get_topologyinfo failed\n");
-        return -ERROR_FAIL;
+        return 1;
     }
 
     if (libxl_cpu_bitmap_alloc(ctx, &cpumap, 0)) {
         fprintf(stderr, "Failed to allocate cpumap\n");
-        libxl_cputopology_list_free(topology, n_cpus);
-        return -ERROR_FAIL;
+        goto out;
     }
 
     /* Reset Pool-0 to 1st node: first add cpus, then remove cpus to avoid
@@ -7507,12 +7749,11 @@ int main_cpupoolnumasplit(int argc, char **argv)
     node = topology[0].node;
     if (libxl_cpupool_cpuadd_node(ctx, 0, node, &n)) {
         fprintf(stderr, "error on adding cpu to Pool 0\n");
-        return -ERROR_FAIL;
+        goto out;
     }
 
-    snprintf(name, 15, "Pool-node%d", node);
-    ret = -libxl_cpupool_rename(ctx, name, 0);
-    if (ret) {
+    xasprintf(&name, "Pool-node%d", node);
+    if (libxl_cpupool_rename(ctx, name, 0)) {
         fprintf(stderr, "error on renaming Pool 0\n");
         goto out;
     }
@@ -7530,6 +7771,12 @@ int main_cpupoolnumasplit(int argc, char **argv)
         goto out;
     }
     for (c = 0; c < 10; c++) {
+        /* We've called libxl_dominfo_init before the loop and will
+         * call libxl_dominfo_dispose after the loop when we're done
+         * with info.
+         */
+        libxl_dominfo_dispose(&info);
+        libxl_dominfo_init(&info);
         if (libxl_domain_info(ctx, &info, 0)) {
             fprintf(stderr, "error on getting info for Domain-0\n");
             goto out;
@@ -7551,23 +7798,21 @@ int main_cpupoolnumasplit(int argc, char **argv)
         }
 
         node = topology[c].node;
-        ret = -libxl_cpupool_cpuremove_node(ctx, 0, node, &n);
-        if (ret) {
+        if (libxl_cpupool_cpuremove_node(ctx, 0, node, &n)) {
             fprintf(stderr, "error on removing cpu from Pool 0\n");
             goto out;
         }
 
-        snprintf(name, 15, "Pool-node%d", node);
+        free(name);
+        xasprintf(&name, "Pool-node%d", node);
         libxl_uuid_generate(&uuid);
         poolid = 0;
-        ret = -libxl_cpupool_create(ctx, name, sched, cpumap, &uuid, &poolid);
-        if (ret) {
+        if (libxl_cpupool_create(ctx, name, sched, cpumap, &uuid, &poolid)) {
             fprintf(stderr, "error on creating cpupool\n");
             goto out;
         }
 
-        ret = -libxl_cpupool_cpuadd_node(ctx, poolid, node, &n);
-        if (ret) {
+        if (libxl_cpupool_cpuadd_node(ctx, poolid, node, &n)) {
             fprintf(stderr, "error on adding cpus to cpupool\n");
             goto out;
         }
@@ -7579,11 +7824,15 @@ int main_cpupoolnumasplit(int argc, char **argv)
         }
     }
 
+    rc = 0;
+
 out:
     libxl_cputopology_list_free(topology, n_cpus);
     libxl_bitmap_dispose(&cpumap);
+    libxl_dominfo_dispose(&info);
+    free(name);
 
-    return ret;
+    return rc;
 }
 
 int main_getenforce(int argc, char **argv)
@@ -7608,7 +7857,7 @@ int main_getenforce(int argc, char **argv)
 
 int main_setenforce(int argc, char **argv)
 {
-    int ret, mode = -1;
+    int ret, mode;
     const char *p = NULL;
 
     if (optind >= argc) {
@@ -7647,7 +7896,7 @@ int main_setenforce(int argc, char **argv)
 int main_loadpolicy(int argc, char **argv)
 {
     const char *polFName;
-    int polFd = 0;
+    int polFd = -1;
     void *polMemCp = NULL;
     struct stat info;
     int ret;
@@ -7659,7 +7908,7 @@ int main_loadpolicy(int argc, char **argv)
 
     polFName = argv[optind];
     polFd = open(polFName, O_RDONLY);
-    if ( polFd < 0 ) {
+    if (polFd < 0) {
         fprintf(stderr, "Error occurred opening policy file '%s': %s\n",
                 polFName, strerror(errno));
         ret = -1;
@@ -7667,7 +7916,7 @@ int main_loadpolicy(int argc, char **argv)
     }
 
     ret = stat(polFName, &info);
-    if ( ret < 0 ) {
+    if (ret < 0) {
         fprintf(stderr, "Error occurred retrieving information about"
                 "policy file '%s': %s\n", polFName, strerror(errno));
         goto done;
@@ -7699,7 +7948,7 @@ int main_loadpolicy(int argc, char **argv)
 
 done:
     free(polMemCp);
-    if ( polFd > 0 )
+    if (polFd >= 0)
         close(polFd);
 
     return ret;
@@ -7770,10 +8019,9 @@ int main_remus(int argc, char **argv)
         if (!ssh_command[0]) {
             rune = host;
         } else {
-            if (asprintf(&rune, "exec %s %s xl migrate-receive -r %s",
-                         ssh_command, host,
-                         daemonize ? "" : " -e") < 0)
-                return 1;
+            xasprintf(&rune, "exec %s %s xl migrate-receive -r %s",
+                      ssh_command, host,
+                      daemonize ? "" : " -e");
         }
 
         save_domain_core_begin(domid, NULL, &config_data, &config_len);
@@ -7824,15 +8072,24 @@ int main_remus(int argc, char **argv)
 int main_devd(int argc, char **argv)
 {
     int ret = 0, opt = 0, daemonize = 1;
+    const char *pidfile = NULL;
+    static const struct option opts[] = {
+        {"pidfile", 1, 0, 'p'},
+        COMMON_LONG_OPTS,
+        {0, 0, 0, 0}
+    };
 
-    SWITCH_FOREACH_OPT(opt, "F", NULL, "devd", 0) {
+    SWITCH_FOREACH_OPT(opt, "Fp:", opts, "devd", 0) {
     case 'F':
         daemonize = 0;
+        break;
+    case 'p':
+        pidfile = optarg;
         break;
     }
 
     if (daemonize) {
-        ret = do_daemonize("xldevd");
+        ret = do_daemonize("xldevd", pidfile);
         if (ret) {
             ret = (ret == 1) ? 0 : ret;
             goto out;
@@ -7846,12 +8103,91 @@ out:
 }
 
 #ifdef LIBXL_HAVE_PSR_CMT
-static void psr_cmt_print_domain_cache_occupancy(libxl_dominfo *dominfo,
-                                                    uint32_t nr_sockets)
+static int psr_cmt_hwinfo(void)
+{
+    int rc;
+    int enabled;
+    uint32_t total_rmid;
+
+    printf("Cache Monitoring Technology (CMT):\n");
+
+    enabled = libxl_psr_cmt_enabled(ctx);
+    printf("%-16s: %s\n", "Enabled", enabled ? "1" : "0");
+    if (!enabled)
+        return 0;
+
+    rc = libxl_psr_cmt_get_total_rmid(ctx, &total_rmid);
+    if (rc) {
+        fprintf(stderr, "Failed to get max RMID value\n");
+        return rc;
+    }
+    printf("%-16s: %u\n", "Total RMID", total_rmid);
+
+    printf("Supported monitor types:\n");
+    if (libxl_psr_cmt_type_supported(ctx, LIBXL_PSR_CMT_TYPE_CACHE_OCCUPANCY))
+        printf("cache-occupancy\n");
+    if (libxl_psr_cmt_type_supported(ctx, LIBXL_PSR_CMT_TYPE_TOTAL_MEM_COUNT))
+        printf("total-mem-bandwidth\n");
+    if (libxl_psr_cmt_type_supported(ctx, LIBXL_PSR_CMT_TYPE_LOCAL_MEM_COUNT))
+        printf("local-mem-bandwidth\n");
+
+    return rc;
+}
+
+#define MBM_SAMPLE_RETRY_MAX 4
+static int psr_cmt_get_mem_bandwidth(uint32_t domid,
+                                     libxl_psr_cmt_type type,
+                                     uint32_t socketid,
+                                     uint64_t *bandwidth_r)
+{
+    uint64_t sample1, sample2;
+    uint64_t tsc1, tsc2;
+    int retry_attempts = 0;
+    int rc;
+
+    while (1) {
+        rc = libxl_psr_cmt_get_sample(ctx, domid, type, socketid,
+                                      &sample1, &tsc1);
+        if (rc < 0)
+            return rc;
+
+        usleep(10000);
+
+        rc = libxl_psr_cmt_get_sample(ctx, domid, type, socketid,
+                                      &sample2, &tsc2);
+        if (rc < 0)
+            return rc;
+
+        if (tsc2 <= tsc1)
+            return -1;
+
+        /*
+         * Hardware guarantees at most 1 overflow can happen if the duration
+         * between two samples is less than 1 second. Note that tsc returned
+         * from hypervisor is already-scaled time(ns).
+         */
+        if (tsc2 - tsc1 < 1000000000 && sample2 >= sample1)
+            break;
+
+        if (retry_attempts < MBM_SAMPLE_RETRY_MAX) {
+            retry_attempts++;
+        } else {
+            fprintf(stderr, "event counter overflowed\n");
+            return -1;
+        }
+    }
+
+    *bandwidth_r = (sample2 - sample1) * 1000000000 / (tsc2 - tsc1) / 1024;
+    return 0;
+}
+
+static void psr_cmt_print_domain_info(libxl_dominfo *dominfo,
+                                      libxl_psr_cmt_type type,
+                                      libxl_bitmap *socketmap)
 {
     char *domain_name;
     uint32_t socketid;
-    uint32_t l3_cache_occupancy;
+    uint64_t monitor_data;
 
     if (!libxl_psr_cmt_domain_attached(ctx, dominfo->domid))
         return;
@@ -7860,20 +8196,32 @@ static void psr_cmt_print_domain_cache_occupancy(libxl_dominfo *dominfo,
     printf("%-40s %5d", domain_name, dominfo->domid);
     free(domain_name);
 
-    for (socketid = 0; socketid < nr_sockets; socketid++) {
-        if ( !libxl_psr_cmt_get_cache_occupancy(ctx, dominfo->domid,
-                 socketid, &l3_cache_occupancy) )
-            printf("%13u KB", l3_cache_occupancy);
+    libxl_for_each_set_bit(socketid, *socketmap) {
+        switch (type) {
+        case LIBXL_PSR_CMT_TYPE_CACHE_OCCUPANCY:
+            if (!libxl_psr_cmt_get_sample(ctx, dominfo->domid, type, socketid,
+                                          &monitor_data, NULL))
+                printf("%13"PRIu64" KB", monitor_data / 1024);
+            break;
+        case LIBXL_PSR_CMT_TYPE_TOTAL_MEM_COUNT:
+        case LIBXL_PSR_CMT_TYPE_LOCAL_MEM_COUNT:
+            if (!psr_cmt_get_mem_bandwidth(dominfo->domid, type, socketid,
+                                           &monitor_data))
+                printf("%11"PRIu64" KB/s", monitor_data);
+            break;
+        default:
+            return;
+        }
     }
 
     printf("\n");
 }
 
-static int psr_cmt_show_cache_occupancy(uint32_t domid)
+static int psr_cmt_show(libxl_psr_cmt_type type, uint32_t domid)
 {
-    uint32_t i, socketid, nr_sockets, total_rmid;
+    uint32_t i, socketid, total_rmid;
     uint32_t l3_cache_size;
-    libxl_physinfo info;
+    libxl_bitmap socketmap;
     int rc, nr_domains;
 
     if (!libxl_psr_cmt_enabled(ctx)) {
@@ -7881,64 +8229,80 @@ static int psr_cmt_show_cache_occupancy(uint32_t domid)
         return -1;
     }
 
-    libxl_physinfo_init(&info);
-    rc = libxl_get_physinfo(ctx, &info);
-    if (rc < 0) {
-        fprintf(stderr, "Failed getting physinfo, rc: %d\n", rc);
-        libxl_physinfo_dispose(&info);
+    if (!libxl_psr_cmt_type_supported(ctx, type)) {
+        fprintf(stderr, "Monitor type '%s' is not supported in the system\n",
+                libxl_psr_cmt_type_to_string(type));
         return -1;
     }
-    nr_sockets = info.nr_cpus / info.threads_per_core / info.cores_per_socket;
-    libxl_physinfo_dispose(&info);
+
+    libxl_bitmap_init(&socketmap);
+    libxl_socket_bitmap_alloc(ctx, &socketmap, 0);
+    rc = libxl_get_online_socketmap(ctx, &socketmap);
+    if (rc < 0) {
+        fprintf(stderr, "Failed getting available sockets, rc: %d\n", rc);
+        goto out;
+    }
 
     rc = libxl_psr_cmt_get_total_rmid(ctx, &total_rmid);
     if (rc < 0) {
         fprintf(stderr, "Failed to get max RMID value\n");
-        return -1;
+        goto out;
     }
 
     printf("Total RMID: %d\n", total_rmid);
 
     /* Header */
     printf("%-40s %5s", "Name", "ID");
-    for (socketid = 0; socketid < nr_sockets; socketid++)
+    libxl_for_each_set_bit(socketid, socketmap)
         printf("%14s %d", "Socket", socketid);
     printf("\n");
 
-    /* Total L3 cache size */
-    printf("%-46s", "Total L3 Cache Size");
-    for (socketid = 0; socketid < nr_sockets; socketid++) {
-        rc = libxl_psr_cmt_get_l3_cache_size(ctx, socketid, &l3_cache_size);
-        if (rc < 0) {
-            fprintf(stderr, "Failed to get system l3 cache size for socket:%d\n",
+    if (type == LIBXL_PSR_CMT_TYPE_CACHE_OCCUPANCY) {
+            /* Total L3 cache size */
+            printf("%-46s", "Total L3 Cache Size");
+            libxl_for_each_set_bit(socketid, socketmap) {
+                rc = libxl_psr_cmt_get_l3_cache_size(ctx, socketid,
+                                                     &l3_cache_size);
+                if (rc < 0) {
+                    fprintf(stderr,
+                            "Failed to get system l3 cache size for socket:%d\n",
                             socketid);
-            return -1;
-        }
-        printf("%13u KB", l3_cache_size);
+                    goto out;
+                }
+                printf("%13u KB", l3_cache_size);
+            }
+            printf("\n");
     }
-    printf("\n");
 
     /* Each domain */
     if (domid != INVALID_DOMID) {
         libxl_dominfo dominfo;
+
+        libxl_dominfo_init(&dominfo);
         if (libxl_domain_info(ctx, &dominfo, domid)) {
             fprintf(stderr, "Failed to get domain info for %d\n", domid);
-            return -1;
+            rc = -1;
+            goto out;
         }
-        psr_cmt_print_domain_cache_occupancy(&dominfo, nr_sockets);
+        psr_cmt_print_domain_info(&dominfo, type, &socketmap);
+        libxl_dominfo_dispose(&dominfo);
     }
     else
     {
         libxl_dominfo *list;
         if (!(list = libxl_list_domain(ctx, &nr_domains))) {
             fprintf(stderr, "Failed to get domain info for domain list.\n");
-            return -1;
+            rc = -1;
+            goto out;
         }
         for (i = 0; i < nr_domains; i++)
-            psr_cmt_print_domain_cache_occupancy(list + i, nr_sockets);
+            psr_cmt_print_domain_info(list + i, type, &socketmap);
         libxl_dominfo_list_free(list, nr_domains);
     }
-    return 0;
+
+out:
+    libxl_bitmap_dispose(&socketmap);
+    return rc;
 }
 
 int main_psr_cmt_attach(int argc, char **argv)
@@ -7981,7 +8345,16 @@ int main_psr_cmt_show(int argc, char **argv)
         /* No options */
     }
 
-    libxl_psr_cmt_type_from_string(argv[optind], &type);
+    if (!strcmp(argv[optind], "cache-occupancy"))
+        type = LIBXL_PSR_CMT_TYPE_CACHE_OCCUPANCY;
+    else if (!strcmp(argv[optind], "total-mem-bandwidth"))
+        type = LIBXL_PSR_CMT_TYPE_TOTAL_MEM_COUNT;
+    else if (!strcmp(argv[optind], "local-mem-bandwidth"))
+        type = LIBXL_PSR_CMT_TYPE_LOCAL_MEM_COUNT;
+    else {
+        help("psr-cmt-show");
+        return 2;
+    }
 
     if (optind + 1 >= argc)
         domid = INVALID_DOMID;
@@ -7992,17 +8365,231 @@ int main_psr_cmt_show(int argc, char **argv)
         return 2;
     }
 
-    switch (type) {
-    case LIBXL_PSR_CMT_TYPE_CACHE_OCCUPANCY:
-        ret = psr_cmt_show_cache_occupancy(domid);
-        break;
-    default:
-        help("psr-cmt-show");
-        return 2;
-    }
+    ret = psr_cmt_show(type, domid);
 
     return ret;
 }
+#endif
+
+#ifdef LIBXL_HAVE_PSR_CAT
+static int psr_cat_hwinfo(void)
+{
+    int rc;
+    int i, nr;
+    uint32_t l3_cache_size;
+    libxl_psr_cat_info *info;
+
+    printf("Cache Allocation Technology (CAT):\n");
+
+    rc = libxl_psr_cat_get_l3_info(ctx, &info, &nr);
+    if (rc) {
+        fprintf(stderr, "Failed to get cat info\n");
+        return rc;
+    }
+
+    for (i = 0; i < nr; i++) {
+        rc = libxl_psr_cmt_get_l3_cache_size(ctx, info[i].id, &l3_cache_size);
+        if (rc) {
+            fprintf(stderr, "Failed to get l3 cache size for socket:%d\n",
+                    info[i].id);
+            goto out;
+        }
+        printf("%-16s: %u\n", "Socket ID", info[i].id);
+        printf("%-16s: %uKB\n", "L3 Cache", l3_cache_size);
+        printf("%-16s: %u\n", "Maximum COS", info[i].cos_max);
+        printf("%-16s: %u\n", "CBM length", info[i].cbm_len);
+        printf("%-16s: %#llx\n", "Default CBM",
+               (1ull << info[i].cbm_len) - 1);
+    }
+
+out:
+    libxl_psr_cat_info_list_free(info, nr);
+    return rc;
+}
+
+static void psr_cat_print_one_domain_cbm(uint32_t domid, uint32_t socketid)
+{
+    char *domain_name;
+    uint64_t cbm;
+
+    domain_name = libxl_domid_to_name(ctx, domid);
+    printf("%5d%25s", domid, domain_name);
+    free(domain_name);
+
+    if (!libxl_psr_cat_get_cbm(ctx, domid, LIBXL_PSR_CBM_TYPE_L3_CBM,
+                               socketid, &cbm))
+         printf("%#16"PRIx64, cbm);
+
+    printf("\n");
+}
+
+static int psr_cat_print_domain_cbm(uint32_t domid, uint32_t socketid)
+{
+    int i, nr_domains;
+    libxl_dominfo *list;
+
+    if (domid != INVALID_DOMID) {
+        psr_cat_print_one_domain_cbm(domid, socketid);
+        return 0;
+    }
+
+    if (!(list = libxl_list_domain(ctx, &nr_domains))) {
+        fprintf(stderr, "Failed to get domain list for cbm display\n");
+        return -1;
+    }
+
+    for (i = 0; i < nr_domains; i++)
+        psr_cat_print_one_domain_cbm(list[i].domid, socketid);
+    libxl_dominfo_list_free(list, nr_domains);
+
+    return 0;
+}
+
+static int psr_cat_print_socket(uint32_t domid, libxl_psr_cat_info *info)
+{
+    int rc;
+    uint32_t l3_cache_size;
+
+    rc = libxl_psr_cmt_get_l3_cache_size(ctx, info->id, &l3_cache_size);
+    if (rc) {
+        fprintf(stderr, "Failed to get l3 cache size for socket:%d\n",
+                info->id);
+        return -1;
+    }
+
+    printf("%-16s: %u\n", "Socket ID", info->id);
+    printf("%-16s: %uKB\n", "L3 Cache", l3_cache_size);
+    printf("%-16s: %#llx\n", "Default CBM", (1ull << info->cbm_len) - 1);
+    printf("%5s%25s%16s\n", "ID", "NAME", "CBM");
+
+    return psr_cat_print_domain_cbm(domid, info->id);
+}
+
+static int psr_cat_show(uint32_t domid)
+{
+    int i, nr;
+    int rc;
+    libxl_psr_cat_info *info;
+
+    rc = libxl_psr_cat_get_l3_info(ctx, &info, &nr);
+    if (rc) {
+        fprintf(stderr, "Failed to get cat info\n");
+        return rc;
+    }
+
+    for (i = 0; i < nr; i++) {
+        rc = psr_cat_print_socket(domid, info + i);
+        if (rc)
+            goto out;
+    }
+
+out:
+    libxl_psr_cat_info_list_free(info, nr);
+    return rc;
+}
+
+int main_psr_cat_cbm_set(int argc, char **argv)
+{
+    uint32_t domid;
+    libxl_psr_cbm_type type = LIBXL_PSR_CBM_TYPE_L3_CBM;
+    uint64_t cbm;
+    int ret, opt = 0;
+    libxl_bitmap target_map;
+    char *value;
+    libxl_string_list socket_list;
+    unsigned long start, end;
+    int i, j, len;
+
+    static struct option opts[] = {
+        {"socket", 1, 0, 's'},
+        COMMON_LONG_OPTS
+    };
+
+    libxl_socket_bitmap_alloc(ctx, &target_map, 0);
+    libxl_bitmap_set_none(&target_map);
+
+    SWITCH_FOREACH_OPT(opt, "s:", opts, "psr-cat-cbm-set", 2) {
+    case 's':
+        trim(isspace, optarg, &value);
+        split_string_into_string_list(value, ",", &socket_list);
+        len = libxl_string_list_length(&socket_list);
+        for (i = 0; i < len; i++) {
+            parse_range(socket_list[i], &start, &end);
+            for (j = start; j <= end; j++)
+                libxl_bitmap_set(&target_map, j);
+        }
+
+        libxl_string_list_dispose(&socket_list);
+        free(value);
+        break;
+    }
+
+    if (libxl_bitmap_is_empty(&target_map))
+        libxl_bitmap_set_any(&target_map);
+
+    if (argc != optind + 2) {
+        help("psr-cat-cbm-set");
+        return 2;
+    }
+
+    domid = find_domain(argv[optind]);
+    cbm = strtoll(argv[optind + 1], NULL , 0);
+
+    ret = libxl_psr_cat_set_cbm(ctx, domid, type, &target_map, cbm);
+
+    libxl_bitmap_dispose(&target_map);
+    return ret;
+}
+
+int main_psr_cat_show(int argc, char **argv)
+{
+    int opt;
+    uint32_t domid;
+
+    SWITCH_FOREACH_OPT(opt, "", NULL, "psr-cat-show", 0) {
+        /* No options */
+    }
+
+    if (optind >= argc)
+        domid = INVALID_DOMID;
+    else if (optind == argc - 1)
+        domid = find_domain(argv[optind]);
+    else {
+        help("psr-cat-show");
+        return 2;
+    }
+
+    return psr_cat_show(domid);
+}
+
+int main_psr_hwinfo(int argc, char **argv)
+{
+    int opt, ret = 0;
+    bool all = true, cmt = false, cat = false;
+    static struct option opts[] = {
+        {"cmt", 0, 0, 'm'},
+        {"cat", 0, 0, 'a'},
+        COMMON_LONG_OPTS
+    };
+
+    SWITCH_FOREACH_OPT(opt, "ma", opts, "psr-hwinfo", 0) {
+    case 'm':
+        all = false; cmt = true;
+        break;
+    case 'a':
+        all = false; cat = true;
+        break;
+    }
+
+    if (!ret && (all || cmt))
+        ret = psr_cmt_hwinfo();
+
+    if (!ret && (all || cat))
+        ret = psr_cat_hwinfo();
+
+    return ret;
+}
+
 #endif
 
 /*

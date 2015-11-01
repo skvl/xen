@@ -22,6 +22,7 @@
 #include <xen/console.h>
 #include <xen/device_tree.h>
 #include <xen/serial.h>
+#include <xen/errno.h>
 
 /*
  * Configure UART port with a string:
@@ -41,9 +42,33 @@ void __init dt_uart_init(void)
     const char *devpath = opt_dtuart;
     char *options;
 
-    if ( !console_has("dtuart") || !strcmp(opt_dtuart, "") )
+    if ( !console_has("dtuart") )
+        return; /* Not for us */
+
+    if ( !strcmp(opt_dtuart, "") )
     {
-        printk("No console\n");
+        const struct dt_device_node *chosen = dt_find_node_by_path("/chosen");
+
+        if ( chosen )
+        {
+            const char *stdout;
+
+            ret = dt_property_read_string(chosen, "stdout-path", &stdout);
+            if ( ret >= 0 )
+            {
+                printk("Taking dtuart configuration from /chosen/stdout-path\n");
+                if ( strlcpy(opt_dtuart, stdout, sizeof(opt_dtuart))
+                     >= sizeof(opt_dtuart) )
+                    printk("WARNING: /chosen/stdout-path too long, truncated\n");
+            }
+            else if ( ret != -EINVAL /* Not present */ )
+                printk("Failed to read /chosen/stdout-path (%d)\n", ret);
+        }
+    }
+
+    if ( !strcmp(opt_dtuart, "") )
+    {
+        printk("No dtuart path configured\n");
         return;
     }
 
@@ -53,7 +78,7 @@ void __init dt_uart_init(void)
     else
         options = "";
 
-    printk("Looking for UART console %s\n", devpath);
+    printk("Looking for dtuart at \"%s\", options \"%s\"\n", devpath, options);
     if ( *devpath == '/' )
         dev = dt_find_node_by_path(devpath);
     else
@@ -68,5 +93,15 @@ void __init dt_uart_init(void)
     ret = device_init(dev, DEVICE_SERIAL, options);
 
     if ( ret )
-        printk("Unable to initialize serial: %d\n", ret);
+        printk("Unable to initialize dtuart: %d\n", ret);
 }
+
+/*
+ * Local variables:
+ * mode: C
+ * c-file-style: "BSD"
+ * c-basic-offset: 4
+ * tab-width: 4
+ * indent-tabs-mode: nil
+ * End:
+ */

@@ -5,7 +5,6 @@
 #include <xen/kernel.h>
 #include <asm/page.h>
 #include <public/xen.h>
-#include <xen/domain_page.h>
 #include <xen/pdx.h>
 
 /* Align Xen to a 2 MiB boundary. */
@@ -208,6 +207,8 @@ static inline void __iomem *ioremap_wc(paddr_t start, size_t len)
 #define pfn_to_paddr(pfn) ((paddr_t)(pfn) << PAGE_SHIFT)
 #define paddr_to_pfn(pa)  ((unsigned long)((pa) >> PAGE_SHIFT))
 #define paddr_to_pdx(pa)    pfn_to_pdx(paddr_to_pfn(pa))
+#define vmap_to_mfn(va)     paddr_to_pfn(virt_to_maddr((vaddr_t)va))
+#define vmap_to_page(va)    mfn_to_page(vmap_to_mfn(va))
 
 /* Page-align address and convert to frame number format */
 #define paddr_to_pfn_aligned(paddr)    paddr_to_pfn(PAGE_ALIGN(paddr))
@@ -274,10 +275,6 @@ static inline void *page_to_virt(const struct page_info *pg)
     return mfn_to_virt(page_to_mfn(pg));
 }
 
-struct domain *page_get_owner_and_reference(struct page_info *page);
-void put_page(struct page_info *page);
-int  get_page(struct page_info *page, struct domain *domain);
-
 struct page_info *get_page_from_gva(struct domain *d, vaddr_t va,
                                     unsigned long flags);
 
@@ -307,8 +304,6 @@ static inline int relinquish_shared_pages(struct domain *d)
 {
     return 0;
 }
-
-#define INVALID_MFN             (~0UL)
 
 /* Xen always owns P2M on ARM */
 #define set_gpfn_from_mfn(mfn, pfn) do { (void) (mfn), (void)(pfn); } while (0)

@@ -17,8 +17,7 @@
  * GNU General Public License for more details.
  * 
  * You should have received a copy of the GNU General Public License
- * along with this program; if not, write to the Free Software
- * Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
+ * along with this program; If not, see <http://www.gnu.org/licenses/>.
  */
 
 #include <xen/config.h>
@@ -278,7 +277,7 @@ unsigned long __init alloc_boot_pages(
 
 #define bits_to_zone(b) (((b) < (PAGE_SHIFT + 1)) ? 1 : ((b) - PAGE_SHIFT))
 #define page_to_zone(pg) (is_xen_heap_page(pg) ? MEMZONE_XEN :  \
-                          (fls(page_to_mfn(pg)) ? : 1))
+                          (flsl(page_to_mfn(pg)) ? : 1))
 
 typedef struct page_list_head heap_by_zone_and_order_t[NR_ZONES][MAX_ORDER+1];
 static heap_by_zone_and_order_t *_heap[MAX_NUMNODES];
@@ -405,13 +404,19 @@ void get_outstanding_claims(uint64_t *free_pages, uint64_t *outstanding_pages)
     spin_unlock(&heap_lock);
 }
 
+static bool_t __read_mostly first_node_initialised;
+#ifndef CONFIG_SEPARATE_XENHEAP
+static unsigned int __read_mostly xenheap_bits;
+#else
+#define xenheap_bits 0
+#endif
+
 static unsigned long init_node_heap(int node, unsigned long mfn,
                                     unsigned long nr, bool_t *use_tail)
 {
     /* First node to be discovered has its heap metadata statically alloced. */
     static heap_by_zone_and_order_t _heap_static;
     static unsigned long avail_static[NR_ZONES];
-    static int first_node_initialised;
     unsigned long needed = (sizeof(**_heap) +
                             sizeof(**avail) * NR_ZONES +
                             PAGE_SIZE - 1) >> PAGE_SHIFT;
@@ -429,14 +434,18 @@ static unsigned long init_node_heap(int node, unsigned long mfn,
     }
 #ifdef DIRECTMAP_VIRT_END
     else if ( *use_tail && nr >= needed &&
-              (mfn + nr) <= (virt_to_mfn(eva - 1) + 1) )
+              (mfn + nr) <= (virt_to_mfn(eva - 1) + 1) &&
+              (!xenheap_bits ||
+               !((mfn + nr - 1) >> (xenheap_bits - PAGE_SHIFT))) )
     {
         _heap[node] = mfn_to_virt(mfn + nr - needed);
         avail[node] = mfn_to_virt(mfn + nr - 1) +
                       PAGE_SIZE - sizeof(**avail) * NR_ZONES;
     }
     else if ( nr >= needed &&
-              (mfn + needed) <= (virt_to_mfn(eva - 1) + 1) )
+              (mfn + needed) <= (virt_to_mfn(eva - 1) + 1) &&
+              (!xenheap_bits ||
+               !((mfn + needed - 1) >> (xenheap_bits - PAGE_SHIFT))) )
     {
         _heap[node] = mfn_to_virt(mfn);
         avail[node] = mfn_to_virt(mfn + needed - 1) +
@@ -580,17 +589,19 @@ static struct page_info *alloc_heap_pages(
     unsigned int order, unsigned int memflags,
     struct domain *d)
 {
-    unsigned int first_node, i, j, zone = 0, nodemask_retry = 0;
-    unsigned int node = (uint8_t)((memflags >> _MEMF_node) - 1);
+    unsigned int i, j, zone = 0, nodemask_retry = 0;
+    nodeid_t first_node, node = MEMF_get_node(memflags), req_node = node;
     unsigned long request = 1UL << order;
     struct page_info *pg;
     nodemask_t nodemask = (d != NULL ) ? d->node_affinity : node_online_map;
     bool_t need_tlbflush = 0;
     uint32_t tlbflush_timestamp = 0;
 
+    /* Make sure there are enough bits in memflags for nodeID. */
+    BUILD_BUG_ON((_MEMF_bits - _MEMF_node) < (8 * sizeof(nodeid_t)));
+
     if ( node == NUMA_NO_NODE )
     {
-        memflags &= ~MEMF_exact_node;
         if ( d != NULL )
         {
             node = next_node(d->last_alloc_node, nodemask);
@@ -602,7 +613,7 @@ static struct page_info *alloc_heap_pages(
     }
     first_node = node;
 
-    ASSERT(node >= 0);
+    ASSERT(node < MAX_NUMNODES);
     ASSERT(zone_lo <= zone_hi);
     ASSERT(zone_hi < NR_ZONES);
 
@@ -651,7 +662,7 @@ static struct page_info *alloc_heap_pages(
                     goto found;
         } while ( zone-- > zone_lo ); /* careful: unsigned zone may wrap */
 
-        if ( memflags & MEMF_exact_node )
+        if ( (memflags & MEMF_exact_node) && req_node != NUMA_NO_NODE )
             goto not_found;
 
         /* Pick next node. */
@@ -668,7 +679,7 @@ static struct page_info *alloc_heap_pages(
         if ( node == first_node )
         {
             /* When we have tried all in nodemask, we fall back to others. */
-            if ( nodemask_retry++ )
+            if ( (memflags & MEMF_exact_node) || nodemask_retry++ )
                 goto not_found;
             nodes_andnot(nodemask, node_online_map, nodemask);
             first_node = node = first_node(nodemask);
@@ -1260,7 +1271,7 @@ void __init end_boot_allocator(void)
     {
 #ifdef CONFIG_X86
         dma_bitsize = min_t(unsigned int,
-                            fls(NODE_DATA(0)->node_spanned_pages) - 1
+                            flsl(NODE_DATA(0)->node_spanned_pages) - 1
                             + PAGE_SHIFT - 2,
                             32);
 #else
@@ -1279,7 +1290,8 @@ static void __init smp_scrub_heap_pages(void *data)
     unsigned long mfn, start, end;
     struct page_info *pg;
     struct scrub_region *r;
-    unsigned int temp_cpu, node, cpu_idx = 0;
+    unsigned int temp_cpu, cpu_idx = 0;
+    nodeid_t node;
     unsigned int cpu = smp_processor_id();
 
     if ( data )
@@ -1338,7 +1350,7 @@ static int __init find_non_smt(unsigned int node, cpumask_t *dest)
         if ( cpumask_intersects(dest, per_cpu(cpu_sibling_mask, i)) )
             continue;
         cpu = cpumask_first(per_cpu(cpu_sibling_mask, i));
-        cpumask_set_cpu(cpu, dest);
+        __cpumask_set_cpu(cpu, dest);
     }
     return cpumask_weight(dest);
 }
@@ -1431,13 +1443,13 @@ void __init scrub_heap_pages(void)
         /* Figure out which NODE CPUs are close. */
         for_each_online_node ( j )
         {
-            int distance;
+            u8 distance;
 
             if ( cpumask_empty(&node_to_cpumask(j)) )
                 continue;
 
             distance = __node_distance(i, j);
-            if ( distance < last_distance )
+            if ( (distance < last_distance) && (distance != NUMA_NO_DISTANCE) )
             {
                 last_distance = distance;
                 best_node = j;
@@ -1450,7 +1462,7 @@ void __init scrub_heap_pages(void)
         cpus = find_non_smt(best_node, &node_cpus);
         if ( cpus == 0 )
         {
-            cpumask_set_cpu(smp_processor_id(), &node_cpus);
+            __cpumask_set_cpu(smp_processor_id(), &node_cpus);
             cpus = 1;
         }
         /* We already have the node information from round #0. */
@@ -1541,11 +1553,13 @@ void free_xenheap_pages(void *v, unsigned int order)
 
 #else
 
-static unsigned int __read_mostly xenheap_bits;
-
 void __init xenheap_max_mfn(unsigned long mfn)
 {
-    xenheap_bits = fls(mfn) + PAGE_SHIFT;
+    ASSERT(!first_node_initialised);
+    ASSERT(!xenheap_bits);
+    BUILD_BUG_ON(PADDR_BITS >= BITS_PER_LONG);
+    xenheap_bits = min(flsl(mfn + 1) - 1 + PAGE_SHIFT, PADDR_BITS);
+    printk(XENLOG_INFO "Xen heap: %u bits\n", xenheap_bits);
 }
 
 void init_xenheap_pages(paddr_t ps, paddr_t pe)
@@ -1642,9 +1656,9 @@ int assign_pages(
         if ( unlikely((d->tot_pages + (1 << order)) > d->max_pages) )
         {
             if ( !opt_tmem || order != 0 || d->tot_pages != d->max_pages )
-                gdprintk(XENLOG_INFO, "Over-allocation for domain %u: "
-                         "%u > %u\n", d->domain_id,
-                         d->tot_pages + (1 << order), d->max_pages);
+                gprintk(XENLOG_INFO, "Over-allocation for domain %u: "
+                        "%u > %u\n", d->domain_id,
+                        d->tot_pages + (1 << order), d->max_pages);
             goto fail;
         }
 
@@ -1682,9 +1696,13 @@ struct page_info *alloc_domheap_pages(
 
     ASSERT(!in_irq());
 
-    bits = domain_clamp_alloc_bitsize(d, bits ? : (BITS_PER_LONG+PAGE_SHIFT));
+    bits = domain_clamp_alloc_bitsize(memflags & MEMF_no_owner ? NULL : d,
+                                      bits ? : (BITS_PER_LONG+PAGE_SHIFT));
     if ( (zone_hi = min_t(unsigned int, bits_to_zone(bits), zone_hi)) == 0 )
         return NULL;
+
+    if ( memflags & MEMF_no_owner )
+        memflags |= MEMF_no_refcount;
 
     if ( dma_bitsize && ((dma_zone = bits_to_zone(dma_bitsize)) < zone_hi) )
         pg = alloc_heap_pages(dma_zone + 1, zone_hi, order, memflags, d);
@@ -1695,7 +1713,8 @@ struct page_info *alloc_domheap_pages(
                                   memflags, d)) == NULL)) )
          return NULL;
 
-    if ( (d != NULL) && assign_pages(d, pg, order, memflags) )
+    if ( d && !(memflags & MEMF_no_owner) &&
+         assign_pages(d, pg, order, memflags) )
     {
         free_heap_pages(pg, order);
         return NULL;

@@ -22,8 +22,7 @@
  * GNU General Public License for more details.
  * 
  * You should have received a copy of the GNU General Public License
- * along with this program; if not, write to the Free Software
- * Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
+ * along with this program; If not, see <http://www.gnu.org/licenses/>.
  */
 
 #ifndef _XEN_ASM_GUEST_PT_H
@@ -31,15 +30,6 @@
 
 #if !defined(GUEST_PAGING_LEVELS)
 #error GUEST_PAGING_LEVELS not defined
-#endif
-
-/* Type of the guest's frame numbers */
-TYPE_SAFE(unsigned long,gfn)
-#define PRI_gfn "05lx"
-
-#ifndef gfn_t
-#define gfn_t /* Grep fodder: gfn_t, _gfn() and gfn_x() are defined above */
-#undef gfn_t
 #endif
 
 #define VALID_GFN(m) (m != INVALID_GFN)

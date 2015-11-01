@@ -17,8 +17,7 @@
  * Lesser General Public License for more details.
  *
  * You should have received a copy of the GNU Lesser General Public
- * License along with this library; if not, write to the Free Software
- * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301  USA
+ * License along with this library; If not, see <http://www.gnu.org/licenses/>.
  *
  * written 2006 by Gerd Hoffmann <kraxel@suse.de>.
  *
@@ -931,9 +930,9 @@ int xc_dom_update_guest_p2m(struct xc_dom_image *dom)
     {
     case 4:
         DOMPRINTF("%s: dst 32bit, pages 0x%" PRIpfn "",
-                  __FUNCTION__, dom->total_pages);
+                  __FUNCTION__, dom->p2m_size);
         p2m_32 = dom->p2m_guest;
-        for ( i = 0; i < dom->total_pages; i++ )
+        for ( i = 0; i < dom->p2m_size; i++ )
             if ( dom->p2m_host[i] != INVALID_P2M_ENTRY )
                 p2m_32[i] = dom->p2m_host[i];
             else
@@ -941,9 +940,9 @@ int xc_dom_update_guest_p2m(struct xc_dom_image *dom)
         break;
     case 8:
         DOMPRINTF("%s: dst 64bit, pages 0x%" PRIpfn "",
-                  __FUNCTION__, dom->total_pages);
+                  __FUNCTION__, dom->p2m_size);
         p2m_64 = dom->p2m_guest;
-        for ( i = 0; i < dom->total_pages; i++ )
+        for ( i = 0; i < dom->p2m_size; i++ )
             if ( dom->p2m_host[i] != INVALID_P2M_ENTRY )
                 p2m_64[i] = dom->p2m_host[i];
             else

@@ -29,22 +29,14 @@ includedir               := @includedir@
 localstatedir            := @localstatedir@
 sysconfdir               := @sysconfdir@
 
-PREFIX                   := $(prefix)
-
-SBINDIR                  := $(sbindir)
-BINDIR                   := $(bindir)
 LIBEXEC                  := $(libexecdir)/$(PACKAGE_TARNAME)
 LIBEXEC_BIN              := @LIBEXEC_BIN@
 LIBEXEC_LIB              := $(LIBEXEC)/lib
 LIBEXEC_INC              := $(LIBEXEC)/include
 
-INCLUDEDIR               := $(includedir)
 SHAREDIR                 := @SHAREDIR@
-MANDIR                   := $(mandir)
-MAN1DIR                  := $(MANDIR)/man1
-MAN8DIR                  := $(MANDIR)/man8
-LIBDIR                   := $(libdir)
-DOCDIR                   := $(docdir)
+MAN1DIR                  := $(mandir)/man1
+MAN8DIR                  := $(mandir)/man8
 
 XEN_RUN_DIR              := @XEN_RUN_DIR@
 XEN_LOG_DIR              := @XEN_LOG_DIR@
@@ -56,8 +48,9 @@ CONFIG_LEAF_DIR          := @CONFIG_LEAF_DIR@
 BASH_COMPLETION_DIR      := $(CONFIG_DIR)/bash_completion.d
 XEN_LOCK_DIR             := @XEN_LOCK_DIR@
 XEN_PAGING_DIR           := @XEN_PAGING_DIR@
+XEN_DUMP_DIR             := @XEN_DUMP_DIR@
 
-XENFIRMWAREDIR           := $(LIBEXEC)/boot
+XENFIRMWAREDIR           := @XENFIRMWAREDIR@
 
 XEN_CONFIG_DIR           := @XEN_CONFIG_DIR@
 XEN_SCRIPT_DIR           := @XEN_SCRIPT_DIR@

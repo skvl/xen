@@ -32,6 +32,10 @@
 /* Using SetVirtualAddressMap() is incompatible with kexec: */
 #undef USE_SET_VIRTUAL_ADDRESS_MAP
 
+#define EFI_REVISION(major, minor) (((major) << 16) | (minor))
+
+#define SMBIOS3_TABLE_GUID \
+  { 0xf2fd1544, 0x9794, 0x4a2c, {0x99, 0x2e, 0xe5, 0xbb, 0xcf, 0x20, 0xe3, 0x94} }
 #define SHIM_LOCK_PROTOCOL_GUID \
   { 0x605dab50, 0xe046, 0x4300, {0xab, 0xb6, 0x3d, 0xd8, 0x10, 0xdd, 0x8b, 0x23} }
 
@@ -76,12 +80,14 @@ static int set_color(u32 mask, int bpp, u8 *pos, u8 *sz);
 static bool_t match_guid(const EFI_GUID *guid1, const EFI_GUID *guid2);
 
 static const EFI_BOOT_SERVICES *__initdata efi_bs;
+static UINT32 __initdata efi_bs_revision;
 static EFI_HANDLE __initdata efi_ih;
 
 static SIMPLE_TEXT_OUTPUT_INTERFACE *__initdata StdOut;
 static SIMPLE_TEXT_OUTPUT_INTERFACE *__initdata StdErr;
 
 static UINT32 __initdata mdesc_ver;
+static bool_t __initdata map_bs;
 
 static struct file __initdata cfg;
 static struct file __initdata kernel;
@@ -213,6 +219,9 @@ static void __init noreturn blexit(const CHAR16 *str)
     if ( str )
         PrintStr((CHAR16 *)str);
     PrintStr(newline);
+
+    if ( !efi_bs )
+        efi_arch_halt();
 
     if ( cfg.addr )
         efi_bs->FreePages(cfg.addr, PFN_UP(cfg.size));
@@ -519,6 +528,8 @@ static bool_t __init read_file(EFI_FILE_HANDLE dir_handle, CHAR16 *name,
         PrintErrMesg(name, ret);
     }
 
+    efi_arch_flush_dcache_area(file->ptr, file->size);
+
     return 1;
 }
 
@@ -710,6 +721,7 @@ efi_start(EFI_HANDLE ImageHandle, EFI_SYSTEM_TABLE *SystemTable)
 
     efi_ih = ImageHandle;
     efi_bs = SystemTable->BootServices;
+    efi_bs_revision = efi_bs->Hdr.Revision;
     efi_rs = SystemTable->RuntimeServices;
     efi_ct = SystemTable->ConfigurationTable;
     efi_num_ct = SystemTable->NumberOfTableEntries;
@@ -751,6 +763,8 @@ efi_start(EFI_HANDLE ImageHandle, EFI_SYSTEM_TABLE *SystemTable)
             {
                 if ( wstrcmp(ptr + 1, L"basevideo") == 0 )
                     base_video = 1;
+                else if ( wstrcmp(ptr + 1, L"mapbs") == 0 )
+                    map_bs = 1;
                 else if ( wstrncmp(ptr + 1, L"cfg=", 4) == 0 )
                     cfg_file_name = ptr + 5;
                 else if ( i + 1 < argc && wstrcmp(ptr + 1, L"cfg") == 0 )
@@ -760,6 +774,7 @@ efi_start(EFI_HANDLE ImageHandle, EFI_SYSTEM_TABLE *SystemTable)
                 {
                     PrintStr(L"Xen EFI Loader options:\r\n");
                     PrintStr(L"-basevideo   retain current video mode\r\n");
+                    PrintStr(L"-mapbs       map EfiBootServices{Code,Data}\r\n");
                     PrintStr(L"-cfg=<file>  specify configuration file\r\n");
                     PrintStr(L"-help, -?    display this help\r\n");
                     blexit(NULL);
@@ -993,6 +1008,7 @@ efi_start(EFI_HANDLE ImageHandle, EFI_SYSTEM_TABLE *SystemTable)
         static EFI_GUID __initdata acpi_guid = ACPI_TABLE_GUID;
         static EFI_GUID __initdata mps_guid = MPS_TABLE_GUID;
         static EFI_GUID __initdata smbios_guid = SMBIOS_TABLE_GUID;
+        static EFI_GUID __initdata smbios3_guid = SMBIOS3_TABLE_GUID;
 
         if ( match_guid(&acpi2_guid, &efi_ct[i].VendorGuid) )
 	       efi.acpi20 = (long)efi_ct[i].VendorTable;
@@ -1002,11 +1018,15 @@ efi_start(EFI_HANDLE ImageHandle, EFI_SYSTEM_TABLE *SystemTable)
 	       efi.mps = (long)efi_ct[i].VendorTable;
         if ( match_guid(&smbios_guid, &efi_ct[i].VendorGuid) )
 	       efi.smbios = (long)efi_ct[i].VendorTable;
+        if ( match_guid(&smbios3_guid, &efi_ct[i].VendorGuid) )
+	       efi.smbios3 = (long)efi_ct[i].VendorTable;
     }
 
 #ifndef CONFIG_ARM /* TODO - disabled until implemented on ARM */
-    if (efi.smbios != EFI_INVALID_TABLE_ADDR)
-        dmi_efi_get_table((void *)(long)efi.smbios);
+    dmi_efi_get_table(efi.smbios != EFI_INVALID_TABLE_ADDR
+                      ? (void *)(long)efi.smbios : NULL,
+                      efi.smbios3 != EFI_INVALID_TABLE_ADDR
+                      ? (void *)(long)efi.smbios3 : NULL);
 #endif
 
     /* Collect PCI ROM contents. */
@@ -1046,16 +1066,21 @@ efi_start(EFI_HANDLE ImageHandle, EFI_SYSTEM_TABLE *SystemTable)
             efi_arch_video_init(gop, info_size, mode_info);
     }
 
-    efi_bs->GetMemoryMap(&efi_memmap_size, NULL, &map_key,
+    info_size = 0;
+    efi_bs->GetMemoryMap(&info_size, NULL, &map_key,
                          &efi_mdesc_size, &mdesc_ver);
-    efi_memmap = efi_arch_allocate_mmap_buffer(&efi_memmap_size);
+    info_size += 8 * efi_mdesc_size;
+    efi_memmap = efi_arch_allocate_mmap_buffer(info_size);
     if ( !efi_memmap )
         blexit(L"Unable to allocate memory for EFI memory map");
 
     for ( retry = 0; ; retry = 1 )
     {
-        status = efi_bs->GetMemoryMap(&efi_memmap_size, efi_memmap, &map_key,
-                                      &efi_mdesc_size, &mdesc_ver);
+        efi_memmap_size = info_size;
+        status = SystemTable->BootServices->GetMemoryMap(&efi_memmap_size,
+                                                         efi_memmap, &map_key,
+                                                         &efi_mdesc_size,
+                                                         &mdesc_ver);
         if ( EFI_ERROR(status) )
             PrintErrMesg(L"Cannot obtain memory map", status);
 
@@ -1064,7 +1089,9 @@ efi_start(EFI_HANDLE ImageHandle, EFI_SYSTEM_TABLE *SystemTable)
 
         efi_arch_pre_exit_boot();
 
-        status = efi_bs->ExitBootServices(ImageHandle, map_key);
+        status = SystemTable->BootServices->ExitBootServices(ImageHandle,
+                                                             map_key);
+        efi_bs = NULL;
         if ( status != EFI_INVALID_PARAMETER || retry )
             break;
     }
@@ -1087,7 +1114,31 @@ efi_start(EFI_HANDLE ImageHandle, EFI_SYSTEM_TABLE *SystemTable)
 #ifndef CONFIG_ARM /* TODO - runtime service support */
 
 static bool_t __initdata efi_rs_enable = 1;
-boolean_param("efi-rs", efi_rs_enable);
+static bool_t __initdata efi_map_uc;
+
+static void __init parse_efi_param(char *s)
+{
+    char *ss;
+
+    do {
+        bool_t val = !!strncmp(s, "no-", 3);
+
+        if ( !val )
+            s += 3;
+
+        ss = strchr(s, ',');
+        if ( ss )
+            *ss = '\0';
+
+        if ( !strcmp(s, "rs") )
+            efi_rs_enable = val;
+        else if ( !strcmp(s, "attr=uc") )
+            efi_map_uc = val;
+
+        s = ss + 1;
+    } while ( ss );
+}
+custom_param("efi", parse_efi_param);
 
 #ifndef USE_SET_VIRTUAL_ADDRESS_MAP
 static __init void copy_mapping(unsigned long mfn, unsigned long end,
@@ -1149,20 +1200,25 @@ void __init efi_init_memory(void)
     } *extra, *extra_head = NULL;
 #endif
 
-    printk(XENLOG_INFO "EFI memory map:\n");
+    printk(XENLOG_INFO "EFI memory map:%s\n",
+           map_bs ? " (mapping BootServices)" : "");
     for ( i = 0; i < efi_memmap_size; i += efi_mdesc_size )
     {
         EFI_MEMORY_DESCRIPTOR *desc = efi_memmap + i;
         u64 len = desc->NumberOfPages << EFI_PAGE_SHIFT;
         unsigned long smfn, emfn;
-        unsigned int prot = PAGE_HYPERVISOR;
+        unsigned int prot = PAGE_HYPERVISOR_RWX;
 
         printk(XENLOG_INFO " %013" PRIx64 "-%013" PRIx64
                            " type=%u attr=%016" PRIx64 "\n",
                desc->PhysicalStart, desc->PhysicalStart + len - 1,
                desc->Type, desc->Attribute);
 
-        if ( !efi_rs_enable || !(desc->Attribute & EFI_MEMORY_RUNTIME) )
+        if ( !efi_rs_enable ||
+             (!(desc->Attribute & EFI_MEMORY_RUNTIME) &&
+              (!map_bs ||
+               (desc->Type != EfiBootServicesCode &&
+                desc->Type != EfiBootServicesData))) )
             continue;
 
         desc->VirtualStart = INVALID_VIRTUAL_ADDRESS;
@@ -1178,17 +1234,23 @@ void __init efi_init_memory(void)
             prot |= _PAGE_PAT | MAP_SMALL_PAGES;
         else if ( desc->Attribute & (EFI_MEMORY_UC | EFI_MEMORY_UCE) )
             prot |= _PAGE_PWT | _PAGE_PCD | MAP_SMALL_PAGES;
+        else if ( efi_bs_revision >= EFI_REVISION(2, 5) &&
+                  (desc->Attribute & EFI_MEMORY_WP) )
+            prot |= _PAGE_PAT | _PAGE_PWT | MAP_SMALL_PAGES;
         else
         {
-            printk(XENLOG_ERR "Unknown cachability for MFNs %#lx-%#lx\n",
-                   smfn, emfn - 1);
-            continue;
+            printk(XENLOG_ERR "Unknown cachability for MFNs %#lx-%#lx%s\n",
+                   smfn, emfn - 1, efi_map_uc ? ", assuming UC" : "");
+            if ( !efi_map_uc )
+                continue;
+            prot |= _PAGE_PWT | _PAGE_PCD | MAP_SMALL_PAGES;
         }
 
-        if ( desc->Attribute & EFI_MEMORY_WP )
-            prot &= _PAGE_RW;
+        if ( desc->Attribute & (efi_bs_revision < EFI_REVISION(2, 5)
+                                ? EFI_MEMORY_WP : EFI_MEMORY_RO) )
+            prot &= ~_PAGE_RW;
         if ( desc->Attribute & EFI_MEMORY_XP )
-            prot |= _PAGE_NX_BIT;
+            prot |= _PAGE_NX;
 
         if ( pfn_to_pdx(emfn - 1) < (DIRECTMAP_SIZE >> PAGE_SHIFT) &&
              !(smfn & pfn_hole_mask) &&
@@ -1248,7 +1310,10 @@ void __init efi_init_memory(void)
     {
         const EFI_MEMORY_DESCRIPTOR *desc = efi_memmap + i;
 
-        if ( (desc->Attribute & EFI_MEMORY_RUNTIME) &&
+        if ( ((desc->Attribute & EFI_MEMORY_RUNTIME) ||
+              (map_bs &&
+               (desc->Type == EfiBootServicesCode ||
+                desc->Type == EfiBootServicesData))) &&
              desc->VirtualStart != INVALID_VIRTUAL_ADDRESS &&
              desc->VirtualStart != desc->PhysicalStart )
             copy_mapping(PFN_DOWN(desc->PhysicalStart),

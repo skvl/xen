@@ -14,6 +14,7 @@
 #include <xen/domain.h>
 #include <xen/event.h>
 #include <xen/domain_page.h>
+#include <xen/tmem.h>
 #include <xen/trace.h>
 #include <xen/console.h>
 #include <xen/iocap.h>
@@ -68,7 +69,7 @@ long do_sysctl(XEN_GUEST_HANDLE_PARAM(xen_sysctl_t) u_sysctl)
     case XEN_SYSCTL_tbuf_op:
         ret = tb_control(&op->u.tbuf_op);
         break;
-    
+
     case XEN_SYSCTL_sched_id:
         op->u.sched_id.sched_id = sched_id();
         break;
@@ -144,7 +145,7 @@ long do_sysctl(XEN_GUEST_HANDLE_PARAM(xen_sysctl_t) u_sysctl)
     case XEN_SYSCTL_getcpuinfo:
     {
         uint32_t i, nr_cpus;
-        struct xen_sysctl_cpuinfo cpuinfo;
+        struct xen_sysctl_cpuinfo cpuinfo = { 0 };
 
         nr_cpus = min(op->u.getcpuinfo.max_cpus, nr_cpu_ids);
 
@@ -274,85 +275,123 @@ long do_sysctl(XEN_GUEST_HANDLE_PARAM(xen_sysctl_t) u_sysctl)
 
     case XEN_SYSCTL_numainfo:
     {
-        uint32_t i, j, max_node_index, last_online_node;
+        unsigned int i, j, num_nodes;
         xen_sysctl_numainfo_t *ni = &op->u.numainfo;
+        bool_t do_meminfo = !guest_handle_is_null(ni->meminfo);
+        bool_t do_distance = !guest_handle_is_null(ni->distance);
 
-        last_online_node = last_node(node_online_map);
-        max_node_index = min_t(uint32_t, ni->max_node_index, last_online_node);
-        ni->max_node_index = last_online_node;
+        num_nodes = last_node(node_online_map) + 1;
 
-        for ( i = 0; i <= max_node_index; i++ )
+        if ( do_meminfo || do_distance )
         {
-            if ( !guest_handle_is_null(ni->node_to_memsize) )
-            {
-                uint64_t memsize = node_online(i) ?
-                                   node_spanned_pages(i) << PAGE_SHIFT : 0ul;
-                if ( copy_to_guest_offset(ni->node_to_memsize, i, &memsize, 1) )
-                    break;
-            }
-            if ( !guest_handle_is_null(ni->node_to_memfree) )
-            {
-                uint64_t memfree = node_online(i) ?
-                                   avail_node_heap_pages(i) << PAGE_SHIFT : 0ul;
-                if ( copy_to_guest_offset(ni->node_to_memfree, i, &memfree, 1) )
-                    break;
-            }
+            xen_sysctl_meminfo_t meminfo = { 0 };
 
-            if ( !guest_handle_is_null(ni->node_to_node_distance) )
+            if ( num_nodes > ni->num_nodes )
+                num_nodes = ni->num_nodes;
+            for ( i = 0; i < num_nodes; ++i )
             {
-                for ( j = 0; j <= max_node_index; j++)
+                static uint32_t distance[MAX_NUMNODES];
+
+                if ( do_meminfo )
                 {
-                    uint32_t distance = ~0u;
-                    if ( node_online(i) && node_online(j) )
-                        distance = __node_distance(i, j);
-                    if ( copy_to_guest_offset(
-                        ni->node_to_node_distance,
-                        i*(max_node_index+1) + j, &distance, 1) )
+                    if ( node_online(i) )
+                    {
+                        meminfo.memsize = node_spanned_pages(i) << PAGE_SHIFT;
+                        meminfo.memfree = avail_node_heap_pages(i) << PAGE_SHIFT;
+                    }
+                    else
+                        meminfo.memsize = meminfo.memfree = XEN_INVALID_MEM_SZ;
+
+                    if ( copy_to_guest_offset(ni->meminfo, i, &meminfo, 1) )
+                    {
+                        ret = -EFAULT;
                         break;
+                    }
                 }
-                if ( j <= max_node_index )
-                    break;
+
+                if ( do_distance )
+                {
+                    for ( j = 0; j < num_nodes; j++ )
+                    {
+                        distance[j] = __node_distance(i, j);
+                        if ( distance[j] == NUMA_NO_DISTANCE )
+                            distance[j] = XEN_INVALID_NODE_DIST;
+                    }
+
+                    if ( copy_to_guest_offset(ni->distance, i * num_nodes,
+                                              distance, num_nodes) )
+                    {
+                        ret = -EFAULT;
+                        break;
+                    }
+                }
             }
         }
+        else
+            i = num_nodes;
 
-        ret = ((i <= max_node_index) || copy_to_guest(u_sysctl, op, 1))
-            ? -EFAULT : 0;
+        if ( !ret && (ni->num_nodes != i) )
+        {
+            ni->num_nodes = i;
+            if ( __copy_field_to_guest(u_sysctl, op,
+                                       u.numainfo.num_nodes) )
+            {
+                ret = -EFAULT;
+                break;
+            }
+        }
     }
     break;
 
-    case XEN_SYSCTL_topologyinfo:
+    case XEN_SYSCTL_cputopoinfo:
     {
-        uint32_t i, max_cpu_index, last_online_cpu;
-        xen_sysctl_topologyinfo_t *ti = &op->u.topologyinfo;
+        unsigned int i, num_cpus;
+        xen_sysctl_cputopoinfo_t *ti = &op->u.cputopoinfo;
 
-        last_online_cpu = cpumask_last(&cpu_online_map);
-        max_cpu_index = min_t(uint32_t, ti->max_cpu_index, last_online_cpu);
-        ti->max_cpu_index = last_online_cpu;
-
-        for ( i = 0; i <= max_cpu_index; i++ )
+        num_cpus = cpumask_last(&cpu_online_map) + 1;
+        if ( !guest_handle_is_null(ti->cputopo) )
         {
-            if ( !guest_handle_is_null(ti->cpu_to_core) )
+            xen_sysctl_cputopo_t cputopo = { 0 };
+
+            if ( num_cpus > ti->num_cpus )
+                num_cpus = ti->num_cpus;
+            for ( i = 0; i < num_cpus; ++i )
             {
-                uint32_t core = cpu_online(i) ? cpu_to_core(i) : ~0u;
-                if ( copy_to_guest_offset(ti->cpu_to_core, i, &core, 1) )
+                if ( cpu_present(i) )
+                {
+                    cputopo.core = cpu_to_core(i);
+                    cputopo.socket = cpu_to_socket(i);
+                    cputopo.node = cpu_to_node(i);
+                    if ( cputopo.node == NUMA_NO_NODE )
+                        cputopo.node = XEN_INVALID_NODE_ID;
+                }
+                else
+                {
+                    cputopo.core = XEN_INVALID_CORE_ID;
+                    cputopo.socket = XEN_INVALID_SOCKET_ID;
+                    cputopo.node = XEN_INVALID_NODE_ID;
+                }
+
+                if ( copy_to_guest_offset(ti->cputopo, i, &cputopo, 1) )
+                {
+                    ret = -EFAULT;
                     break;
-            }
-            if ( !guest_handle_is_null(ti->cpu_to_socket) )
-            {
-                uint32_t socket = cpu_online(i) ? cpu_to_socket(i) : ~0u;
-                if ( copy_to_guest_offset(ti->cpu_to_socket, i, &socket, 1) )
-                    break;
-            }
-            if ( !guest_handle_is_null(ti->cpu_to_node) )
-            {
-                uint32_t node = cpu_online(i) ? cpu_to_node(i) : ~0u;
-                if ( copy_to_guest_offset(ti->cpu_to_node, i, &node, 1) )
-                    break;
+                }
             }
         }
+        else
+            i = num_cpus;
 
-        ret = ((i <= max_cpu_index) || copy_to_guest(u_sysctl, op, 1))
-            ? -EFAULT : 0;
+        if ( !ret && (ti->num_cpus != i) )
+        {
+            ti->num_cpus = i;
+            if ( __copy_field_to_guest(u_sysctl, op,
+                                       u.cputopoinfo.num_cpus) )
+            {
+                ret = -EFAULT;
+                break;
+            }
+        }
     }
     break;
 
@@ -361,6 +400,65 @@ long do_sysctl(XEN_GUEST_HANDLE_PARAM(xen_sysctl_t) u_sysctl)
         ret = sysctl_coverage_op(&op->u.coverage_op);
         break;
 #endif
+
+#ifdef HAS_PCI
+    case XEN_SYSCTL_pcitopoinfo:
+    {
+        xen_sysctl_pcitopoinfo_t *ti = &op->u.pcitopoinfo;
+        unsigned int i = 0;
+
+        if ( guest_handle_is_null(ti->devs) ||
+             guest_handle_is_null(ti->nodes) )
+        {
+            ret = -EINVAL;
+            break;
+        }
+
+        while ( i < ti->num_devs )
+        {
+            physdev_pci_device_t dev;
+            uint32_t node;
+            const struct pci_dev *pdev;
+
+            if ( copy_from_guest_offset(&dev, ti->devs, i, 1) )
+            {
+                ret = -EFAULT;
+                break;
+            }
+
+            spin_lock(&pcidevs_lock);
+            pdev = pci_get_pdev(dev.seg, dev.bus, dev.devfn);
+            if ( !pdev )
+                node = XEN_INVALID_DEV;
+            else if ( pdev->node == NUMA_NO_NODE )
+                node = XEN_INVALID_NODE_ID;
+            else
+                node = pdev->node;
+            spin_unlock(&pcidevs_lock);
+
+            if ( copy_to_guest_offset(ti->nodes, i, &node, 1) )
+            {
+                ret = -EFAULT;
+                break;
+            }
+
+            if ( (++i > 0x3f) && hypercall_preempt_check() )
+                break;
+        }
+
+        if ( !ret && (ti->num_devs != i) )
+        {
+            ti->num_devs = i;
+            if ( __copy_field_to_guest(u_sysctl, op, u.pcitopoinfo.num_devs) )
+                ret = -EFAULT;
+        }
+        break;
+    }
+#endif
+
+    case XEN_SYSCTL_tmem_op:
+        ret = tmem_control(&op->u.tmem_op);
+        break;
 
     default:
         ret = arch_do_sysctl(op, u_sysctl);

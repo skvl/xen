@@ -126,22 +126,28 @@ static void populate_physmap(struct memop_args *a)
             if ( is_domain_direct_mapped(d) )
             {
                 mfn = gpfn;
-                if ( !mfn_valid(mfn) )
+
+                for ( j = 0; j < (1U << a->extent_order); j++, mfn++ )
                 {
-                    gdprintk(XENLOG_INFO, "Invalid mfn %#"PRI_xen_pfn"\n",
-                             mfn);
-                    goto out;
+                    if ( !mfn_valid(mfn) )
+                    {
+                        gdprintk(XENLOG_INFO, "Invalid mfn %#"PRI_xen_pfn"\n",
+                                 mfn);
+                        goto out;
+                    }
+
+                    page = mfn_to_page(mfn);
+                    if ( !get_page(page, d) )
+                    {
+                        gdprintk(XENLOG_INFO,
+                                 "mfn %#"PRI_xen_pfn" doesn't belong to the"
+                                 " domain\n", mfn);
+                        goto out;
+                    }
+                    put_page(page);
                 }
 
-                page = mfn_to_page(mfn);
-                if ( !get_page(page, d) )
-                {
-                    gdprintk(XENLOG_INFO,
-                             "mfn %#"PRI_xen_pfn" doesn't belong to the"
-                             " domain\n", mfn);
-                    goto out;
-                }
-                put_page(page);
+                page = mfn_to_page(gpfn);
             }
             else
                 page = alloc_domheap_pages(d, a->extent_order, a->memflags);
@@ -462,7 +468,8 @@ static long memory_exchange(XEN_GUEST_HANDLE_PARAM(xen_memory_exchange_t) arg)
         /* Allocate a chunk's worth of anonymous output pages. */
         for ( j = 0; j < (1UL << out_chunk_order); j++ )
         {
-            page = alloc_domheap_pages(NULL, exch.out.extent_order, memflags);
+            page = alloc_domheap_pages(d, exch.out.extent_order,
+                                       MEMF_no_owner | memflags);
             if ( unlikely(page == NULL) )
             {
                 rc = -ENOMEM;
@@ -692,11 +699,98 @@ out:
     return rc;
 }
 
+static int construct_memop_from_reservation(
+               const struct xen_memory_reservation *r,
+               struct memop_args *a)
+{
+    unsigned int address_bits;
+
+    a->extent_list  = r->extent_start;
+    a->nr_extents   = r->nr_extents;
+    a->extent_order = r->extent_order;
+    a->memflags     = 0;
+
+    address_bits = XENMEMF_get_address_bits(r->mem_flags);
+    if ( (address_bits != 0) &&
+         (address_bits < (get_order_from_pages(max_page) + PAGE_SHIFT)) )
+    {
+        if ( address_bits <= PAGE_SHIFT )
+            return -EINVAL;
+        a->memflags = MEMF_bits(address_bits);
+    }
+
+    if ( r->mem_flags & XENMEMF_vnode )
+    {
+        nodeid_t vnode, pnode;
+        struct domain *d = a->domain;
+
+        read_lock(&d->vnuma_rwlock);
+        if ( d->vnuma )
+        {
+            vnode = XENMEMF_get_node(r->mem_flags);
+            if ( vnode >= d->vnuma->nr_vnodes )
+            {
+                read_unlock(&d->vnuma_rwlock);
+                return -EINVAL;
+            }
+
+            pnode = d->vnuma->vnode_to_pnode[vnode];
+            if ( pnode != NUMA_NO_NODE )
+            {
+                a->memflags |= MEMF_node(pnode);
+                if ( r->mem_flags & XENMEMF_exact_node_request )
+                    a->memflags |= MEMF_exact_node;
+            }
+        }
+        read_unlock(&d->vnuma_rwlock);
+    }
+    else
+    {
+        a->memflags |= MEMF_node(XENMEMF_get_node(r->mem_flags));
+        if ( r->mem_flags & XENMEMF_exact_node_request )
+            a->memflags |= MEMF_exact_node;
+    }
+
+    return 0;
+}
+
+#ifdef HAS_PASSTHROUGH
+struct get_reserved_device_memory {
+    struct xen_reserved_device_memory_map map;
+    unsigned int used_entries;
+};
+
+static int get_reserved_device_memory(xen_pfn_t start, xen_ulong_t nr,
+                                      u32 id, void *ctxt)
+{
+    struct get_reserved_device_memory *grdm = ctxt;
+    u32 sbdf = PCI_SBDF3(grdm->map.dev.pci.seg, grdm->map.dev.pci.bus,
+                         grdm->map.dev.pci.devfn);
+
+    if ( !(grdm->map.flags & XENMEM_RDM_ALL) && (sbdf != id) )
+        return 0;
+
+    if ( grdm->used_entries < grdm->map.nr_entries )
+    {
+        struct xen_reserved_device_memory rdm = {
+            .start_pfn = start, .nr_pages = nr
+        };
+
+        if ( __copy_to_guest_offset(grdm->map.buffer, grdm->used_entries,
+                                    &rdm, 1) )
+            return -EFAULT;
+    }
+
+    ++grdm->used_entries;
+
+    return 1;
+}
+#endif
+
 long do_memory_op(unsigned long cmd, XEN_GUEST_HANDLE_PARAM(void) arg)
 {
     struct domain *d;
     long rc;
-    unsigned int address_bits;
     struct xen_memory_reservation reservation;
     struct memop_args args;
     domid_t domid;
@@ -718,34 +812,23 @@ long do_memory_op(unsigned long cmd, XEN_GUEST_HANDLE_PARAM(void) arg)
         if ( unlikely(start_extent >= reservation.nr_extents) )
             return start_extent;
 
-        args.extent_list  = reservation.extent_start;
-        args.nr_extents   = reservation.nr_extents;
-        args.extent_order = reservation.extent_order;
-        args.nr_done      = start_extent;
-        args.preempted    = 0;
-        args.memflags     = 0;
-
-        address_bits = XENMEMF_get_address_bits(reservation.mem_flags);
-        if ( (address_bits != 0) &&
-             (address_bits < (get_order_from_pages(max_page) + PAGE_SHIFT)) )
-        {
-            if ( address_bits <= PAGE_SHIFT )
-                return start_extent;
-            args.memflags = MEMF_bits(address_bits);
-        }
-
-        args.memflags |= MEMF_node(XENMEMF_get_node(reservation.mem_flags));
-        if ( reservation.mem_flags & XENMEMF_exact_node_request )
-            args.memflags |= MEMF_exact_node;
-
-        if ( op == XENMEM_populate_physmap
-             && (reservation.mem_flags & XENMEMF_populate_on_demand) )
-            args.memflags |= MEMF_populate_on_demand;
-
         d = rcu_lock_domain_by_any_id(reservation.domid);
         if ( d == NULL )
             return start_extent;
         args.domain = d;
+
+        if ( construct_memop_from_reservation(&reservation, &args) )
+        {
+            rcu_unlock_domain(d);
+            return start_extent;
+        }
+
+        args.nr_done   = start_extent;
+        args.preempted = 0;
+
+        if ( op == XENMEM_populate_physmap
+             && (reservation.mem_flags & XENMEMF_populate_on_demand) )
+            args.memflags |= MEMF_populate_on_demand;
 
         if ( xsm_memory_adjust_reservation(XSM_TARGET, current->domain, d) )
         {
@@ -1118,12 +1201,59 @@ long do_memory_op(unsigned long cmd, XEN_GUEST_HANDLE_PARAM(void) arg)
         break;
     }
 
+#ifdef HAS_PASSTHROUGH
+    case XENMEM_reserved_device_memory_map:
+    {
+        struct get_reserved_device_memory grdm;
+
+        if ( unlikely(start_extent) )
+            return -ENOSYS;
+
+        if ( copy_from_guest(&grdm.map, arg, 1) ||
+             !guest_handle_okay(grdm.map.buffer, grdm.map.nr_entries) )
+            return -EFAULT;
+
+        if ( grdm.map.flags & ~XENMEM_RDM_ALL )
+            return -EINVAL;
+
+        grdm.used_entries = 0;
+        rc = iommu_get_reserved_device_memory(get_reserved_device_memory,
+                                              &grdm);
+
+        if ( !rc && grdm.map.nr_entries < grdm.used_entries )
+            rc = -ENOBUFS;
+        grdm.map.nr_entries = grdm.used_entries;
+        if ( __copy_to_guest(arg, &grdm.map, 1) )
+            rc = -EFAULT;
+
+        break;
+    }
+#endif
+
     default:
         rc = arch_memory_op(cmd, arg);
         break;
     }
 
     return rc;
+}
+
+void clear_domain_page(mfn_t mfn)
+{
+    void *ptr = map_domain_page(mfn);
+
+    clear_page(ptr);
+    unmap_domain_page(ptr);
+}
+
+void copy_domain_page(mfn_t dest, mfn_t source)
+{
+    const void *src = map_domain_page(source);
+    void *dst = map_domain_page(dest);
+
+    copy_page(dst, src);
+    unmap_domain_page(dst);
+    unmap_domain_page(src);
 }
 
 void destroy_ring_for_helper(

@@ -36,6 +36,7 @@ obj-y += microcode_intel.o
 # This must come after the vendor specific files.
 obj-y += microcode.o
 obj-y += mm.o
+obj-y += monitor.o
 obj-y += mpparse.o
 obj-y += nmi.o
 obj-y += numa.o
@@ -59,6 +60,7 @@ obj-y += machine_kexec.o
 obj-y += crash.o
 obj-y += tboot.o
 obj-y += hpet.o
+obj-y += vm_event.o
 obj-y += xstate.o
 
 obj-$(crash_debug) += gdbstub.o

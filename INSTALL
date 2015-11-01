@@ -128,6 +128,10 @@ original xenstored will be used. Valid names are xenstored and
 oxenstored.
   --with-xenstored=name
 
+The path where to store core dumps for domUs which are configured with
+coredump-destroy or coredump-restart can be specified with this option.
+  --with-xen-dumpdir=DIR
+
 Instead of starting the tools in dom0 with sysv runlevel scripts they
 can also be started by systemd. If this option is enabled xenstored will
 receive the communication socked directly from systemd. So starting it
@@ -142,7 +146,6 @@ this detection and the sysv runlevel scripts have to be used.
 
 The old backend drivers are disabled because qdisk is now the default.
 This option can be used to build them anyway.
-  --enable-blktap1
   --enable-blktap2
 
 Build various stubom components, some are only example code. Its usually
@@ -193,13 +196,17 @@ OCAMLFIND_DESTDIR= and OCAMLFIND_METADIR= will have the same effect.
 OCAMLDESTDIR=
 
 The xen subsystem will install the hypervisor into fixed locations.
-BOOT_DIR defaults to /boot, EFI_DIR to /usr/lib64/efi.
+BOOT_DIR defaults to /boot, DEBUG_DIR defaults to /usr/lib/debug and
+EFI_DIR to /usr/lib64/efi.
 BOOT_DIR=
+DEBUG_DIR=
 EFI_DIR=
 
 The make target 'rpmball' will build a xen.rpm. This variable can be
-used to append a custom string to the name.
+used to append a custom string to the name. In addition a string can be
+appended to the rpm Release: tag.
 PKG_SUFFIX=
+PKG_RELEASE=
 
 The hypervisor will report a certain version string. This variable can
 be used to append a custom string to the version.
@@ -209,6 +216,14 @@ During boot xen will report a certain user@host string, which can be
 changed with these variables.
 XEN_WHOAMI=
 XEN_DOMAIN=
+
+Some components of xen and tools will include an unpredictable timestamp
+into the binaries. To allow reproducible builds the following variables
+can be used to provide fixed timestamps in the expected format.
+XEN_BUILD_DATE=<output of date(1)>
+XEN_BUILD_TIME=hh:mm:ss
+SMBIOS_REL_DATE=mm/dd/yyyy
+VGABIOS_REL_DATE="dd Mon yyyy"
 
 The following variables can be used to tweak some aspects of the
 hypervisor build.
@@ -233,6 +248,7 @@ OVMF_UPSTREAM_URL=
 QEMU_UPSTREAM_URL=
 QEMU_TRADITIONAL_URL=
 SEABIOS_UPSTREAM_URL=
+MINIOS_UPSTREAM_URL=
 
 Using additional CFLAGS to build tools which will run in dom0 is
 required when building distro packages. These variables can be used to

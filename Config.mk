@@ -75,8 +75,8 @@ EXTRA_LIB += $(EXTRA_PREFIX)/lib
 endif
 
 PYTHON      ?= python
-PYTHON_PREFIX_ARG ?= --prefix="$(PREFIX)"
-# The above requires that PREFIX contains *no spaces*. This variable is here
+PYTHON_PREFIX_ARG ?= --prefix="$(prefix)"
+# The above requires that prefix contains *no spaces*. This variable is here
 # to permit the user to set PYTHON_PREFIX_ARG to '' to workaround this bug:
 #  https://bugs.launchpad.net/ubuntu/+bug/362570
 
@@ -142,7 +142,7 @@ define as-insn-check-closure
 endef
 
 define buildmakevars2shellvars
-    export PREFIX="$(PREFIX)";                                            \
+    export PREFIX="$(prefix)";                                            \
     export XEN_SCRIPT_DIR="$(XEN_SCRIPT_DIR)";                            \
     export XEN_ROOT="$(XEN_ROOT)"
 endef
@@ -157,9 +157,9 @@ define move-if-changed
 	if ! cmp -s $(1) $(2); then mv -f $(1) $(2); else rm -f $(1); fi
 endef
 
-BUILD_MAKE_VARS := SBINDIR BINDIR LIBEXEC LIBEXEC_BIN LIBDIR SHAREDIR \
+BUILD_MAKE_VARS := sbindir bindir LIBEXEC LIBEXEC_BIN libdir SHAREDIR \
                    XENFIRMWAREDIR XEN_CONFIG_DIR XEN_SCRIPT_DIR XEN_LOCK_DIR \
-                   XEN_RUN_DIR XEN_PAGING_DIR
+                   XEN_RUN_DIR XEN_PAGING_DIR XEN_DUMP_DIR
 
 buildmakevars2file = $(eval $(call buildmakevars2file-closure,$(1)))
 define buildmakevars2file-closure
@@ -204,7 +204,7 @@ CFLAGS += $(foreach i, $(EXTRA_INCLUDES), -I$(i))
 LDFLAGS += $(foreach i, $(PREPEND_LIB), -L$(i))
 CFLAGS += $(foreach i, $(PREPEND_INCLUDES), -I$(i))
 ifeq ($(XEN_TOOLS_RPATH),y)
-LDFLAGS += -Wl,-rpath,$(LIBDIR)
+LDFLAGS += -Wl,-rpath,$(libdir)
 endif
 APPEND_LDFLAGS += $(foreach i, $(APPEND_LIB), -L$(i))
 APPEND_CFLAGS += $(foreach i, $(APPEND_INCLUDES), -I$(i))
@@ -242,27 +242,33 @@ endif
 
 ifeq ($(GIT_HTTP),y)
 OVMF_UPSTREAM_URL ?= http://xenbits.xen.org/git-http/ovmf.git
-QEMU_UPSTREAM_URL ?= http://xenbits.xen.org/git-http/qemu-upstream-4.5-testing.git
-QEMU_TRADITIONAL_URL ?= http://xenbits.xen.org/git-http/qemu-xen-4.5-testing.git
+QEMU_UPSTREAM_URL ?= http://xenbits.xen.org/git-http/qemu-upstream-4.6-testing.git
+QEMU_TRADITIONAL_URL ?= http://xenbits.xen.org/git-http/qemu-xen-4.6-testing.git
 SEABIOS_UPSTREAM_URL ?= http://xenbits.xen.org/git-http/seabios.git
+MINIOS_UPSTREAM_URL ?= http://xenbits.xen.org/git-http/mini-os.git
 else
 OVMF_UPSTREAM_URL ?= git://xenbits.xen.org/ovmf.git
-QEMU_UPSTREAM_URL ?= git://xenbits.xen.org/qemu-upstream-4.5-testing.git
-QEMU_TRADITIONAL_URL ?= git://xenbits.xen.org/qemu-xen-4.5-testing.git
+QEMU_UPSTREAM_URL ?= git://xenbits.xen.org/qemu-upstream-4.6-testing.git
+QEMU_TRADITIONAL_URL ?= git://xenbits.xen.org/qemu-xen-4.6-testing.git
 SEABIOS_UPSTREAM_URL ?= git://xenbits.xen.org/seabios.git
+MINIOS_UPSTREAM_URL ?= git://xenbits.xen.org/mini-os.git
 endif
-OVMF_UPSTREAM_REVISION ?= 447d264115c476142f884af0be287622cd244423
-QEMU_UPSTREAM_REVISION ?= qemu-xen-4.5.1-rc1
-SEABIOS_UPSTREAM_REVISION ?= rel-1.7.5
-# Thu May 22 16:59:16 2014 -0400
-# python3 fixes for vgabios and csm builds.
+OVMF_UPSTREAM_REVISION ?= cb9a7ebabcd6b8a49dc0854b2f9592d732b5afbd
+QEMU_UPSTREAM_REVISION ?= qemu-xen-4.6.0
+MINIOS_UPSTREAM_REVISION ?= xen-RELEASE-4.6.0
+# Fri Jun 26 11:58:40 2015 +0100
+# Correct printf formatting for tpm_tis message.
+
+SEABIOS_UPSTREAM_REVISION ?= rel-1.8.2
+# Tue Mar 17 10:52:16 2015 -0400
+# vgabios: On bda_save_restore() the saved vbe_mode also has flags in it
 
 ETHERBOOT_NICS ?= rtl8139 8086100e
 
 
-QEMU_TRADITIONAL_REVISION ?= xen-4.5.1-rc1
-# Tue Mar 31 16:27:45 2015 +0100
-# xen: limit guest control of PCI command register
+QEMU_TRADITIONAL_REVISION ?= xen-4.6.0
+# Tue Sep 8 15:41:20 2015 +0100
+# Fix build after "ui/vnc: limit client_cut_text msg payload size"
 
 # Specify which qemu-dm to use. This may be `ioemu' to use the old
 # Mercurial in-tree version, or a local directory, or a git URL.

@@ -23,14 +23,11 @@ CHECK_SIZE_(struct, vcpu_info);
 CHECK_vcpu_register_vcpu_info;
 #undef xen_vcpu_register_vcpu_info
 
-int compat_vcpu_op(int cmd, int vcpuid, XEN_GUEST_HANDLE_PARAM(void) arg)
+int compat_vcpu_op(int cmd, unsigned int vcpuid, XEN_GUEST_HANDLE_PARAM(void) arg)
 {
     struct domain *d = current->domain;
     struct vcpu *v;
     int rc = 0;
-
-    if ( (vcpuid < 0) || (vcpuid >= MAX_VIRT_CPUS) )
-        return -EINVAL;
 
     if ( vcpuid >= d->max_vcpus || (v = d->vcpu[vcpuid]) == NULL )
         return -ENOENT;
@@ -59,7 +56,7 @@ int compat_vcpu_op(int cmd, int vcpuid, XEN_GUEST_HANDLE_PARAM(void) arg)
         domain_unlock(d);
 
         if ( rc == -ERESTART )
-            rc = hypercall_create_continuation(__HYPERVISOR_vcpu_op, "iih",
+            rc = hypercall_create_continuation(__HYPERVISOR_vcpu_op, "iuh",
                                                cmd, vcpuid, arg);
 
         xfree(cmp_ctxt);

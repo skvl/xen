@@ -61,7 +61,7 @@ static void libxl_create_pci_backend_device(libxl__gc *gc, flexarray_t *back, in
               libxl__sprintf(gc, "msitranslate=%d,power_mgmt=%d,permissive=%d",
                              pcidev->msitranslate, pcidev->power_mgmt,
                              pcidev->permissive));
-    flexarray_append_pair(back, libxl__sprintf(gc, "state-%d", num), libxl__sprintf(gc, "%d", 1));
+    flexarray_append_pair(back, libxl__sprintf(gc, "state-%d", num), GCSPRINTF("%d", XenbusStateInitialising));
 }
 
 static int libxl__device_from_pcidev(libxl__gc *gc, uint32_t domid,
@@ -99,7 +99,7 @@ int libxl__create_pci_backend(libxl__gc *gc, uint32_t domid,
 
     flexarray_append_pair(back, "frontend-id", libxl__sprintf(gc, "%d", domid));
     flexarray_append_pair(back, "online", "1");
-    flexarray_append_pair(back, "state", libxl__sprintf(gc, "%d", 1));
+    flexarray_append_pair(back, "state", GCSPRINTF("%d", XenbusStateInitialising));
     flexarray_append_pair(back, "domain", libxl__domid_to_name(gc, domid));
 
     for (i = 0; i < num; i++, pcidev++)
@@ -107,7 +107,7 @@ int libxl__create_pci_backend(libxl__gc *gc, uint32_t domid,
 
     flexarray_append_pair(back, "num_devs", libxl__sprintf(gc, "%d", num));
     flexarray_append_pair(front, "backend-id", libxl__sprintf(gc, "%d", 0));
-    flexarray_append_pair(front, "state", libxl__sprintf(gc, "%d", 1));
+    flexarray_append_pair(front, "state", GCSPRINTF("%d", XenbusStateInitialising));
 
     libxl__device_generic_add(gc, XBT_NULL, &device,
                               libxl__xs_kvs_of_flexarray(gc, back, back->count),
@@ -123,7 +123,7 @@ static int libxl__device_pci_add_xenstore(libxl__gc *gc, uint32_t domid, libxl_d
     flexarray_t *back;
     char *num_devs, *be_path;
     int num = 0;
-    xs_transaction_t t;
+    xs_transaction_t t = XBT_NULL;
     libxl__device *device;
     int rc;
     libxl_domain_config d_config;
@@ -144,7 +144,7 @@ static int libxl__device_pci_add_xenstore(libxl__gc *gc, uint32_t domid, libxl_d
         return ERROR_FAIL;
 
     if (!starting && domtype == LIBXL_DOMAIN_TYPE_PV) {
-        if (libxl__wait_for_backend(gc, be_path, "4") < 0)
+        if (libxl__wait_for_backend(gc, be_path, GCSPRINTF("%d", XenbusStateConnected)) < 0)
             return ERROR_FAIL;
     }
 
@@ -155,7 +155,7 @@ static int libxl__device_pci_add_xenstore(libxl__gc *gc, uint32_t domid, libxl_d
     libxl_create_pci_backend_device(gc, back, num, pcidev);
     flexarray_append_pair(back, "num_devs", libxl__sprintf(gc, "%d", num + 1));
     if (!starting)
-        flexarray_append_pair(back, "state", libxl__sprintf(gc, "%d", 7));
+        flexarray_append_pair(back, "state", GCSPRINTF("%d", XenbusStateReconfiguring));
 
     GCNEW(device);
     libxl__device_from_pcidev(gc, domid, pcidev, device);
@@ -213,7 +213,7 @@ static int libxl__device_pci_remove_xenstore(libxl__gc *gc, uint32_t domid, libx
         return ERROR_FAIL;
 
     if (domtype == LIBXL_DOMAIN_TYPE_PV) {
-        if (libxl__wait_for_backend(gc, be_path, "4") < 0) {
+        if (libxl__wait_for_backend(gc, be_path, GCSPRINTF("%d", XenbusStateConnected)) < 0) {
             LIBXL__LOG(ctx, LIBXL__LOG_DEBUG, "pci backend at %s is not ready", be_path);
             return ERROR_FAIL;
         }
@@ -235,14 +235,14 @@ static int libxl__device_pci_remove_xenstore(libxl__gc *gc, uint32_t domid, libx
 
 retry_transaction:
     t = xs_transaction_start(ctx->xsh);
-    xs_write(ctx->xsh, t, libxl__sprintf(gc, "%s/state-%d", be_path, i), "5", strlen("5"));
-    xs_write(ctx->xsh, t, libxl__sprintf(gc, "%s/state", be_path), "7", strlen("7"));
+    xs_write(ctx->xsh, t, libxl__sprintf(gc, "%s/state-%d", be_path, i), GCSPRINTF("%d", XenbusStateClosing), 1);
+    xs_write(ctx->xsh, t, libxl__sprintf(gc, "%s/state", be_path), GCSPRINTF("%d", XenbusStateReconfiguring), 1);
     if (!xs_transaction_end(ctx->xsh, t, 0))
         if (errno == EAGAIN)
             goto retry_transaction;
 
     if (domtype == LIBXL_DOMAIN_TYPE_PV) {
-        if (libxl__wait_for_backend(gc, be_path, "4") < 0) {
+        if (libxl__wait_for_backend(gc, be_path, GCSPRINTF("%d", XenbusStateConnected)) < 0) {
             LIBXL__LOG(ctx, LIBXL__LOG_DEBUG, "pci backend at %s is not ready", be_path);
             return ERROR_FAIL;
         }
@@ -850,11 +850,12 @@ static int qemu_pci_add_xenstore(libxl__gc *gc, uint32_t domid,
     int rc = 0;
     char *path;
     char *state, *vdevfn;
+    uint32_t dm_domid;
 
-    path = libxl__sprintf(gc, "/local/domain/0/device-model/%d/state", domid);
+    dm_domid = libxl_get_stubdom_id(CTX, domid);
+    path = libxl__device_model_xs_path(gc, dm_domid, domid, "/state");
     state = libxl__xs_read(gc, XBT_NULL, path);
-    path = libxl__sprintf(gc, "/local/domain/0/device-model/%d/parameter",
-                          domid);
+    path = libxl__device_model_xs_path(gc, dm_domid, domid, "/parameter");
     if (pcidev->vdevfn) {
         libxl__xs_write(gc, XBT_NULL, path, PCI_BDF_VDEVFN","PCI_OPTIONS,
                         pcidev->domain, pcidev->bus, pcidev->dev,
@@ -869,11 +870,9 @@ static int qemu_pci_add_xenstore(libxl__gc *gc, uint32_t domid,
     libxl__qemu_traditional_cmd(gc, domid, "pci-ins");
     rc = libxl__wait_for_device_model_deprecated(gc, domid, NULL, NULL,
                                       pci_ins_check, state);
-    path = libxl__sprintf(gc, "/local/domain/0/device-model/%d/parameter",
-                          domid);
+    path = libxl__device_model_xs_path(gc, dm_domid, domid, "/parameter");
     vdevfn = libxl__xs_read(gc, XBT_NULL, path);
-    path = libxl__sprintf(gc, "/local/domain/0/device-model/%d/state",
-                          domid);
+    path = libxl__device_model_xs_path(gc, dm_domid, domid, "/state");
     if ( rc < 0 )
         LIBXL__LOG(ctx, LIBXL__LOG_ERROR,
                    "qemu refused to add device: %s", vdevfn);
@@ -895,6 +894,7 @@ static int do_pci_add(libxl__gc *gc, uint32_t domid, libxl_device_pci *pcidev, i
     FILE *f;
     unsigned long long start, end, flags, size;
     int irq, i, rc, hvm = 0;
+    uint32_t flag = XEN_DOMCTL_DEV_RDM_RELAXED;
 
     if (type == LIBXL_DOMAIN_TYPE_INVALID)
         return ERROR_FAIL;
@@ -988,7 +988,13 @@ static int do_pci_add(libxl__gc *gc, uint32_t domid, libxl_device_pci *pcidev, i
 
 out:
     if (!libxl_is_stubdom(ctx, domid, NULL)) {
-        rc = xc_assign_device(ctx->xch, domid, pcidev_encode_bdf(pcidev));
+        if (pcidev->rdm_policy == LIBXL_RDM_RESERVE_POLICY_STRICT) {
+            flag &= ~XEN_DOMCTL_DEV_RDM_RELAXED;
+        } else if (pcidev->rdm_policy != LIBXL_RDM_RESERVE_POLICY_RELAXED) {
+            LIBXL__LOG_ERRNO(ctx, LIBXL__LOG_ERROR, "unknown rdm check flag.");
+            return ERROR_FAIL;
+        }
+        rc = xc_assign_device(ctx->xch, domid, pcidev_encode_bdf(pcidev), flag);
         if (rc < 0 && (hvm || errno != ENOSYS)) {
             LIBXL__LOG_ERRNO(ctx, LIBXL__LOG_ERROR, "xc_assign_device failed");
             return ERROR_FAIL;
@@ -1040,6 +1046,9 @@ static int libxl__device_pci_reset(libxl__gc *gc, unsigned int domain, unsigned 
 
 int libxl__device_pci_setdefault(libxl__gc *gc, libxl_device_pci *pci)
 {
+    /* We'd like to force reserve rdm specific to a device by default.*/
+    if (pci->rdm_policy == LIBXL_RDM_RESERVE_POLICY_INVALID)
+        pci->rdm_policy = LIBXL_RDM_RESERVE_POLICY_STRICT;
     return 0;
 }
 
@@ -1175,10 +1184,13 @@ static int qemu_pci_remove_xenstore(libxl__gc *gc, uint32_t domid,
     libxl_ctx *ctx = libxl__gc_owner(gc);
     char *state;
     char *path;
+    uint32_t dm_domid;
 
-    path = libxl__sprintf(gc, "/local/domain/0/device-model/%d/state", domid);
+    dm_domid = libxl_get_stubdom_id(CTX, domid);
+
+    path = libxl__device_model_xs_path(gc, dm_domid, domid, "/state");
     state = libxl__xs_read(gc, XBT_NULL, path);
-    path = libxl__sprintf(gc, "/local/domain/0/device-model/%d/parameter", domid);
+    path = libxl__device_model_xs_path(gc, dm_domid, domid, "/parameter");
     libxl__xs_write(gc, XBT_NULL, path, PCI_BDF, pcidev->domain,
                     pcidev->bus, pcidev->dev, pcidev->func);
 
@@ -1196,7 +1208,7 @@ static int qemu_pci_remove_xenstore(libxl__gc *gc, uint32_t domid,
             return ERROR_FAIL;
         }
     }
-    path = libxl__sprintf(gc, "/local/domain/0/device-model/%d/state", domid);
+    path = libxl__device_model_xs_path(gc, dm_domid, domid, "/state");
     xs_write(ctx->xsh, XBT_NULL, path, state, strlen(state));
 
     return 0;

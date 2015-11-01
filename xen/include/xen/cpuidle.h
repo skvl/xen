@@ -19,8 +19,7 @@
  *  General Public License for more details.
  *
  *  You should have received a copy of the GNU General Public License along
- *  with this program; if not, write to the Free Software Foundation, Inc.,
- *  59 Temple Place, Suite 330, Boston, MA 02111-1307 USA.
+ *  with this program; If not, see <http://www.gnu.org/licenses/>.
  *
  * ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
  */
@@ -66,6 +65,7 @@ struct acpi_processor_power
     struct acpi_processor_cx *last_state;
     struct acpi_processor_cx *safe_state;
     void *gdata; /* governor specific data */
+    u64 last_state_update_tick;
     u32 last_residency;
     u32 count;
     spinlock_t stat_lock;

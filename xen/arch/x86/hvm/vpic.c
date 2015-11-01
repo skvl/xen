@@ -56,7 +56,7 @@ static int vpic_get_priority(struct hvm_hw_vpic *vpic, uint8_t mask)
         return VPIC_PRIO_NONE;
 
     /* prio = ffs(mask ROR vpic->priority_add); */
-    asm ( "ror %%cl,%b1 ; bsf %1,%0"
+    asm ( "ror %%cl,%b1 ; rep; bsf %1,%0"
           : "=r" (prio) : "q" ((uint32_t)mask), "c" (vpic->priority_add) );
     return prio;
 }
@@ -324,7 +324,7 @@ static uint32_t vpic_ioport_read(struct hvm_hw_vpic *vpic, uint32_t addr)
 }
 
 static int vpic_intercept_pic_io(
-    int dir, uint32_t port, uint32_t bytes, uint32_t *val)
+    int dir, unsigned int port, unsigned int bytes, uint32_t *val)
 {
     struct hvm_hw_vpic *vpic;
 
@@ -346,7 +346,7 @@ static int vpic_intercept_pic_io(
 }
 
 static int vpic_intercept_elcr_io(
-    int dir, uint32_t port, uint32_t bytes, uint32_t *val)
+    int dir, unsigned int port, unsigned int bytes, uint32_t *val)
 {
     struct hvm_hw_vpic *vpic;
     uint32_t data;

@@ -17,8 +17,7 @@
  * Lesser General Public License for more details.
  *
  * You should have received a copy of the GNU Lesser General Public
- * License along with this library; if not, write to the Free Software
- * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301  USA
+ * License along with this library; If not, see <http://www.gnu.org/licenses/>.
  */
 
 #include "xc_private.h"
@@ -43,8 +42,10 @@ int xc_physdev_map_pirq(xc_interface *xch,
     struct physdev_map_pirq map;
 
     if ( !pirq )
-        return -EINVAL;
-
+    {
+        errno = EINVAL;
+        return -1;
+    }
     memset(&map, 0, sizeof(struct physdev_map_pirq));
     map.domid = domid;
     map.type = MAP_PIRQ_TYPE_GSI;
@@ -72,8 +73,10 @@ int xc_physdev_map_pirq_msi(xc_interface *xch,
     struct physdev_map_pirq map;
 
     if ( !pirq )
-        return -EINVAL;
-
+    {
+        errno = EINVAL;
+        return -1;
+    }
     memset(&map, 0, sizeof(struct physdev_map_pirq));
     map.domid = domid;
     map.type = MAP_PIRQ_TYPE_MSI;

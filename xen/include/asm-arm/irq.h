@@ -15,7 +15,6 @@ struct arch_pirq
 };
 
 struct arch_irq_desc {
-    int eoi_cpu;
     unsigned int type;
 };
 
@@ -37,12 +36,18 @@ void do_IRQ(struct cpu_user_regs *regs, unsigned int irq, int is_fiq);
 
 #define domain_pirq_to_irq(d, pirq) (pirq)
 
+bool_t is_assignable_irq(unsigned int irq);
+
 void init_IRQ(void);
 void init_secondary_IRQ(void);
 
-int route_irq_to_guest(struct domain *d, unsigned int irq,
-                       const char *devname);
+int route_irq_to_guest(struct domain *d, unsigned int virq,
+                       unsigned int irq, const char *devname);
+int release_guest_irq(struct domain *d, unsigned int irq);
+
 void arch_move_irqs(struct vcpu *v);
+
+#define arch_evtchn_bind_pirq(d, pirq) ((void)((d) + (pirq)))
 
 /* Set IRQ type for an SPI */
 int irq_set_spi_type(unsigned int spi, unsigned int type);

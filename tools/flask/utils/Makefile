@@ -39,6 +39,9 @@ clean:
 	rm -f $(CLIENTS)
 	$(RM) $(DEPS)
 
+.PHONY: distclean
+distclean: clean
+
 .PHONY: print-dir
 print-dir:
 	@echo -n tools/flask/utils: 
@@ -49,7 +52,7 @@ print-end:
 
 .PHONY: install
 install: all
-	$(INSTALL_DIR) $(DESTDIR)$(SBINDIR)
-	$(INSTALL_PROG) $(CLIENTS) $(DESTDIR)$(SBINDIR)
+	$(INSTALL_DIR) $(DESTDIR)$(sbindir)
+	$(INSTALL_PROG) $(CLIENTS) $(DESTDIR)$(sbindir)
 
 -include $(DEPS)

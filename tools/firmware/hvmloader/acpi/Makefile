@@ -11,8 +11,7 @@
 # more details.
 #
 # You should have received a copy of the GNU General Public License along with
-# this program; if not, write to the Free Software Foundation, Inc., 59 Temple
-# Place - Suite 330, Boston, MA 02111-1307 USA.
+# this program; If not, see <http://www.gnu.org/licenses/>.
 #
 
 XEN_ROOT = $(CURDIR)/../../../..
@@ -36,12 +35,12 @@ mk_dsdt: mk_dsdt.c
 
 dsdt_anycpu_qemu_xen.asl: dsdt.asl mk_dsdt
 	awk 'NR > 1 {print s} {s=$$0}' $< > $@
-	./mk_dsdt --dm-version qemu-xen >> $@
+	./mk_dsdt --debug=$(debug) --dm-version qemu-xen >> $@
 
 # NB. awk invocation is a portable alternative to 'head -n -1'
 dsdt_%cpu.asl: dsdt.asl mk_dsdt
 	awk 'NR > 1 {print s} {s=$$0}' $< > $@
-	./mk_dsdt --maxcpu $*  >> $@
+	./mk_dsdt --debug=$(debug) --maxcpu $*  >> $@
 
 $(filter dsdt_%.c,$(C_SRC)): %.c: iasl %.asl
 	iasl -vs -p $* -tc $*.asl
@@ -65,6 +64,8 @@ acpi.a: $(OBJS)
 clean:
 	rm -rf *.a *.o $(IASL_VER) $(IASL_VER).tar.gz $(DEPS)
 	rm -rf ssdt_*.h dsdt*.c *~ *.aml *.hex mk_dsdt dsdt_*.asl
+
+distclean: clean
 
 install: all
 

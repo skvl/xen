@@ -14,8 +14,7 @@
 # more details.
 #
 # You should have received a copy of the GNU General Public License along with
-# this program; if not, write to the Free Software Foundation, Inc., 59 Temple
-# Place - Suite 330, Boston, MA 02111-1307 USA.
+# this program; If not, see <http://www.gnu.org/licenses/>.
 #
 
 XEN_ROOT = $(CURDIR)/../../..
@@ -26,10 +25,16 @@ SUBDIRS := acpi
 # The HVM loader is started in 32-bit mode at the address below:
 LOADADDR = 0x100000
 
+# SMBIOS spec requires format mm/dd/yyyy
+SMBIOS_REL_DATE ?= $(shell date +%m/%d/%Y)
+
 CFLAGS += $(CFLAGS_xeninclude)
 
+# We mustn't use tools-only public interfaces.
+CFLAGS += -U__XEN_TOOLS__ -D__XEN_INTERFACE_VERSION__=__XEN_LATEST_INTERFACE_VERSION__
+
 OBJS  = hvmloader.o mp_tables.o util.o smbios.o 
-OBJS += smp.o cacheattr.o xenbus.o
+OBJS += smp.o cacheattr.o xenbus.o vnuma.o
 OBJS += e820.o pci.o pir.o ctype.o
 OBJS += hvm_param.o
 ifeq ($(debug),y)
@@ -88,7 +93,7 @@ all: subdirs-all
 	$(MAKE) hvmloader
 
 ovmf.o rombios.o seabios.o hvmloader.o: roms.inc
-smbios.o: CFLAGS += -D__SMBIOS_DATE__="\"$(shell date +%m/%d/%Y)\""
+smbios.o: CFLAGS += -D__SMBIOS_DATE__="\"$(SMBIOS_REL_DATE)\""
 
 hvmloader: $(OBJS) acpi/acpi.a
 	$(LD) $(LDFLAGS_DIRECT) -N -Ttext $(LOADADDR) -o hvmloader.tmp $^
@@ -138,5 +143,8 @@ endif
 clean: subdirs-clean
 	rm -f roms.inc roms.inc.new acpi.h
 	rm -f hvmloader hvmloader.tmp *.o $(DEPS)
+
+.PHONY: distclean
+distclean: clean
 
 -include $(DEPS)

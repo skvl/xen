@@ -219,7 +219,20 @@ ENTRY(compat_post_handle_exception)
         movb  $0,TRAPBOUNCE_flags(%rdx)
         jmp   compat_test_all_events
 
-ENTRY(compat_syscall)
+/* See lstar_enter for entry register state. */
+ENTRY(cstar_enter)
+        sti
+        movq  8(%rsp),%rax /* Restore %rax. */
+        movq  $FLAT_KERNEL_SS,8(%rsp)
+        pushq %r11
+        pushq $FLAT_USER_CS32
+        pushq %rcx
+        pushq $0
+        SAVE_VOLATILE TRAP_syscall
+        GET_CURRENT(%rbx)
+        movq  VCPU_domain(%rbx),%rcx
+        cmpb  $0,DOMAIN_is_32bit_pv(%rcx)
+        je    switch_to_kernel
         cmpb  $0,VCPU_syscall32_disables_events(%rbx)
         movzwl VCPU_syscall32_sel(%rbx),%esi
         movq  VCPU_syscall32_addr(%rbx),%rax
@@ -417,6 +430,8 @@ ENTRY(compat_hypercall_table)
         .quad do_domctl
         .quad compat_kexec_op
         .quad do_tmem_op
+        .quad do_ni_hypercall           /* reserved for XenClient */
+        .quad do_xenpmu_op              /* 40 */
         .rept __HYPERVISOR_arch_0-((.-compat_hypercall_table)/8)
         .quad compat_ni_hypercall
         .endr
@@ -466,6 +481,8 @@ ENTRY(compat_hypercall_args_table)
         .byte 1 /* do_domctl                */
         .byte 2 /* compat_kexec_op          */
         .byte 1 /* do_tmem_op               */
+        .byte 0 /* reserved for XenClient   */
+        .byte 2 /* do_xenpmu_op             */  /* 40 */
         .rept __HYPERVISOR_arch_0-(.-compat_hypercall_args_table)
         .byte 0 /* compat_ni_hypercall      */
         .endr

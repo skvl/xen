@@ -10,7 +10,7 @@ LVM-UTIL-OBJ    := $(BLKTAP_ROOT)/lvm/lvm-util.o
 
 LIBVHD-BUILD    := libvhd.a
 
-INST-DIR         = $(LIBDIR)
+INST-DIR         = $(libdir)
 
 CFLAGS          += -Werror
 CFLAGS          += -Wno-unused
@@ -75,6 +75,8 @@ install: all
 clean:
 	rm -rf *.a *.so* *.o *.opic *~ $(DEPS) $(LIBVHD)
 
-.PHONY: all build clean install libvhd
+distclean: clean
+
+.PHONY: all build clean distclean install libvhd
 
 -include $(DEPS)

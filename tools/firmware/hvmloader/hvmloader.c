@@ -16,8 +16,7 @@
  * more details.
  *
  * You should have received a copy of the GNU General Public License along with
- * this program; if not, write to the Free Software Foundation, Inc., 59 Temple
- * Place - Suite 330, Boston, MA 02111-1307 USA.
+ * this program; If not, see <http://www.gnu.org/licenses/>.
  */
 
 #include "util.h"
@@ -26,6 +25,7 @@
 #include "pci_regs.h"
 #include "apic_regs.h"
 #include "acpi/acpi2_0.h"
+#include "vnuma.h"
 #include <xen/version.h>
 #include <xen/hvm/params.h>
 
@@ -261,6 +261,8 @@ int main(void)
 
     init_hypercalls();
 
+    memory_map_setup();
+
     xenbus_setup();
 
     bios = detect_bios();
@@ -310,6 +312,8 @@ int main(void)
 
     if ( acpi_enabled )
     {
+        init_vnuma_info();
+
         if ( bios->acpi_build_tables )
         {
             printf("Loading ACPI ...\n");

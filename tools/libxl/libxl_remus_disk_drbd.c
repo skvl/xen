@@ -47,7 +47,7 @@ static void drbd_async_call(libxl__egc *egc,
                             void func(libxl__remus_device *),
                             libxl__ev_child_callback callback)
 {
-    int pid = -1, rc;
+    int pid, rc;
     libxl__ao_device *aodev = &dev->aodev;
     STATE_AO_GC(dev->rds->ao);
 
@@ -78,7 +78,7 @@ out:
 /* callbacks */
 static void match_async_exec_cb(libxl__egc *egc,
                                 libxl__async_exec_state *aes,
-                                int status);
+                                int rc, int status);
 
 /* implementations */
 
@@ -120,7 +120,7 @@ static void match_async_exec(libxl__egc *egc, libxl__remus_device *dev)
     aes->stdfds[1] = -1;
     aes->stdfds[2] = -1;
 
-    rc = libxl__async_exec_start(gc, aes);
+    rc = libxl__async_exec_start(aes);
     if (rc)
         goto out;
 
@@ -133,9 +133,8 @@ out:
 
 static void match_async_exec_cb(libxl__egc *egc,
                                 libxl__async_exec_state *aes,
-                                int status)
+                                int rc, int status)
 {
-    int rc;
     libxl__ao_device *aodev = CONTAINER_OF(aes, *aodev, aes);
     libxl__remus_device *dev = CONTAINER_OF(aodev, *dev, aodev);
     libxl__remus_drbd_disk *drbd_disk;
@@ -143,8 +142,13 @@ static void match_async_exec_cb(libxl__egc *egc,
 
     STATE_AO_GC(aodev->ao);
 
+    if (rc)
+        goto out;
+
     if (status) {
         rc = ERROR_REMUS_DEVOPS_DOES_NOT_MATCH;
+        /* BUG: seems to assume that any exit status means `no match' */
+        /* BUG: exit status will have been logged as an error */
         goto out;
     }
 

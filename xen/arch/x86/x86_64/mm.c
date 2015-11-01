@@ -13,8 +13,7 @@
  * more details.
  * 
  * You should have received a copy of the GNU General Public License along 
- * with this program; if not, write to the Free Software Foundation, Inc., 59 
- * Temple Place, Suite 330, Boston, MA  02111-1307  USA
+ * with this program; If not, see <http://www.gnu.org/licenses/>.
  */
 
 #include <xen/config.h>
@@ -26,7 +25,6 @@
 #include <xen/nodemask.h>
 #include <xen/guest_access.h>
 #include <xen/hypercall.h>
-#include <xen/mem_event.h>
 #include <xen/mem_access.h>
 #include <asm/current.h>
 #include <asm/asm_defns.h>
@@ -37,16 +35,15 @@
 #include <asm/msr.h>
 #include <asm/setup.h>
 #include <asm/numa.h>
+#include <asm/mem_paging.h>
 #include <asm/mem_sharing.h>
 #include <public/memory.h>
 
 unsigned int __read_mostly m2p_compat_vstart = __HYPERVISOR_COMPAT_VIRT_START;
 
 /* Enough page directories to map into the bottom 1GB. */
-l3_pgentry_t __attribute__ ((__section__ (".bss.page_aligned")))
-    l3_bootmap[L3_PAGETABLE_ENTRIES];
-l2_pgentry_t __attribute__ ((__section__ (".bss.page_aligned")))
-    l2_bootmap[L2_PAGETABLE_ENTRIES];
+l3_pgentry_t __section(".bss.page_aligned") l3_bootmap[L3_PAGETABLE_ENTRIES];
+l2_pgentry_t __section(".bss.page_aligned") l2_bootmap[L2_PAGETABLE_ENTRIES];
 
 l2_pgentry_t *compat_idle_pg_table_l2;
 
@@ -61,7 +58,7 @@ void *do_page_walk(struct vcpu *v, unsigned long addr)
     if ( !is_pv_vcpu(v) || !is_canonical_address(addr) )
         return NULL;
 
-    l4t = map_domain_page(mfn);
+    l4t = map_domain_page(_mfn(mfn));
     l4e = l4t[l4_table_offset(addr)];
     unmap_domain_page(l4t);
     if ( !(l4e_get_flags(l4e) & _PAGE_PRESENT) )
@@ -79,7 +76,7 @@ void *do_page_walk(struct vcpu *v, unsigned long addr)
         goto ret;
     }
 
-    l2t = map_domain_page(mfn);
+    l2t = map_domain_page(_mfn(mfn));
     l2e = l2t[l2_table_offset(addr)];
     unmap_domain_page(l2t);
     mfn = l2e_get_pfn(l2e);
@@ -91,7 +88,7 @@ void *do_page_walk(struct vcpu *v, unsigned long addr)
         goto ret;
     }
 
-    l1t = map_domain_page(mfn);
+    l1t = map_domain_page(_mfn(mfn));
     l1e = l1t[l1_table_offset(addr)];
     unmap_domain_page(l1t);
     mfn = l1e_get_pfn(l1e);
@@ -99,7 +96,7 @@ void *do_page_walk(struct vcpu *v, unsigned long addr)
         return NULL;
 
  ret:
-    return map_domain_page(mfn) + (addr & ~PAGE_MASK);
+    return map_domain_page(_mfn(mfn)) + (addr & ~PAGE_MASK);
 }
 
 /*
@@ -480,7 +477,7 @@ static int setup_m2p_table(struct mem_hotadd_info *info)
                 l2_ro_mpt += l2_table_offset(va);
             }
 
-            /* NB. Cannot be GLOBAL as shadow_mode_translate reuses this area. */
+            /* NB. Cannot be GLOBAL: guest user mode should not see it. */
             l2e_write(l2_ro_mpt, l2e_from_pfn(mfn,
                    /*_PAGE_GLOBAL|*/_PAGE_PSE|_PAGE_USER|_PAGE_PRESENT));
         }
@@ -583,7 +580,7 @@ void __init paging_init(void)
                        0x77, 1UL << L3_PAGETABLE_SHIFT);
 
                 ASSERT(!l2_table_offset(va));
-                /* NB. Cannot be GLOBAL as shadow_mode_translate reuses this area. */
+                /* NB. Cannot be GLOBAL: guest user mode should not see it. */
                 l3e_write(&l3_ro_mpt[l3_table_offset(va)],
                     l3e_from_page(l1_pg,
                         /*_PAGE_GLOBAL|*/_PAGE_PSE|_PAGE_USER|_PAGE_PRESENT));
@@ -621,7 +618,7 @@ void __init paging_init(void)
                       l3e_from_page(l2_pg, __PAGE_HYPERVISOR | _PAGE_USER));
             ASSERT(!l2_table_offset(va));
         }
-        /* NB. Cannot be GLOBAL as shadow_mode_translate reuses this area. */
+        /* NB. Cannot be GLOBAL: guest user mode should not see it. */
         if ( l1_pg )
             l2e_write(l2_ro_mpt, l2e_from_page(
                 l1_pg, /*_PAGE_GLOBAL|*/_PAGE_PSE|_PAGE_USER|_PAGE_PRESENT));
@@ -895,6 +892,33 @@ void __init subarch_init_memory(void)
             share_xen_page_with_privileged_guests(page, XENSHARE_readonly);
         }
     }
+
+    /* Mark low 16Mb of direct map NX if hardware supports it. */
+    if ( !cpu_has_nx )
+        return;
+
+    v = DIRECTMAP_VIRT_START + (1UL << 20);
+    l3e = l4e_to_l3e(idle_pg_table[l4_table_offset(v)])[l3_table_offset(v)];
+    ASSERT(l3e_get_flags(l3e) & _PAGE_PRESENT);
+    do {
+        l2e = l3e_to_l2e(l3e)[l2_table_offset(v)];
+        ASSERT(l2e_get_flags(l2e) & _PAGE_PRESENT);
+        if ( l2e_get_flags(l2e) & _PAGE_PSE )
+        {
+            l2e_add_flags(l2e, _PAGE_NX_BIT);
+            l3e_to_l2e(l3e)[l2_table_offset(v)] = l2e;
+            v += 1 << L2_PAGETABLE_SHIFT;
+        }
+        else
+        {
+            l1_pgentry_t l1e = l2e_to_l1e(l2e)[l1_table_offset(v)];
+
+            ASSERT(l1e_get_flags(l1e) & _PAGE_PRESENT);
+            l1e_add_flags(l1e, _PAGE_NX_BIT);
+            l2e_to_l1e(l2e)[l1_table_offset(v)] = l1e;
+            v += 1 << L1_PAGETABLE_SHIFT;
+        }
+    } while ( v < DIRECTMAP_VIRT_START + (16UL << 20) );
 }
 
 long subarch_memory_op(unsigned long cmd, XEN_GUEST_HANDLE_PARAM(void) arg)
@@ -984,28 +1008,10 @@ long subarch_memory_op(unsigned long cmd, XEN_GUEST_HANDLE_PARAM(void) arg)
         return mem_sharing_get_nr_shared_mfns();
 
     case XENMEM_paging_op:
-    {
-        xen_mem_event_op_t meo;
-        if ( copy_from_guest(&meo, arg, 1) )
-            return -EFAULT;
-        rc = do_mem_event_op(cmd, meo.domain, &meo);
-        if ( !rc && __copy_to_guest(arg, &meo, 1) )
-            return -EFAULT;
-        break;
-    }
+        return mem_paging_memop(guest_handle_cast(arg, xen_mem_paging_op_t));
 
     case XENMEM_sharing_op:
-    {
-        xen_mem_sharing_op_t mso;
-        if ( copy_from_guest(&mso, arg, 1) )
-            return -EFAULT;
-        if ( mso.op == XENMEM_sharing_op_audit )
-            return mem_sharing_audit(); 
-        rc = do_mem_event_op(cmd, mso.domain, &mso);
-        if ( !rc && __copy_to_guest(arg, &mso, 1) )
-            return -EFAULT;
-        break;
-    }
+        return mem_sharing_memop(guest_handle_cast(arg, xen_mem_sharing_op_t));
 
     default:
         rc = -ENOSYS;
@@ -1181,7 +1187,7 @@ int handle_memadd_fault(unsigned long addr, struct cpu_user_regs *regs)
     unsigned long mfn, idle_index;
     int ret = 0;
 
-    if (!is_pv_32on64_domain(d))
+    if (!is_pv_32bit_domain(d))
         return 0;
 
     if ( (addr < HYPERVISOR_COMPAT_VIRT_START(d)) ||
@@ -1190,7 +1196,7 @@ int handle_memadd_fault(unsigned long addr, struct cpu_user_regs *regs)
 
     mfn = (read_cr3()) >> PAGE_SHIFT;
 
-    pl4e = map_domain_page(mfn);
+    pl4e = map_domain_page(_mfn(mfn));
 
     l4e = pl4e[0];
 
@@ -1199,7 +1205,7 @@ int handle_memadd_fault(unsigned long addr, struct cpu_user_regs *regs)
 
     mfn = l4e_get_pfn(l4e);
     /* We don't need get page type here since it is current CR3 */
-    pl3e = map_domain_page(mfn);
+    pl3e = map_domain_page(_mfn(mfn));
 
     l3e = pl3e[3];
 
@@ -1207,7 +1213,7 @@ int handle_memadd_fault(unsigned long addr, struct cpu_user_regs *regs)
         goto unmap;
 
     mfn = l3e_get_pfn(l3e);
-    pl2e = map_domain_page(mfn);
+    pl2e = map_domain_page(_mfn(mfn));
 
     l2e = pl2e[l2_table_offset(addr)];
 
@@ -1240,7 +1246,7 @@ unmap:
 
 void domain_set_alloc_bitsize(struct domain *d)
 {
-    if ( !is_pv_32on64_domain(d) ||
+    if ( !is_pv_32bit_domain(d) ||
          (MACH2PHYS_COMPAT_NR_ENTRIES(d) >= max_page) ||
          d->arch.physaddr_bitsize > 0 )
         return;
@@ -1343,7 +1349,8 @@ int mem_hotadd_check(unsigned long spfn, unsigned long epfn)
 int memory_add(unsigned long spfn, unsigned long epfn, unsigned int pxm)
 {
     struct mem_hotadd_info info;
-    int ret, node;
+    int ret;
+    nodeid_t node;
     unsigned long old_max = max_page, old_total = total_pages;
     unsigned long old_node_start, old_node_span, orig_online;
     unsigned long i;
@@ -1353,7 +1360,7 @@ int memory_add(unsigned long spfn, unsigned long epfn, unsigned int pxm)
     if ( !mem_hotadd_check(spfn, epfn) )
         return -EINVAL;
 
-    if ( (node = setup_node(pxm)) == -1 )
+    if ( (node = setup_node(pxm)) == NUMA_NO_NODE )
         return -EINVAL;
 
     if ( !valid_numa_range(spfn << PAGE_SHIFT, epfn << PAGE_SHIFT, node) )
@@ -1369,16 +1376,16 @@ int memory_add(unsigned long spfn, unsigned long epfn, unsigned int pxm)
         ret = map_pages_to_xen((unsigned long)mfn_to_virt(spfn), spfn,
                                min(epfn, i) - spfn, PAGE_HYPERVISOR);
         if ( ret )
-            return ret;
+            goto destroy_directmap;
     }
     if ( i < epfn )
     {
         if ( i < spfn )
             i = spfn;
         ret = map_pages_to_xen((unsigned long)mfn_to_virt(i), i,
-                               epfn - i, __PAGE_HYPERVISOR);
+                               epfn - i, __PAGE_HYPERVISOR_RW);
         if ( ret )
-            return ret;
+            goto destroy_directmap;
     }
 
     old_node_start = NODE_DATA(node)->node_start_pfn;
@@ -1401,7 +1408,6 @@ int memory_add(unsigned long spfn, unsigned long epfn, unsigned int pxm)
             NODE_DATA(node)->node_spanned_pages = epfn - node_start_pfn(node);
     }
 
-    ret = -EINVAL;
     info.spfn = spfn;
     info.epfn = epfn;
     info.cur = spfn;
@@ -1424,7 +1430,7 @@ int memory_add(unsigned long spfn, unsigned long epfn, unsigned int pxm)
     if ( ret )
         goto destroy_m2p;
 
-    if ( !need_iommu(hardware_domain) )
+    if ( iommu_enabled && !iommu_passthrough && !need_iommu(hardware_domain) )
     {
         for ( i = spfn; i < epfn; i++ )
             if ( iommu_map_page(hardware_domain, i, i, IOMMUF_readable|IOMMUF_writable) )
@@ -1438,9 +1444,8 @@ int memory_add(unsigned long spfn, unsigned long epfn, unsigned int pxm)
     }
 
     /* We can't revert any more */
-    transfer_pages_to_heap(&info);
-
     share_hotadd_m2p_table(&info);
+    transfer_pages_to_heap(&info);
 
     return 0;
 
@@ -1451,13 +1456,13 @@ destroy_m2p:
     max_pdx = pfn_to_pdx(max_page - 1) + 1;
 destroy_frametable:
     cleanup_frame_table(&info);
-    destroy_xen_mappings((unsigned long)mfn_to_virt(spfn),
-                         (unsigned long)mfn_to_virt(epfn));
-
     if ( !orig_online )
         node_set_offline(node);
     NODE_DATA(node)->node_start_pfn = old_node_start;
     NODE_DATA(node)->node_spanned_pages = old_node_span;
+ destroy_directmap:
+    destroy_xen_mappings((unsigned long)mfn_to_virt(spfn),
+                         (unsigned long)mfn_to_virt(epfn));
 
     return ret;
 }

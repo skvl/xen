@@ -87,6 +87,23 @@ void __init set_nr_cpu_ids(unsigned int max_cpus)
 #endif
 }
 
+void __init set_nr_sockets(void)
+{
+    /*
+     * Count the actual cpus in the socket 0 and use it to calculate nr_sockets
+     * so that the latter will be always >= the actual socket number in the
+     * system even when APIC IDs from MP table are too sparse.
+     */
+    unsigned int cpus = bitmap_weight(phys_cpu_present_map.mask,
+                                      boot_cpu_data.x86_max_cores *
+                                      boot_cpu_data.x86_num_siblings);
+
+    if ( cpus == 0 )
+        cpus = 1;
+
+    nr_sockets = DIV_ROUND_UP(num_processors + disabled_cpus, cpus);
+}
+
 /*
  * Intel MP BIOS table parsing routines:
  */
@@ -541,7 +558,7 @@ static inline void __init construct_default_ISA_mptable(int mpc_default_type)
 static __init void efi_unmap_mpf(void)
 {
 	if (efi_enabled)
-		__set_fixmap(FIX_EFI_MPF, 0, 0);
+		clear_fixmap(FIX_EFI_MPF);
 }
 
 static struct intel_mp_floating *__initdata mpf_found;

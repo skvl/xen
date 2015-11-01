@@ -40,9 +40,17 @@
     ((__HSR_SYSREG_##crm) << HSR_SYSREG_CRM_SHIFT) | \
     ((__HSR_SYSREG_##op2) << HSR_SYSREG_OP2_SHIFT)
 
+#define HSR_SYSREG_DCISW          HSR_SYSREG(1,0,c7,c6,2)
+#define HSR_SYSREG_DCCSW          HSR_SYSREG(1,0,c7,c10,2)
+#define HSR_SYSREG_DCCISW         HSR_SYSREG(1,0,c7,c14,2)
+
 #define HSR_SYSREG_MDSCR_EL1      HSR_SYSREG(2,0,c0,c2,2)
+#define HSR_SYSREG_MDRAR_EL1      HSR_SYSREG(2,0,c1,c0,0)
 #define HSR_SYSREG_OSLAR_EL1      HSR_SYSREG(2,0,c1,c0,4)
+#define HSR_SYSREG_OSLSR_EL1      HSR_SYSREG(2,0,c1,c1,4)
 #define HSR_SYSREG_OSDLR_EL1      HSR_SYSREG(2,0,c1,c3,4)
+#define HSR_SYSREG_DBGPRCR_EL1    HSR_SYSREG(2,0,c1,c4,4)
+#define HSR_SYSREG_MDCCSR_EL0     HSR_SYSREG(2,3,c0,c1,0)
 
 #define HSR_SYSREG_DBGBVRn_EL1(n) HSR_SYSREG(2,0,c0,c##n,4)
 #define HSR_SYSREG_DBGBCRn_EL1(n) HSR_SYSREG(2,0,c0,c##n,5)
@@ -67,6 +75,7 @@
                                   case HSR_SYSREG_##REG##n_EL1(15)
 
 #define HSR_SYSREG_SCTLR_EL1      HSR_SYSREG(3,0,c1, c0,0)
+#define HSR_SYSREG_ACTLR_EL1      HSR_SYSREG(3,0,c1, c0,1)
 #define HSR_SYSREG_TTBR0_EL1      HSR_SYSREG(3,0,c2, c0,0)
 #define HSR_SYSREG_TTBR1_EL1      HSR_SYSREG(3,0,c2, c0,1)
 #define HSR_SYSREG_TCR_EL1        HSR_SYSREG(3,0,c2, c0,2)
@@ -100,8 +109,9 @@
 #define HSR_SYSREG_PMOVSSET_EL0   HSR_SYSREG(3,3,c9,c14,3)
 
 #define HSR_SYSREG_CNTPCT_EL0     HSR_SYSREG(3,3,c14,c0,0)
-#define HSR_SYSREG_CNTP_CTL_EL0   HSR_SYSREG(3,3,c14,c2,1)
 #define HSR_SYSREG_CNTP_TVAL_EL0  HSR_SYSREG(3,3,c14,c2,0)
+#define HSR_SYSREG_CNTP_CTL_EL0   HSR_SYSREG(3,3,c14,c2,1)
+#define HSR_SYSREG_CNTP_CVAL_EL0  HSR_SYSREG(3,3,c14,c2,2)
 
 /*
  * GIC System register assembly aliases picked from kernel

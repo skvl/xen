@@ -140,6 +140,13 @@ mode during S3 resume.
 
 Permit Xen to use superpages when performing memory management.
 
+### altp2m (Intel)
+> `= <boolean>`
+
+> Default: `false`
+
+Permit multiple copies of host p2m.
+
 ### apic
 > `= bigsmp | default`
 
@@ -242,7 +249,7 @@ the NMI watchdog is also enabled.
 
 > Default: `0` (1/32 of RAM)
 
-Amount of RAM to set aside for the Xenheap.
+Amount of RAM to set aside for the Xenheap. Must be an integer multiple of 32.
 
 By default will use 1/32 of the RAM up to a maximum of 1GB and with a
 minimum of 32M, subject to a suitably aligned and sized contiguous
@@ -252,6 +259,14 @@ region of memory being available.
 > `= pit | hpet | acpi`
 
 If set, override Xen's default choice for the platform timer.
+
+### cmci-threshold
+> `= <integer>`
+
+> Default: `2`
+
+Specify the event count threshold for raising Corrected Machine Check
+Interrupts.  Specifying zero disables CMCI handling.
 
 ### cmos-rtc-probe
 > `= <boolean>`
@@ -543,6 +558,18 @@ any dom0 autoballooning feature present in your toolstack. See the
 _xl.conf(5)_ man page or [Xen Best
 Practices](http://wiki.xen.org/wiki/Xen_Best_Practices#Xen_dom0_dedicated_memory_and_preventing_dom0_memory_ballooning).
 
+### dom0\_nodes
+
+> `= List of [ <integer> | relaxed | strict ]`
+
+> Default: `strict`
+
+Specify the NUMA nodes to place Dom0 on. Defaults for vCPU-s created
+and memory assigned to Dom0 will be adjusted to match the node
+restrictions set up here. Note that the values to be specified here are
+ACPI PXM ones, not Xen internal node numbers. `relaxed` sets up vCPU
+affinities to prefer but be not limited to the specified node(s).
+
 ### dom0\_shadow
 > `= <boolean>`
 
@@ -597,12 +624,24 @@ Either force retrieval of monitor EDID information via VESA DDC, or
 disable it (edid=no). This option should not normally be required
 except for debugging purposes.
 
-### efi-rs
-> `= <boolean>`
+### efi
+> `= List of [ rs | attr ]`
+
+All options are of boolean kind and can be prefixed with `no-` to
+effect the inverse meaning.
+
+> `rs`
 
 > Default: `true`
 
-Force or disable use of EFI runtime services.
+>> Force or disable use of EFI runtime services.
+
+> `attr=uc`
+
+> Default: `off`
+
+>> Allows mapping of RuntimeServices which have no cachability attribute
+>> set as UC.
 
 ### extra\_guest\_irqs
 > `= [<domU number>][,<dom0 number>]`
@@ -618,11 +657,31 @@ hardware domain is architecture dependent.
 Note that specifying zero as domU value means zero, while for dom0 it means
 to use the default.
 
-### flask\_enabled
-> `= <integer>`
+### flask
+> `= permissive | enforcing | late | disabled`
 
-### flask\_enforcing
-> `= <integer>`
+> Default: `permissive`
+
+Specify how the FLASK security server should be configured.  This option is only
+available if the hypervisor was compiled with XSM support (which can be enabled
+by setting XSM\_ENABLE = y in .config).
+
+* `permissive`: This is intended for development and is not suitable for use
+  with untrusted guests.  If a policy is provided by the bootloader, it will be
+  loaded; errors will be reported to the ring buffer but will not prevent
+  booting.  The policy can be changed to enforcing mode using "xl setenforce".
+* `enforcing`: This requires a security policy to be provided by the bootloader
+  and will enter enforcing mode prior to the creation of domain 0.  If a valid
+  policy is not provided, the hypervisor will not continue booting.
+* `late`: This disables loading of the security policy from the bootloader.
+  FLASK will be enabled but will not enforce access controls until a policy is
+  loaded by a domain using "xl loadpolicy".  Once a policy is loaded, FLASK will
+  run in enforcing mode unless "xl setenforce" has changed that setting.
+* `disabled`: This causes the XSM framework to revert to the dummy module.  The
+  dummy module provides the same security policy as is used when compiling the
+  hypervisor without support for XSM.  The xsm\_op hypercall can also be used to
+  switch to this mode after boot, but there is no way to re-enable FLASK once
+  the dummy module is loaded.
 
 ### font
 > `= <height>` where height is `8x8 | 8x14 | 8x16`
@@ -644,6 +703,30 @@ or trust the guest administrator who would be using passthrough, then the
 requirement can be relaxed.  This option is particularly useful for nested
 virtualization, to allow the L1 hypervisor to use EPT even if the L0 hypervisor
 does not provide VM\_ENTRY\_LOAD\_GUEST\_PAT.
+
+### ept (Intel)
+> `= List of ( {no-}pml | {no-}ad )`
+
+Controls EPT related features.
+
+> Sub-options:
+
+> `pml`
+
+> Default: `false`
+
+>> PML is a new hardware feature in Intel's Broadwell Server and further
+>> platforms which reduces hypervisor overhead of log-dirty mechanism by
+>> automatically recording GPAs (guest physical addresses) when guest memory
+>> gets dirty, and therefore significantly reducing number of EPT violation
+>> caused by write protection of guest memory, which is a necessity to
+>> implement log-dirty mechanism before PML.
+
+> `ad`
+
+> Default: Hardware dependent
+
+>> Have hardware keep accessed/dirty (A/D) bits updated.
 
 ### gdb
 > `= <baud>[/<clock_hz>][,DPS[,<io-base>[,<irq>[,<port-bdf>[,<bridge-bdf>]]]] | pci | amt ] `
@@ -781,7 +864,7 @@ debug hypervisor only).
 > Default: `new` unless directed-EOI is supported
 
 ### iommu
-> `= List of [ <boolean> | force | required | intremap | qinval | snoop | sharept | dom0-passthrough | dom0-strict | amd-iommu-perdev-intremap | workaround_bios_bug | verbose | debug ]`
+> `= List of [ <boolean> | force | required | intremap | qinval | snoop | sharept | dom0-passthrough | dom0-strict | amd-iommu-perdev-intremap | workaround_bios_bug | igfx | verbose | debug ]`
 
 > Sub-options:
 
@@ -854,6 +937,15 @@ debug hypervisor only).
 >> Causes DRHD entries without any PCI discoverable devices under them to be
 >> ignored (normally IOMMU setup fails if any of the devices listed by a DRHD
 >> entry aren't PCI discoverable).
+
+> `igfx` (VT-d)
+
+> Default: `true`
+
+>> Enable IOMMU for Intel graphics devices. The intended usage of this option
+>> is `no-igfx`, which is similar to Linux `intel_iommu=igfx_off` option used
+>> to workaround graphics issues. If adding `no-igfx` fixes anything, you
+>> should file a bug reporting the problem.
 
 > `verbose`
 
@@ -1082,9 +1174,9 @@ This option can be specified more than once (up to 8 times at present).
 > `= <integer>`
 
 ### psr (Intel)
-> `= List of ( cmt:<boolean> | rmid_max:<integer> )`
+> `= List of ( cmt:<boolean> | rmid_max:<integer> | cat:<boolean> | cos_max:<integer> )`
 
-> Default: `psr=cmt:0,rmid_max:255`
+> Default: `psr=cmt:0,rmid_max:255,cat:0,cos_max:255`
 
 Platform Shared Resource(PSR) Services.  Intel Haswell and later server
 platforms offer information about the sharing of resources.
@@ -1094,15 +1186,29 @@ Monitoring ID(RMID) is used to bind the domain to corresponding shared
 resource.  RMID is a hardware-provided layer of abstraction between software
 and logical processors.
 
+To use the PSR cache allocation service for a certain domain, a capacity
+bitmasks(CBM) is used to bind the domain to corresponding shared resource.
+CBM represents cache capacity and indicates the degree of overlap and isolation
+between domains. In hypervisor a Class of Service(COS) ID is allocated for each
+unique CBM.
+
 The following resources are available:
 
 * Cache Monitoring Technology (Haswell and later).  Information regarding the
   L3 cache occupancy.
   * `cmt` instructs Xen to enable/disable Cache Monitoring Technology.
   * `rmid_max` indicates the max value for rmid.
+* Memory Bandwidth Monitoring (Broadwell and later). Information regarding the
+  total/local memory bandwidth. Follow the same options with Cache Monitoring
+  Technology.
+
+* Cache Allocation Technology (Broadwell and later).  Information regarding
+  the cache allocation.
+  * `cat` instructs Xen to enable/disable Cache Allocation Technology.
+  * `cos_max` indicates the max value for COS ID.
 
 ### reboot
-> `= t[riple] | k[bd] | a[cpi] | p[ci] | e[fi] | n[o] [, [w]arm | [c]old]`
+> `= t[riple] | k[bd] | a[cpi] | p[ci] | P[ower] | e[fi] | n[o] [, [w]arm | [c]old]`
 
 > Default: `0`
 
@@ -1122,11 +1228,21 @@ Specify the host reboot method.
 
 `pci` instructs Xen to reboot the host using PCI reset register (port CF9).
 
+`Power` instructs Xen to power-cycle the host using PCI reset register (port CF9).
+
 'efi' instructs Xen to reboot using the EFI reboot call (in EFI mode by
  default it will use that method first).
 
+### ro-hpet
+> `= <boolean>`
+
+> Default: `true`
+
+Map the HPET page as read only in Dom0. If disabled the page will be mapped
+with read and write permissions.
+
 ### sched
-> `= credit | credit2 | sedf | arinc653`
+> `= credit | credit2 | arinc653`
 
 > Default: `sched=credit`
 

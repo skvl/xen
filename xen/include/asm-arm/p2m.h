@@ -2,10 +2,16 @@
 #define _XEN_P2M_H
 
 #include <xen/mm.h>
-
+#include <xen/radix-tree.h>
+#include <public/vm_event.h> /* for vm_event_response_t */
+#include <public/memory.h>
 #include <xen/p2m-common.h>
+#include <public/memory.h>
 
 #define paddr_bits PADDR_BITS
+
+/* Holds the bit size of IPAs in p2m tables.  */
+extern unsigned int p2m_ipa_bits;
 
 struct domain;
 
@@ -45,9 +51,21 @@ struct p2m_domain {
         unsigned long shattered[4];
     } stats;
 
-    /* If true, and an access fault comes in and there is no mem_event listener,
+    /* If true, and an access fault comes in and there is no vm_event listener,
      * pause domain. Otherwise, remove access restrictions. */
     bool_t access_required;
+
+    /* Defines if mem_access is in use for the domain. */
+    bool_t mem_access_enabled;
+
+    /* Default P2M access type for each page in the the domain: new pages,
+     * swapped in pages, cleared pages, and pages that are ambiguously
+     * retyped get this access type. See definition of p2m_access_t. */
+    p2m_access_t default_access;
+
+    /* Radix tree to store the p2m_access_t settings as the pte's don't have
+     * enough available bits to store this information. */
+    struct radix_tree_root mem_access_settings;
 };
 
 /* List of possible type for each page in the p2m entry.
@@ -71,16 +89,30 @@ typedef enum {
 } p2m_type_t;
 
 static inline
-void p2m_mem_event_emulate_check(struct vcpu *v,
-                                 const mem_event_response_t *rsp)
+int p2m_mem_access_enable_emulate(struct domain *d)
 {
-    /* Not supported on ARM. */
-};
+    /* Not supported on ARM */
+    return -ENOSYS;
+}
 
 static inline
-void p2m_setup_introspection(struct domain *d)
+int p2m_mem_access_disable_emulate(struct domain *d)
 {
-    /* No special setup on ARM. */
+    /* Not supported on ARM */
+    return -ENOSYS;
+}
+
+static inline
+void p2m_mem_access_emulate_check(struct vcpu *v,
+                                  const vm_event_response_t *rsp)
+{
+    /* Not supported on ARM. */
+}
+
+static inline
+void p2m_altp2m_check(struct vcpu *v, uint16_t idx)
+{
+    /* Not supported on ARM. */
 }
 
 #define p2m_is_foreign(_t)  ((_t) == p2m_map_foreign)
@@ -216,6 +248,21 @@ static inline int get_page_and_type(struct page_info *page,
 
 /* get host p2m table */
 #define p2m_get_hostp2m(d) (&(d)->arch.p2m)
+
+/* vm_event and mem_access are supported on any ARM guest */
+static inline bool_t p2m_mem_access_sanity_check(struct domain *d)
+{
+    return 1;
+}
+
+static inline bool_t p2m_vm_event_sanity_check(struct domain *d)
+{
+    return 1;
+}
+
+/* Send mem event based on the access. Boolean return value indicates if trap
+ * needs to be injected into guest. */
+bool_t p2m_mem_access_check(paddr_t gpa, vaddr_t gla, const struct npfec npfec);
 
 #endif /* _XEN_P2M_H */
 
