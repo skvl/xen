@@ -1,4 +1,4 @@
-#!/usr/bin/env python
+#!/usr/bin/env python3
 
 import os, sys
 sys.path.append(os.path.join(sys.path[0], "../lib/python"))
@@ -52,7 +52,7 @@ class Gencontrol(Base):
 
         for i in ('postinst', 'prerm', 'lintian-overrides'):
             j = self.substitute(self.templates["xen-utils.%s" % i], vars)
-            file("debian/%s.%s" % (package_utils_name, i), 'w').write(j)
+            open("debian/%s.%s" % (package_utils_name, i), 'w').write(j)
 
         cmds_binary_arch = ["$(MAKE) -f debian/rules.real binary-arch-arch %s" % makeflags]
         cmds_build = ["$(MAKE) -f debian/rules.real build-arch-arch %s" % makeflags]
@@ -72,14 +72,14 @@ class Gencontrol(Base):
             ('xen-arch', 'XEN_ARCH'),
             ('image-suffix', 'IMAGE_SUFFIX'),
         ):
-            if config_entry.has_key(i[0]):
+            if i[0] in config_entry:
                 makeflags[i[1]] = config_entry[i[0]]
 
     def do_flavour_packages(self, packages, makefile, arch, featureset, flavour, vars, makeflags, extra):
         hypervisor = self.templates["control.hypervisor"]
         system_latest = self.templates["control.system.latest"]
 
-        if not vars.has_key('desc'):
+        if not 'desc' in vars:
             vars['desc'] = ''
 
         packages_own = []
@@ -102,7 +102,7 @@ class Gencontrol(Base):
 
         for i in ('postinst', 'postrm'):
             j = self.substitute(self.templates["xen-hypervisor.%s" % i], vars)
-            file("debian/%s.%s" % (package_name, i), 'w').write(j)
+            open("debian/%s.%s" % (package_name, i), 'w').write(j)
 
         cmds_binary_arch = ["$(MAKE) -f debian/rules.real binary-arch-flavour %s" % makeflags]
         cmds_build = ["$(MAKE) -f debian/rules.real build-arch-flavour %s" % makeflags]

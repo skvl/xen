@@ -1,3 +1,9 @@
+xen (4.6.0-1) UNRELEASED; urgency=medium
+
+  * New upstream release.
+
+ -- Bastian Blank <waldi@debian.org>  Sun, 01 Nov 2015 17:43:30 +0000
+
 xen (4.5.1~rc1-1) experimental; urgency=medium
 
   [ Ian Campbell ]

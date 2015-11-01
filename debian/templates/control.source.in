@@ -18,6 +18,7 @@ Build-Depends:
  libglib2.0-dev,
  liblzma-dev,
  libncurses5-dev,
+ libpixman-1-dev,
  libyajl-dev,
  libssl-dev,
  pkg-config,
