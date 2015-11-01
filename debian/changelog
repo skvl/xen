@@ -1,4 +1,4 @@
-xen (4.6.0-1) UNRELEASED; urgency=medium
+xen (4.6.0-1) unstable; urgency=medium
 
   * New upstream release.
   * CVE-2015-7812
@@ -10,7 +10,7 @@ xen (4.6.0-1) UNRELEASED; urgency=medium
   * CVE-2015-7971
   * CVE-2015-7972
 
- -- Bastian Blank <waldi@debian.org>  Sun, 01 Nov 2015 17:43:30 +0000
+ -- Bastian Blank <waldi@debian.org>  Sun, 01 Nov 2015 21:49:07 +0100
 
 xen (4.5.1~rc1-1) experimental; urgency=medium
 
