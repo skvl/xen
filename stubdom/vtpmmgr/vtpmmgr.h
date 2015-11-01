@@ -44,9 +44,22 @@
 #include "uuid.h"
 #include "tcg.h"
 #include "vtpm_manager.h"
+#include "tpm2_types.h"
 
+#define TPM2_EXTRA_OPT "tpm2=1"
 #define RSA_KEY_SIZE 0x0800
 #define RSA_CIPHER_SIZE (RSA_KEY_SIZE / 8)
+
+enum {
+    TPM1_HARDWARE = 1,
+    TPM2_HARDWARE,
+} tpm_version;
+
+struct tpm_hardware_version {
+    int hw_version;
+};
+
+extern struct tpm_hardware_version hardware_version;
 
 struct vtpm_globals {
    int tpm_fd;
@@ -59,6 +72,14 @@ struct vtpm_globals {
    ctr_drbg_context    ctr_drbg;
 
    int hw_locality;
+
+    /* TPM 2.0 */
+    TPM_AuthArea       pw_auth;
+    TPM_AuthArea       srk_auth_area;
+    TPM2_HANDLE        srk_handle;
+    TPM2_HANDLE        sk_handle;
+    TPM2B_NAME         sk_name;
+    TPM2_RSA_KEY       tpm2_storage_key;
 };
 
 struct tpm_opaque {
@@ -83,5 +104,13 @@ TPM_RESULT vtpmmgr_handle_cmd(struct tpm_opaque *opq, tpmcmd_t* tpmcmd);
 inline TPM_RESULT vtpmmgr_rand(unsigned char* bytes, size_t num_bytes) {
    return ctr_drbg_random(&vtpm_globals.ctr_drbg, bytes, num_bytes) == 0 ? 0 : TPM_FAIL;
 }
+
+/* TPM 2.0 */
+TPM_RC tpm2_take_ownership(void);
+TPM_RC tpm2_pcr_read(int index, uint8_t *buf);
+TPM_RESULT vtpmmgr2_create(void);
+TPM_RESULT vtpmmgr2_init(int argc, char** argv);
+int parse_cmdline_hw(int argc, char** argv);
+int hw_is_tpm2(void);
 
 #endif

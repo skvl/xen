@@ -13,8 +13,7 @@
  * GNU General Public License for more details.
  *
  * You should have received a copy of the GNU General Public License
- * along with this program; if not, write to the Free Software
- * Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307 USA
+ * along with this program; If not, see <http://www.gnu.org/licenses/>.
  */
 
 #include <xen/err.h>
@@ -365,15 +364,17 @@ unsigned int amd_iommu_read_ioapic_from_ire(
     unsigned int apic, unsigned int reg)
 {
     unsigned int val = __io_apic_read(apic, reg);
+    unsigned int pin = (reg - 0x10) / 2;
+    unsigned int offset = ioapic_sbdf[IO_APIC_ID(apic)].pin_2_idx[pin];
 
-    if ( !(reg & 1) )
+    if ( !(reg & 1) && offset < INTREMAP_ENTRIES )
     {
-        unsigned int offset = val & (INTREMAP_ENTRIES - 1);
         u16 bdf = ioapic_sbdf[IO_APIC_ID(apic)].bdf;
         u16 seg = ioapic_sbdf[IO_APIC_ID(apic)].seg;
         u16 req_id = get_intremap_requestor_id(seg, bdf);
         const u32 *entry = get_intremap_entry(seg, req_id, offset);
 
+        ASSERT(offset == (val & (INTREMAP_ENTRIES - 1)));
         val &= ~(INTREMAP_ENTRIES - 1);
         val |= get_field_from_reg_u32(*entry,
                                       INT_REMAP_ENTRY_INTTYPE_MASK,
@@ -529,10 +530,12 @@ int amd_iommu_msi_msg_update_ire(
     } while ( PCI_SLOT(bdf) == PCI_SLOT(pdev->devfn) );
 
     if ( !rc )
+    {
         for ( i = 1; i < nr; ++i )
             msi_desc[i].remap_index = msi_desc->remap_index + i;
+        msg->data = data;
+    }
 
-    msg->data = data;
     return rc;
 }
 

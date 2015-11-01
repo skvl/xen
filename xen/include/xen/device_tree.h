@@ -11,7 +11,9 @@
 #define __XEN_DEVICE_TREE_H__
 
 #include <asm/byteorder.h>
+#include <asm/device.h>
 #include <public/xen.h>
+#include <xen/kernel.h>
 #include <xen/init.h>
 #include <xen/string.h>
 #include <xen/types.h>
@@ -28,6 +30,7 @@ struct dt_device_match {
     const char *type;
     const char *compatible;
     const bool_t not_available;
+    const void *data;
 };
 
 #define DT_MATCH_PATH(p)                { .path = p }
@@ -79,7 +82,18 @@ struct dt_device_node {
     /* IOMMU specific fields */
     bool is_protected;
     struct list_head domain_list;
+
+    struct device dev;
 };
+
+#define dt_to_dev(dt_node)  (&(dt_node)->dev)
+
+static inline struct dt_device_node *dev_to_dt(struct device *dev)
+{
+    ASSERT(dev->type == DEV_DT);
+
+    return container_of(dev, struct dt_device_node, dev);
+}
 
 #define MAX_PHANDLE_ARGS 16
 struct dt_phandle_args {
@@ -442,6 +456,20 @@ struct dt_device_node *dt_find_node_by_alias(const char *alias);
  */
 struct dt_device_node *dt_find_node_by_path(const char *path);
 
+
+/**
+ * dt_find_node_by_gpath - Same as dt_find_node_by_path but retrieve the
+ * path from the guest
+ *
+ * @u_path: Xen Guest handle to the buffer containing the path
+ * @u_plen: Length of the buffer
+ * @node: TODO
+ *
+ * Return 0 if succeed otherwise -errno
+ */
+int dt_find_node_by_gpath(XEN_GUEST_HANDLE(char) u_path, uint32_t u_plen,
+                          struct dt_device_node **node);
+
 /**
  * dt_get_parent - Get a node's parent if any
  * @node: Node to get parent
@@ -460,7 +488,7 @@ const struct dt_device_node *dt_get_parent(const struct dt_device_node *node);
  * This function resolves an address, walking the tree, for a give
  * device-tree node. It returns 0 on success.
  */
-int dt_device_get_address(const struct dt_device_node *dev, int index,
+int dt_device_get_address(const struct dt_device_node *dev, unsigned int index,
                           u64 *addr, u64 *size);
 
 /**
@@ -490,7 +518,7 @@ unsigned int dt_number_of_address(const struct dt_device_node *device);
  * This function resolves an interrupt, walking the tree, for a given
  * device-tree node. It's the high level pendant to dt_device_get_raw_irq().
  */
-int dt_device_get_irq(const struct dt_device_node *device, int index,
+int dt_device_get_irq(const struct dt_device_node *device, unsigned int index,
                       struct dt_irq *irq);
 
 /**
@@ -502,7 +530,8 @@ int dt_device_get_irq(const struct dt_device_node *device, int index,
  * This function resolves an interrupt for a device, no translation is
  * made. dt_irq_translate can be called after.
  */
-int dt_device_get_raw_irq(const struct dt_device_node *device, int index,
+int dt_device_get_raw_irq(const struct dt_device_node *device,
+                          unsigned int index,
                           struct dt_raw_irq *irq);
 
 /**
@@ -511,6 +540,30 @@ int dt_device_get_raw_irq(const struct dt_device_node *device, int index,
  * @out_irq: structure dt_irq filled by this function
  */
 int dt_irq_translate(const struct dt_raw_irq *raw, struct dt_irq *out_irq);
+
+/**
+ * dt_for_each_irq_map - Iterate over a nodes interrupt-map property
+ * @dev: The node whose interrupt-map property should be iterated over
+ * @cb: Call back to call for each entry
+ * @data: Caller data passed to callback
+ */
+int dt_for_each_irq_map(const struct dt_device_node *dev,
+                        int (*cb)(const struct dt_device_node *,
+                                  const struct dt_irq *,
+                                  void *),
+                        void *data);
+
+/**
+ * dt_for_each_range - Iterate over a nodes ranges property
+ * @dev: The node whose interrupt-map property should be iterated over
+ * @cb: Call back to call for each entry
+ * @data: Caller data passed to callback
+ */
+int dt_for_each_range(const struct dt_device_node *dev,
+                      int (*cb)(const struct dt_device_node *,
+                                u64 addr, u64 length,
+                                void *),
+                      void *data);
 
 /**
  * dt_n_size_cells - Helper to retrieve the number of cell for the size
@@ -541,14 +594,26 @@ int dt_n_addr_cells(const struct dt_device_node *np);
 bool_t dt_device_is_available(const struct dt_device_node *device);
 
 /**
+ * dt_device_for_passthrough - Check if a device will be used for
+ * passthrough later
+ *
+ * @device: Node to check
+ *
+ * Return true if the property "xen,passthrough" is present in the node,
+ * false otherwise.
+ */
+bool_t dt_device_for_passthrough(const struct dt_device_node *device);
+
+/**
  * dt_match_node - Tell if a device_node has a matching of dt_device_match
  * @matches: array of dt_device_match structures to search in
  * @node: the dt_device_node structure to match against
  *
  * Returns true if the device node match one of dt_device_match.
  */
-bool_t dt_match_node(const struct dt_device_match *matches,
-                     const struct dt_device_node *node);
+const struct dt_device_match *
+dt_match_node(const struct dt_device_match *matches,
+              const struct dt_device_node *node);
 
 /**
  * dt_find_matching_node - Find a node based on an dt_device_match match table

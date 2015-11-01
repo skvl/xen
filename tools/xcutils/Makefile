@@ -44,4 +44,7 @@ clean:
 	$(RM) *.o $(PROGRAMS)
 	$(RM) $(DEPS)
 
+.PHONY: distclean
+distclean: clean
+
 -include $(DEPS)

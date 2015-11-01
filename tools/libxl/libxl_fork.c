@@ -112,9 +112,12 @@ libxl__carefd *libxl__carefd_record(libxl_ctx *ctx, int fd)
 libxl__carefd *libxl__carefd_opened(libxl_ctx *ctx, int fd)
 {
     libxl__carefd *cf = 0;
+    int saved_errno = errno;
 
-    cf = libxl__carefd_record(ctx, fd);
+    if (fd >= 0)
+        cf = libxl__carefd_record(ctx, fd);
     libxl__carefd_unlock();
+    errno = saved_errno;
     return cf;
 }
 
@@ -447,9 +450,10 @@ static int perhaps_sigchld_needed(libxl__gc *gc, bool creating)
 static void childproc_reaped_ours(libxl__egc *egc, libxl__ev_child *ch,
                                  int status)
 {
+    pid_t pid = ch->pid;
     LIBXL_LIST_REMOVE(ch, entry);
     ch->pid = -1;
-    ch->callback(egc, ch, ch->pid, status);
+    ch->callback(egc, ch, pid, status);
 }
 
 static int childproc_reaped(libxl__egc *egc, pid_t pid, int status)

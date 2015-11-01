@@ -1,4 +1,4 @@
-From 71f52ec87e60da06b4ef216e3e1de227c1f78bb3 Mon Sep 17 00:00:00 2001
+From 973db50d8c62f6fdc9ea25f65fa8bb8634a4771f Mon Sep 17 00:00:00 2001
 From: Bastian Blank <waldi@debian.org>
 Date: Sat, 5 Jul 2014 11:46:48 +0200
 Subject: tools-libxc-abiname.diff
@@ -9,20 +9,20 @@ Patch-Name: tools-libxc-abiname.diff
  1 file changed, 13 insertions(+), 22 deletions(-)
 
 diff --git a/tools/libxc/Makefile b/tools/libxc/Makefile
-index bd2ca6c..09a065d 100644
+index a0f899b..8695ebf 100644
 --- a/tools/libxc/Makefile
 +++ b/tools/libxc/Makefile
 @@ -1,9 +1,6 @@
  XEN_ROOT = $(CURDIR)/../..
  include $(XEN_ROOT)/tools/Rules.mk
  
--MAJOR    = 4.5
+-MAJOR    = 4.6
 -MINOR    = 0
 -
- CTRL_SRCS-y       :=
- CTRL_SRCS-y       += xc_core.c
- CTRL_SRCS-$(CONFIG_X86) += xc_core_x86.c
-@@ -113,12 +110,12 @@ $(CTRL_PIC_OBJS) $(GUEST_PIC_OBJS) $(OSDEP_PIC_OBJS) : CFLAGS += -include $(XEN_
+ ifeq ($(CONFIG_LIBXC_MINIOS),y)
+ # Save/restore of a domain is currently incompatible with a stubdom environment
+ override CONFIG_MIGRATE := n
+@@ -128,12 +125,12 @@ $(CTRL_PIC_OBJS) $(GUEST_PIC_OBJS) $(OSDEP_PIC_OBJS) : CFLAGS += -include $(XEN_
  
  LIB := libxenctrl.a
  ifneq ($(nosharedlibs),y)
@@ -37,27 +37,27 @@ index bd2ca6c..09a065d 100644
  endif
  
  ifneq ($(nosharedlibs),y)
-@@ -147,15 +144,13 @@ libs: $(LIB)
+@@ -162,15 +159,13 @@ libs: $(LIB)
  install: build
- 	$(INSTALL_DIR) $(DESTDIR)$(LIBDIR)
- 	$(INSTALL_DIR) $(DESTDIR)$(INCLUDEDIR)
--	$(INSTALL_SHLIB) libxenctrl.so.$(MAJOR).$(MINOR) $(DESTDIR)$(LIBDIR)
-+	$(INSTALL_SHLIB) libxenctrl-$(PACKAGE_VERSION).so $(DESTDIR)$(LIBDIR)
- 	$(INSTALL_DATA) libxenctrl.a $(DESTDIR)$(LIBDIR)
--	$(SYMLINK_SHLIB) libxenctrl.so.$(MAJOR).$(MINOR) $(DESTDIR)$(LIBDIR)/libxenctrl.so.$(MAJOR)
--	$(SYMLINK_SHLIB) libxenctrl.so.$(MAJOR) $(DESTDIR)$(LIBDIR)/libxenctrl.so
-+	$(SYMLINK_SHLIB) libxenctrl-$(PACKAGE_VERSION).so $(DESTDIR)$(LIBDIR)/libxenctrl.so
- 	$(INSTALL_DATA) include/xenctrl.h include/xenctrlosdep.h include/xentoollog.h $(DESTDIR)$(INCLUDEDIR)
--	$(INSTALL_SHLIB) libxenguest.so.$(MAJOR).$(MINOR) $(DESTDIR)$(LIBDIR)
-+	$(INSTALL_SHLIB) libxenguest-$(PACKAGE_VERSION).so $(DESTDIR)$(LIBDIR)
- 	$(INSTALL_DATA) libxenguest.a $(DESTDIR)$(LIBDIR)
--	$(SYMLINK_SHLIB) libxenguest.so.$(MAJOR).$(MINOR) $(DESTDIR)$(LIBDIR)/libxenguest.so.$(MAJOR)
--	$(SYMLINK_SHLIB) libxenguest.so.$(MAJOR) $(DESTDIR)$(LIBDIR)/libxenguest.so
-+	$(SYMLINK_SHLIB) libxenguest-$(PACKAGE_VERSION).so $(DESTDIR)$(LIBDIR)/libxenguest.so
- 	$(INSTALL_DATA) include/xenguest.h $(DESTDIR)$(INCLUDEDIR)
+ 	$(INSTALL_DIR) $(DESTDIR)$(libdir)
+ 	$(INSTALL_DIR) $(DESTDIR)$(includedir)
+-	$(INSTALL_SHLIB) libxenctrl.so.$(MAJOR).$(MINOR) $(DESTDIR)$(libdir)
++	$(INSTALL_SHLIB) libxenctrl-$(PACKAGE_VERSION).so $(DESTDIR)$(libdir)
++	$(SYMLINK_SHLIB) libxenctrl-$(PACKAGE_VERSION).so $(DESTDIR)$(libdir)/libxenctrl.so
+ 	$(INSTALL_DATA) libxenctrl.a $(DESTDIR)$(libdir)
+-	$(SYMLINK_SHLIB) libxenctrl.so.$(MAJOR).$(MINOR) $(DESTDIR)$(libdir)/libxenctrl.so.$(MAJOR)
+-	$(SYMLINK_SHLIB) libxenctrl.so.$(MAJOR) $(DESTDIR)$(libdir)/libxenctrl.so
+ 	$(INSTALL_DATA) include/xenctrl.h include/xenctrlosdep.h include/xentoollog.h $(DESTDIR)$(includedir)
+-	$(INSTALL_SHLIB) libxenguest.so.$(MAJOR).$(MINOR) $(DESTDIR)$(libdir)
++	$(INSTALL_SHLIB) libxenguest-$(PACKAGE_VERSION).so $(DESTDIR)$(libdir)
++	$(SYMLINK_SHLIB) libxenguest-$(PACKAGE_VERSION).so $(DESTDIR)$(libdir)/libxenguest.so
+ 	$(INSTALL_DATA) libxenguest.a $(DESTDIR)$(libdir)
+-	$(SYMLINK_SHLIB) libxenguest.so.$(MAJOR).$(MINOR) $(DESTDIR)$(libdir)/libxenguest.so.$(MAJOR)
+-	$(SYMLINK_SHLIB) libxenguest.so.$(MAJOR) $(DESTDIR)$(libdir)/libxenguest.so
+ 	$(INSTALL_DATA) include/xenguest.h $(DESTDIR)$(includedir)
  
  .PHONY: TAGS
-@@ -185,22 +180,18 @@ rpm: build
+@@ -203,22 +198,18 @@ rpm: build
  libxenctrl.a: $(CTRL_LIB_OBJS)
  	$(AR) rc $@ $^
  
@@ -84,7 +84,7 @@ index bd2ca6c..09a065d 100644
  	$(SYMLINK_SHLIB) $< $@
  
  ifeq ($(CONFIG_MiniOS),y)
-@@ -212,9 +203,9 @@ endif
+@@ -230,9 +221,9 @@ endif
  xc_dom_bzimageloader.o: CFLAGS += $(call zlib-options,D)
  xc_dom_bzimageloader.opic: CFLAGS += $(call zlib-options,D)
  

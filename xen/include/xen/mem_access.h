@@ -16,23 +16,26 @@
  * GNU General Public License for more details.
  *
  * You should have received a copy of the GNU General Public License
- * along with this program; if not, write to the Free Software
- * Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
+ * along with this program; If not, see <http://www.gnu.org/licenses/>.
  */
 
 #ifndef _XEN_ASM_MEM_ACCESS_H
 #define _XEN_ASM_MEM_ACCESS_H
 
 #include <public/memory.h>
+#include <asm/p2m.h>
 
 #ifdef HAS_MEM_ACCESS
 
 int mem_access_memop(unsigned long cmd,
                      XEN_GUEST_HANDLE_PARAM(xen_mem_access_op_t) arg);
-int mem_access_send_req(struct domain *d, mem_event_request_t *req);
+int mem_access_send_req(struct domain *d, vm_event_request_t *req);
 
-/* Resumes the running of the VCPU, restarting the last instruction */
-void mem_access_resume(struct domain *d);
+static inline
+void mem_access_resume(struct vcpu *v, vm_event_response_t *rsp)
+{
+    p2m_mem_access_emulate_check(v, rsp);
+}
 
 #else
 
@@ -44,12 +47,16 @@ int mem_access_memop(unsigned long cmd,
 }
 
 static inline
-int mem_access_send_req(struct domain *d, mem_event_request_t *req)
+int mem_access_send_req(struct domain *d, vm_event_request_t *req)
 {
     return -ENOSYS;
 }
 
-static inline void mem_access_resume(struct domain *d) {}
+static inline
+void mem_access_resume(struct vcpu *vcpu, vm_event_response_t *rsp)
+{
+    /* Nothing to do. */
+}
 
 #endif /* HAS_MEM_ACCESS */
 

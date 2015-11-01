@@ -71,6 +71,7 @@ static void __init init_idle_domain(void)
 static const char * __initdata processor_implementers[] = {
     ['A'] = "ARM Limited",
     ['B'] = "Broadcom Corporation",
+    ['C'] = "Cavium Inc.",
     ['D'] = "Digital Equipment Corp",
     ['M'] = "Motorola, Freescale Semiconductor Inc.",
     ['P'] = "Applied Micro",
@@ -249,7 +250,7 @@ void __init discard_initial_modules(void)
     struct bootmodules *mi = &bootinfo.modules;
     int i;
 
-    for ( i = 0; i <= mi->nr_mods; i++ )
+    for ( i = 0; i < mi->nr_mods; i++ )
     {
         paddr_t s = mi->module[i].start;
         paddr_t e = s + PAGE_ALIGN(mi->module[i].size);
@@ -349,7 +350,7 @@ static paddr_t __init next_module(paddr_t s, paddr_t *end)
     paddr_t lowest = ~(paddr_t)0;
     int i;
 
-    for ( i = 0; i <= mi->nr_mods; i++ )
+    for ( i = 0; i < mi->nr_mods; i++ )
     {
         paddr_t mod_s = mi->module[i].start;
         paddr_t mod_e = mod_s + mi->module[i].size;
@@ -664,7 +665,6 @@ static void __init setup_mm(unsigned long dtb_paddr, size_t dtb_size)
     xenheap_virt_end = XENHEAP_VIRT_START + ram_end - ram_start;
     xenheap_mfn_start = ram_start >> PAGE_SHIFT;
     xenheap_mfn_end = ram_end >> PAGE_SHIFT;
-    xenheap_max_mfn(xenheap_mfn_end);
 
     /*
      * Need enough mapped pages for copying the DTB.
@@ -709,6 +709,7 @@ void __init start_xen(unsigned long boot_phys_offset,
     const char *cmdline;
     struct bootmodule *xen_bootmodule;
     struct domain *dom0;
+    struct xen_arch_domainconfig config;
 
     setup_cache();
 
@@ -751,9 +752,14 @@ void __init start_xen(unsigned long boot_phys_offset,
 
     vm_init();
     dt_unflatten_host_device_tree();
-    dt_irq_xlate = gic_irq_xlate;
 
     init_IRQ();
+
+    platform_init();
+
+    preinit_xen_time();
+
+    gic_preinit();
 
     dt_uart_init();
     console_init_preirq();
@@ -762,8 +768,6 @@ void __init start_xen(unsigned long boot_phys_offset,
     system_state = SYS_STATE_boot;
 
     processor_id();
-
-    platform_init();
 
     smp_init_cpus();
     cpus = smp_get_max_cpus();
@@ -795,8 +799,6 @@ void __init start_xen(unsigned long boot_phys_offset,
     local_irq_enable();
     local_abort_enable();
 
-    iommu_setup();
-
     smp_prepare_cpus(cpus);
 
     initialize_keytable();
@@ -820,10 +822,16 @@ void __init start_xen(unsigned long boot_phys_offset,
 
     setup_virt_paging();
 
+    iommu_setup();
+
     do_initcalls();
 
     /* Create initial domain 0. */
-    dom0 = domain_create(0, 0, 0);
+    /* The vGIC for DOM0 is exactly emulating the hardware GIC */
+    config.gic_version = XEN_DOMCTL_CONFIG_GIC_NATIVE;
+    config.nr_spis = gic_number_lines() - 32;
+
+    dom0 = domain_create(0, 0, 0, &config);
     if ( IS_ERR(dom0) || (alloc_dom0_vcpu0(dom0) == NULL) )
             panic("Error creating domain 0");
 

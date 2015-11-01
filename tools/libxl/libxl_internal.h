@@ -19,6 +19,8 @@
 
 #include "libxl_osdeps.h" /* must come before any other headers */
 
+#include "libxl_sr_stream_format.h"
+
 #include <assert.h>
 #include <dirent.h>
 #include <errno.h>
@@ -84,8 +86,12 @@
 
 #define LIBXL_INIT_TIMEOUT 10
 #define LIBXL_DESTROY_TIMEOUT 10
-#define LIBXL_HOTPLUG_TIMEOUT 10
-#define LIBXL_DEVICE_MODEL_START_TIMEOUT 10
+#define LIBXL_HOTPLUG_TIMEOUT 40
+/* QEMU may be slow to load and start due to a bug in Linux where the I/O
+ * subsystem sometime produce high latency under load. */
+#define LIBXL_DEVICE_MODEL_START_TIMEOUT 60
+#define LIBXL_DEVICE_MODEL_RESTORE_FILE "/var/lib/xen/qemu-resume" /* .$domid */
+#define LIBXL_STUBDOM_START_TIMEOUT 30
 #define LIBXL_QEMU_BODGE_TIMEOUT 2
 #define LIBXL_XENCONSOLE_LIMIT 1048576
 #define LIBXL_XENCONSOLE_PROTOCOL "vt100"
@@ -103,10 +109,28 @@
 #define STUBDOM_CONSOLE_SERIAL 3
 #define STUBDOM_SPECIAL_CONSOLES 3
 #define TAP_DEVICE_SUFFIX "-emu"
-#define DISABLE_UDEV_PATH "libxl/disable_udev"
 #define DOMID_XS_PATH "domid"
 
 #define ARRAY_SIZE(a) (sizeof(a) / sizeof(a[0]))
+
+#define ROUNDUP(_val, _order)                                           \
+    (((unsigned long)(_val)+(1UL<<(_order))-1) & ~((1UL<<(_order))-1))
+
+#define min(X, Y) ({                             \
+            const typeof (X) _x = (X);           \
+            const typeof (Y) _y = (Y);           \
+            (void) (&_x == &_y);                 \
+            (_x < _y) ? _x : _y; })
+#define max(X, Y) ({                             \
+            const typeof (X) _x = (X);           \
+            const typeof (Y) _y = (Y);           \
+            (void) (&_x == &_y);                 \
+            (_x > _y) ? _x : _y; })
+
+#define min_t(type, x, y)                                               \
+    ({ const type _x = (x); const type _y = (y); _x < _y ? _x: _y; })
+#define max_t(type, x, y)                                               \
+    ({ const type _x = (x); const type _y = (y); _x > _y ? _x: _y; })
 
 #define LIBXL__LOGGING_ENABLED
 
@@ -120,6 +144,9 @@
 #define LIBXL__LOG_ERRNOVAL(ctx, loglevel, errnoval, _f, _a...)
 #endif
   /* all of these macros preserve errno (saving and restoring) */
+
+/* Convert pfn to physical address space. */
+#define pfn_to_paddr(x) ((uint64_t)(x) << XC_PAGE_SHIFT)
 
 /* logging */
 _hidden void libxl__logv(libxl_ctx *ctx, xentoollog_level msglevel, int errnoval,
@@ -160,6 +187,9 @@ typedef void libxl__ev_fd_callback(libxl__egc *egc, libxl__ev_fd *ev,
    *
    * It is not permitted to listen for the same or overlapping events
    * on the same fd using multiple different libxl__ev_fd's.
+   *
+   * (Spurious wakeups, and spurious bits set in revents, are
+   * suppressed by the libxl event core.)
    */
 struct libxl__ev_fd {
     /* caller should include this in their own struct */
@@ -173,9 +203,46 @@ struct libxl__ev_fd {
 };
 
 
+typedef struct libxl__ao_abortable libxl__ao_abortable;
+typedef void libxl__ao_abortable_callback(libxl__egc *egc,
+                  libxl__ao_abortable *ao_abortable, int rc /* ABORTED */);
+
+struct libxl__ao_abortable {
+    /* caller must fill this in and it must remain valid */
+    libxl__ao *ao;
+    libxl__ao_abortable_callback *callback;
+    /* remainder is private for abort machinery */
+    bool registered;
+    LIBXL_LIST_ENTRY(libxl__ao_abortable) entry;
+    /*
+     * For nested aos:
+     *  Semantically, abort affects the whole tree of aos,
+     *    not just the parent.
+     *  libxl__ao_abortable.ao refers to the child, so
+     *    that the child callback sees the right ao.  (After all,
+     *    it was code dealing with the child that set .ao.)
+     *  But, the abortable is recorded on the "abortables" list
+     *    for the ultimate root ao, so that every possible child
+     *    abort occurs as a result of the abort of the parent.
+     *  We set ao->aborting only in the root.
+     */
+};
+
+_hidden int libxl__ao_abortable_register(libxl__ao_abortable*);
+_hidden void libxl__ao_abortable_deregister(libxl__ao_abortable*);
+
+static inline void libxl__ao_abortable_init
+  (libxl__ao_abortable *c) { c->registered = 0; }
+static inline bool libxl__ao_abortable_isregistered
+  (const libxl__ao_abortable *c) { return c->registered; }
+
+int libxl__ao_aborting(libxl__ao *ao); /* -> 0 or ERROR_ABORTED */
+
+
 typedef struct libxl__ev_time libxl__ev_time;
 typedef void libxl__ev_time_callback(libxl__egc *egc, libxl__ev_time *ev,
-                                     const struct timeval *requested_abs);
+                                     const struct timeval *requested_abs,
+                                     int rc); /* TIMEDOUT or ABORTED */
 struct libxl__ev_time {
     /* caller should include this in their own struct */
     /* read-only for caller, who may read only when registered: */
@@ -185,6 +252,7 @@ struct libxl__ev_time {
     LIBXL_TAILQ_ENTRY(libxl__ev_time) entry;
     struct timeval abs;
     libxl__osevent_hook_nexus *nexus;
+    libxl__ao_abortable abrt;
 };
 
 typedef struct libxl__ev_xswatch libxl__ev_xswatch;
@@ -304,6 +372,18 @@ struct libxl__poller {
     int (*fd_rindices)[3]; /* see libxl_event.c:beforepoll_internal */
 
     int wakeup_pipe[2]; /* 0 means no fd allocated */
+
+    /*
+     * We also use the poller to record whether any fds have been
+     * deregistered since we entered poll.  Each poller which is not
+     * idle is on the list pollers_fds_changed.  fds_changed is
+     * cleared by beforepoll, and tested by afterpoll.  Whenever an fd
+     * event is deregistered, we set the fds_changed of all non-idle
+     * pollers.  So afterpoll can tell whether any POLLNVAL is
+     * plausibly due to an fd being closed and reopened.
+     */
+    LIBXL_LIST_ENTRY(libxl__poller) fds_changed_entry;
+    bool fds_changed;
 };
 
 struct libxl__gc {
@@ -343,8 +423,9 @@ struct libxl__ctx {
       /* See the comment for OSEVENT_HOOK_INTERN in libxl_event.c
        * for restrictions on the use of the osevent fields. */
 
-    libxl__poller poller_app; /* libxl_osevent_beforepoll and _afterpoll */
+    libxl__poller *poller_app; /* libxl_osevent_beforepoll and _afterpoll */
     LIBXL_LIST_HEAD(, libxl__poller) pollers_event, pollers_idle;
+    LIBXL_LIST_HEAD(, libxl__poller) pollers_fds_changed;
 
     LIBXL_SLIST_HEAD(libxl__osevent_hook_nexi, libxl__osevent_hook_nexus)
         hook_fd_nexi_idle, hook_timeout_nexi_idle;
@@ -360,6 +441,8 @@ struct libxl__ctx {
     xc_evtchn *xce; /* waiting must be done only with libxl__ev_evtchn* */
     LIBXL_LIST_HEAD(, libxl__ev_evtchn) evtchns_waiting;
     libxl__ev_fd evtchn_efd;
+
+    LIBXL_LIST_HEAD(, libxl__ao) aos_inprogress;
 
     LIBXL_TAILQ_HEAD(libxl__evgen_domain_death_list, libxl_evgen_domain_death)
         death_list /* sorted by domid */,
@@ -447,9 +530,15 @@ struct libxl__ao {
      * only in libxl__ao_complete.)
      */
     uint32_t magic;
-    unsigned constructing:1, in_initiator:1, complete:1, notified:1, nested:1;
+    unsigned constructing:1, in_initiator:1, complete:1, notified:1,
+        aborting:1;
+    int manip_refcnt;
+    libxl__ao *nested_root;
+    int nested_progeny;
     int progress_reports_outstanding;
     int rc;
+    LIBXL_LIST_HEAD(, libxl__ao_abortable) abortables;
+    LIBXL_LIST_ENTRY(libxl__ao) inprogress_entry;
     libxl__gc gc;
     libxl_asyncop_how how;
     libxl__poller *poller;
@@ -521,10 +610,14 @@ _hidden void *libxl__realloc(libxl__gc *gc_opt, void *ptr, size_t new_size) NN1;
 /* print @fmt into an allocated string large enoughto contain the result.
  * (similar to gc'd asprintf(3)). */
 _hidden char *libxl__sprintf(libxl__gc *gc_opt, const char *fmt, ...) PRINTF_ATTRIBUTE(2, 3) NN1;
+_hidden char *libxl__vsprintf(libxl__gc *gc, const char *format, va_list ap);
 /* duplicate the string @c (similar to a gc'd strdup(3)). */
-_hidden char *libxl__strdup(libxl__gc *gc_opt, const char *c) NN1;
+_hidden char *libxl__strdup(libxl__gc *gc_opt,
+                            const char *c /* may be NULL */) NN1;
 /* duplicate at most @n bytes of string @c (similar to a gc'd strndup(3)). */
-_hidden char *libxl__strndup(libxl__gc *gc_opt, const char *c, size_t n) NN1;
+_hidden char *libxl__strndup(libxl__gc *gc_opt,
+                             const char *c /* may be NULL */,
+                             size_t n) NN1;
 /* strip the last path component from @s and return as a newly allocated
  * string. (similar to a gc'd dirname(3)). */
 _hidden char *libxl__dirname(libxl__gc *gc_opt, const char *s) NN1;
@@ -537,6 +630,17 @@ _hidden int libxl__pipe_nonblock(libxl_ctx *ctx, int fds[2]);
  * `not open'.  Ignores any errors.  Sets fds[] to -1. */
 _hidden void libxl__pipe_close(int fds[2]);
 
+/* Change the flags for the file description associated with fd to
+ *    (flags & mask) | val.
+ * If r_oldflags != NULL then sets *r_oldflags to the original set of
+ * flags.
+ */
+_hidden int libxl__fd_flags_modify_save(libxl__gc *gc, int fd,
+                                        int mask, int val, int *r_oldflags);
+/* Restores the flags for the file description associated with fd to
+ * to the previous value (returned by libxl__fd_flags_modify_save)
+ */
+_hidden int libxl__fd_flags_restore(libxl__gc *gc, int fd, int old_flags);
 
 /* Each of these logs errors and returns a libxl error code.
  * They do not mind if path is already removed.
@@ -770,10 +874,10 @@ static inline void libxl__ev_fd_init(libxl__ev_fd *efd)
 static inline int libxl__ev_fd_isregistered(const libxl__ev_fd *efd)
                     { return efd->fd >= 0; }
 
-_hidden int libxl__ev_time_register_rel(libxl__gc*, libxl__ev_time *ev_out,
+_hidden int libxl__ev_time_register_rel(libxl__ao*, libxl__ev_time *ev_out,
                                         libxl__ev_time_callback*,
                                         int milliseconds /* as for poll(2) */);
-_hidden int libxl__ev_time_register_abs(libxl__gc*, libxl__ev_time *ev_out,
+_hidden int libxl__ev_time_register_abs(libxl__ao*, libxl__ev_time *ev_out,
                                         libxl__ev_time_callback*,
                                         struct timeval);
 _hidden int libxl__ev_time_modify_rel(libxl__gc*, libxl__ev_time *ev,
@@ -782,7 +886,7 @@ _hidden int libxl__ev_time_modify_abs(libxl__gc*, libxl__ev_time *ev,
                                       struct timeval);
 _hidden void libxl__ev_time_deregister(libxl__gc*, libxl__ev_time *ev);
 static inline void libxl__ev_time_init(libxl__ev_time *ev)
-                { ev->func = 0; }
+                { ev->func = 0; libxl__ao_abortable_init(&ev->abrt); }
 static inline int libxl__ev_time_isregistered(const libxl__ev_time *ev)
                 { return !!ev->func; }
 
@@ -950,7 +1054,6 @@ _hidden int libxl__file_reference_unmap(libxl__file_reference *f);
 
 /* from xl_dom */
 _hidden libxl_domain_type libxl__domain_type(libxl__gc *gc, uint32_t domid);
-_hidden int libxl__domain_shutdown_reason(libxl__gc *gc, uint32_t domid);
 _hidden int libxl__domain_cpupool(libxl__gc *gc, uint32_t domid);
 _hidden libxl_scheduler libxl__domain_scheduler(libxl__gc *gc, uint32_t domid);
 _hidden int libxl__sched_set_params(libxl__gc *gc, uint32_t domid,
@@ -973,6 +1076,11 @@ typedef struct {
     libxl__file_reference pv_ramdisk;
     const char * pv_cmdline;
     bool pvh_enabled;
+
+    xen_vmemrange_t *vmemranges;
+    uint32_t num_vmemranges;
+
+    xc_domain_configuration_t config;
 } libxl__domain_build_state;
 
 _hidden int libxl__build_pre(libxl__gc *gc, uint32_t domid,
@@ -985,7 +1093,7 @@ _hidden int libxl__build_post(libxl__gc *gc, uint32_t domid,
 _hidden int libxl__build_pv(libxl__gc *gc, uint32_t domid,
              libxl_domain_build_info *info, libxl__domain_build_state *state);
 _hidden int libxl__build_hvm(libxl__gc *gc, uint32_t domid,
-              libxl_domain_build_info *info,
+              libxl_domain_config *d_config,
               libxl__domain_build_state *state);
 
 _hidden int libxl__qemu_traditional_cmd(libxl__gc *gc, uint32_t domid,
@@ -994,8 +1102,6 @@ _hidden int libxl__domain_rename(libxl__gc *gc, uint32_t domid,
                                  const char *old_name, const char *new_name,
                                  xs_transaction_t trans);
 
-_hidden int libxl__toolstack_restore(uint32_t domid, const uint8_t *buf,
-                                     uint32_t size, void *data);
 _hidden int libxl__domain_resume_device_model(libxl__gc *gc, uint32_t domid);
 
 _hidden const char *libxl__userdata_path(libxl__gc *gc, uint32_t domid,
@@ -1082,6 +1188,8 @@ _hidden int libxl__device_vtpm_setdefault(libxl__gc *gc, libxl_device_vtpm *vtpm
 _hidden int libxl__device_vfb_setdefault(libxl__gc *gc, libxl_device_vfb *vfb);
 _hidden int libxl__device_vkb_setdefault(libxl__gc *gc, libxl_device_vkb *vkb);
 _hidden int libxl__device_pci_setdefault(libxl__gc *gc, libxl_device_pci *pci);
+_hidden void libxl__rdm_setdefault(libxl__gc *gc,
+                                   libxl_domain_build_info *b_info);
 
 _hidden const char *libxl__device_nic_devname(libxl__gc *gc,
                                               uint32_t domid,
@@ -1089,93 +1197,6 @@ _hidden const char *libxl__device_nic_devname(libxl__gc *gc,
                                               libxl_nic_type type);
 
 _hidden int libxl__get_domid(libxl__gc *gc, uint32_t *domid);
-
-/*
- * libxl__ev_devstate - waits a given time for a device to
- * reach a given state.  Follows the libxl_ev_* conventions.
- * Will generate only one event, and after that is automatically
- * cancelled.
- */
-typedef struct libxl__ev_devstate libxl__ev_devstate;
-typedef void libxl__ev_devstate_callback(libxl__egc *egc, libxl__ev_devstate*,
-                                         int rc);
-  /* rc will be 0, ERROR_TIMEDOUT, ERROR_INVAL (meaning path was removed),
-   * or ERROR_FAIL if other stuff went wrong (in which latter case, logged) */
-
-struct libxl__ev_devstate {
-    /* read-only for caller, who may read only when waiting: */
-    int wanted;
-    libxl__ev_devstate_callback *callback;
-    /* as for the remainder, read-only public parts may also be
-     * read by the caller (notably, watch.path), but only when waiting: */
-    libxl__ev_xswatch watch;
-    libxl__ev_time timeout;
-};
-
-static inline void libxl__ev_devstate_init(libxl__ev_devstate *ds)
-{
-    libxl__ev_time_init(&ds->timeout);
-    libxl__ev_xswatch_init(&ds->watch);
-}
-
-static inline void libxl__ev_devstate_cancel(libxl__gc *gc,
-                                             libxl__ev_devstate *ds)
-{
-    libxl__ev_time_deregister(gc,&ds->timeout);
-    libxl__ev_xswatch_deregister(gc,&ds->watch);
-}
-
-_hidden int libxl__ev_devstate_wait(libxl__gc *gc, libxl__ev_devstate *ds,
-                                    libxl__ev_devstate_callback cb,
-                                    const char *state_path,
-                                    int state, int milliseconds);
-
-/*
- * libxl__ev_domaindeathcheck_register - arranges to call back (once)
- * if the domain is destroyed.  If the domain dies, we log a message
- * of the form "<what>: <explanation of the situation, including the domid>".
- */
-
-typedef struct libxl__domaindeathcheck libxl__domaindeathcheck;
-typedef void libxl___domaindeathcheck_callback(libxl__egc *egc,
-                                         libxl__domaindeathcheck*);
-
-struct libxl__domaindeathcheck {
-    /* must be filled in by caller, and remain valid: */
-    const char *what;
-    uint32_t domid;
-    libxl___domaindeathcheck_callback *callback;
-    /* private */
-    libxl__ev_xswatch watch;
-};
-
-_hidden int libxl__domaindeathcheck_start(libxl__gc *gc,
-                                          libxl__domaindeathcheck *dc);
-
-static inline void libxl__domaindeathcheck_init
- (libxl__domaindeathcheck *dc) { libxl__ev_xswatch_init(&dc->watch); }
-static inline void libxl__domaindeathcheck_stop(libxl__gc *gc,
-  libxl__domaindeathcheck *dc) { libxl__ev_xswatch_deregister(gc,&dc->watch); }
-
-
-/*
- * libxl__try_phy_backend - Check if there's support for the passed
- * type of file using the PHY backend
- * st_mode: mode_t of the file, as returned by stat function
- *
- * Returns 1 on success, and 0 if not suitable for phy backend.
- */
-_hidden int libxl__try_phy_backend(mode_t st_mode);
-
-
-_hidden char *libxl__devid_to_localdev(libxl__gc *gc, int devid);
-
-/* from libxl_pci */
-
-_hidden int libxl__device_pci_add(libxl__gc *gc, uint32_t domid, libxl_device_pci *pcidev, int starting);
-_hidden int libxl__create_pci_backend(libxl__gc *gc, uint32_t domid,
-                                      libxl_device_pci *pcidev, int num);
-_hidden int libxl__device_pci_destroy_all(libxl__gc *gc, uint32_t domid);
 
 /*----- xswait: wait for a xenstore node to be suitable -----*/
 
@@ -1195,13 +1216,13 @@ typedef struct libxl__xswait_state libxl__xswait_state;
  *     Otherwise, xswait will continue waiting and watching and
  *     will call you back later.
  *
- * rc==ERROR_TIMEDOUT
+ * rc==ERROR_TIMEDOUT, rc==ERROR_ABORTED
  *
  *     The specified timeout was reached.
  *     This has NOT been logged (except to the debug log).
  *     xswait will not continue (but calling libxl__xswait_stop is OK).
  *
- * rc!=0, !=ERROR_TIMEDOUT
+ * rc!=0, !=ERROR_TIMEDOUT, !=ERROR_ABORTED
  *
  *     Some other error occurred.
  *     This HAS been logged.
@@ -1230,6 +1251,102 @@ void libxl__xswait_stop(libxl__gc*, libxl__xswait_state*); /*idempotent*/
 bool libxl__xswait_inuse(const libxl__xswait_state *ss);
 
 int libxl__xswait_start(libxl__gc*, libxl__xswait_state*);
+
+
+/*
+ * libxl__ev_devstate - waits a given time for a device to
+ * reach a given state.  Follows the libxl_ev_* conventions.
+ * Will generate only one event, and after that is automatically
+ * cancelled.
+ */
+typedef struct libxl__ev_devstate libxl__ev_devstate;
+typedef void libxl__ev_devstate_callback(libxl__egc *egc, libxl__ev_devstate*,
+                                         int rc);
+  /* rc will be 0, ERROR_TIMEDOUT, ERROR_ABORTED, ERROR_INVAL
+   * (meaning path was removed), or ERROR_FAIL if other stuff went
+   * wrong (in which latter case, logged) */
+
+struct libxl__ev_devstate {
+    /* read-only for caller, who may read only when waiting: */
+    int wanted;
+    libxl__ev_devstate_callback *callback;
+    /* as for the remainder, read-only public parts may also be
+     * read by the caller (notably, watch.path), but only when waiting: */
+    libxl__xswait_state w;
+};
+
+static inline void libxl__ev_devstate_init(libxl__ev_devstate *ds)
+{
+    libxl__xswait_init(&ds->w);
+}
+
+static inline void libxl__ev_devstate_cancel(libxl__gc *gc,
+                                             libxl__ev_devstate *ds)
+{
+    libxl__xswait_stop(gc,&ds->w);
+}
+
+_hidden int libxl__ev_devstate_wait(libxl__ao *ao, libxl__ev_devstate *ds,
+                                    libxl__ev_devstate_callback cb,
+                                    const char *state_path,
+                                    int state, int milliseconds);
+
+/*
+ * libxl__ev_domaindeathcheck_register - arranges to call back (once)
+ * if the domain is destroyed.  If the domain dies, we log a message
+ * of the form "<what>: <explanation of the situation, including the domid>".
+ */
+
+typedef struct libxl__domaindeathcheck libxl__domaindeathcheck;
+typedef void libxl___domaindeathcheck_callback(libxl__egc *egc,
+        libxl__domaindeathcheck*,
+        int rc /* DESTROYED or ABORTED */);
+
+struct libxl__domaindeathcheck {
+    /* must be filled in by caller, and remain valid: */
+    const char *what;
+    uint32_t domid;
+    libxl___domaindeathcheck_callback *callback;
+    /* private */
+    libxl__ao_abortable abrt;
+    libxl__ev_xswatch watch;
+};
+
+_hidden int libxl__domaindeathcheck_start(libxl__ao *ao,
+                                          libxl__domaindeathcheck *dc);
+
+void libxl__domaindeathcheck_init(libxl__domaindeathcheck *dc);
+void libxl__domaindeathcheck_stop(libxl__gc *gc, libxl__domaindeathcheck *dc);
+
+
+/*
+ * libxl__try_phy_backend - Check if there's support for the passed
+ * type of file using the PHY backend
+ * st_mode: mode_t of the file, as returned by stat function
+ *
+ * Returns 1 on success, and 0 if not suitable for phy backend.
+ */
+_hidden int libxl__try_phy_backend(mode_t st_mode);
+
+
+_hidden char *libxl__devid_to_localdev(libxl__gc *gc, int devid);
+
+_hidden int libxl__pci_numdevs(libxl__gc *gc);
+_hidden int libxl__pci_topology_init(libxl__gc *gc,
+                                     physdev_pci_device_t *devs,
+                                     int num_devs);
+
+/* from libxl_pci */
+
+_hidden int libxl__device_pci_add(libxl__gc *gc, uint32_t domid, libxl_device_pci *pcidev, int starting);
+_hidden int libxl__create_pci_backend(libxl__gc *gc, uint32_t domid,
+                                      libxl_device_pci *pcidev, int num);
+_hidden int libxl__device_pci_destroy_all(libxl__gc *gc, uint32_t domid);
+
+/* from libxl_dtdev */
+
+_hidden int libxl__device_dt_add(libxl__gc *gc, uint32_t domid,
+                                 const libxl_device_dtdev *dtdev);
 
 /*
  *----- spawn -----
@@ -1329,7 +1446,8 @@ libxl__spawn_midproc_cb(libxl__gc*, libxl__spawn_state*, pid_t inner);
  * The spawn state will be Idle on entry to the callback (and
  * it may be reused immediately if desired).
  */
-typedef void libxl__spawn_failure_cb(libxl__egc*, libxl__spawn_state*);
+typedef void libxl__spawn_failure_cb(libxl__egc*, libxl__spawn_state*,
+                                     int rc);
 
 /*
  * Called when the xspath watch triggers.  xspath will have been read
@@ -1370,7 +1488,7 @@ struct libxl__spawn_state {
 
     /* remaining fields are private to libxl_spawn_... */
     int detaching; /* we are in Detaching */
-    int failed; /* might be true whenever we are not Idle */
+    int rc; /* might be non-0 whenever we are not Idle */
     libxl__ev_child mid; /* always in use whenever we are not Idle */
     libxl__xswait_state xswait;
 };
@@ -1393,7 +1511,7 @@ _hidden int libxl__spawn_record_pid(libxl__gc*, libxl__spawn_state*,
  * This is a NOT function for waiting for ordinary child processes.
  * If you want to run (fork/exec/wait) subprocesses from libxl:
  *  - Make your libxl entrypoint use the ao machinery
- *  - Use libxl__ev_fork, and use the callback programming style
+ *  - Use libxl__ev_child_fork, and use the callback programming style
  *
  * This function is intended for interprocess communication with a
  * service process.  If the service process does not respond quickly,
@@ -1462,8 +1580,9 @@ _hidden  void libxl__exec(libxl__gc *gc, int stdinfd, int stdoutfd,
  /* on entry, libxl_domid_valid_guest(domid) must be false;
   * on exit (even error exit), domid may be valid and refer to a domain */
 _hidden int libxl__domain_make(libxl__gc *gc,
-                               libxl_domain_create_info *info,
-                               uint32_t *domid);
+                               libxl_domain_config *d_config,
+                               uint32_t *domid,
+                               xc_domain_configuration_t *xc_config);
 
 _hidden int libxl__domain_build(libxl__gc *gc,
                                 libxl_domain_config *d_config,
@@ -1478,6 +1597,15 @@ _hidden int libxl__need_xenpv_qemu(libxl__gc *gc,
         int nr_vfbs, libxl_device_vfb *vfbs,
         int nr_disks, libxl_device_disk *disks,
         int nr_channels, libxl_device_channel *channels);
+
+/*
+ * This function will fix reserved device memory conflict
+ * according to user's configuration.
+ */
+_hidden int libxl__domain_device_construct_rdm(libxl__gc *gc,
+                                   libxl_domain_config *d_config,
+                                   uint64_t rdm_mem_guard,
+                                   struct xc_hvm_build_args *args);
 
 /*
  * This function will cause the whole libxl process to hang
@@ -1562,6 +1690,10 @@ _hidden int libxl__device_destroy_tapdisk(libxl__gc *gc, const char *params);
 _hidden int libxl__device_from_disk(libxl__gc *gc, uint32_t domid,
                                    libxl_device_disk *disk,
                                    libxl__device *device);
+
+/* Calls poll() again - useful to check whether a signaled condition
+ * is still true.  Cannot fail.  Returns currently-true revents. */
+_hidden short libxl__fd_poll_recheck(libxl__egc *egc, int fd, short events);
 
 _hidden char *libxl__uuid2string(libxl__gc *gc, const libxl_uuid uuid);
 
@@ -1794,9 +1926,9 @@ _hidden libxl__json_object *libxl__json_parse(libxl__gc *gc_opt, const char *s);
 _hidden int libxl__device_model_version_running(libxl__gc *gc, uint32_t domid);
   /* Return the system-wide default device model */
 _hidden libxl_device_model_version libxl__default_device_model(libxl__gc *gc);
-
-/* Check how executes hotplug script currently */
-int libxl__hotplug_settings(libxl__gc *gc, xs_transaction_t t);
+_hidden char *libxl__device_model_xs_path(libxl__gc *gc, uint32_t dm_domid,
+                                          uint32_t domid,
+                                          const char *format, ...) PRINTF_ATTRIBUTE(4, 5);
 
 /*
  * Calling context and GC for event-generating functions:
@@ -1864,8 +1996,9 @@ _hidden void libxl__egc_cleanup(libxl__egc *egc);
  * All "slow" functions (see below for the exact definition) need to
  * use the asynchronous operation ("ao") machinery.  The function
  * should take a parameter const libxl_asyncop_how *ao_how and must
- * start with a call to AO_INITIATOR_ENTRY.  These functions MAY NOT
- * be called from inside libxl, because they can cause reentrancy
+ * start with a call to AO_CREATE or equivalent.  These functions MAY
+ * NOT be called from inside libxl (regardless of what is passed for
+ * ao_how), because they can cause reentrancy hazards due to
  * callbacks.
  *
  * For the same reason functions taking an ao_how may make themselves
@@ -1909,28 +2042,41 @@ _hidden void libxl__egc_cleanup(libxl__egc *egc);
  *        must be copied into the per-operation structure using
  *        libxl__ao_progress_gethow.
  *
- * - If initiation is successful, the initiating function needs
- *   to run libxl__ao_inprogress right before unlocking and
- *   returning, and return whatever it returns (AO_INPROGRESS macro).
- *
  * - If the initiation is unsuccessful, the initiating function must
- *   call libxl__ao_abort before unlocking and returning whatever
- *   error code is appropriate (AO_ABORT macro).
+ *   call libxl__ao_create_fail before unlocking and returning whatever
+ *   error code is appropriate (AO_CREATE_FAIL macro).
+ *
+ * If initiation is successful:
+ *
+ * - The initiating function must run libxl__ao_inprogress right
+ *   before unlocking and returning, and return whatever it returns.
+ *   This is best achieved with the AO_INPROGRESS macro.
  *
  * - If the operation supports progress reports, it may generate
  *   suitable events with NEW_EVENT and report them with
  *   libxl__ao_progress_report (with the ctx locked).
  *
- * - Later, some callback function, whose callback has been requested
- *   directly or indirectly, should call libxl__ao_complete (with the
- *   ctx locked, as it will generally already be in any event callback
- *   function).  This must happen exactly once for each ao (and not if
- *   the ao has been destroyed, obviously).
+ * - Eventually, some callback function, whose callback has been
+ *   requested directly or indirectly, should call libxl__ao_complete
+ *   (with the ctx locked, as it will generally already be in any
+ *   event callback function).  This must happen exactly once for each
+ *   ao, as the last that happens with that ao.
+ *
+ * - However, it is permissible for the initiating function to call
+ *   libxl__ao_inprogress and/or libxl__ao_complete (directly or
+ *   indirectly), before it uses AO_INPROGRESS to return.  (The ao
+ *   infrastructure will arrange to defer destruction of the ao, etc.,
+ *   until the proper time.)  An initiating function should do this
+ *   if it takes a codepath which completes synchronously.
+ *
+ * - Conversely it is forbidden to call libxl__ao_complete in the
+ *   initiating function _after_ AO_INPROGRESS, because
+ *   libxl__ao_complete requires the ctx to be locked.
  *
  * - Note that during callback functions, two gcs are available:
  *    - The one in egc, whose lifetime is only this callback
  *    - The one in ao, whose lifetime is the asynchronous operation
- *   Usually callback function should use CONTAINER_OF to obtain its
+ *   Usually a callback function should use CONTAINER_OF to obtain its
  *   own state structure, containing a pointer to the ao.  It should
  *   then obtain the ao and use the ao's gc; this is most easily done
  *   using the convenience macro STATE_AO_GC.
@@ -1955,18 +2101,31 @@ _hidden void libxl__egc_cleanup(libxl__egc *egc);
         (ao__rc);                                               \
    })
 
-#define AO_ABORT(rc) ({                                         \
+#define AO_CREATE_FAIL(rc) ({                                   \
         libxl_ctx *ao__ctx = libxl__gc_owner(&ao->gc);          \
         assert(rc);                                             \
-        libxl__ao_abort(ao);                                    \
+        libxl__ao_create_fail(ao);                              \
         libxl__ctx_unlock(ao__ctx); /* gc is now invalid */     \
         EGC_FREE;                                               \
         (rc);                                                   \
     })
 
+
+/*
+ * Given, in scope,
+ *   libxl__ao *ao;
+ * produces, in scope,
+ *   libxl__gc *gc;
+ */
 #define AO_GC                                   \
     libxl__gc *const gc __attribute__((unused)) = &ao->gc
 
+/*
+ * void STATE_AO_GC(libxl__ao *ao_spec);
+ * // Produces, in scope:
+ *   libxl__ao *ao;  // set from ao_spec
+ *   libxl__gc *gc;
+ */
 #define STATE_AO_GC(op_ao)                      \
     libxl__ao *const ao = (op_ao);              \
     libxl__gc *const gc __attribute__((unused)) = libxl__ao_inprogress_gc(ao)
@@ -1979,7 +2138,7 @@ _hidden libxl__ao *libxl__ao_create(libxl_ctx*, uint32_t domid,
        const char *file, int line, const char *func);
 _hidden int libxl__ao_inprogress(libxl__ao *ao,
        const char *file, int line, const char *func); /* temporarily unlocks */
-_hidden void libxl__ao_abort(libxl__ao *ao);
+_hidden void libxl__ao_create_fail(libxl__ao *ao);
 _hidden void libxl__ao_complete(libxl__egc *egc, libxl__ao *ao, int rc);
 _hidden libxl__gc *libxl__ao_inprogress_gc(libxl__ao *ao);
 
@@ -2008,7 +2167,7 @@ _hidden void libxl__ao_complete_check_progress_reports(libxl__egc*, libxl__ao*);
  * The returned sub-ao is suitable for passing to gc-related functions
  * and macros such as libxl__ao_inprogress_gc, AO_GC, and STATE_AO_GC.
  *
- * It MUST NOT be used with AO_INPROGRESS, AO_ABORT,
+ * It MUST NOT be used with AO_INPROGRESS, AO_CREATE_FAIL,
  * libxl__ao_complete, libxl__ao_progress_report, and so on.
  *
  * The caller must ensure that all of the sub-ao's are freed before
@@ -2068,7 +2227,7 @@ _hidden void libxl__carefd_unlock(void);
 _hidden libxl__carefd *libxl__carefd_record(libxl_ctx *ctx, int fd);
 
 /* Combines _record and _unlock in a single call.  If fd==-1,
- * still does the unlock, but returns 0.  Cannot fail. */
+ * still does the unlock, but returns 0. */
 _hidden libxl__carefd *libxl__carefd_opened(libxl_ctx *ctx, int fd);
 
 /* Works just like close(2).  You may pass NULL, in which case it's
@@ -2091,7 +2250,16 @@ _hidden const char *libxl__run_dir_path(void);
 typedef struct libxl__async_exec_state libxl__async_exec_state;
 
 typedef void libxl__async_exec_callback(libxl__egc *egc,
-                        libxl__async_exec_state *aes, int status);
+                        libxl__async_exec_state *aes, int rc, int status);
+/*
+ * Meaning of status and rc:
+ *  rc==0, status==0    all went well
+ *  rc==0, status!=0    everything OK except child exited nonzero (logged)
+ *  rc!=0               something else went wrong (status is real
+ *                       exit status; maybe reflecting SIGKILL, and
+ *                       therefore not very interesting, if aes code
+ *                       killed the child).  Logged unless ABORTED.
+ */
 
 struct libxl__async_exec_state {
     /* caller must fill these in */
@@ -2107,11 +2275,14 @@ struct libxl__async_exec_state {
     /* private */
     libxl__ev_time time;
     libxl__ev_child child;
+    int rc;
 };
 
 void libxl__async_exec_init(libxl__async_exec_state *aes);
-int libxl__async_exec_start(libxl__gc *gc, libxl__async_exec_state *aes);
+int libxl__async_exec_start(libxl__async_exec_state *aes);
 bool libxl__async_exec_inuse(const libxl__async_exec_state *aes);
+
+_hidden void libxl__kill(libxl__gc *gc, pid_t pid, int sig, const char *what);
 
 /*----- device addition/removal -----*/
 
@@ -2152,7 +2323,7 @@ struct libxl__ao_device {
     /* Bodge for Qemu devices */
     libxl__ev_time timeout;
     /* xenstore watch for backend path of driver domains */
-    libxl__ev_xswatch xs_watch;
+    libxl__xswait_state xswait;
     int num_exec;
     /* for calling hotplug scripts */
     libxl__async_exec_state aes;
@@ -2324,7 +2495,7 @@ struct libxl__multidev {
  *          any stale entry
  *       for loop -- xs transaction
  *           open xs transaction
- *           check device existence, abort if it exists
+ *           check device existence, bail if it exists
  *           write in-memory json config to disk
  *           commit xs transaction
  *       end for loop
@@ -2506,16 +2677,21 @@ _hidden void libxl__device_disk_local_initiate_detach(libxl__egc *egc,
 typedef struct libxl__datacopier_state libxl__datacopier_state;
 typedef struct libxl__datacopier_buf libxl__datacopier_buf;
 
-/* onwrite==1 means failure happened when writing, logged, errnoval is valid
- * onwrite==0 means failure happened when reading
- *     errnoval==0 means we got eof and all data was written
- *     errnoval!=0 means we had a read error, logged
- * onwrite==-1 means some other internal failure, errnoval not valid, logged
- * If we get POLLHUP, we call callback_pollhup(..., onwrite, -1);
- * or if callback_pollhup==0 this is an internal failure, as above.
+/* onwrite==1 means problem happened when writing
+ *     rc==FAIL    errnoval >0    we had a write error, logged
+ * onwrite==0 means problem happened when reading
+ *     rc==0       errnoval==0    we got eof and all data was written
+ *     rc==FAIL    errnoval >0    we had a read error, logged
+ * onwrite==-1 means some other internal problem
+ *     rc==FAIL    errnoval==EIO  some other internal failure, logged
+ *     rc==ABORTED errnoval==0    abort requested, not logged
+ * If we get POLLHUP, we call callback_pollhup with
+ *     rc==FAIL    errnoval==-1   POLLHUP signalled
+ * or if callback_pollhup==0 this is treated as eof (if POLLIN|POLLHUP
+ * on the reading fd) or an internal failure (otherwise), as above.
  * In all cases copier is killed before calling this callback */
 typedef void libxl__datacopier_callback(libxl__egc *egc,
-     libxl__datacopier_state *dc, int onwrite, int errnoval);
+     libxl__datacopier_state *dc, int rc, int onwrite, int errnoval);
 
 struct libxl__datacopier_buf {
     /* private to datacopier */
@@ -2529,11 +2705,16 @@ struct libxl__datacopier_state {
     libxl__ao *ao;
     int readfd, writefd;
     ssize_t maxsz;
+    ssize_t bytes_to_read; /* set to -1 to read until EOF */
     const char *copywhat, *readwhat, *writewhat; /* for error msgs */
     FILE *log; /* gets a copy of everything */
     libxl__datacopier_callback *callback;
     libxl__datacopier_callback *callback_pollhup;
+    void *readbuf; /* Set this to read data into it without writing to an
+                      fd. The buffer should be at least as large as the
+                      bytes_to_read parameter, which should not be -1. */
     /* remaining fields are private to datacopier */
+    libxl__ao_abortable abrt;
     libxl__ev_fd toread, towrite;
     ssize_t used;
     LIBXL_TAILQ_HEAD(libxl__datacopier_bufs, libxl__datacopier_buf) bufs;
@@ -2554,8 +2735,6 @@ _hidden void libxl__datacopier_prefixdata(libxl__egc*, libxl__datacopier_state*,
 
 typedef struct libxl__srm_save_callbacks {
     libxl__srm_save_autogen_callbacks a;
-    int (*toolstack_save)(uint32_t domid, uint8_t **buf,
-                          uint32_t *len, void *data);
 } libxl__srm_save_callbacks;
 
 typedef struct libxl__srm_restore_callbacks {
@@ -2583,11 +2762,11 @@ typedef struct libxl__save_helper_state {
     int rc;
     int completed; /* retval/errnoval valid iff completed */
     int retval, errnoval; /* from xc_domain_save / xc_domain_restore */
+    libxl__ao_abortable abrt;
     libxl__carefd *pipes[2]; /* 0 = helper's stdin, 1 = helper's stdout */
     libxl__ev_fd readable;
     libxl__ev_child child;
     const char *stdin_what, *stdout_what;
-    FILE *toolstack_data_file;
 
     libxl__egc *egc; /* valid only for duration of each event callback;
                       * is here in this struct for the benefit of the
@@ -2771,7 +2950,44 @@ _hidden void libxl__remus_devices_commit(libxl__egc *egc,
                                          libxl__remus_devices_state *rds);
 _hidden int libxl__netbuffer_enabled(libxl__gc *gc);
 
+/*----- Legacy conversion helper -----*/
+typedef struct libxl__conversion_helper_state libxl__conversion_helper_state;
+
+struct libxl__conversion_helper_state {
+    /* Public - Must be filled by caller unless noted. */
+    libxl__ao *ao;
+    int legacy_fd;             /* fd to read the legacy stream from. */
+    bool hvm;                  /* pv or hvm domain? */
+    libxl__carefd *v2_carefd;  /* Filled by successful call to
+                                * libxl__convert_legacy_stream().  Caller
+                                * assumes ownership of the fd. */
+    void (*completion_callback)(
+        libxl__egc *egc, libxl__conversion_helper_state *chs, int rc);
+    /* private */
+    int rc;
+    libxl__ao_abortable abrt;
+    libxl__ev_child child;
+};
+
+_hidden void libxl__conversion_helper_init
+                    (libxl__conversion_helper_state *chs);
+_hidden int libxl__convert_legacy_stream(libxl__egc *egc,
+                    libxl__conversion_helper_state *chs);
+_hidden void libxl__conversion_helper_abort(libxl__egc *egc,
+                    libxl__conversion_helper_state *chs, int rc);
+static inline bool libxl__conversion_helper_inuse
+                    (const libxl__conversion_helper_state *chs)
+{ return libxl__ev_child_inuse(&chs->child); }
+
+
 /*----- Domain suspend (save) state structure -----*/
+/*
+ * "suspend" refers to quiescing the VM, so pausing qemu, making a
+ * remote_shutdown(SHUTDOWN_suspend) hypercall etc.
+ *
+ * "save" refers to the actions involved in actually shuffling the
+ * state of the VM, so xc_domain_save() etc.
+ */
 
 typedef struct libxl__domain_suspend_state libxl__domain_suspend_state;
 
@@ -2779,6 +2995,55 @@ typedef void libxl__domain_suspend_cb(libxl__egc*,
                                       libxl__domain_suspend_state*, int rc);
 typedef void libxl__save_device_model_cb(libxl__egc*,
                                          libxl__domain_suspend_state*, int rc);
+
+/* State for writing a libxl migration v2 stream */
+typedef struct libxl__stream_write_state libxl__stream_write_state;
+typedef void (*sws_record_done_cb)(libxl__egc *egc,
+                                   libxl__stream_write_state *sws);
+struct libxl__stream_write_state {
+    /* filled by the user */
+    libxl__ao *ao;
+    libxl__domain_suspend_state *dss;
+    int fd;
+    void (*completion_callback)(libxl__egc *egc,
+                                libxl__stream_write_state *sws,
+                                int rc);
+    void (*checkpoint_callback)(libxl__egc *egc,
+                                libxl__stream_write_state *sws,
+                                int rc);
+    /* Private */
+    int rc;
+    bool running;
+    bool in_checkpoint;
+    bool sync_teardown;  /* Only used to coordinate shutdown on error path. */
+    libxl__save_helper_state shs;
+
+    /* Main stream-writing data. */
+    libxl__datacopier_state dc;
+    sws_record_done_cb record_done_callback;
+
+    /* Only used when constructing EMULATOR records. */
+    libxl__datacopier_state emu_dc;
+    libxl__carefd *emu_carefd;
+    libxl__sr_rec_hdr emu_rec_hdr;
+    libxl__sr_emulator_hdr emu_sub_hdr;
+    void *emu_body;
+};
+
+_hidden void libxl__stream_write_init(libxl__stream_write_state *stream);
+_hidden void libxl__stream_write_start(libxl__egc *egc,
+                                       libxl__stream_write_state *stream);
+_hidden void
+libxl__stream_write_start_checkpoint(libxl__egc *egc,
+                                     libxl__stream_write_state *stream);
+_hidden void libxl__stream_write_abort(libxl__egc *egc,
+                                       libxl__stream_write_state *stream,
+                                       int rc);
+static inline bool
+libxl__stream_write_inuse(const libxl__stream_write_state *stream)
+{
+    return stream->running;
+}
 
 typedef struct libxl__logdirty_switch {
     const char *cmd;
@@ -2789,17 +3054,19 @@ typedef struct libxl__logdirty_switch {
 } libxl__logdirty_switch;
 
 struct libxl__domain_suspend_state {
-    /* set by caller of libxl__domain_suspend */
+    /* set by caller of libxl__domain_save */
     libxl__ao *ao;
     libxl__domain_suspend_cb *callback;
 
     uint32_t domid;
     int fd;
+    int fdfl; /* original flags on fd */
     libxl_domain_type type;
     int live;
     int debug;
     const libxl_domain_remus_info *remus;
     /* private */
+    int rc;
     libxl__ev_evtchn guest_evtchn;
     int guest_evtchn_lockfd;
     int hvm;
@@ -2812,7 +3079,7 @@ struct libxl__domain_suspend_state {
     libxl__remus_devices_state rds;
     libxl__ev_time checkpoint_timeout; /* used for Remus checkpoint */
     int interval; /* checkpoint interval (for Remus) */
-    libxl__save_helper_state shs;
+    libxl__stream_write_state sws;
     libxl__logdirty_switch logdirty;
     void (*callback_common_done)(libxl__egc*,
                                  struct libxl__domain_suspend_state*, int ok);
@@ -2957,6 +3224,7 @@ struct libxl__destroy_domid_state {
     libxl__domid_destroy_cb *callback;
     /* private to implementation */
     libxl__devices_remove_state drs;
+    libxl__ev_child destroyer;
 };
 
 struct libxl__domain_destroy_state {
@@ -3044,6 +3312,7 @@ typedef struct {
     libxl__dm_spawn_state pvqemu;
     libxl__destroy_domid_state dis;
     libxl__multidev multidev;
+    libxl__xswait_state xswait;
 } libxl__stub_dm_spawn_state;
 
 _hidden void libxl__spawn_stub_dm(libxl__egc *egc, libxl__stub_dm_spawn_state*);
@@ -3064,23 +3333,87 @@ typedef void libxl__domain_create_cb(libxl__egc *egc,
                                      libxl__domain_create_state*,
                                      int rc, uint32_t domid);
 
+/* State for manipulating a libxl migration v2 stream */
+typedef struct libxl__stream_read_state libxl__stream_read_state;
+
+typedef struct libxl__sr_record_buf {
+    /* private to stream read helper */
+    LIBXL_STAILQ_ENTRY(struct libxl__sr_record_buf) entry;
+    libxl__sr_rec_hdr hdr;
+    void *body; /* iff hdr.length != 0 */
+} libxl__sr_record_buf;
+
+struct libxl__stream_read_state {
+    /* filled by the user */
+    libxl__ao *ao;
+    libxl__domain_create_state *dcs;
+    int fd;
+    bool legacy;
+    void (*completion_callback)(libxl__egc *egc,
+                                libxl__stream_read_state *srs,
+                                int rc);
+    void (*checkpoint_callback)(libxl__egc *egc,
+                                libxl__stream_read_state *srs,
+                                int rc);
+    /* Private */
+    int rc;
+    bool running;
+    bool in_checkpoint;
+    bool sync_teardown; /* Only used to coordinate shutdown on error path. */
+    libxl__save_helper_state shs;
+    libxl__conversion_helper_state chs;
+
+    /* Main stream-reading data. */
+    libxl__datacopier_state dc; /* Only used when reading a record */
+    libxl__sr_hdr hdr;
+    LIBXL_STAILQ_HEAD(, libxl__sr_record_buf) record_queue; /* NOGC */
+    enum {
+        SRS_PHASE_NORMAL,
+        SRS_PHASE_BUFFERING,
+        SRS_PHASE_UNBUFFERING,
+    } phase;
+    bool recursion_guard;
+
+    /* Only used while actively reading a record from the stream. */
+    libxl__sr_record_buf *incoming_record; /* NOGC */
+
+    /* Both only used when processing an EMULATOR record. */
+    libxl__datacopier_state emu_dc;
+    libxl__carefd *emu_carefd;
+};
+
+_hidden void libxl__stream_read_init(libxl__stream_read_state *stream);
+_hidden void libxl__stream_read_start(libxl__egc *egc,
+                                      libxl__stream_read_state *stream);
+_hidden void libxl__stream_read_start_checkpoint(libxl__egc *egc,
+                                                 libxl__stream_read_state *stream);
+_hidden void libxl__stream_read_abort(libxl__egc *egc,
+                                      libxl__stream_read_state *stream, int rc);
+static inline bool
+libxl__stream_read_inuse(const libxl__stream_read_state *stream)
+{
+    return stream->running;
+}
+
+
 struct libxl__domain_create_state {
     /* filled in by user */
     libxl__ao *ao;
     libxl_domain_config *guest_config;
     libxl_domain_config guest_config_saved; /* vanilla config */
-    int restore_fd;
+    int restore_fd, libxc_fd;
+    int restore_fdfl; /* original flags of restore_fd */
+    libxl_domain_restore_params restore_params;
     libxl__domain_create_cb *callback;
     libxl_asyncprogress_how aop_console_how;
     /* private to domain_create */
     int guest_domid;
-    int checkpointed_stream;
     libxl__domain_build_state build_state;
     libxl__bootloader_state bl;
     libxl__stub_dm_spawn_state dmss;
         /* If we're not doing stubdom, we use only dmss.dm,
          * for the non-stubdom device model. */
-    libxl__save_helper_state shs;
+    libxl__stream_read_state srs;
     /* necessary if the domain creation failed and we have to destroy it */
     libxl__domain_destroy_state dds;
     libxl__multidev multidev;
@@ -3089,12 +3422,14 @@ struct libxl__domain_create_state {
 /*----- Domain suspend (save) functions -----*/
 
 /* calls dss->callback when done */
-_hidden void libxl__domain_suspend(libxl__egc *egc,
-                                   libxl__domain_suspend_state *dss);
+_hidden void libxl__domain_save(libxl__egc *egc,
+                                libxl__domain_suspend_state *dss);
 
 
 /* calls libxl__xc_domain_suspend_done when done */
-_hidden void libxl__xc_domain_save(libxl__egc*, libxl__domain_suspend_state*);
+_hidden void libxl__xc_domain_save(libxl__egc *egc,
+                                   libxl__domain_suspend_state *dss,
+                                   libxl__save_helper_state *shs);
 /* If rc==0 then retval is the return value from xc_domain_save
  * and errnoval is the errno value it provided.
  * If rc!=0, retval and errnoval are undefined. */
@@ -3111,19 +3446,31 @@ void libxl__xc_domain_saverestore_async_callback_done(libxl__egc *egc,
 
 _hidden void libxl__domain_suspend_common_switch_qemu_logdirty
                                (int domid, unsigned int enable, void *data);
-_hidden int libxl__toolstack_save(uint32_t domid, uint8_t **buf,
-        uint32_t *len, void *data);
+_hidden int libxl__save_emulator_xenstore_data(libxl__domain_suspend_state *dss,
+                                               char **buf, uint32_t *len);
+_hidden int libxl__restore_emulator_xenstore_data
+    (libxl__domain_create_state *dcs, const char *ptr, uint32_t size);
 
 
 /* calls libxl__xc_domain_restore_done when done */
 _hidden void libxl__xc_domain_restore(libxl__egc *egc,
                                       libxl__domain_create_state *dcs,
+                                      libxl__save_helper_state *shs,
                                       int hvm, int pae, int superpages);
 /* If rc==0 then retval is the return value from xc_domain_save
  * and errnoval is the errno value it provided.
  * If rc!=0, retval and errnoval are undefined. */
 _hidden void libxl__xc_domain_restore_done(libxl__egc *egc, void *dcs_void,
                                            int rc, int retval, int errnoval);
+
+_hidden void libxl__save_helper_init(libxl__save_helper_state *shs);
+_hidden void libxl__save_helper_abort(libxl__egc *egc,
+                                      libxl__save_helper_state *shs);
+
+static inline bool libxl__save_helper_inuse(const libxl__save_helper_state *shs)
+{
+    return libxl__ev_child_inuse(&shs->child);
+}
 
 /* Each time the dm needs to be saved, we must call suspend and then save */
 _hidden int libxl__domain_suspend_device_model(libxl__gc *gc,
@@ -3133,6 +3480,12 @@ _hidden void libxl__domain_save_device_model(libxl__egc *egc,
                                      libxl__save_device_model_cb *callback);
 
 _hidden const char *libxl__device_model_savefile(libxl__gc *gc, uint32_t domid);
+
+/* calls dss->callback_common_done when done */
+_hidden void libxl__domain_suspend(libxl__egc *egc,
+                                   libxl__domain_suspend_state *dss);
+/* used by libxc to suspend the guest during migration */
+_hidden void libxl__domain_suspend_callback(void *data);
 
 
 /*
@@ -3167,6 +3520,9 @@ _hidden const char *libxl__device_model_savefile(libxl__gc *gc, uint32_t domid);
                (typeof(inner_ptr))0) /* type check */;                  \
         container_of_;                                                  \
     })
+
+
+#define FILLZERO LIBXL_FILLZERO
 
 
 /*
@@ -3391,6 +3747,27 @@ void libxl__numa_candidate_put_nodemap(libxl__gc *gc,
     libxl_bitmap_copy(CTX, &cndt->nodemap, nodemap);
 }
 
+/* Check if vNUMA config is valid. Returns 0 if valid,
+ * ERROR_VNUMA_CONFIG_INVALID otherwise.
+ */
+int libxl__vnuma_config_check(libxl__gc *gc,
+                              const libxl_domain_build_info *b_info,
+                              const libxl__domain_build_state *state);
+int libxl__vnuma_build_vmemrange_pv_generic(libxl__gc *gc,
+                                            uint32_t domid,
+                                            libxl_domain_build_info *b_info,
+                                            libxl__domain_build_state *state);
+int libxl__vnuma_build_vmemrange_pv(libxl__gc *gc,
+                                    uint32_t domid,
+                                    libxl_domain_build_info *b_info,
+                                    libxl__domain_build_state *state);
+int libxl__vnuma_build_vmemrange_hvm(libxl__gc *gc,
+                                     uint32_t domid,
+                                     libxl_domain_build_info *b_info,
+                                     libxl__domain_build_state *state,
+                                     struct xc_hvm_build_args *args);
+bool libxl__vnuma_configured(const libxl_domain_build_info *b_info);
+
 _hidden int libxl__ms_vm_genid_set(libxl__gc *gc, uint32_t domid,
                                    const libxl_ms_vm_genid *id);
 
@@ -3524,9 +3901,10 @@ int libxl__cpuid_policy_is_empty(libxl_cpuid_policy_list *pl);
 
 /* Portability note: a proper flock(2) implementation is required */
 typedef struct {
-    libxl__carefd *lock_carefd;
+    libxl__carefd *carefd;
     char *path; /* path of the lock file itself */
 } libxl__domain_userdata_lock;
+/* The CTX_LOCK must be held around uses of this lock */
 libxl__domain_userdata_lock *libxl__lock_domain_userdata(libxl__gc *gc,
                                                          uint32_t domid);
 void libxl__unlock_domain_userdata(libxl__domain_userdata_lock *lock);
@@ -3630,6 +4008,8 @@ static inline void libxl__update_config_vtpm(libxl__gc *gc,
  */
 void libxl__bitmap_copy_best_effort(libxl__gc *gc, libxl_bitmap *dptr,
                                     const libxl_bitmap *sptr);
+
+int libxl__count_physical_sockets(libxl__gc *gc, int *sockets);
 #endif
 
 /*

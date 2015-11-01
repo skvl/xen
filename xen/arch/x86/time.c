@@ -47,7 +47,8 @@ string_param("clocksource", opt_clocksource);
 unsigned long __read_mostly cpu_khz;  /* CPU clock frequency in kHz. */
 DEFINE_SPINLOCK(rtc_lock);
 unsigned long pit0_ticks;
-static u32 wc_sec, wc_nsec; /* UTC time at last 'time update'. */
+static unsigned long wc_sec; /* UTC time at last 'time update'. */
+static unsigned int wc_nsec;
 static DEFINE_SPINLOCK(wc_lock);
 
 struct cpu_time {
@@ -178,7 +179,7 @@ static void smp_send_timer_broadcast_ipi(void)
 
     if ( cpumask_test_cpu(cpu, &mask) )
     {
-        cpumask_clear_cpu(cpu, &mask);
+        __cpumask_clear_cpu(cpu, &mask);
         raise_softirq(TIMER_SOFTIRQ);
     }
 
@@ -260,10 +261,10 @@ static u64 init_pit_and_calibrate_tsc(void)
     outb(CALIBRATE_LATCH & 0xff, PIT_CH2); /* LSB of count */
     outb(CALIBRATE_LATCH >> 8, PIT_CH2);   /* MSB of count */
 
-    rdtscll(start);
+    start = rdtsc();
     for ( count = 0; (inb(0x61) & 0x20) == 0; count++ )
         continue;
-    rdtscll(end);
+    end = rdtsc();
 
     /* Error if the CTC doesn't behave itself. */
     if ( count == 0 )
@@ -763,7 +764,7 @@ s_time_t get_s_time_fixed(u64 at_tsc)
     if ( at_tsc )
         tsc = at_tsc;
     else
-        rdtscll(tsc);
+        tsc = rdtsc();
     delta = tsc - t->local_tsc_stamp;
     now = t->stime_local_stamp + scale_delta(delta, &t->tsc_scale);
 
@@ -902,6 +903,7 @@ void force_update_vcpu_system_time(struct vcpu *v)
 void update_domain_wallclock_time(struct domain *d)
 {
     uint32_t *wc_version;
+    unsigned long sec;
 
     spin_lock(&wc_lock);
 
@@ -909,8 +911,19 @@ void update_domain_wallclock_time(struct domain *d)
     *wc_version = version_update_begin(*wc_version);
     wmb();
 
-    shared_info(d, wc_sec)  = wc_sec + d->time_offset_seconds;
-    shared_info(d, wc_nsec) = wc_nsec;
+    sec = wc_sec + d->time_offset_seconds;
+    if ( likely(!has_32bit_shinfo(d)) )
+    {
+        d->shared_info->native.wc_sec    = sec;
+        d->shared_info->native.wc_nsec   = wc_nsec;
+        d->shared_info->native.wc_sec_hi = sec >> 32;
+    }
+    else
+    {
+        d->shared_info->compat.wc_sec         = sec;
+        d->shared_info->compat.wc_nsec        = wc_nsec;
+        d->shared_info->compat.arch.wc_sec_hi = sec >> 32;
+    }
 
     wmb();
     *wc_version = version_update_end(*wc_version);
@@ -931,7 +944,7 @@ static void update_domain_rtc(void)
     rcu_read_unlock(&domlist_read_lock);
 }
 
-void domain_set_time_offset(struct domain *d, int32_t time_offset_seconds)
+void domain_set_time_offset(struct domain *d, int64_t time_offset_seconds)
 {
     d->time_offset_seconds = time_offset_seconds;
     if ( is_hvm_domain(d) )
@@ -958,7 +971,7 @@ int cpu_frequency_change(u64 freq)
     /* TSC-extrapolated time may be bogus after frequency change. */
     /*t->stime_local_stamp = get_s_time();*/
     t->stime_local_stamp = t->stime_master_stamp;
-    rdtscll(curr_tsc);
+    curr_tsc = rdtsc();
     t->local_tsc_stamp = curr_tsc;
     set_time_scale(&t->tsc_scale, freq);
     local_irq_enable();
@@ -976,13 +989,13 @@ int cpu_frequency_change(u64 freq)
 }
 
 /* Set clock to <secs,usecs> after 00:00:00 UTC, 1 January, 1970. */
-void do_settime(unsigned long secs, unsigned long nsecs, u64 system_time_base)
+void do_settime(unsigned long secs, unsigned int nsecs, u64 system_time_base)
 {
     u64 x;
     u32 y;
     struct domain *d;
 
-    x = SECONDS(secs) + (u64)nsecs - system_time_base;
+    x = SECONDS(secs) + nsecs - system_time_base;
     y = do_div(x, 1000000000);
 
     spin_lock(&wc_lock);
@@ -1294,7 +1307,7 @@ static void time_calibration_tsc_rendezvous(void *_r)
             if ( r->master_stime == 0 )
             {
                 r->master_stime = read_platform_stime();
-                rdtscll(r->master_tsc_stamp);
+                r->master_tsc_stamp = rdtsc();
             }
             atomic_inc(&r->semaphore);
 
@@ -1320,7 +1333,7 @@ static void time_calibration_tsc_rendezvous(void *_r)
         }
     }
 
-    rdtscll(c->local_tsc_stamp);
+    c->local_tsc_stamp = rdtsc();
     c->stime_local_stamp = get_s_time();
     c->stime_master_stamp = r->master_stime;
 
@@ -1350,7 +1363,7 @@ static void time_calibration_std_rendezvous(void *_r)
         mb(); /* receive signal /then/ read r->master_stime */
     }
 
-    rdtscll(c->local_tsc_stamp);
+    c->local_tsc_stamp = rdtsc();
     c->stime_local_stamp = get_s_time();
     c->stime_master_stamp = r->master_stime;
 
@@ -1384,7 +1397,7 @@ void init_percpu_time(void)
     t->tsc_scale = per_cpu(cpu_time, 0).tsc_scale;
 
     local_irq_save(flags);
-    rdtscll(t->local_tsc_stamp);
+    t->local_tsc_stamp = rdtsc();
     now = read_platform_stime();
     local_irq_restore(flags);
 
@@ -1413,13 +1426,13 @@ static void __init tsc_check_writability(void)
     if ( boot_cpu_has(X86_FEATURE_TSC_RELIABLE) )
         return;
 
-    rdtscll(tsc);
+    tsc = rdtsc();
     if ( wrmsr_safe(MSR_IA32_TSC, 0) == 0 )
     {
-        uint64_t tmp, tmp2;
-        rdtscll(tmp2);
+        uint64_t tmp, tmp2 = rdtsc();
+
         write_tsc(tsc | (1ULL << 32));
-        rdtscll(tmp);
+        tmp = rdtsc();
         if ( ABS((s64)tmp - (s64)tmp2) < (1LL << 31) )
             what = "only partially";
     }
@@ -1764,10 +1777,12 @@ void pv_soft_rdtsc(struct vcpu *v, struct cpu_user_regs *regs, int rdtscp)
 
     spin_lock(&d->arch.vtsc_lock);
 
+#if !defined(NDEBUG) || defined(PERF_COUNTERS)
     if ( guest_kernel_mode(v, regs) )
         d->arch.vtsc_kerncount++;
     else
         d->arch.vtsc_usercount++;
+#endif
 
     if ( (int64_t)(now - d->arch.vtsc_last) > 0 )
         d->arch.vtsc_last = now;
@@ -1853,7 +1868,7 @@ void tsc_get_info(struct domain *d, uint32_t *tsc_mode,
             *gtsc_khz = d->arch.tsc_khz;
             break;
         }
-        rdtscll(tsc);
+        tsc = rdtsc();
         *elapsed_nsec = scale_delta(tsc, &d->arch.vtsc_to_ns);
         *gtsc_khz = cpu_khz;
         break;
@@ -1865,7 +1880,7 @@ void tsc_get_info(struct domain *d, uint32_t *tsc_mode,
         }
         else
         {
-            rdtscll(tsc);
+            tsc = rdtsc();
             *elapsed_nsec = scale_delta(tsc, &d->arch.vtsc_to_ns) -
                             d->arch.vtsc_offset;
             *gtsc_khz = 0; /* ignored by tsc_set_info */
@@ -1958,9 +1973,7 @@ void tsc_set_info(struct domain *d,
         else {
             /* when using native TSC, offset is nsec relative to power-on
              * of physical machine */
-            uint64_t tsc = 0;
-            rdtscll(tsc);
-            d->arch.vtsc_offset = scale_delta(tsc,&d->arch.vtsc_to_ns) -
+            d->arch.vtsc_offset = scale_delta(rdtsc(), &d->arch.vtsc_to_ns) -
                                   elapsed_nsec;
         }
         break;
@@ -1979,7 +1992,7 @@ void tsc_set_info(struct domain *d,
              * call set_tsc_offset() later from hvm_vcpu_reset_state() and they
              * will sync their TSC to BSP's sync_tsc.
              */
-            rdtscll(d->arch.hvm_domain.sync_tsc);
+            d->arch.hvm_domain.sync_tsc = rdtsc();
             hvm_funcs.set_tsc_offset(d->vcpu[0],
                                      d->vcpu[0]->arch.hvm_vcpu.cache_tsc_offset,
                                      d->arch.hvm_domain.sync_tsc);
@@ -2020,17 +2033,13 @@ static void dump_softtsc(unsigned char key)
             printk(",khz=%"PRIu32, d->arch.tsc_khz);
         if ( d->arch.incarnation )
             printk(",inc=%"PRIu32, d->arch.incarnation);
+#if !defined(NDEBUG) || defined(PERF_COUNTERS)
         if ( !(d->arch.vtsc_kerncount | d->arch.vtsc_usercount) )
-        {
             printk("\n");
-            continue;
-        }
-        if ( is_hvm_domain(d) )
-            printk(",vtsc count: %"PRIu64" total\n",
-                   d->arch.vtsc_kerncount);
         else
             printk(",vtsc count: %"PRIu64" kernel, %"PRIu64" user\n",
                    d->arch.vtsc_kerncount, d->arch.vtsc_usercount);
+#endif
         domcnt++;
     }
 

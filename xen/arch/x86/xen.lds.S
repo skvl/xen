@@ -38,7 +38,7 @@ SECTIONS
   . = __XEN_VIRT_START;
   __image_base__ = .;
 #endif
-  . = __XEN_VIRT_START + 0x100000;
+  . = __XEN_VIRT_START + MB(1);
   _start = .;
   .text : {
         _stext = .;            /* Text and read-only data */
@@ -175,6 +175,7 @@ SECTIONS
        *(.bss.percpu.read_mostly)
        . = ALIGN(SMP_CACHE_BYTES);
        __per_cpu_data_end = .;
+       __bss_end = .;
   } :text
   _end = . ;
 
@@ -186,7 +187,7 @@ SECTIONS
   /* Trick the linker into setting the image size to exactly 16Mb. */
   . = ALIGN(__section_alignment__);
   .pad : {
-    . = ALIGN(0x1000000);
+    . = ALIGN(MB(16));
   } :text
 #else
   efi = .;
@@ -197,6 +198,8 @@ SECTIONS
        *(.exit.text)
        *(.exit.data)
        *(.exitcall.exit)
+       *(.discard)
+       *(.discard.*)
        *(.eh_frame)
 #ifdef EFI
        *(.comment)
@@ -214,4 +217,8 @@ SECTIONS
   .comment 0 : { *(.comment) }
 }
 
+ASSERT(__image_base__ > XEN_VIRT_START ||
+       _end <= XEN_VIRT_END - NR_CPUS * PAGE_SIZE,
+       "Xen image overlaps stubs area")
 ASSERT(kexec_reloc_size - kexec_reloc <= PAGE_SIZE, "kexec_reloc is too large")
+ASSERT((cpu0_stack & (STACK_SIZE - 1)) == 0, "cpu0_stack misaligned")

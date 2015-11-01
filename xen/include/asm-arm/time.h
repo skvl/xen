@@ -22,6 +22,12 @@ enum timer_ppi
     MAX_TIMER_PPI = 4,
 };
 
+/*
+ * Value of "clock-frequency" in the DT timer node if present.
+ * 0 means the property doesn't exist.
+ */
+extern uint32_t timer_dt_clock_frequency;
+
 /* Get one of the timer IRQ number */
 unsigned int timer_get_irq(enum timer_ppi ppi);
 
@@ -30,6 +36,8 @@ extern void __cpuinit init_timer_interrupt(void);
 
 /* Counter value at boot time */
 extern uint64_t boot_count;
+
+void preinit_xen_time(void);
 
 #endif /* __ARM_TIME_H__ */
 /*

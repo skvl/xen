@@ -16,8 +16,7 @@
  * GNU General Public License for more details.
  * 
  * You should have received a copy of the GNU General Public License
- * along with this program; if not, write to the Free Software
- * Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
+ * along with this program; If not, see <http://www.gnu.org/licenses/>.
  */
 
 #include <xen/config.h>
@@ -25,6 +24,7 @@
 #include <xen/kernel.h>
 #include <xen/mm.h>
 #include <xen/domain.h>
+#include <xen/domain_page.h>
 #include <xen/sched.h>
 #include <xen/sched-if.h>
 #include <xen/irq.h>
@@ -59,6 +59,10 @@ DEFINE_PER_CPU_READ_MOSTLY(cpumask_var_t, cpu_core_mask);
 cpumask_t cpu_online_map __read_mostly;
 EXPORT_SYMBOL(cpu_online_map);
 
+unsigned int __read_mostly nr_sockets;
+cpumask_t **__read_mostly socket_cpumask;
+static cpumask_t *secondary_socket_cpumask;
+
 struct cpuinfo_x86 cpu_data[NR_CPUS];
 
 u32 x86_cpu_to_apicid[NR_CPUS] __read_mostly =
@@ -80,10 +84,20 @@ void *stack_base[NR_CPUS];
 static void smp_store_cpu_info(int id)
 {
     struct cpuinfo_x86 *c = cpu_data + id;
+    unsigned int socket;
 
     *c = boot_cpu_data;
     if ( id != 0 )
+    {
         identify_cpu(c);
+
+        socket = cpu_to_socket(id);
+        if ( !socket_cpumask[socket] )
+        {
+            socket_cpumask[socket] = secondary_socket_cpumask;
+            secondary_socket_cpumask = NULL;
+        }
+    }
 
     /*
      * Certain Athlons might work (for various values of 'work') in SMP
@@ -142,7 +156,7 @@ static void synchronize_tsc_master(unsigned int slave)
 
     for ( i = 1; i <= 5; i++ )
     {
-        rdtscll(tsc_value);
+        tsc_value = rdtsc();
         wmb();
         atomic_inc(&tsc_count);
         while ( atomic_read(&tsc_count) != (i<<1) )
@@ -243,6 +257,8 @@ static void set_cpu_sibling_map(int cpu)
     struct cpuinfo_x86 *c = cpu_data;
 
     cpumask_set_cpu(cpu, &cpu_sibling_setup_map);
+
+    cpumask_set_cpu(cpu, socket_cpumask[cpu_to_socket(cpu)]);
 
     if ( c[cpu].x86_num_siblings > 1 )
     {
@@ -603,6 +619,43 @@ static int do_boot_cpu(int apicid, int cpu)
     return rc;
 }
 
+#define STUB_BUF_CPU_OFFS(cpu) (((cpu) & (STUBS_PER_PAGE - 1)) * STUB_BUF_SIZE)
+
+unsigned long alloc_stub_page(unsigned int cpu, unsigned long *mfn)
+{
+    unsigned long stub_va;
+    struct page_info *pg;
+
+    BUILD_BUG_ON(STUBS_PER_PAGE & (STUBS_PER_PAGE - 1));
+
+    if ( *mfn )
+        pg = mfn_to_page(*mfn);
+    else
+    {
+        nodeid_t node = cpu_to_node(cpu);
+        unsigned int memflags = node != NUMA_NO_NODE ? MEMF_node(node) : 0;
+
+        pg = alloc_domheap_page(NULL, memflags);
+        if ( !pg )
+            return 0;
+
+        unmap_domain_page(memset(__map_domain_page(pg), 0xcc, PAGE_SIZE));
+    }
+
+    stub_va = XEN_VIRT_END - (cpu + 1) * PAGE_SIZE;
+    if ( map_pages_to_xen(stub_va, page_to_mfn(pg), 1,
+                          PAGE_HYPERVISOR_RX | MAP_SMALL_PAGES) )
+    {
+        if ( !*mfn )
+            free_domheap_page(pg);
+        stub_va = 0;
+    }
+    else if ( !*mfn )
+        *mfn = page_to_mfn(pg);
+
+    return stub_va;
+}
+
 void cpu_exit_clear(unsigned int cpu)
 {
     cpu_uninit(cpu);
@@ -611,10 +664,39 @@ void cpu_exit_clear(unsigned int cpu)
 
 static void cpu_smpboot_free(unsigned int cpu)
 {
-    unsigned int order;
+    unsigned int order, socket = cpu_to_socket(cpu);
+    struct cpuinfo_x86 *c = cpu_data;
+
+    if ( cpumask_empty(socket_cpumask[socket]) )
+    {
+        xfree(socket_cpumask[socket]);
+        socket_cpumask[socket] = NULL;
+    }
+
+    c[cpu].phys_proc_id = XEN_INVALID_SOCKET_ID;
+    c[cpu].cpu_core_id = XEN_INVALID_CORE_ID;
+    c[cpu].compute_unit_id = INVALID_CUID;
+    cpumask_clear_cpu(cpu, &cpu_sibling_setup_map);
 
     free_cpumask_var(per_cpu(cpu_sibling_mask, cpu));
     free_cpumask_var(per_cpu(cpu_core_mask, cpu));
+
+    if ( per_cpu(stubs.addr, cpu) )
+    {
+        unsigned long mfn = per_cpu(stubs.mfn, cpu);
+        unsigned char *stub_page = map_domain_page(_mfn(mfn));
+        unsigned int i;
+
+        memset(stub_page + STUB_BUF_CPU_OFFS(cpu), 0xcc, STUB_BUF_SIZE);
+        for ( i = 0; i < STUBS_PER_PAGE; ++i )
+            if ( stub_page[i * STUB_BUF_SIZE] != 0xcc )
+                break;
+        unmap_domain_page(stub_page);
+        destroy_xen_mappings(per_cpu(stubs.addr, cpu) & PAGE_MASK,
+                             (per_cpu(stubs.addr, cpu) | ~PAGE_MASK) + 1);
+        if ( i == STUBS_PER_PAGE )
+            free_domheap_page(mfn_to_page(mfn));
+    }
 
     order = get_order_from_pages(NR_RESERVED_GDT_PAGES);
     free_xenheap_pages(per_cpu(gdt_table, cpu), order);
@@ -635,35 +717,55 @@ static void cpu_smpboot_free(unsigned int cpu)
 
 static int cpu_smpboot_alloc(unsigned int cpu)
 {
-    unsigned int order;
+    unsigned int i, order, memflags = 0;
+    nodeid_t node = cpu_to_node(cpu);
     struct desc_struct *gdt;
+    unsigned long stub_page;
 
-    stack_base[cpu] = alloc_xenheap_pages(STACK_ORDER, 0);
+    if ( node != NUMA_NO_NODE )
+        memflags = MEMF_node(node);
+
+    stack_base[cpu] = alloc_xenheap_pages(STACK_ORDER, memflags);
     if ( stack_base[cpu] == NULL )
         goto oom;
     memguard_guard_stack(stack_base[cpu]);
 
     order = get_order_from_pages(NR_RESERVED_GDT_PAGES);
-    per_cpu(gdt_table, cpu) = gdt =
-        alloc_xenheap_pages(order, MEMF_node(cpu_to_node(cpu)));
+    per_cpu(gdt_table, cpu) = gdt = alloc_xenheap_pages(order, memflags);
     if ( gdt == NULL )
         goto oom;
     memcpy(gdt, boot_cpu_gdt_table, NR_RESERVED_GDT_PAGES * PAGE_SIZE);
     BUILD_BUG_ON(NR_CPUS > 0x10000);
     gdt[PER_CPU_GDT_ENTRY - FIRST_RESERVED_GDT_ENTRY].a = cpu;
 
-    per_cpu(compat_gdt_table, cpu) = gdt =
-        alloc_xenheap_pages(order, MEMF_node(cpu_to_node(cpu)));
+    per_cpu(compat_gdt_table, cpu) = gdt = alloc_xenheap_pages(order, memflags);
     if ( gdt == NULL )
         goto oom;
     memcpy(gdt, boot_cpu_compat_gdt_table, NR_RESERVED_GDT_PAGES * PAGE_SIZE);
     gdt[PER_CPU_GDT_ENTRY - FIRST_RESERVED_GDT_ENTRY].a = cpu;
 
     order = get_order_from_bytes(IDT_ENTRIES * sizeof(idt_entry_t));
-    idt_tables[cpu] = alloc_xenheap_pages(order, MEMF_node(cpu_to_node(cpu)));
+    idt_tables[cpu] = alloc_xenheap_pages(order, memflags);
     if ( idt_tables[cpu] == NULL )
         goto oom;
     memcpy(idt_tables[cpu], idt_table, IDT_ENTRIES * sizeof(idt_entry_t));
+
+    for ( stub_page = 0, i = cpu & ~(STUBS_PER_PAGE - 1);
+          i < nr_cpu_ids && i <= (cpu | (STUBS_PER_PAGE - 1)); ++i )
+        if ( cpu_online(i) && cpu_to_node(i) == node )
+        {
+            per_cpu(stubs.mfn, cpu) = per_cpu(stubs.mfn, i);
+            break;
+        }
+    BUG_ON(i == cpu);
+    stub_page = alloc_stub_page(cpu, &per_cpu(stubs.mfn, cpu));
+    if ( !stub_page )
+        goto oom;
+    per_cpu(stubs.addr, cpu) = stub_page + STUB_BUF_CPU_OFFS(cpu);
+
+    if ( secondary_socket_cpumask == NULL &&
+         (secondary_socket_cpumask = xzalloc(cpumask_t)) == NULL )
+        goto oom;
 
     if ( zalloc_cpumask_var(&per_cpu(cpu_sibling_mask, cpu)) &&
          zalloc_cpumask_var(&per_cpu(cpu_core_mask, cpu)) )
@@ -714,6 +816,13 @@ void __init smp_prepare_cpus(unsigned int max_cpus)
     x86_cpu_to_apicid[0] = boot_cpu_physical_apicid;
 
     stack_base[0] = stack_start;
+
+    set_nr_sockets();
+
+    socket_cpumask = xzalloc_array(cpumask_t *, nr_sockets);
+    if ( socket_cpumask == NULL ||
+         (socket_cpumask[cpu_to_socket(0)] = xzalloc(cpumask_t)) == NULL )
+        panic("No memory for socket CPU siblings map");
 
     if ( !zalloc_cpumask_var(&per_cpu(cpu_sibling_mask, 0)) ||
          !zalloc_cpumask_var(&per_cpu(cpu_core_mask, 0)) )
@@ -778,24 +887,21 @@ static void
 remove_siblinginfo(int cpu)
 {
     int sibling;
-    struct cpuinfo_x86 *c = cpu_data;
+
+    cpumask_clear_cpu(cpu, socket_cpumask[cpu_to_socket(cpu)]);
 
     for_each_cpu ( sibling, per_cpu(cpu_core_mask, cpu) )
     {
         cpumask_clear_cpu(cpu, per_cpu(cpu_core_mask, sibling));
         /* Last thread sibling in this cpu core going down. */
         if ( cpumask_weight(per_cpu(cpu_sibling_mask, cpu)) == 1 )
-            c[sibling].booted_cores--;
+            cpu_data[sibling].booted_cores--;
     }
    
     for_each_cpu(sibling, per_cpu(cpu_sibling_mask, cpu))
         cpumask_clear_cpu(cpu, per_cpu(cpu_sibling_mask, sibling));
     cpumask_clear(per_cpu(cpu_sibling_mask, cpu));
     cpumask_clear(per_cpu(cpu_core_mask, cpu));
-    c[cpu].phys_proc_id = BAD_APICID;
-    c[cpu].cpu_core_id = BAD_APICID;
-    c[cpu].compute_unit_id = BAD_APICID;
-    cpumask_clear_cpu(cpu, &cpu_sibling_setup_map);
 }
 
 void __cpu_disable(void)
@@ -816,7 +922,6 @@ void __cpu_disable(void)
     remove_siblinginfo(cpu);
 
     /* It's now safe to remove this processor from the online map */
-    cpumask_clear_cpu(cpu, cpupool0->cpu_valid);
     cpumask_clear_cpu(cpu, &cpu_online_map);
     fixup_irqs();
 
@@ -843,7 +948,7 @@ void __cpu_die(unsigned int cpu)
 
 int cpu_add(uint32_t apic_id, uint32_t acpi_id, uint32_t pxm)
 {
-    int node, cpu = -1;
+    int cpu = -1;
 
     dprintk(XENLOG_DEBUG, "cpu_add apic_id %x acpi_id %x pxm %x\n",
             apic_id, acpi_id, pxm);
@@ -877,7 +982,9 @@ int cpu_add(uint32_t apic_id, uint32_t acpi_id, uint32_t pxm)
 
     if ( !srat_disabled() )
     {
-        if ( (node = setup_node(pxm)) < 0 )
+        nodeid_t node = setup_node(pxm);
+
+        if ( node == NUMA_NO_NODE )
         {
             dprintk(XENLOG_WARNING,
                     "Setup node failed for pxm %x\n", pxm);

@@ -51,21 +51,22 @@
 	i1 = (uint32_t) Int64_val(Field(input, 0)); \
 	i2 = ((Field(input, 1) == Val_none) ? 0xffffffff : (uint32_t) Int64_val(Field(Field(input, 1), 0)));
 
-#define ERROR_STRLEN 1024
-void failwith_xc(xc_interface *xch)
+static void Noreturn failwith_xc(xc_interface *xch)
 {
-	static char error_str[ERROR_STRLEN];
+	char error_str[256];
 	if (xch) {
 		const xc_error *error = xc_get_last_error(xch);
 		if (error->code == XC_ERROR_NONE)
-                	snprintf(error_str, ERROR_STRLEN, "%d: %s", errno, strerror(errno));
+			snprintf(error_str, sizeof(error_str),
+				 "%d: %s", errno, strerror(errno));
 		else
-			snprintf(error_str, ERROR_STRLEN, "%d: %s: %s",
-				 error->code,
+			snprintf(error_str, sizeof(error_str),
+				 "%d: %s: %s", error->code,
 				 xc_error_code_to_desc(error->code),
 				 error->message);
 	} else {
-		snprintf(error_str, ERROR_STRLEN, "Unable to open XC interface");
+		snprintf(error_str, sizeof(error_str),
+			 "Unable to open XC interface");
 	}
 	caml_raise_with_string(*caml_named_value("xc.error"), error_str);
 }
@@ -457,6 +458,9 @@ CAMLprim value stub_xc_vcpu_getaffinity(value xch, value domid,
 	int i, len = xc_get_max_cpus(_H(xch));
 	int retval;
 
+	if (len < 1)
+		failwith_xc(_H(xch));
+
 	c_cpumap = xc_cpumap_alloc(_H(xch));
 	if (c_cpumap == NULL)
 		failwith_xc(_H(xch));
@@ -526,26 +530,65 @@ CAMLprim value stub_xc_evtchn_reset(value xch, value domid)
 }
 
 
-#define RING_SIZE 32768
-static char ring[RING_SIZE];
-
 CAMLprim value stub_xc_readconsolering(value xch)
 {
-	unsigned int size = RING_SIZE - 1;
-	char *ring_ptr = ring;
-	int retval;
+	/* Safe to use outside of blocking sections because of Ocaml GC lock. */
+	static unsigned int conring_size = 16384 + 1;
+
+	unsigned int count = conring_size, size = count, index = 0;
+	char *str = NULL, *ptr;
+	int ret;
 
 	CAMLparam1(xch);
+	CAMLlocal1(ring);
 
+	str = malloc(size);
+	if (!str)
+		caml_raise_out_of_memory();
+
+	/* Hopefully our conring_size guess is sufficient */
 	caml_enter_blocking_section();
-	retval = xc_readconsolering(_H(xch), ring_ptr, &size, 0, 0, NULL);
+	ret = xc_readconsolering(_H(xch), str, &count, 0, 0, &index);
 	caml_leave_blocking_section();
 
-	if (retval)
+	if (ret < 0) {
+		free(str);
 		failwith_xc(_H(xch));
+	}
 
-	ring[size] = '\0';
-	CAMLreturn(caml_copy_string(ring));
+	while (count == size && ret >= 0) {
+		size += count - 1;
+		if (size < count)
+			break;
+
+		ptr = realloc(str, size);
+		if (!ptr)
+			break;
+
+		str = ptr + count;
+		count = size - count;
+
+		caml_enter_blocking_section();
+		ret = xc_readconsolering(_H(xch), str, &count, 0, 1, &index);
+		caml_leave_blocking_section();
+
+		count += str - ptr;
+		str = ptr;
+	}
+
+	/*
+	 * If we didn't break because of an overflow with size, and we have
+	 * needed to realloc() ourself more space, update our tracking of the
+	 * real console ring size.
+	 */
+	if (size > conring_size)
+		conring_size = size;
+
+	ring = caml_alloc_string(count);
+	memcpy(String_val(ring), str, count);
+	free(str);
+
+	CAMLreturn(ring);
 }
 
 CAMLprim value stub_xc_send_debug_keys(value xch, value keys)
@@ -821,6 +864,12 @@ CAMLprim value stub_xc_version_version(value xch)
 
 	caml_enter_blocking_section();
 	packed = xc_version(_H(xch), XENVER_version, NULL);
+	caml_leave_blocking_section();
+
+	if (packed < 0)
+		failwith_xc(_H(xch));
+
+	caml_enter_blocking_section();
 	retval = xc_version(_H(xch), XENVER_extraversion, &extra);
 	caml_leave_blocking_section();
 
@@ -1123,12 +1172,17 @@ CAMLprim value stub_xc_domain_test_assign_device(value xch, value domid, value d
 	CAMLreturn(Val_bool(ret == 0));
 }
 
-CAMLprim value stub_xc_domain_assign_device(value xch, value domid, value desc)
+static int domain_assign_device_rdm_flag_table[] = {
+    XEN_DOMCTL_DEV_RDM_RELAXED,
+};
+
+CAMLprim value stub_xc_domain_assign_device(value xch, value domid, value desc,
+                                            value rflag)
 {
-	CAMLparam3(xch, domid, desc);
+	CAMLparam4(xch, domid, desc, rflag);
 	int ret;
 	int domain, bus, dev, func;
-	uint32_t sbdf;
+	uint32_t sbdf, flag;
 
 	domain = Int_val(Field(desc, 0));
 	bus = Int_val(Field(desc, 1));
@@ -1136,7 +1190,10 @@ CAMLprim value stub_xc_domain_assign_device(value xch, value domid, value desc)
 	func = Int_val(Field(desc, 3));
 	sbdf = encode_sbdf(domain, bus, dev, func);
 
-	ret = xc_assign_device(_H(xch), _D(domid), sbdf);
+	ret = Int_val(Field(rflag, 0));
+	flag = domain_assign_device_rdm_flag_table[ret];
+
+	ret = xc_assign_device(_H(xch), _D(domid), sbdf, flag);
 
 	if (ret < 0)
 		failwith_xc(_H(xch));

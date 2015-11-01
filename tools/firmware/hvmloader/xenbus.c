@@ -105,7 +105,7 @@ void xenbus_shutdown(void)
 /* Helper functions: copy data in and out of the ring */
 static void ring_write(const char *data, uint32_t len)
 {
-    uint32_t part;
+    uint32_t part, done = 0;
 
     ASSERT(len <= XENSTORE_PAYLOAD_MAX);
 
@@ -122,16 +122,18 @@ static void ring_write(const char *data, uint32_t len)
         if ( part > len ) 
             part = len;
 
-        memcpy(rings->req + MASK_XENSTORE_IDX(rings->req_prod), data, part);
+        memcpy(rings->req + MASK_XENSTORE_IDX(rings->req_prod),
+               data + done, part);
         barrier(); /* = wmb before prod write, rmb before next cons read */
         rings->req_prod += part;
         len -= part;
+        done += part;
     }
 }
 
 static void ring_read(char *data, uint32_t len)
 {
-    uint32_t part;
+    uint32_t part, done = 0;
 
     ASSERT(len <= XENSTORE_PAYLOAD_MAX);
 
@@ -148,10 +150,12 @@ static void ring_read(char *data, uint32_t len)
         if ( part > len )
             part = len;
 
-        memcpy(data, rings->rsp + MASK_XENSTORE_IDX(rings->rsp_cons), part);
+        memcpy(data + done,
+               rings->rsp + MASK_XENSTORE_IDX(rings->rsp_cons), part);
         barrier(); /* = wmb before cons write, rmb before next prod read */
         rings->rsp_cons += part;
         len -= part;
+        done += part;
     }
 }
 
@@ -204,15 +208,23 @@ static void xenbus_send(uint32_t type, ...)
  * Returns 0 for success, or an errno for error.
  * The answer is returned in a static buffer which is only
  * valid until the next call of xenbus_send(). */
-static int xenbus_recv(uint32_t *reply_len, const char **reply_data)
+static int xenbus_recv(uint32_t *reply_len, const char **reply_data,
+                       uint32_t *reply_type)
 {
     struct xsd_sockmsg hdr;
 
-    /* Pull the reply off the ring */
-    ring_read((char *) &hdr, sizeof(hdr));
-    ring_read(payload, hdr.len);
-    /* For sanity's sake, nul-terminate the answer */
-    payload[hdr.len] = '\0';
+    do
+    {
+        /* Pull the reply off the ring */
+        ring_read((char *) &hdr, sizeof(hdr));
+        ring_read(payload, hdr.len);
+        /* For sanity's sake, nul-terminate the answer */
+        payload[hdr.len] = '\0';
+
+    } while ( hdr.type == XS_DEBUG );
+
+    if ( reply_type )
+        *reply_type = hdr.type;
 
     /* Handle errors */
     if ( hdr.type == XS_ERROR )
@@ -243,7 +255,7 @@ static int xenbus_recv(uint32_t *reply_len, const char **reply_data)
  */
 const char *xenstore_read(const char *path, const char *default_resp)
 {
-    uint32_t len = 0;
+    uint32_t len = 0, type = 0;
     const char *answer = NULL;
 
     xenbus_send(XS_READ,
@@ -251,7 +263,7 @@ const char *xenstore_read(const char *path, const char *default_resp)
                 "", 1, /* nul separator */
                 NULL, 0);
 
-    if ( xenbus_recv(&len, &answer) )
+    if ( xenbus_recv(&len, &answer, &type) || (type != XS_READ) )
         answer = NULL;
 
     if ( (default_resp != NULL) && ((answer == NULL) || (*answer == '\0')) )
@@ -266,13 +278,23 @@ const char *xenstore_read(const char *path, const char *default_resp)
  */
 int xenstore_write(const char *path, const char *value)
 {
+    uint32_t len = 0, type = 0;
+    const char *answer = NULL;
+    int ret;
+
     xenbus_send(XS_WRITE,
                 path, strlen(path),
                 "", 1, /* nul separator */
                 value, strlen(value),
                 NULL, 0);
 
-    return ( xenbus_recv(NULL, NULL) );
+    ret = xenbus_recv(&len, &answer, &type);
+
+    if ( ret == 0 && ((type != XS_WRITE) || (len != 3) ||
+                      !answer || strcmp(answer, "OK")) )
+        ret = EIO;
+
+    return ret;
 }
 
 /*

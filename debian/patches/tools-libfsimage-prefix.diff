@@ -1,4 +1,4 @@
-From 1c31520bc0d397c34468406503e47db42f3e3043 Mon Sep 17 00:00:00 2001
+From 4b86c760c09a8fa291cccfe60811ef53e87b896a Mon Sep 17 00:00:00 2001
 From: Bastian Blank <waldi@debian.org>
 Date: Sat, 5 Jul 2014 11:46:55 +0200
 Subject: tools-libfsimage-prefix.diff
@@ -10,7 +10,7 @@ Patch-Name: tools-libfsimage-prefix.diff
  2 files changed, 6 insertions(+), 3 deletions(-)
 
 diff --git a/tools/libfsimage/Rules.mk b/tools/libfsimage/Rules.mk
-index 8a23655..3e35fc7 100644
+index a0c6504..3e35fc7 100644
 --- a/tools/libfsimage/Rules.mk
 +++ b/tools/libfsimage/Rules.mk
 @@ -3,10 +3,11 @@ include $(XEN_ROOT)/tools/Rules.mk
@@ -21,13 +21,13 @@ index 8a23655..3e35fc7 100644
  
  PIC_OBJS := $(patsubst %.c,%.opic,$(LIB_SRCS-y))
  
--FSDIR = $(LIBDIR)/fs
+-FSDIR = $(libdir)/fs
 +FSDIR = $(LIBEXEC_LIB)/fs
  
  FSLIB = fsimage.so
  
 diff --git a/tools/libfsimage/common/Makefile b/tools/libfsimage/common/Makefile
-index 0e6c728..4e472f0 100644
+index 8357b0a..2043744 100644
 --- a/tools/libfsimage/common/Makefile
 +++ b/tools/libfsimage/common/Makefile
 @@ -1,6 +1,8 @@
@@ -43,11 +43,11 @@ index 0e6c728..4e472f0 100644
  
  .PHONY: install
  install: all
--	$(INSTALL_DIR) $(DESTDIR)$(LIBDIR)
+-	$(INSTALL_DIR) $(DESTDIR)$(libdir)
 +	$(INSTALL_DIR) $(DESTDIR)$(LIBEXEC_LIB)
- 	$(INSTALL_DIR) $(DESTDIR)$(INCLUDEDIR)
--	$(INSTALL_PROG) libfsimage.so $(DESTDIR)$(LIBDIR)
+ 	$(INSTALL_DIR) $(DESTDIR)$(includedir)
+-	$(INSTALL_PROG) libfsimage.so $(DESTDIR)$(libdir)
 +	$(INSTALL_PROG) libfsimage.so $(DESTDIR)$(LIBEXEC_LIB)
- 	$(INSTALL_DATA) fsimage.h $(DESTDIR)$(INCLUDEDIR)
- 	$(INSTALL_DATA) fsimage_plugin.h $(DESTDIR)$(INCLUDEDIR)
- 	$(INSTALL_DATA) fsimage_grub.h $(DESTDIR)$(INCLUDEDIR)
+ 	$(INSTALL_DATA) fsimage.h $(DESTDIR)$(includedir)
+ 	$(INSTALL_DATA) fsimage_plugin.h $(DESTDIR)$(includedir)
+ 	$(INSTALL_DATA) fsimage_grub.h $(DESTDIR)$(includedir)

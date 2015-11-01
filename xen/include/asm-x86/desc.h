@@ -47,17 +47,7 @@
     (sel) = (((sel) & 3) >= _rpl) ? (sel) : (((sel) & ~3) | _rpl); \
 })
 
-/* Stack selectors don't need fixing up if the kernel runs in ring 0. */
-#ifdef CONFIG_X86_SUPERVISOR_MODE_KERNEL
-#define fixup_guest_stack_selector(d, ss) ((void)0)
-#else
 #define fixup_guest_stack_selector(d, ss) __fixup_guest_selector(d, ss)
-#endif
-
-/*
- * Code selectors are always fixed up. It allows the Xen exit stub to detect
- * return to guest context, even when the guest kernel runs in ring 0.
- */
 #define fixup_guest_code_selector(d, cs)  __fixup_guest_selector(d, cs)
 
 /*
@@ -75,7 +65,7 @@
  */
 #define guest_gate_selector_okay(d, sel)                                \
     ((((sel)>>3) < FIRST_RESERVED_GDT_ENTRY) || /* Guest seg? */        \
-     ((sel) == (!is_pv_32on64_domain(d) ?                               \
+     ((sel) == (!is_pv_32bit_domain(d) ?                                \
                 FLAT_KERNEL_CS :                /* Xen default seg? */  \
                 FLAT_COMPAT_KERNEL_CS)) ||                              \
      ((sel) & 4))                               /* LDT seg? */

@@ -16,14 +16,13 @@
  * GNU General Public License for more details.
  *
  * You should have received a copy of the GNU General Public License
- * along with this program; if not, write to the Free Software
- * Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
+ * along with this program; If not, see <http://www.gnu.org/licenses/>.
  */
 
 #include <xen/iommu.h>
-#include <xen/mem_event.h>
+#include <xen/vm_event.h>
 #include <xen/event.h>
-#include <public/mem_event.h>
+#include <public/vm_event.h>
 #include <asm/domain.h>
 #include <asm/page.h>
 #include <asm/paging.h>
@@ -109,7 +108,7 @@ p2m_pod_cache_add(struct p2m_domain *p2m,
      */
     for ( i = 0; i < (1 << order); i++ )
     {
-        char *b = map_domain_page(mfn_x(page_to_mfn(page)) + i);
+        char *b = map_domain_page(_mfn(mfn_x(page_to_mfn(page)) + i));
         clear_page(b);
         unmap_domain_page(b);
     }
@@ -536,7 +535,7 @@ recount:
         p2m_access_t a;
         p2m_type_t t;
 
-        (void)p2m->get_entry(p2m, gpfn + i, &t, &a, 0, NULL);
+        (void)p2m->get_entry(p2m, gpfn + i, &t, &a, 0, NULL, NULL);
 
         if ( t == p2m_populate_on_demand )
             pod++;
@@ -587,7 +586,7 @@ recount:
         p2m_type_t t;
         p2m_access_t a;
 
-        mfn = p2m->get_entry(p2m, gpfn + i, &t, &a, 0, NULL);
+        mfn = p2m->get_entry(p2m, gpfn + i, &t, &a, 0, NULL, NULL);
         if ( t == p2m_populate_on_demand )
         {
             p2m_set_entry(p2m, gpfn + i, _mfn(INVALID_MFN), 0, p2m_invalid,
@@ -676,7 +675,7 @@ p2m_pod_zero_check_superpage(struct p2m_domain *p2m, unsigned long gfn)
     for ( i=0; i<SUPERPAGE_PAGES; i++ )
     {
         p2m_access_t a; 
-        mfn = p2m->get_entry(p2m, gfn + i, &type, &a, 0, NULL);
+        mfn = p2m->get_entry(p2m, gfn + i, &type, &a, 0, NULL, NULL);
 
         if ( i == 0 )
         {
@@ -710,7 +709,7 @@ p2m_pod_zero_check_superpage(struct p2m_domain *p2m, unsigned long gfn)
     for ( i=0; i<SUPERPAGE_PAGES; i++ )
     {
         /* Quick zero-check */
-        map = map_domain_page(mfn_x(mfn0) + i);
+        map = map_domain_page(_mfn(mfn_x(mfn0) + i));
 
         for ( j=0; j<16; j++ )
             if( *(map+j) != 0 )
@@ -743,7 +742,7 @@ p2m_pod_zero_check_superpage(struct p2m_domain *p2m, unsigned long gfn)
     /* Finally, do a full zero-check */
     for ( i=0; i < SUPERPAGE_PAGES; i++ )
     {
-        map = map_domain_page(mfn_x(mfn0) + i);
+        map = map_domain_page(_mfn(mfn_x(mfn0) + i));
 
         for ( j=0; j<PAGE_SIZE/sizeof(*map); j++ )
             if( *(map+j) != 0 )
@@ -808,14 +807,14 @@ p2m_pod_zero_check(struct p2m_domain *p2m, unsigned long *gfns, int count)
     for ( i=0; i<count; i++ )
     {
         p2m_access_t a;
-        mfns[i] = p2m->get_entry(p2m, gfns[i], types + i, &a, 0, NULL);
+        mfns[i] = p2m->get_entry(p2m, gfns[i], types + i, &a, 0, NULL, NULL);
         /* If this is ram, and not a pagetable or from the xen heap, and probably not mapped
            elsewhere, map it; otherwise, skip. */
         if ( p2m_is_ram(types[i])
              && ( (mfn_to_page(mfns[i])->count_info & PGC_allocated) != 0 ) 
              && ( (mfn_to_page(mfns[i])->count_info & (PGC_page_table|PGC_xen_heap)) == 0 ) 
              && ( (mfn_to_page(mfns[i])->count_info & PGC_count_mask) <= max_ref ) )
-            map[i] = map_domain_page(mfn_x(mfns[i]));
+            map[i] = map_domain_page(mfns[i]);
         else
             map[i] = NULL;
     }
@@ -902,28 +901,6 @@ p2m_pod_zero_check(struct p2m_domain *p2m, unsigned long *gfns, int count)
 }
 
 #define POD_SWEEP_LIMIT 1024
-
-/* When populating a new superpage, look at recently populated superpages
- * hoping that they've been zeroed.  This will snap up zeroed pages as soon as 
- * the guest OS is done with them. */
-static void
-p2m_pod_check_last_super(struct p2m_domain *p2m, unsigned long gfn_aligned)
-{
-    unsigned long check_gfn;
-
-    ASSERT(p2m->pod.last_populated_index < POD_HISTORY_MAX);
-
-    check_gfn = p2m->pod.last_populated[p2m->pod.last_populated_index];
-
-    p2m->pod.last_populated[p2m->pod.last_populated_index] = gfn_aligned;
-
-    p2m->pod.last_populated_index =
-        ( p2m->pod.last_populated_index + 1 ) % POD_HISTORY_MAX;
-
-    p2m_pod_zero_check_superpage(p2m, check_gfn);
-}
-
-
 #define POD_SWEEP_STRIDE  16
 static void
 p2m_pod_emergency_sweep(struct p2m_domain *p2m)
@@ -947,7 +924,7 @@ p2m_pod_emergency_sweep(struct p2m_domain *p2m)
     for ( i=p2m->pod.reclaim_single; i > 0 ; i-- )
     {
         p2m_access_t a;
-        (void)p2m->get_entry(p2m, i, &t, &a, 0, NULL);
+        (void)p2m->get_entry(p2m, i, &t, &a, 0, NULL, NULL);
         if ( p2m_is_ram(t) )
         {
             gfns[j] = i;
@@ -964,7 +941,7 @@ p2m_pod_emergency_sweep(struct p2m_domain *p2m)
          * NB that this is a zero-sum game; we're increasing our cache size
          * by re-increasing our 'debt'.  Since we hold the pod lock,
          * (entry_count - count) must remain the same. */
-        if ( p2m->pod.count > 0 && i < limit )
+        if ( i < limit && (p2m->pod.count > 0 || hypercall_preempt_check()) )
             break;
     }
 
@@ -974,6 +951,58 @@ p2m_pod_emergency_sweep(struct p2m_domain *p2m)
     p2m_unlock(p2m);
     p2m->pod.reclaim_single = i ? i - 1 : i;
 
+}
+
+static void pod_eager_reclaim(struct p2m_domain *p2m)
+{
+    struct pod_mrp_list *mrp = &p2m->pod.mrp;
+    unsigned int i = 0;
+
+    /*
+     * Always check one page for reclaimation.
+     *
+     * If the PoD pool is empty, keep checking some space is found, or all
+     * entries have been exhaused.
+     */
+    do
+    {
+        unsigned int idx = (mrp->idx + i++) % ARRAY_SIZE(mrp->list);
+        unsigned long gfn = mrp->list[idx];
+
+        if ( gfn != INVALID_GFN )
+        {
+            if ( gfn & POD_LAST_SUPERPAGE )
+            {
+                gfn &= ~POD_LAST_SUPERPAGE;
+
+                if ( p2m_pod_zero_check_superpage(p2m, gfn) == 0 )
+                {
+                    unsigned int x;
+
+                    for ( x = 0; x < SUPERPAGE_PAGES; ++x, ++gfn )
+                        p2m_pod_zero_check(p2m, &gfn, 1);
+                }
+            }
+            else
+                p2m_pod_zero_check(p2m, &gfn, 1);
+
+            mrp->list[idx] = INVALID_GFN;
+        }
+
+    } while ( (p2m->pod.count == 0) && (i < ARRAY_SIZE(mrp->list)) );
+}
+
+static void pod_eager_record(struct p2m_domain *p2m,
+                             unsigned long gfn, unsigned int order)
+{
+    struct pod_mrp_list *mrp = &p2m->pod.mrp;
+
+    ASSERT(mrp->list[mrp->idx] == INVALID_GFN);
+    ASSERT(gfn != INVALID_GFN);
+
+    mrp->list[mrp->idx++] =
+        gfn | (order == PAGE_ORDER_2M ? POD_LAST_SUPERPAGE : 0);
+    mrp->idx %= ARRAY_SIZE(mrp->list);
 }
 
 int
@@ -1016,6 +1045,8 @@ p2m_pod_demand_populate(struct p2m_domain *p2m, unsigned long gfn,
         return 0;
     }
 
+    pod_eager_reclaim(p2m);
+
     /* Only sweep if we're actually out of memory.  Doing anything else
      * causes unnecessary time and fragmentation of superpages in the p2m. */
     if ( p2m->pod.count == 0 )
@@ -1052,6 +1083,8 @@ p2m_pod_demand_populate(struct p2m_domain *p2m, unsigned long gfn,
     p2m->pod.entry_count -= (1 << order);
     BUG_ON(p2m->pod.entry_count < 0);
 
+    pod_eager_record(p2m, gfn_aligned, order);
+
     if ( tb_init_done )
     {
         struct {
@@ -1066,12 +1099,6 @@ p2m_pod_demand_populate(struct p2m_domain *p2m, unsigned long gfn,
         
         __trace_var(TRC_MEM_POD_POPULATE, 0, sizeof(t), &t);
     }
-
-    /* Check the last guest demand-populate */
-    if ( p2m->pod.entry_count > p2m->pod.count 
-         && (order == PAGE_ORDER_2M)
-         && (q & P2M_ALLOC) )
-        p2m_pod_check_last_super(p2m, gfn_aligned);
 
     pod_unlock(p2m);
     return 0;
@@ -1135,7 +1162,7 @@ guest_physmap_mark_populate_on_demand(struct domain *d, unsigned long gfn,
     for ( i = 0; i < (1UL << order); i++ )
     {
         p2m_access_t a;
-        omfn = p2m->get_entry(p2m, gfn + i, &ot, &a, 0, NULL);
+        omfn = p2m->get_entry(p2m, gfn + i, &ot, &a, 0, NULL, NULL);
         if ( p2m_is_ram(ot) )
         {
             P2M_DEBUG("gfn_to_mfn returned type %d!\n", ot);

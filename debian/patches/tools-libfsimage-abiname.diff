@@ -1,4 +1,4 @@
-From 307493934f33b78e88e083874c5c36656852c77e Mon Sep 17 00:00:00 2001
+From 9cd5bad1a3bb72b5448c5767070160249c45c34e Mon Sep 17 00:00:00 2001
 From: Bastian Blank <waldi@debian.org>
 Date: Sat, 5 Jul 2014 11:46:47 +0200
 Subject: tools-libfsimage-abiname.diff
@@ -9,7 +9,7 @@ Patch-Name: tools-libfsimage-abiname.diff
  1 file changed, 4 insertions(+), 14 deletions(-)
 
 diff --git a/tools/libfsimage/common/Makefile b/tools/libfsimage/common/Makefile
-index fb306f4..0e6c728 100644
+index 4840bc2..8357b0a 100644
 --- a/tools/libfsimage/common/Makefile
 +++ b/tools/libfsimage/common/Makefile
 @@ -1,9 +1,6 @@
@@ -33,15 +33,15 @@ index fb306f4..0e6c728 100644
  all: $(LIB)
 @@ -24,9 +21,7 @@ all: $(LIB)
  install: all
- 	$(INSTALL_DIR) $(DESTDIR)$(LIBDIR)
- 	$(INSTALL_DIR) $(DESTDIR)$(INCLUDEDIR)
--	$(INSTALL_PROG) libfsimage.so.$(MAJOR).$(MINOR) $(DESTDIR)$(LIBDIR)
--	ln -sf libfsimage.so.$(MAJOR).$(MINOR) $(DESTDIR)$(LIBDIR)/libfsimage.so.$(MAJOR)
--	ln -sf libfsimage.so.$(MAJOR) $(DESTDIR)$(LIBDIR)/libfsimage.so
-+	$(INSTALL_PROG) libfsimage.so $(DESTDIR)$(LIBDIR)
- 	$(INSTALL_DATA) fsimage.h $(DESTDIR)$(INCLUDEDIR)
- 	$(INSTALL_DATA) fsimage_plugin.h $(DESTDIR)$(INCLUDEDIR)
- 	$(INSTALL_DATA) fsimage_grub.h $(DESTDIR)$(INCLUDEDIR)
+ 	$(INSTALL_DIR) $(DESTDIR)$(libdir)
+ 	$(INSTALL_DIR) $(DESTDIR)$(includedir)
+-	$(INSTALL_PROG) libfsimage.so.$(MAJOR).$(MINOR) $(DESTDIR)$(libdir)
+-	ln -sf libfsimage.so.$(MAJOR).$(MINOR) $(DESTDIR)$(libdir)/libfsimage.so.$(MAJOR)
+-	ln -sf libfsimage.so.$(MAJOR) $(DESTDIR)$(libdir)/libfsimage.so
++	$(INSTALL_PROG) libfsimage.so $(DESTDIR)$(libdir)
+ 	$(INSTALL_DATA) fsimage.h $(DESTDIR)$(includedir)
+ 	$(INSTALL_DATA) fsimage_plugin.h $(DESTDIR)$(includedir)
+ 	$(INSTALL_DATA) fsimage_grub.h $(DESTDIR)$(includedir)
 @@ -34,13 +29,8 @@ install: all
  clean distclean::
  	rm -f $(LIB)

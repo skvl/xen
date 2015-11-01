@@ -122,7 +122,7 @@ $(STAMPS_DIR)/install-utils-common: $(STAMPS_DIR)/build-docs
 	@rm -rf $(INSTALL_DIR)
 	+$(MAKE_CLEAN) -C $(SOURCE_DIR)/tools/examples install-configs
 	+$(MAKE_CLEAN) -C $(SOURCE_DIR)/tools/hotplug/common install-scripts
-	+$(MAKE_CLEAN) -C $(SOURCE_DIR)/tools/hotplug/Linux install-udev install-scripts UDEV_RULES_DIR=/lib/udev
+	+$(MAKE_CLEAN) -C $(SOURCE_DIR)/tools/hotplug/Linux install-scripts
 	+$(MAKE_CLEAN) -C debian/scripts install
 	touch $@
 
@@ -227,15 +227,11 @@ install-utils-common: $(STAMPS_DIR)/install-utils-common
 	dh_installinit --name xen -- defaults 20 21
 	dh_installinit --name xend
 	dh_installinit --name xendomains --no-start -- defaults 21 20
-	dh_installman $(SOURCE_DIR)/docs/man1/* $(SOURCE_DIR)/docs/man5/* \
-		$(SOURCE_DIR)/tools/xentrace/xentrace_format.1 \
-		$(SOURCE_DIR)/tools/xentrace/xentrace.8 \
-		$(SOURCE_DIR)/tools/xenstat/xentop/xentop.1
-	dh_installdocs $(SOURCE_DIR)/docs/txt/misc/efi.txt
-	dh_installdocs $(SOURCE_DIR)/docs/txt/misc/xen-command-line.txt
-	dh_installdocs $(SOURCE_DIR)/docs/txt/misc/xl-disk-configuration.txt
-	dh_installdocs $(SOURCE_DIR)/docs/txt/misc/xl-network-configuration.txt
-	dh_installdocs $(SOURCE_DIR)/docs/txt/misc/xl-numa-placement.txt
+	dh_installman \
+		$(SOURCE_DIR)/docs/man1/* \
+		$(SOURCE_DIR)/docs/man5/* \
+		$(SOURCE_DIR)/docs/man8/*
+	dh_installdocs $(SOURCE_DIR)/docs/txt/misc
 	dh_link
 	dh_ucf
 	+$(MAKE_SELF) install-base

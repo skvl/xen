@@ -291,7 +291,7 @@ ret_t do_physdev_op(int cmd, XEN_GUEST_HANDLE_PARAM(void) arg)
 {
     int irq;
     ret_t ret;
-    struct vcpu *v = current;
+    struct domain *currd = current->domain;
 
     switch ( cmd )
     {
@@ -303,32 +303,31 @@ ret_t do_physdev_op(int cmd, XEN_GUEST_HANDLE_PARAM(void) arg)
         if ( copy_from_guest(&eoi, arg, 1) != 0 )
             break;
         ret = -EINVAL;
-        if ( eoi.irq >= v->domain->nr_pirqs )
+        if ( eoi.irq >= currd->nr_pirqs )
             break;
-        spin_lock(&v->domain->event_lock);
-        pirq = pirq_info(v->domain, eoi.irq);
+        spin_lock(&currd->event_lock);
+        pirq = pirq_info(currd, eoi.irq);
         if ( !pirq ) {
-            spin_unlock(&v->domain->event_lock);
+            spin_unlock(&currd->event_lock);
             break;
         }
-        if ( v->domain->arch.auto_unmask )
+        if ( currd->arch.auto_unmask )
             evtchn_unmask(pirq->evtchn);
-        if ( is_pv_domain(v->domain) ||
-             domain_pirq_to_irq(v->domain, eoi.irq) > 0 )
+        if ( is_pv_domain(currd) || domain_pirq_to_irq(currd, eoi.irq) > 0 )
             pirq_guest_eoi(pirq);
-        if ( is_hvm_domain(v->domain) &&
-                domain_pirq_to_emuirq(v->domain, eoi.irq) > 0 )
+        if ( is_hvm_domain(currd) &&
+             domain_pirq_to_emuirq(currd, eoi.irq) > 0 )
         {
-            struct hvm_irq *hvm_irq = &v->domain->arch.hvm_domain.irq;
-            int gsi = domain_pirq_to_emuirq(v->domain, eoi.irq);
+            struct hvm_irq *hvm_irq = &currd->arch.hvm_domain.irq;
+            int gsi = domain_pirq_to_emuirq(currd, eoi.irq);
 
             /* if this is a level irq and count > 0, send another
              * notification */ 
             if ( gsi >= NR_ISAIRQS /* ISA irqs are edge triggered */
                     && hvm_irq->gsi_assert_count[gsi] )
-                send_guest_pirq(v->domain, pirq);
+                send_guest_pirq(currd, pirq);
         }
-        spin_unlock(&v->domain->event_lock);
+        spin_unlock(&currd->event_lock);
         ret = 0;
         break;
     }
@@ -336,7 +335,6 @@ ret_t do_physdev_op(int cmd, XEN_GUEST_HANDLE_PARAM(void) arg)
     case PHYSDEVOP_pirq_eoi_gmfn_v2:
     case PHYSDEVOP_pirq_eoi_gmfn_v1: {
         struct physdev_pirq_eoi_gmfn info;
-        unsigned long mfn;
         struct page_info *page;
 
         ret = -EFAULT;
@@ -352,26 +350,25 @@ ret_t do_physdev_op(int cmd, XEN_GUEST_HANDLE_PARAM(void) arg)
             put_page(page);
             break;
         }
-        mfn = page_to_mfn(page);
 
-        if ( cmpxchg(&v->domain->arch.pirq_eoi_map_mfn,
-                     0, mfn) != 0 )
+        if ( cmpxchg(&currd->arch.pirq_eoi_map_mfn,
+                     0, page_to_mfn(page)) != 0 )
         {
-            put_page_and_type(mfn_to_page(mfn));
+            put_page_and_type(page);
             ret = -EBUSY;
             break;
         }
 
-        v->domain->arch.pirq_eoi_map = map_domain_page_global(mfn);
-        if ( v->domain->arch.pirq_eoi_map == NULL )
+        currd->arch.pirq_eoi_map = __map_domain_page_global(page);
+        if ( currd->arch.pirq_eoi_map == NULL )
         {
-            v->domain->arch.pirq_eoi_map_mfn = 0;
-            put_page_and_type(mfn_to_page(mfn));
+            currd->arch.pirq_eoi_map_mfn = 0;
+            put_page_and_type(page);
             ret = -ENOSPC;
             break;
         }
         if ( cmd == PHYSDEVOP_pirq_eoi_gmfn_v1 )
-            v->domain->arch.auto_unmask = 1;
+            currd->arch.auto_unmask = 1;
 
         ret = 0;
         break;
@@ -379,7 +376,7 @@ ret_t do_physdev_op(int cmd, XEN_GUEST_HANDLE_PARAM(void) arg)
 
     /* Legacy since 0x00030202. */
     case PHYSDEVOP_IRQ_UNMASK_NOTIFY: {
-        ret = pirq_guest_unmask(v->domain);
+        ret = pirq_guest_unmask(currd);
         break;
     }
 
@@ -390,12 +387,12 @@ ret_t do_physdev_op(int cmd, XEN_GUEST_HANDLE_PARAM(void) arg)
             break;
         irq = irq_status_query.irq;
         ret = -EINVAL;
-        if ( (irq < 0) || (irq >= v->domain->nr_pirqs) )
+        if ( (irq < 0) || (irq >= currd->nr_pirqs) )
             break;
         irq_status_query.flags = 0;
-        if ( is_hvm_domain(v->domain) &&
-             domain_pirq_to_irq(v->domain, irq) <= 0 &&
-             domain_pirq_to_emuirq(v->domain, irq) == IRQ_UNBOUND )
+        if ( is_hvm_domain(currd) &&
+             domain_pirq_to_irq(currd, irq) <= 0 &&
+             domain_pirq_to_emuirq(currd, irq) == IRQ_UNBOUND )
         {
             ret = -EINVAL;
             break;
@@ -410,7 +407,7 @@ ret_t do_physdev_op(int cmd, XEN_GUEST_HANDLE_PARAM(void) arg)
          * then dom0 is probably modern anyway.
          */
         irq_status_query.flags |= XENIRQSTAT_needs_eoi;
-        if ( pirq_shared(v->domain, irq) )
+        if ( pirq_shared(currd, irq) )
             irq_status_query.flags |= XENIRQSTAT_shared;
         ret = __copy_to_guest(arg, &irq_status_query, 1) ? -EFAULT : 0;
         break;
@@ -471,7 +468,7 @@ ret_t do_physdev_op(int cmd, XEN_GUEST_HANDLE_PARAM(void) arg)
         ret = -EFAULT;
         if ( copy_from_guest(&apic, arg, 1) != 0 )
             break;
-        ret = xsm_apic(XSM_PRIV, v->domain, cmd);
+        ret = xsm_apic(XSM_PRIV, currd, cmd);
         if ( ret )
             break;
         ret = ioapic_guest_read(apic.apic_physbase, apic.reg, &apic.value);
@@ -485,7 +482,7 @@ ret_t do_physdev_op(int cmd, XEN_GUEST_HANDLE_PARAM(void) arg)
         ret = -EFAULT;
         if ( copy_from_guest(&apic, arg, 1) != 0 )
             break;
-        ret = xsm_apic(XSM_PRIV, v->domain, cmd);
+        ret = xsm_apic(XSM_PRIV, currd, cmd);
         if ( ret )
             break;
         ret = ioapic_guest_write(apic.apic_physbase, apic.reg, apic.value);
@@ -501,7 +498,7 @@ ret_t do_physdev_op(int cmd, XEN_GUEST_HANDLE_PARAM(void) arg)
 
         /* Use the APIC check since this dummy hypercall should still only
          * be called by the domain with access to program the ioapic */
-        ret = xsm_apic(XSM_PRIV, v->domain, cmd);
+        ret = xsm_apic(XSM_PRIV, currd, cmd);
         if ( ret )
             break;
 
@@ -518,10 +515,11 @@ ret_t do_physdev_op(int cmd, XEN_GUEST_HANDLE_PARAM(void) arg)
     }
 
     case PHYSDEVOP_set_iopl: {
+        struct vcpu *curr = current;
         struct physdev_set_iopl set_iopl;
 
         ret = -ENOSYS;
-        if ( is_pvh_vcpu(current) )
+        if ( is_pvh_vcpu(curr) )
             break;
 
         ret = -EFAULT;
@@ -531,15 +529,16 @@ ret_t do_physdev_op(int cmd, XEN_GUEST_HANDLE_PARAM(void) arg)
         if ( set_iopl.iopl > 3 )
             break;
         ret = 0;
-        v->arch.pv_vcpu.iopl = set_iopl.iopl;
+        curr->arch.pv_vcpu.iopl = set_iopl.iopl;
         break;
     }
 
     case PHYSDEVOP_set_iobitmap: {
+        struct vcpu *curr = current;
         struct physdev_set_iobitmap set_iobitmap;
 
         ret = -ENOSYS;
-        if ( is_pvh_vcpu(current) )
+        if ( is_pvh_vcpu(curr) )
             break;
 
         ret = -EFAULT;
@@ -551,11 +550,12 @@ ret_t do_physdev_op(int cmd, XEN_GUEST_HANDLE_PARAM(void) arg)
             break;
         ret = 0;
 #ifndef COMPAT
-        v->arch.pv_vcpu.iobmp = set_iobitmap.bitmap;
+        curr->arch.pv_vcpu.iobmp = set_iobitmap.bitmap;
 #else
-        guest_from_compat_handle(v->arch.pv_vcpu.iobmp, set_iobitmap.bitmap);
+        guest_from_compat_handle(curr->arch.pv_vcpu.iobmp,
+                                 set_iobitmap.bitmap);
 #endif
-        v->arch.pv_vcpu.iobmp_limit = set_iobitmap.nr_ports;
+        curr->arch.pv_vcpu.iobmp_limit = set_iobitmap.nr_ports;
         break;
     }
 
@@ -565,7 +565,8 @@ ret_t do_physdev_op(int cmd, XEN_GUEST_HANDLE_PARAM(void) arg)
         if ( copy_from_guest(&manage_pci, arg, 1) != 0 )
             break;
 
-        ret = pci_add_device(0, manage_pci.bus, manage_pci.devfn, NULL);
+        ret = pci_add_device(0, manage_pci.bus, manage_pci.devfn,
+                             NULL, NUMA_NO_NODE);
         break;
     }
 
@@ -597,13 +598,14 @@ ret_t do_physdev_op(int cmd, XEN_GUEST_HANDLE_PARAM(void) arg)
         pdev_info.physfn.devfn = manage_pci_ext.physfn.devfn;
         ret = pci_add_device(0, manage_pci_ext.bus,
                              manage_pci_ext.devfn,
-                             &pdev_info);
+                             &pdev_info, NUMA_NO_NODE);
         break;
     }
 
     case PHYSDEVOP_pci_device_add: {
         struct physdev_pci_device_add add;
         struct pci_dev_info pdev_info;
+        nodeid_t node;
 
         ret = -EFAULT;
         if ( copy_from_guest(&add, arg, 1) != 0 )
@@ -618,7 +620,22 @@ ret_t do_physdev_op(int cmd, XEN_GUEST_HANDLE_PARAM(void) arg)
         }
         else
             pdev_info.is_virtfn = 0;
-        ret = pci_add_device(add.seg, add.bus, add.devfn, &pdev_info);
+
+        if ( add.flags & XEN_PCI_DEV_PXM )
+        {
+            uint32_t pxm;
+            size_t optarr_off = offsetof(struct physdev_pci_device_add, optarr) /
+                                sizeof(add.optarr[0]);
+
+            if ( copy_from_guest_offset(&pxm, arg, optarr_off, 1) )
+                break;
+
+            node = pxm_to_node(pxm);
+        }
+        else
+            node = NUMA_NO_NODE;
+
+        ret = pci_add_device(add.seg, add.bus, add.devfn, &pdev_info, node);
         break;
     }
 
@@ -715,18 +732,17 @@ ret_t do_physdev_op(int cmd, XEN_GUEST_HANDLE_PARAM(void) arg)
     }
     case PHYSDEVOP_get_free_pirq: {
         struct physdev_get_free_pirq out;
-        struct domain *d = v->domain;
 
         ret = -EFAULT;
         if ( copy_from_guest(&out, arg, 1) != 0 )
             break;
 
-        spin_lock(&d->event_lock);
+        spin_lock(&currd->event_lock);
 
-        ret = get_free_pirq(d, out.type);
+        ret = get_free_pirq(currd, out.type);
         if ( ret >= 0 )
         {
-            struct pirq *info = pirq_get_info(d, ret);
+            struct pirq *info = pirq_get_info(currd, ret);
 
             if ( info )
                 info->arch.irq = PIRQ_ALLOCATED;
@@ -734,7 +750,7 @@ ret_t do_physdev_op(int cmd, XEN_GUEST_HANDLE_PARAM(void) arg)
                 ret = -ENOMEM;
         }
 
-        spin_unlock(&d->event_lock);
+        spin_unlock(&currd->event_lock);
 
         if ( ret >= 0 )
         {
@@ -748,7 +764,7 @@ ret_t do_physdev_op(int cmd, XEN_GUEST_HANDLE_PARAM(void) arg)
     case PHYSDEVOP_dbgp_op: {
         struct physdev_dbgp_op op;
 
-        if ( !is_hardware_domain(v->domain) )
+        if ( !is_hardware_domain(currd) )
             ret = -EPERM;
         else if ( copy_from_guest(&op, arg, 1) )
             ret = -EFAULT;

@@ -18,8 +18,7 @@
  *  GNU General Public License for more details.
  *
  *  You should have received a copy of the GNU General Public License
- *  along with this program; if not, write to the Free Software
- *  Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
+ *  along with this program; If not, see <http://www.gnu.org/licenses/>.
  *
  * ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
  *
@@ -88,13 +87,14 @@ void __iomem *
 acpi_os_map_memory(acpi_physical_address phys, acpi_size size)
 {
 	if (system_state >= SYS_STATE_active) {
-		unsigned long pfn = PFN_DOWN(phys);
+		mfn_t mfn = _mfn(PFN_DOWN(phys));
 		unsigned int offs = phys & (PAGE_SIZE - 1);
 
 		/* The low first Mb is always mapped. */
 		if ( !((phys + size - 1) >> 20) )
 			return __va(phys);
-		return __vmap(&pfn, PFN_UP(offs + size), 1, 1, PAGE_HYPERVISOR_NOCACHE) + offs;
+		return __vmap(&mfn, PFN_UP(offs + size), 1, 1,
+			      PAGE_HYPERVISOR_NOCACHE) + offs;
 	}
 	return __acpi_map_table(phys, size);
 }

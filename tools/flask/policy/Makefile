@@ -20,20 +20,20 @@ MLS_CATS ?= 256
 CHECKPOLICY ?= checkpolicy
 M4 ?= m4
 
+# Output security policy version.  Leave unset to autodetect.
+OUTPUT_POLICY ?= $(BEST_POLICY_VER)
+
 ########################################
 #
 # End of configuration options
 #
 ########################################
 
-# Policy version
-# By default, checkpolicy creates the highest version policy it supports. Force
-# the use of version 24 which is the highest that Xen supports, and the first to
-# include the Xen policy type (needed for static device policy).
-OUTPUT_POLICY = 24
-
 POLICY_FILENAME = xenpolicy-$(shell $(MAKE) -C $(XEN_ROOT)/xen xenversion --no-print-directory)
 POLICY_LOADPATH = /boot
+
+# List of policy versions supported by the hypervisor
+POLICY_VER_LIST_HV = 24 30
 
 # policy source layout
 POLDIR := policy
@@ -56,6 +56,7 @@ MLSSUPPORT := $(POLDIR)/mls
 USERS := $(POLDIR)/users
 CONSTRAINTS := $(POLDIR)/constraints
 ISID_DEFS := $(POLDIR)/initial_sids
+DEV_OCONS := $(POLDIR)/device_contexts
 
 # config file paths
 GLOBALTUN := $(POLDIR)/global_tunables
@@ -63,6 +64,14 @@ MOD_CONF := $(POLDIR)/modules.conf
 
 # checkpolicy can use the #line directives provided by -s for error reporting:
 M4PARAM := -D self_contained_policy -s
+
+# The output of checkpolicy -V is "30 (compatibility range 30-15)", and the
+# first word of the output is the maximum policy version supported.
+CHECKPOLICY_VER_MAX := $(firstword $(shell $(CHECKPOLICY) -V))
+
+# Find the highest version supported by both the hypervisor and checkpolicy
+BEST_POLICY_VER := $(shell best=24; for ver in $(POLICY_VER_LIST_HV); do if test $$ver -le $(CHECKPOLICY_VER_MAX); then best=$$ver; fi; done; echo $$best)
+
 CHECKPOLICY_PARAM := -t Xen -c $(OUTPUT_POLICY)
 
 # enable MLS if requested.
@@ -86,7 +95,7 @@ DETECTED_MODS := $(sort $(foreach dir,$(ALL_LAYERS),$(wildcard $(dir)/*.te)))
 MODENABLED := on
 
 # extract settings from modules.conf
-ENABLED_MODS := $(foreach mod,$(shell awk '/^[[:blank:]]*[[:alpha:]]/{ if ($$3 == "$(MODENABLED)") print $$1 }' $(MOD_CONF) 2> /dev/null),$(subst ./,,$(shell find -iname $(mod).te)))
+ENABLED_MODS := $(foreach mod,$(shell awk '/^[ \t]*[a-z]/{ if ($$3 == "$(MODENABLED)") print $$1 }' $(MOD_CONF) 2> /dev/null),$(subst ./,,$(shell find -iname $(mod).te)))
 
 ALL_MODULES := $(filter $(ENABLED_MODS),$(DETECTED_MODS))
 
@@ -98,7 +107,7 @@ POLICY_SECTIONS += $(M4SUPPORT) $(MLSSUPPORT)
 POLICY_SECTIONS += $(ALL_INTERFACES)
 POLICY_SECTIONS += $(GLOBALTUN)
 POLICY_SECTIONS += $(ALL_MODULES)
-POLICY_SECTIONS += $(USERS) $(CONSTRAINTS) $(ISID_DEFS)
+POLICY_SECTIONS += $(USERS) $(CONSTRAINTS) $(ISID_DEFS) $(DEV_OCONS)
 
 all: $(POLICY_FILENAME)
 
@@ -115,4 +124,6 @@ policy.conf: $(POLICY_SECTIONS)
 clean:
 	$(RM) tmp policy.conf $(POLICY_FILENAME)
 
-.PHONY: all install clean
+distclean: clean
+
+.PHONY: all install clean distclean

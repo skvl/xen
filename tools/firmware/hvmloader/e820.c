@@ -16,12 +16,91 @@
  * more details.
  *
  * You should have received a copy of the GNU General Public License along with
- * this program; if not, write to the Free Software Foundation, Inc., 59 Temple
- * Place - Suite 330, Boston, MA 02111-1307 USA.
+ * this program; If not, see <http://www.gnu.org/licenses/>.
  */
 
 #include "config.h"
 #include "util.h"
+
+struct e820map memory_map;
+
+void memory_map_setup(void)
+{
+    unsigned int nr_entries = E820MAX, i;
+    int rc;
+    uint64_t alloc_addr = RESERVED_MEMORY_DYNAMIC_START;
+    uint64_t alloc_size = RESERVED_MEMORY_DYNAMIC_END - alloc_addr;
+
+    rc = get_mem_mapping_layout(memory_map.map, &nr_entries);
+
+    if ( rc || !nr_entries )
+    {
+        printf("Get guest memory maps[%d] failed. (%d)\n", nr_entries, rc);
+        BUG();
+    }
+
+    memory_map.nr_map = nr_entries;
+
+    for ( i = 0; i < nr_entries; i++ )
+    {
+        if ( memory_map.map[i].type == E820_RESERVED &&
+             check_overlap(alloc_addr, alloc_size,
+                           memory_map.map[i].addr, memory_map.map[i].size) )
+        {
+            printf("Fail to setup memory map due to conflict");
+            printf(" on dynamic reserved memory range.\n");
+            BUG();
+        }
+    }
+}
+
+/*
+ * Sometimes hvmloader may have relocated RAM so low_mem_pgend/high_mem_end
+ * would be changed over there. But memory_map[] just records the
+ * original low/high memory, so we need to sync these entries once
+ * hvmloader modifies low/high memory.
+ */
+void adjust_memory_map(void)
+{
+    uint32_t low_mem_end = hvm_info->low_mem_pgend << PAGE_SHIFT;
+    uint64_t high_mem_end = (uint64_t)hvm_info->high_mem_pgend << PAGE_SHIFT;
+    unsigned int i;
+
+    for ( i = 0; i < memory_map.nr_map; i++ )
+    {
+        uint64_t map_start = memory_map.map[i].addr;
+        uint64_t map_size = memory_map.map[i].size;
+        uint64_t map_end = map_start + map_size;
+
+        /* If we need to adjust lowmem. */
+        if ( memory_map.map[i].type == E820_RAM &&
+             low_mem_end > map_start && low_mem_end < map_end )
+        {
+            memory_map.map[i].size = low_mem_end - map_start;
+            continue;
+        }
+
+        /* Modify the existing highmem region if it exists. */
+        if ( memory_map.map[i].type == E820_RAM &&
+             high_mem_end && map_start == ((uint64_t)1 << 32) )
+        {
+            if ( high_mem_end != map_end )
+                memory_map.map[i].size = high_mem_end - map_start;
+            high_mem_end = 0;
+            continue;
+        }
+    }
+
+    /* If there was no highmem region, just create one. */
+    if ( high_mem_end )
+    {
+        memory_map.map[i].addr = ((uint64_t)1 << 32);
+        memory_map.map[i].size =
+                ((uint64_t)hvm_info->high_mem_pgend << PAGE_SHIFT) -
+                    memory_map.map[i].addr;
+        memory_map.map[i].type = E820_RAM;
+    }
+}
 
 void dump_e820_table(struct e820entry *e820, unsigned int nr)
 {
@@ -73,7 +152,8 @@ int build_e820_table(struct e820entry *e820,
                      unsigned int lowmem_reserved_base,
                      unsigned int bios_image_base)
 {
-    unsigned int nr = 0;
+    unsigned int nr = 0, i, j;
+    uint32_t low_mem_end = hvm_info->low_mem_pgend << PAGE_SHIFT;
 
     if ( !lowmem_reserved_base )
             lowmem_reserved_base = 0xA0000;
@@ -117,13 +197,6 @@ int build_e820_table(struct e820entry *e820,
     e820[nr].type = E820_RESERVED;
     nr++;
 
-    /* Low RAM goes here. Reserve space for special pages. */
-    BUG_ON((hvm_info->low_mem_pgend << PAGE_SHIFT) < (2u << 20));
-    e820[nr].addr = 0x100000;
-    e820[nr].size = (hvm_info->low_mem_pgend << PAGE_SHIFT) - e820[nr].addr;
-    e820[nr].type = E820_RAM;
-    nr++;
-
     /*
      * Explicitly reserve space for special pages.
      * This space starts at RESERVED_MEMBASE an extends to cover various
@@ -159,14 +232,46 @@ int build_e820_table(struct e820entry *e820,
         nr++;
     }
 
+    /* Low RAM goes here. Reserve space for special pages. */
+    BUG_ON(low_mem_end < (2u << 20));
 
-    if ( hvm_info->high_mem_pgend )
+    /*
+     * Construct E820 table according to recorded memory map.
+     *
+     * The memory map created by toolstack may include,
+     *
+     * #1. Low memory region
+     *
+     * Low RAM starts at least from 1M to make sure all standard regions
+     * of the PC memory map, like BIOS, VGA memory-mapped I/O and vgabios,
+     * have enough space.
+     *
+     * #2. Reserved regions if they exist
+     *
+     * #3. High memory region if it exists
+     *
+     * Note we just have one low memory entry and one high mmeory entry if
+     * exists.
+     */
+    for ( i = 0; i < memory_map.nr_map; i++ )
     {
-        e820[nr].addr = ((uint64_t)1 << 32);
-        e820[nr].size =
-            ((uint64_t)hvm_info->high_mem_pgend << PAGE_SHIFT) - e820[nr].addr;
-        e820[nr].type = E820_RAM;
+        e820[nr] = memory_map.map[i];
         nr++;
+    }
+
+    /* Finally we need to sort all e820 entries. */
+    for ( j = 0; j < nr - 1; j++ )
+    {
+        for ( i = j + 1; i < nr; i++ )
+        {
+            if ( e820[j].addr > e820[i].addr )
+            {
+                struct e820entry tmp = e820[j];
+
+                e820[j] = e820[i];
+                e820[i] = tmp;
+            }
+        }
     }
 
     return nr;

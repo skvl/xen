@@ -251,8 +251,6 @@ void __init avc_init(void)
     }
     atomic_set(&avc_cache.active_nodes, 0);
     atomic_set(&avc_cache.lru_hint, 0);
-
-    printk("AVC INITIALIZED\n");
 }
 
 int avc_get_hash_stats(struct xen_flask_hash_stats *arg)
@@ -601,6 +599,9 @@ void avc_audit(u32 ssid, u32 tsid, u16 tclass, u32 requested,
         break;
     case AVC_AUDIT_DATA_MEMORY:
         avc_printk(&buf, "pte=%#lx mfn=%#lx ", a->memory.pte, a->memory.mfn);
+        break;
+    case AVC_AUDIT_DATA_DTDEV:
+        avc_printk(&buf, "dtdevice=%s ", a->dtdev);
         break;
     }
 

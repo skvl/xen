@@ -33,6 +33,7 @@
 #include <xen/device_tree.h>
 #include <xen/sizes.h>
 #include <xen/libfdt/libfdt.h>
+#include <xen/sort.h>
 #include <asm/p2m.h>
 #include <asm/domain.h>
 #include <asm/io.h>
@@ -41,16 +42,8 @@
 #include <asm/gic_v3_defs.h>
 #include <asm/cpufeature.h>
 
-struct rdist_region {
-    paddr_t base;
-    paddr_t size;
-    void __iomem *map_base;
-};
-
 /* Global state */
 static struct {
-    paddr_t dbase;            /* Address of distributor registers */
-    paddr_t dbase_size;
     void __iomem *map_dbase;  /* Mapped address of distributor registers */
     struct rdist_region *rdist_regions;
     uint32_t  rdist_stride;
@@ -254,7 +247,7 @@ static void gicv3_enable_sre(void)
     uint32_t val;
 
     val = READ_SYSREG32(ICC_SRE_EL2);
-    val |= GICC_SRE_EL2_SRE | GICC_SRE_EL2_ENEL1;
+    val |= GICC_SRE_EL2_SRE;
 
     WRITE_SYSREG32(val, ICC_SRE_EL2);
     isb();
@@ -382,6 +375,19 @@ static void gicv3_save_state(struct vcpu *v)
 
 static void gicv3_restore_state(const struct vcpu *v)
 {
+    uint32_t val;
+
+    val = READ_SYSREG32(ICC_SRE_EL2);
+    /*
+     * Don't give access to system registers when the guest is using
+     * GICv2
+     */
+    if ( v->domain->arch.vgic.version == GIC_V2 )
+        val &= ~GICC_SRE_EL2_ENEL1;
+    else
+        val |= GICC_SRE_EL2_ENEL1;
+    WRITE_SYSREG32(val, ICC_SRE_EL2);
+
     WRITE_SYSREG32(v->arch.gic.v3.sre_el1, ICC_SRE_EL1);
     WRITE_SYSREG32(v->arch.gic.v3.vmcr, ICH_VMCR_EL2);
     restore_aprn_regs(&v->arch.gic);
@@ -465,7 +471,7 @@ static void gicv3_set_irq_properties(struct irq_desc *desc,
                                      const cpumask_t *cpu_mask,
                                      unsigned int priority)
 {
-    uint32_t cfg, edgebit;
+    uint32_t cfg, actual, edgebit;
     uint64_t affinity;
     void __iomem *base;
     unsigned int cpu = gicv3_get_cpu_from_mask(cpu_mask);
@@ -492,6 +498,20 @@ static void gicv3_set_irq_properties(struct irq_desc *desc,
 
     writel_relaxed(cfg, base);
 
+    actual = readl_relaxed(base);
+    if ( ( cfg & edgebit ) ^ ( actual & edgebit ) )
+    {
+        printk(XENLOG_WARNING "GICv3: WARNING: "
+               "CPU%d: Failed to configure IRQ%u as %s-triggered. "
+               "H/w forces to %s-triggered.\n",
+               smp_processor_id(), desc->irq,
+               cfg & edgebit ? "Edge" : "Level",
+               actual & edgebit ? "Edge" : "Level");
+        desc->arch.type = actual & edgebit ?
+            DT_IRQ_TYPE_EDGE_RISING :
+            DT_IRQ_TYPE_LEVEL_HIGH;
+    }
+
     affinity = gicv3_mpidr_to_affinity(cpu);
     /* Make sure we don't broadcast the interrupt */
     affinity &= ~GICD_IROUTER_SPI_MODE_ANY;
@@ -513,23 +533,24 @@ static void __init gicv3_dist_init(void)
     uint32_t type;
     uint32_t priority;
     uint64_t affinity;
+    unsigned int nr_lines;
     int i;
 
     /* Disable the distributor */
     writel_relaxed(0, GICD + GICD_CTLR);
 
     type = readl_relaxed(GICD + GICD_TYPER);
-    gicv3_info.nr_lines = 32 * ((type & GICD_TYPE_LINES) + 1);
+    nr_lines = 32 * ((type & GICD_TYPE_LINES) + 1);
 
     printk("GICv3: %d lines, (IID %8.8x).\n",
-           gicv3_info.nr_lines, readl_relaxed(GICD + GICD_IIDR));
+           nr_lines, readl_relaxed(GICD + GICD_IIDR));
 
     /* Default all global IRQs to level, active low */
-    for ( i = NR_GIC_LOCAL_IRQS; i < gicv3_info.nr_lines; i += 16 )
+    for ( i = NR_GIC_LOCAL_IRQS; i < nr_lines; i += 16 )
         writel_relaxed(0, GICD + GICD_ICFGR + (i / 16) * 4);
 
     /* Default priority for global interrupts */
-    for ( i = NR_GIC_LOCAL_IRQS; i < gicv3_info.nr_lines; i += 4 )
+    for ( i = NR_GIC_LOCAL_IRQS; i < nr_lines; i += 4 )
     {
         priority = (GIC_PRI_IRQ << 24 | GIC_PRI_IRQ << 16 |
                     GIC_PRI_IRQ << 8 | GIC_PRI_IRQ);
@@ -537,7 +558,7 @@ static void __init gicv3_dist_init(void)
     }
 
     /* Disable all global interrupts */
-    for ( i = NR_GIC_LOCAL_IRQS; i < gicv3_info.nr_lines; i += 32 )
+    for ( i = NR_GIC_LOCAL_IRQS; i < nr_lines; i += 32 )
         writel_relaxed(0xffffffff, GICD + GICD_ICENABLER + (i / 32) * 4);
 
     gicv3_dist_wait_for_rwp();
@@ -551,8 +572,11 @@ static void __init gicv3_dist_init(void)
     /* Make sure we don't broadcast the interrupt */
     affinity &= ~GICD_IROUTER_SPI_MODE_ANY;
 
-    for ( i = NR_GIC_LOCAL_IRQS; i < gicv3_info.nr_lines; i++ )
+    for ( i = NR_GIC_LOCAL_IRQS; i < nr_lines; i++ )
         writeq_relaxed(affinity, GICD + GICD_IROUTER + i * 8);
+
+    /* Only 1020 interrupts are supported */
+    gicv3_info.nr_lines = min(1020U, nr_lines);
 }
 
 static int gicv3_enable_redist(void)
@@ -638,7 +662,7 @@ static int __init gicv3_populate_rdist(void)
                 ptr += gicv3.rdist_stride;
             else
             {
-                ptr += SZ_64K * 2;
+                ptr += SZ_64K * 2; /* Skip RD_base + SGI_base */
                 if ( typer & GICR_TYPER_VLPIS )
                     ptr += SZ_64K * 2; /* Skip VLPI_base + reserved page */
             }
@@ -695,7 +719,7 @@ static int __cpuinit gicv3_cpu_init(void)
     /* Set priority mask register */
     WRITE_SYSREG32(DEFAULT_PMR_VALUE, ICC_PMR_EL1);
 
-    /* EOI drops priority too (mode 0) */
+    /* EOI drops priority, DIR deactivates the interrupt (mode 1) */
     WRITE_SYSREG32(GICC_CTLR_EL1_EOImode_drop, ICC_CTLR_EL1);
 
     /* Enable Group1 interrupts */
@@ -789,8 +813,7 @@ out:
     return tlist;
 }
 
-static void gicv3_send_sgi(enum gic_sgi sgi, enum gic_sgi_mode mode,
-                           const cpumask_t *cpumask)
+static void gicv3_send_sgi_list(enum gic_sgi sgi, const cpumask_t *cpumask)
 {
     int cpu = 0;
     uint64_t val;
@@ -814,10 +837,32 @@ static void gicv3_send_sgi(enum gic_sgi sgi, enum gic_sgi_mode mode,
                MPIDR_AFFINITY_LEVEL(cluster_id, 1) << 16  |
                tlist);
 
-        WRITE_SYSREG(val, ICC_SGI1R_EL1);
+        WRITE_SYSREG64(val, ICC_SGI1R_EL1);
     }
     /* Force above writes to ICC_SGI1R_EL1 */
     isb();
+}
+
+static void gicv3_send_sgi(enum gic_sgi sgi, enum gic_sgi_mode mode,
+                           const cpumask_t *cpumask)
+{
+    switch ( mode )
+    {
+    case SGI_TARGET_OTHERS:
+        WRITE_SYSREG64(ICH_SGI_TARGET_OTHERS << ICH_SGI_IRQMODE_SHIFT |
+                       (uint64_t)sgi << ICH_SGI_IRQ_SHIFT,
+                       ICC_SGI1R_EL1);
+        isb();
+        break;
+    case SGI_TARGET_SELF:
+        gicv3_send_sgi_list(sgi, cpumask_of(smp_processor_id()));
+        break;
+    case SGI_TARGET_LIST:
+        gicv3_send_sgi_list(sgi, cpumask);
+        break;
+    default:
+        BUG();
+    }
 }
 
 /* Shut down the per-CPU GIC interface */
@@ -834,13 +879,20 @@ static void gicv3_disable_interface(void)
 static void gicv3_update_lr(int lr, const struct pending_irq *p,
                             unsigned int state)
 {
-    uint64_t grp = GICH_LR_GRP1;
     uint64_t val = 0;
 
     BUG_ON(lr >= gicv3_info.nr_lrs);
     BUG_ON(lr < 0);
 
-    val =  (((uint64_t)state & 0x3) << GICH_LR_STATE_SHIFT) | grp;
+    val =  (((uint64_t)state & 0x3) << GICH_LR_STATE_SHIFT);
+
+    /*
+     * When the guest is GICv3, all guest IRQs are Group 1, as Group0
+     * would result in a FIQ in the guest, which it wouldn't expect
+     */
+    if ( current->domain->arch.vgic.version == GIC_V3 )
+        val |= GICH_LR_GRP1;
+
     val |= ((uint64_t)p->priority & 0xff) << GICH_LR_PRIORITY_SHIFT;
     val |= ((uint64_t)p->irq & GICH_LR_VIRTUAL_MASK) << GICH_LR_VIRTUAL_SHIFT;
 
@@ -883,46 +935,6 @@ static void gicv3_write_lr(int lr_reg, const struct gic_lr *lr)
         ((u64)(lr->grp & GICH_LR_GRP_MASK) << GICH_LR_GRP_SHIFT) );
 
     gicv3_ich_write_lr(lr_reg, lrv);
-}
-
-static int gicv_v3_init(struct domain *d)
-{
-    int i;
-
-    /*
-     * Domain 0 gets the hardware address.
-     * Guests get the virtual platform layout.
-     */
-    if ( is_hardware_domain(d) )
-    {
-        d->arch.vgic.dbase = gicv3.dbase;
-        d->arch.vgic.dbase_size = gicv3.dbase_size;
-        for ( i = 0; i < gicv3.rdist_count; i++ )
-        {
-            d->arch.vgic.rbase[i] = gicv3.rdist_regions[i].base;
-            d->arch.vgic.rbase_size[i] = gicv3.rdist_regions[i].size;
-        }
-        d->arch.vgic.rdist_stride = gicv3.rdist_stride;
-        d->arch.vgic.rdist_count = gicv3.rdist_count;
-    }
-    else
-    {
-        d->arch.vgic.dbase = GUEST_GICV3_GICD_BASE;
-        d->arch.vgic.dbase_size = GUEST_GICV3_GICD_SIZE;
-
-        /* XXX: Only one Re-distributor region mapped for the guest */
-        BUILD_BUG_ON(GUEST_GICV3_RDIST_REGIONS != 1);
-
-        d->arch.vgic.rdist_count = GUEST_GICV3_RDIST_REGIONS;
-        d->arch.vgic.rdist_stride = GUEST_GICV3_RDIST_STRIDE;
-
-        /* The first redistributor should contain enough space for all CPUs */
-        BUILD_BUG_ON((GUEST_GICV3_GICR0_SIZE / GUEST_GICV3_RDIST_STRIDE) < MAX_VIRT_CPUS);
-        d->arch.vgic.rbase[0] = GUEST_GICV3_GICR0_BASE;
-        d->arch.vgic.rbase_size[0] = GUEST_GICV3_GICR0_SIZE;
-    }
-
-    return 0;
 }
 
 static void gicv3_hcr_status(uint32_t flag, bool_t status)
@@ -1041,16 +1053,14 @@ static void gicv3_irq_set_affinity(struct irq_desc *desc, const cpumask_t *mask)
     spin_unlock(&gicv3.lock);
 }
 
-static int gicv3_make_dt_node(const struct domain *d,
-                              const struct dt_device_node *node, void *fdt)
+static int gicv3_make_hwdom_dt_node(const struct domain *d,
+                                    const struct dt_device_node *node,
+                                    void *fdt)
 {
     const struct dt_device_node *gic = dt_interrupt_controller;
     const void *compatible = NULL;
     uint32_t len;
     __be32 *new_cells, *tmp;
-    uint32_t rd_stride = 0;
-    uint32_t rd_count = 0;
-
     int i, res = 0;
 
     compatible = dt_get_property(gic, "compatible", &len);
@@ -1060,35 +1070,17 @@ static int gicv3_make_dt_node(const struct domain *d,
         return -FDT_ERR_XEN(ENOENT);
     }
 
-    res = fdt_begin_node(fdt, "interrupt-controller");
-    if ( res )
-        return res;
-
     res = fdt_property(fdt, "compatible", compatible, len);
     if ( res )
         return res;
 
-    res = fdt_property_cell(fdt, "#interrupt-cells", 3);
+    res = fdt_property_cell(fdt, "redistributor-stride",
+                            d->arch.vgic.rdist_stride);
     if ( res )
         return res;
 
-    res = fdt_property(fdt, "interrupt-controller", NULL, 0);
-    if ( res )
-        return res;
-
-    res = dt_property_read_u32(gic, "redistributor-stride", &rd_stride);
-    if ( !res )
-        rd_stride = 0;
-
-    res = dt_property_read_u32(gic, "#redistributor-regions", &rd_count);
-    if ( !res )
-        rd_count = 1;
-
-    res = fdt_property_cell(fdt, "redistributor-stride", rd_stride);
-    if ( res )
-        return res;
-
-    res = fdt_property_cell(fdt, "#redistributor-regions", rd_count);
+    res = fdt_property_cell(fdt, "#redistributor-regions",
+                            d->arch.vgic.nr_regions);
     if ( res )
         return res;
 
@@ -1098,18 +1090,18 @@ static int gicv3_make_dt_node(const struct domain *d,
      * CPU interface and virtual cpu interfaces accessesed as System registers
      * So cells are created only for Distributor and rdist regions
      */
-    len = len * (d->arch.vgic.rdist_count + 1);
+    len = len * (d->arch.vgic.nr_regions + 1);
     new_cells = xzalloc_bytes(len);
     if ( new_cells == NULL )
         return -FDT_ERR_XEN(ENOMEM);
 
     tmp = new_cells;
 
-    dt_set_range(&tmp, node, d->arch.vgic.dbase, d->arch.vgic.dbase_size);
+    dt_set_range(&tmp, node, d->arch.vgic.dbase, SZ_64K);
 
-    for ( i = 0; i < d->arch.vgic.rdist_count; i++ )
-        dt_set_range(&tmp, node, d->arch.vgic.rbase[i],
-                     d->arch.vgic.rbase_size[i]);
+    for ( i = 0; i < d->arch.vgic.nr_regions; i++ )
+        dt_set_range(&tmp, node, d->arch.vgic.rdist_regions[i].base,
+                     d->arch.vgic.rdist_regions[i].size);
 
     res = fdt_property(fdt, "reg", new_cells, len);
     xfree(new_cells);
@@ -1139,37 +1131,49 @@ static const hw_irq_controller gicv3_guest_irq_type = {
     .set_affinity = gicv3_irq_set_affinity,
 };
 
-static const struct gic_hw_operations gicv3_ops = {
-    .info                = &gicv3_info,
-    .save_state          = gicv3_save_state,
-    .restore_state       = gicv3_restore_state,
-    .dump_state          = gicv3_dump_state,
-    .gicv_setup          = gicv_v3_init,
-    .gic_host_irq_type   = &gicv3_host_irq_type,
-    .gic_guest_irq_type  = &gicv3_guest_irq_type,
-    .eoi_irq             = gicv3_eoi_irq,
-    .deactivate_irq      = gicv3_dir_irq,
-    .read_irq            = gicv3_read_irq,
-    .set_irq_properties  = gicv3_set_irq_properties,
-    .send_SGI            = gicv3_send_sgi,
-    .disable_interface   = gicv3_disable_interface,
-    .update_lr           = gicv3_update_lr,
-    .update_hcr_status   = gicv3_hcr_status,
-    .clear_lr            = gicv3_clear_lr,
-    .read_lr             = gicv3_read_lr,
-    .write_lr            = gicv3_write_lr,
-    .read_vmcr_priority  = gicv3_read_vmcr_priority,
-    .read_apr            = gicv3_read_apr,
-    .secondary_init      = gicv3_secondary_cpu_init,
-    .make_dt_node        = gicv3_make_dt_node,
-};
+static int __init cmp_rdist(const void *a, const void *b)
+{
+    const struct rdist_region *l = a, *r = a;
+
+    /* We assume that re-distributor regions can never overlap */
+    return ( l->base < r->base) ? -1 : 0;
+}
+
+/* If the GICv3 supports GICv2, initialize it */
+static void __init gicv3_init_v2(const struct dt_device_node *node,
+                                 paddr_t dbase)
+{
+    int res;
+    paddr_t cbase, vbase;
+
+    /*
+     * For GICv3 supporting GICv2, GICC and GICV base address will be
+     * provided.
+     */
+    res = dt_device_get_address(node, 1 + gicv3.rdist_count,
+                                &cbase, NULL);
+    if ( res )
+        return;
+
+    res = dt_device_get_address(node, 1 + gicv3.rdist_count + 2,
+                                &vbase, NULL);
+    if ( res )
+        return;
+
+    printk("GICv3 compatible with GICv2 cbase %#"PRIpaddr" vbase %#"PRIpaddr"\n",
+           cbase, vbase);
+
+    vgic_v2_setup_hw(dbase, cbase, vbase);
+}
 
 /* Set up the GIC */
-static int __init gicv3_init(struct dt_device_node *node, const void *data)
+static int __init gicv3_init(void)
 {
     struct rdist_region *rdist_regs;
     int res, i;
     uint32_t reg;
+    const struct dt_device_node *node = gicv3_info.node;
+    paddr_t dbase;
 
     if ( !cpu_has_gicv3 )
     {
@@ -1177,17 +1181,15 @@ static int __init gicv3_init(struct dt_device_node *node, const void *data)
         return -ENODEV;
     }
 
-    dt_device_set_used_by(node, DOMID_XEN);
-
-    res = dt_device_get_address(node, 0, &gicv3.dbase, &gicv3.dbase_size);
-    if ( res || !gicv3.dbase )
+    res = dt_device_get_address(node, 0, &dbase, NULL);
+    if ( res )
         panic("GICv3: Cannot find a valid distributor address");
 
-    if ( (gicv3.dbase & ~PAGE_MASK) || (gicv3.dbase_size & ~PAGE_MASK) )
+    if ( (dbase & ~PAGE_MASK) )
         panic("GICv3:  Found unaligned distributor address %"PRIpaddr"",
-              gicv3.dbase);
+              dbase);
 
-    gicv3.map_dbase = ioremap_nocache(gicv3.dbase, gicv3.dbase_size);
+    gicv3.map_dbase = ioremap_nocache(dbase, SZ_64K);
     if ( !gicv3.map_dbase )
         panic("GICv3: Failed to ioremap for GIC distributor\n");
 
@@ -1212,14 +1214,16 @@ static int __init gicv3_init(struct dt_device_node *node, const void *data)
         uint64_t rdist_base, rdist_size;
 
         res = dt_device_get_address(node, 1 + i, &rdist_base, &rdist_size);
-        if ( res || !rdist_base )
+        if ( res )
             panic("GICv3: No rdist base found for region %d\n", i);
 
         rdist_regs[i].base = rdist_base;
         rdist_regs[i].size = rdist_size;
     }
 
-    /* If stride is not set in dt. Set default to 2 * SZ_64K */
+    /* The vGIC code requires the region to be sorted */
+    sort(rdist_regs, gicv3.rdist_count, sizeof(*rdist_regs), cmp_rdist, NULL);
+
     if ( !dt_property_read_u32(node, "redistributor-stride", &gicv3.rdist_stride) )
         gicv3.rdist_stride = 0;
 
@@ -1229,9 +1233,6 @@ static int __init gicv3_init(struct dt_device_node *node, const void *data)
     if ( res < 0 )
         panic("GICv3: Cannot find the maintenance IRQ");
     gicv3_info.maintenance_irq = res;
-
-    /* Set the GIC as the primary interrupt controller */
-    dt_interrupt_controller = node;
 
     for ( i = 0; i < gicv3.rdist_count; i++ )
     {
@@ -1245,19 +1246,24 @@ static int __init gicv3_init(struct dt_device_node *node, const void *data)
     }
 
     printk("GICv3 initialization:\n"
-           "      gic_dist_addr=%"PRIpaddr"\n"
-           "      gic_dist_size=%"PRIpaddr"\n"
-           "      gic_dist_mapaddr=%p\n"
-           "      gic_rdist_regions=%d\n"
-           "      gic_rdist_stride=%x\n"
-           "      gic_rdist_base=%"PRIpaddr"\n"
-           "      gic_rdist_base_size=%"PRIpaddr"\n"
-           "      gic_rdist_base_mapaddr=%p\n"
-           "      gic_maintenance_irq=%u\n",
-           gicv3.dbase, gicv3.dbase_size, gicv3.map_dbase, gicv3.rdist_count,
-           gicv3.rdist_stride, gicv3.rdist_regions[0].base,
-           gicv3.rdist_regions[0].size, gicv3.rdist_regions[0].map_base,
-           gicv3_info.maintenance_irq);
+           "      gic_dist_addr=%#"PRIpaddr"\n"
+           "      gic_maintenance_irq=%u\n"
+           "      gic_rdist_stride=%#x\n"
+           "      gic_rdist_regions=%d\n",
+           dbase, gicv3_info.maintenance_irq,
+           gicv3.rdist_stride, gicv3.rdist_count);
+    printk("      redistributor regions:\n");
+    for ( i = 0; i < gicv3.rdist_count; i++ )
+    {
+        const struct rdist_region *r = &gicv3.rdist_regions[i];
+
+        printk("        - region %u: %#"PRIpaddr" - %#"PRIpaddr"\n",
+               i, r->base, r->base + r->size);
+    }
+
+    vgic_v3_setup_hw(dbase, gicv3.rdist_count, gicv3.rdist_regions,
+                     gicv3.rdist_stride);
+    gicv3_init_v2(node, dbase);
 
     spin_lock_init(&gicv3.lock);
 
@@ -1267,24 +1273,55 @@ static int __init gicv3_init(struct dt_device_node *node, const void *data)
     res = gicv3_cpu_init();
     gicv3_hyp_init();
 
-    gicv3_info.hw_version = GIC_V3;
-    /* Register hw ops*/
-    register_gic_ops(&gicv3_ops);
-
     spin_unlock(&gicv3.lock);
 
     return res;
 }
 
-static const char * const gicv3_dt_compat[] __initconst =
+static const struct gic_hw_operations gicv3_ops = {
+    .info                = &gicv3_info,
+    .init                = gicv3_init,
+    .save_state          = gicv3_save_state,
+    .restore_state       = gicv3_restore_state,
+    .dump_state          = gicv3_dump_state,
+    .gic_host_irq_type   = &gicv3_host_irq_type,
+    .gic_guest_irq_type  = &gicv3_guest_irq_type,
+    .eoi_irq             = gicv3_eoi_irq,
+    .deactivate_irq      = gicv3_dir_irq,
+    .read_irq            = gicv3_read_irq,
+    .set_irq_properties  = gicv3_set_irq_properties,
+    .send_SGI            = gicv3_send_sgi,
+    .disable_interface   = gicv3_disable_interface,
+    .update_lr           = gicv3_update_lr,
+    .update_hcr_status   = gicv3_hcr_status,
+    .clear_lr            = gicv3_clear_lr,
+    .read_lr             = gicv3_read_lr,
+    .write_lr            = gicv3_write_lr,
+    .read_vmcr_priority  = gicv3_read_vmcr_priority,
+    .read_apr            = gicv3_read_apr,
+    .secondary_init      = gicv3_secondary_cpu_init,
+    .make_hwdom_dt_node  = gicv3_make_hwdom_dt_node,
+};
+
+static int __init gicv3_preinit(struct dt_device_node *node, const void *data)
 {
-    DT_COMPAT_GIC_V3,
-    NULL
+    gicv3_info.hw_version = GIC_V3;
+    gicv3_info.node = node;
+    register_gic_ops(&gicv3_ops);
+    dt_irq_xlate = gic_irq_xlate;
+
+    return 0;
+}
+
+static const struct dt_device_match gicv3_dt_match[] __initconst =
+{
+    DT_MATCH_GIC_V3,
+    { /* sentinel */ },
 };
 
 DT_DEVICE_START(gicv3, "GICv3", DEVICE_GIC)
-        .compatible = gicv3_dt_compat,
-        .init = gicv3_init,
+        .dt_match = gicv3_dt_match,
+        .init = gicv3_preinit,
 DT_DEVICE_END
 
 /*

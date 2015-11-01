@@ -1,39 +1,41 @@
-From 5ba372a685d180fea38790377bbc3847342a32d4 Mon Sep 17 00:00:00 2001
+From 7912cb831bac7eb34095049a470b5a2dab85cfe4 Mon Sep 17 00:00:00 2001
 From: Bastian Blank <waldi@debian.org>
 Date: Sat, 5 Jul 2014 11:47:14 +0200
 Subject: tools-xentrace-prefix.diff
 
 Patch-Name: tools-xentrace-prefix.diff
 ---
- tools/xentrace/Makefile | 9 ++++-----
- 1 file changed, 4 insertions(+), 5 deletions(-)
+ tools/xentrace/Makefile | 13 ++++---------
+ 1 file changed, 4 insertions(+), 9 deletions(-)
 
 diff --git a/tools/xentrace/Makefile b/tools/xentrace/Makefile
-index b821952..ffe2f0d 100644
+index 6c13cd1..a436718 100644
 --- a/tools/xentrace/Makefile
 +++ b/tools/xentrace/Makefile
 @@ -5,6 +5,7 @@ CFLAGS += -Werror
  
  CFLAGS += $(CFLAGS_libxenctrl)
- LDLIBS += $(LDLIBS_libxenctrl)
+ LDLIBS += $(LDLIBS_libxenctrl) $(ARGP_LDFLAGS)
 +LDFLAGS += $(call LDFLAGS_RPATH,../lib)
  
- BIN      = xentrace xentrace_setsize
- LIBBIN   = xenctx
-@@ -20,13 +21,11 @@ build: $(BIN) $(LIBBIN)
+ BIN-$(CONFIG_X86) = xenalyze
+ BIN      = $(BIN-y)
+@@ -20,15 +21,9 @@ build: $(BIN) $(SBIN) $(LIBBIN)
  
  .PHONY: install
  install: build
--	$(INSTALL_DIR) $(DESTDIR)$(BINDIR)
+-	$(INSTALL_DIR) $(DESTDIR)$(bindir)
+-	$(INSTALL_DIR) $(DESTDIR)$(sbindir)
 -	[ -z "$(LIBBIN)" ] || $(INSTALL_DIR) $(DESTDIR)$(LIBEXEC_BIN)
-+	$(INSTALL_DIR) $(DESTDIR)$(LIBEXEC_BIN)
- 	$(INSTALL_DIR) $(DESTDIR)$(MAN1DIR)
- 	$(INSTALL_DIR) $(DESTDIR)$(MAN8DIR)
--	$(INSTALL_PROG) $(BIN) $(DESTDIR)$(BINDIR)
--	$(INSTALL_PYTHON_PROG) $(SCRIPTS) $(DESTDIR)$(BINDIR)
+-ifneq ($(BIN),)
+-	$(INSTALL_PROG) $(BIN) $(DESTDIR)$(bindir)
+-endif
+-	$(INSTALL_PROG) $(SBIN) $(DESTDIR)$(sbindir)
+-	$(INSTALL_PYTHON_PROG) $(SCRIPTS) $(DESTDIR)$(bindir)
 -	[ -z "$(LIBBIN)" ] || $(INSTALL_PROG) $(LIBBIN) $(DESTDIR)$(LIBEXEC_BIN)
-+	$(INSTALL_PROG) $(BIN) $(LIBBIN) $(DESTDIR)$(LIBEXEC_BIN)
++	$(INSTALL_DIR) $(DESTDIR)$(LIBEXEC_BIN)
++	$(INSTALL_PROG) $(BIN) $(SBIN) $(LIBBIN) $(DESTDIR)$(LIBEXEC_BIN)
 +	$(INSTALL_PYTHON_PROG) $(SCRIPTS) $(DESTDIR)$(LIBEXEC_BIN)
- 	$(INSTALL_DATA) $(MAN1) $(DESTDIR)$(MAN1DIR)
- 	$(INSTALL_DATA) $(MAN8) $(DESTDIR)$(MAN8DIR)
  
+ .PHONY: clean
+ clean:

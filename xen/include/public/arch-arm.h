@@ -87,15 +87,10 @@
  * unavailable/unsupported.
  *
  *  HYPERVISOR_memory_op
- *   All generic sub-operations.
- *
- *   In addition the following arch specific sub-ops:
- *    * XENMEM_add_to_physmap
- *    * XENMEM_add_to_physmap_batch
+ *   All generic sub-operations
  *
  *  HYPERVISOR_domctl
  *   All generic sub-operations, with the exception of:
- *    * XEN_DOMCTL_iomem_permission (not yet implemented)
  *    * XEN_DOMCTL_irq_permission (not yet implemented)
  *
  *  HYPERVISOR_sched_op
@@ -170,6 +165,7 @@
 
 #define XEN_HYPERCALL_TAG   0XEA1
 
+#define  int64_aligned_t  int64_t __attribute__((aligned(8)))
 #define uint64_aligned_t uint64_t __attribute__((aligned(8)))
 
 #ifndef __ASSEMBLY__
@@ -183,8 +179,8 @@
  * XEN_GUEST_HANDLE represents a guest pointer, when passed as a field
  * in a struct in memory. On ARM is always 8 bytes sizes and 8 bytes
  * aligned.
- * XEN_GUEST_HANDLE_PARAM represent a guest pointer, when passed as an
- * hypercall argument. It is 4 bytes on aarch and 8 bytes on aarch64.
+ * XEN_GUEST_HANDLE_PARAM represents a guest pointer, when passed as an
+ * hypercall argument. It is 4 bytes on aarch32 and 8 bytes on aarch64.
  */
 #define __DEFINE_XEN_GUEST_HANDLE(name, type) \
     ___DEFINE_XEN_GUEST_HANDLE(name, type);   \
@@ -192,7 +188,6 @@
 #define DEFINE_XEN_GUEST_HANDLE(name)   __DEFINE_XEN_GUEST_HANDLE(name, name)
 #define __XEN_GUEST_HANDLE(name)        __guest_handle_64_ ## name
 #define XEN_GUEST_HANDLE(name)          __XEN_GUEST_HANDLE(name)
-/* this is going to be changed on 64 bit */
 #define XEN_GUEST_HANDLE_PARAM(name)    __guest_handle_ ## name
 #define set_xen_guest_handle_raw(hnd, val)                  \
     do {                                                    \
@@ -303,7 +298,35 @@ struct vcpu_guest_context {
 };
 typedef struct vcpu_guest_context vcpu_guest_context_t;
 DEFINE_XEN_GUEST_HANDLE(vcpu_guest_context_t);
-#endif
+
+/*
+ * struct xen_arch_domainconfig's ABI is covered by
+ * XEN_DOMCTL_INTERFACE_VERSION.
+ */
+#define XEN_DOMCTL_CONFIG_GIC_NATIVE    0
+#define XEN_DOMCTL_CONFIG_GIC_V2        1
+#define XEN_DOMCTL_CONFIG_GIC_V3        2
+struct xen_arch_domainconfig {
+    /* IN/OUT */
+    uint8_t gic_version;
+    /* IN */
+    uint32_t nr_spis;
+    /*
+     * OUT
+     * Based on the property clock-frequency in the DT timer node.
+     * The property may be present when the bootloader/firmware doesn't
+     * set correctly CNTFRQ which hold the timer frequency.
+     *
+     * As it's not possible to trap this register, we have to replicate
+     * the value in the guest DT.
+     *
+     * = 0 => property not present
+     * > 0 => Value of the property
+     *
+     */
+    uint32_t clock_frequency;
+};
+#endif /* __XEN__ || __XEN_TOOLS__ */
 
 struct arch_vcpu_info {
 };
@@ -318,7 +341,7 @@ typedef uint64_t xen_callback_t;
 
 #if defined(__XEN__) || defined(__XEN_TOOLS__)
 
-/* PSR bits (CPSR, SPSR)*/
+/* PSR bits (CPSR, SPSR) */
 
 #define PSR_THUMB       (1<<5)        /* Thumb Mode enable */
 #define PSR_FIQ_MASK    (1<<6)        /* Fast Interrupt mask */
@@ -365,7 +388,8 @@ typedef uint64_t xen_callback_t;
 
 /* Physical Address Space */
 
-/* vGIC mappings: Only one set of mapping is used by the guest.
+/*
+ * vGIC mappings: Only one set of mapping is used by the guest.
  * Therefore they can overlap.
  */
 
@@ -382,10 +406,11 @@ typedef uint64_t xen_callback_t;
 #define GUEST_GICV3_RDIST_STRIDE   0x20000ULL
 #define GUEST_GICV3_RDIST_REGIONS  1
 
-#define GUEST_GICV3_GICR0_BASE     0x03020000ULL    /* vCPU0 - vCPU7 */
-#define GUEST_GICV3_GICR0_SIZE     0x00100000ULL
+#define GUEST_GICV3_GICR0_BASE     0x03020000ULL    /* vCPU0 - vCPU127 */
+#define GUEST_GICV3_GICR0_SIZE     0x01000000ULL
 
-/* 16MB == 4096 pages reserved for guest to use as a region to map its
+/*
+ * 16MB == 4096 pages reserved for guest to use as a region to map its
  * grant table in.
  */
 #define GUEST_GNTTAB_BASE 0x38000000ULL
@@ -421,6 +446,11 @@ typedef uint64_t xen_callback_t;
 #define PSCI_cpu_on      2
 #define PSCI_migrate     3
 
+#endif
+
+#ifndef __ASSEMBLY__
+/* Stub definition of PMU structure */
+typedef struct xen_pmu_arch { uint8_t dummy; } xen_pmu_arch_t;
 #endif
 
 #endif /*  __XEN_PUBLIC_ARCH_ARM_H__ */

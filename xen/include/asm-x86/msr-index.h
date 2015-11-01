@@ -130,6 +130,7 @@
 #define MSR_IA32_VMX_TRUE_PROCBASED_CTLS        0x48e
 #define MSR_IA32_VMX_TRUE_EXIT_CTLS             0x48f
 #define MSR_IA32_VMX_TRUE_ENTRY_CTLS            0x490
+#define MSR_IA32_VMX_VMFUNC                     0x491
 #define IA32_FEATURE_CONTROL_MSR                0x3a
 #define IA32_FEATURE_CONTROL_MSR_LOCK                     0x0001
 #define IA32_FEATURE_CONTROL_MSR_ENABLE_VMXON_INSIDE_SMX  0x0002
@@ -327,6 +328,7 @@
 #define MSR_IA32_CMT_EVTSEL		0x00000c8d
 #define MSR_IA32_CMT_CTR		0x00000c8e
 #define MSR_IA32_PSR_ASSOC		0x00000c8f
+#define MSR_IA32_PSR_L3_MASK(n)	(0x00000c90 + (n))
 
 /* Intel Model 6 */
 #define MSR_P6_PERFCTR(n)		(0x000000c1 + (n))

@@ -37,16 +37,6 @@ struct platform_desc {
      * List of devices which must not pass-through to a guest
      */
     const struct dt_device_match *blacklist_dev;
-    /*
-     * The IRQ (PPI) to use to inject event channels to dom0.
-     */
-    unsigned int dom0_evtchn_ppi;
-    /*
-     * The location of a region of physical address space which dom0
-     * can use for grant table mappings. If size is zero defaults to
-     * 0xb0000000-0xb0020000.
-     */
-    paddr_t dom0_gnttab_start, dom0_gnttab_size;
 };
 
 /*
@@ -54,11 +44,6 @@ struct platform_desc {
  * 64K stride.
  */
 #define PLATFORM_QUIRK_GIC_64K_STRIDE (1 << 0)
-
-/*
- * Quirk for platforms where GICH_LR_HW does not work as expected.
- */
-#define PLATFORM_QUIRK_GUEST_PIRQ_NEED_EOI       (1 << 1)
 
 void __init platform_init(void);
 int __init platform_init_time(void);
@@ -72,11 +57,10 @@ void platform_poweroff(void);
 bool_t platform_has_quirk(uint32_t quirk);
 bool_t platform_device_is_blacklisted(const struct dt_device_node *node);
 unsigned int platform_dom0_evtchn_ppi(void);
-void platform_dom0_gnttab(paddr_t *start, paddr_t *size);
 
 #define PLATFORM_START(_name, _namestr)                         \
 static const struct platform_desc  __plat_desc_##_name __used   \
-__attribute__((__section__(".arch.info"))) = {                  \
+__section(".arch.info") = {                                     \
     .name = _namestr,
 
 #define PLATFORM_END                                            \

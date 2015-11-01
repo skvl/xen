@@ -5,10 +5,8 @@
  */
 
 #ifndef __ASM_I386_CPUFEATURE_H
+#ifndef X86_FEATURES_ONLY
 #define __ASM_I386_CPUFEATURE_H
-
-#ifndef __ASSEMBLY__
-#include <xen/bitops.h>
 #endif
 
 #define NCAPINTS	8	/* N 32-bit words worth of info */
@@ -151,11 +149,14 @@
 #define X86_FEATURE_CMT 	(7*32+12) /* Cache Monitoring Technology */
 #define X86_FEATURE_NO_FPU_SEL 	(7*32+13) /* FPU CS/DS stored as zero */
 #define X86_FEATURE_MPX		(7*32+14) /* Memory Protection Extensions */
+#define X86_FEATURE_CAT 	(7*32+15) /* Cache Allocation Technology */
 #define X86_FEATURE_RDSEED	(7*32+18) /* RDSEED instruction */
 #define X86_FEATURE_ADX		(7*32+19) /* ADCX, ADOX instructions */
 #define X86_FEATURE_SMAP	(7*32+20) /* Supervisor Mode Access Prevention */
 
-#ifndef __ASSEMBLY__
+#if !defined(__ASSEMBLY__) && !defined(X86_FEATURES_ONLY)
+#include <xen/bitops.h>
+
 #define cpu_has(c, bit)		test_bit(bit, (c)->x86_capability)
 #define boot_cpu_has(bit)	test_bit(bit, boot_cpu_data.x86_capability)
 #define cpufeat_mask(idx)       (1u << ((idx) & 31))
@@ -216,6 +217,8 @@
 
 #define cpu_has_cpuid_faulting	boot_cpu_has(X86_FEATURE_CPUID_FAULTING)
 
+#define cpu_has_cx16            boot_cpu_has(X86_FEATURE_CX16)
+
 enum _cache_type {
     CACHE_TYPE_NULL = 0,
     CACHE_TYPE_DATA = 1,
@@ -261,6 +264,8 @@ struct cpuid4_info {
 
 int cpuid4_cache_lookup(int index, struct cpuid4_info *this_leaf);
 #endif
+
+#undef X86_FEATURES_ONLY
 
 #endif /* __ASM_I386_CPUFEATURE_H */
 

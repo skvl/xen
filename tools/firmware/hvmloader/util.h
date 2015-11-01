@@ -4,8 +4,10 @@
 #include <stdarg.h>
 #include <stdint.h>
 #include <stddef.h>
+#include <stdbool.h>
 #include <xen/xen.h>
 #include <xen/hvm/hvm_info_table.h>
+#include "e820.h"
 
 #define __STR(...) #__VA_ARGS__
 #define STR(...) __STR(__VA_ARGS__)
@@ -82,9 +84,9 @@ uint32_t pci_read(uint32_t devfn, uint32_t reg, uint32_t len);
 #define pci_readw(devfn, reg) ((uint16_t)pci_read(devfn, reg, 2))
 #define pci_readl(devfn, reg) ((uint32_t)pci_read(devfn, reg, 4))
 void pci_write(uint32_t devfn, uint32_t reg, uint32_t len, uint32_t val);
-#define pci_writeb(devfn, reg, val) (pci_write(devfn, reg, 1, (uint8_t) val))
-#define pci_writew(devfn, reg, val) (pci_write(devfn, reg, 2, (uint16_t)val))
-#define pci_writel(devfn, reg, val) (pci_write(devfn, reg, 4, (uint32_t)val))
+#define pci_writeb(devfn, reg, val) pci_write(devfn, reg, 1, (uint8_t) (val))
+#define pci_writew(devfn, reg, val) pci_write(devfn, reg, 2, (uint16_t)(val))
+#define pci_writel(devfn, reg, val) pci_write(devfn, reg, 4, (uint32_t)(val))
 
 /* Get a pointer to the shared-info page */
 struct shared_info *get_shared_info(void) __attribute__ ((const));
@@ -222,6 +224,12 @@ int hvm_param_set(uint32_t index, uint64_t value);
 /* Setup PCI bus */
 void pci_setup(void);
 
+/* Setup memory map  */
+void memory_map_setup(void);
+
+/* Sync memory map */
+void adjust_memory_map(void);
+
 /* Prepare the 32bit BIOS */
 uint32_t rombios_highbios_setup(void);
 
@@ -248,6 +256,13 @@ void perform_tests(void);
 #endif
 
 extern char _start[], _end[];
+
+int get_mem_mapping_layout(struct e820entry entries[],
+                           unsigned int *max_entries);
+
+extern struct e820map memory_map;
+bool check_overlap(uint64_t start, uint64_t size,
+                   uint64_t reserved_start, uint64_t reserved_size);
 
 #endif /* __HVMLOADER_UTIL_H__ */
 

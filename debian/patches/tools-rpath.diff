@@ -1,4 +1,4 @@
-From 46795c9616501539a896420e201eed3b9cc5da45 Mon Sep 17 00:00:00 2001
+From cdfa126024ef926d0e22d1ed5966917b863c972d Mon Sep 17 00:00:00 2001
 From: Bastian Blank <waldi@debian.org>
 Date: Sat, 5 Jul 2014 11:46:51 +0200
 Subject: tools-rpath.diff
@@ -9,7 +9,7 @@ Patch-Name: tools-rpath.diff
  1 file changed, 2 insertions(+)
 
 diff --git a/tools/Rules.mk b/tools/Rules.mk
-index 87a56dc..6b3a62a 100644
+index 2c422bd..8ea20a3 100644
 --- a/tools/Rules.mk
 +++ b/tools/Rules.mk
 @@ -9,6 +9,8 @@ include $(XEN_ROOT)/Config.mk

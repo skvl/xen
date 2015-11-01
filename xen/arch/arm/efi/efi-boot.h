@@ -6,8 +6,10 @@
 #include <xen/device_tree.h>
 #include <xen/libfdt/libfdt.h>
 #include <asm/setup.h>
+#include <asm/smp.h>
 
 void noreturn efi_xen_start(void *fdt_ptr, uint32_t fdt_size);
+void __flush_dcache_area(const void *vaddr, unsigned long size);
 
 #define DEVICE_TREE_GUID \
 {0xb1b621d5, 0xf19c, 0x41a5, {0x83, 0x0b, 0xd9, 0x15, 0x2c, 0x69, 0xaa, 0xe0}}
@@ -104,7 +106,7 @@ static int __init fdt_set_reg(void *fdt, int node, int addr_cells,
 
 static void __init *lookup_fdt_config_table(EFI_SYSTEM_TABLE *sys_table)
 {
-    const EFI_GUID fdt_guid = DEVICE_TREE_GUID;
+    static const EFI_GUID __initconst fdt_guid = DEVICE_TREE_GUID;
     EFI_CONFIGURATION_TABLE *tables;
     void *fdt = NULL;
     int i;
@@ -131,19 +133,20 @@ static EFI_STATUS __init efi_process_memory_map_bootinfo(EFI_MEMORY_DESCRIPTOR *
 
     for ( Index = 0; Index < (mmap_size / desc_size); Index++ )
     {
-        if ( desc_ptr->Type == EfiConventionalMemory
-             || desc_ptr->Type == EfiBootServicesCode
-             || desc_ptr->Type == EfiBootServicesData )
+        if ( desc_ptr->Type == EfiConventionalMemory ||
+             (!map_bs &&
+              (desc_ptr->Type == EfiBootServicesCode ||
+               desc_ptr->Type == EfiBootServicesData)) )
         {
-            bootinfo.mem.bank[i].start = desc_ptr->PhysicalStart;
-            bootinfo.mem.bank[i].size = desc_ptr->NumberOfPages * EFI_PAGE_SIZE;
-            if ( ++i >= NR_MEM_BANKS )
+            if ( i >= NR_MEM_BANKS )
             {
-                PrintStr(L"Warning: All ");
-                DisplayUint(NR_MEM_BANKS, -1);
-                PrintStr(L" bootinfo mem banks exhausted.\r\n");
+                PrintStr(L"Warning: All " __stringify(NR_MEM_BANKS)
+                          " bootinfo mem banks exhausted.\r\n");
                 break;
             }
+            bootinfo.mem.bank[i].start = desc_ptr->PhysicalStart;
+            bootinfo.mem.bank[i].size = desc_ptr->NumberOfPages * EFI_PAGE_SIZE;
+            ++i;
         }
         desc_ptr = NextMemoryDescriptor(desc_ptr, desc_size);
     }
@@ -334,7 +337,7 @@ static void __init efi_arch_process_memory_map(EFI_SYSTEM_TABLE *SystemTable,
     status = fdt_add_uefi_nodes(SystemTable, fdt, map, map_size, desc_size,
                                 desc_ver);
     if ( EFI_ERROR(status) )
-        PrintErrMesg(L"Updating FDT failed\r\n", status);
+        PrintErrMesg(L"Updating FDT failed", status);
 }
 
 static void __init efi_arch_pre_exit_boot(void)
@@ -370,16 +373,14 @@ static void __init efi_arch_cfg_file_late(EFI_FILE_HANDLE dir_handle, char *sect
 {
 }
 
-static void *__init efi_arch_allocate_mmap_buffer(UINTN *map_size)
+static void *__init efi_arch_allocate_mmap_buffer(UINTN map_size)
 {
     void *ptr;
     EFI_STATUS status;
-    UINTN map_size_alloc = *map_size + EFI_PAGE_SIZE;
 
-    status = efi_bs->AllocatePool(EfiLoaderData, map_size_alloc, &ptr);
+    status = efi_bs->AllocatePool(EfiLoaderData, map_size, &ptr);
     if ( status != EFI_SUCCESS )
         return NULL;
-    *map_size = map_size_alloc;
     return ptr;
 }
 
@@ -408,7 +409,7 @@ static void __init efi_arch_handle_cmdline(CHAR16 *image_name,
 
     status = efi_bs->AllocatePool(EfiBootServicesData, EFI_PAGE_SIZE, (void **)&buf);
     if ( EFI_ERROR(status) )
-        PrintErrMesg(L"Unable to allocate string buffer\r\n", status);
+        PrintErrMesg(L"Unable to allocate string buffer", status);
 
     if ( image_name )
     {
@@ -524,6 +525,11 @@ static void __init efi_arch_blexit(void)
         efi_bs->FreePool(memmap);
 }
 
+static void __init efi_arch_halt(void)
+{
+    stop_cpu();
+}
+
 static void __init efi_arch_load_addr_check(EFI_LOADED_IMAGE *loaded_image)
 {
     if ( (unsigned long)loaded_image->ImageBase & ((1 << 12) - 1) )
@@ -566,6 +572,12 @@ static void __init efi_arch_video_init(EFI_GRAPHICS_OUTPUT_PROTOCOL *gop,
                                        EFI_GRAPHICS_OUTPUT_MODE_INFORMATION *mode_info)
 {
 }
+
+static void efi_arch_flush_dcache_area(const void *vaddr, UINTN size)
+{
+    __flush_dcache_area(vaddr, size);
+}
+
 /*
  * Local variables:
  * mode: C

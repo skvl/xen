@@ -13,8 +13,7 @@
  * more details.
  *
  * You should have received a copy of the GNU General Public License along with
- * this program; if not, write to the Free Software Foundation, Inc., 59 Temple
- * Place - Suite 330, Boston, MA 02111-1307 USA.
+ * this program; If not, see <http://www.gnu.org/licenses/>.
  */
 
 #ifndef __ASM_X86_HVM_VCPU_H__
@@ -30,13 +29,11 @@
 #include <asm/hvm/svm/nestedsvm.h>
 #include <asm/mtrr.h>
 
-enum hvm_io_state {
-    HVMIO_none = 0,
-    HVMIO_dispatched,
-    HVMIO_awaiting_completion,
-    HVMIO_handle_mmio_awaiting_completion,
-    HVMIO_handle_pio_awaiting_completion,
-    HVMIO_completed
+enum hvm_io_completion {
+    HVMIO_no_completion,
+    HVMIO_mmio_completion,
+    HVMIO_pio_completion,
+    HVMIO_realmode_completion
 };
 
 struct hvm_vcpu_asid {
@@ -44,11 +41,22 @@ struct hvm_vcpu_asid {
     uint32_t asid;
 };
 
+/*
+ * We may read or write up to m256 as a number of device-model
+ * transactions.
+ */
+struct hvm_mmio_cache {
+    unsigned long gla;
+    unsigned int size;
+    uint8_t dir;
+    uint8_t pad[3]; /* make buffer[] long-aligned */
+    uint8_t buffer[32];
+};
+
 struct hvm_vcpu_io {
     /* I/O request in flight to device model. */
-    enum hvm_io_state   io_state;
-    unsigned long       io_data;
-    int                 io_size;
+    enum hvm_io_completion io_completion;
+    ioreq_t                io_req;
 
     /*
      * HVM emulation:
@@ -60,13 +68,13 @@ struct hvm_vcpu_io {
     unsigned long       mmio_gva;
     unsigned long       mmio_gpfn;
 
-    /* We may read up to m256 as a number of device-model transactions. */
-    paddr_t mmio_large_read_pa;
-    uint8_t mmio_large_read[32];
-    unsigned int mmio_large_read_bytes;
-    /* We may write up to m256 as a number of device-model transactions. */
-    unsigned int mmio_large_write_bytes;
-    paddr_t mmio_large_write_pa;
+    /*
+     * We may need to handle up to 3 distinct memory accesses per
+     * instruction.
+     */
+    struct hvm_mmio_cache mmio_cache[3];
+    unsigned int mmio_cache_count;
+
     /* For retries we shouldn't re-fetch the instruction. */
     unsigned int mmio_insn_bytes;
     unsigned char mmio_insn[16];
@@ -74,10 +82,18 @@ struct hvm_vcpu_io {
      * For string instruction emulation we need to be able to signal a
      * necessary retry through other than function return codes.
      */
-    bool_t mmio_retry, mmio_retrying;
+    bool_t mmio_retry;
 
     unsigned long msix_unmask_address;
+
+    const struct g2m_ioport *g2m_ioport;
 };
+
+static inline bool_t hvm_vcpu_io_need_completion(const struct hvm_vcpu_io *vio)
+{
+    return (vio->io_req.state == STATE_IOREQ_READY) &&
+           !vio->io_req.data_is_ptr;
+}
 
 #define VMCX_EADDR    (~0ULL)
 
@@ -118,6 +134,13 @@ struct nestedvcpu {
 
 #define vcpu_nestedhvm(v) ((v)->arch.hvm_vcpu.nvcpu)
 
+struct altp2mvcpu {
+    uint16_t    p2midx;         /* alternate p2m index */
+    gfn_t       veinfo_gfn;     /* #VE information page gfn */
+};
+
+#define vcpu_altp2m(v) ((v)->arch.hvm_vcpu.avcpu)
+
 struct hvm_vcpu {
     /* Guest control-register and EFER values, just as the guest sees them. */
     unsigned long       guest_cr[5];
@@ -151,9 +174,6 @@ struct hvm_vcpu {
     u32                 msr_tsc_aux;
     u64                 msr_tsc_adjust;
 
-    /* VPMU */
-    struct vpmu_struct  vpmu;
-
     union {
         struct arch_vmx_struct vmx;
         struct arch_svm_struct svm;
@@ -163,11 +183,15 @@ struct hvm_vcpu {
 
     struct nestedvcpu   nvcpu;
 
+    struct altp2mvcpu   avcpu;
+
     struct mtrr_state   mtrr;
     u64                 pat_cr;
 
     /* In mode delay_for_missed_ticks, VCPUs have differing guest times. */
     int64_t             stime_offset;
+
+    u8                  evtchn_upcall_vector;
 
     /* Which cache mode is this VCPU in (CR0:CD/NW)? */
     u8                  cache_mode;

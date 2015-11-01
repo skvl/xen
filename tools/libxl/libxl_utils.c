@@ -604,7 +604,12 @@ void libxl_bitmap_init(libxl_bitmap *map)
 
 void libxl_bitmap_dispose(libxl_bitmap *map)
 {
+    if (!map)
+        return;
+
     free(map->map);
+    map->map = NULL;
+    map->size = 0;
 }
 
 void libxl_bitmap_copy(libxl_ctx *ctx, libxl_bitmap *dptr,
@@ -686,6 +691,76 @@ void libxl_bitmap_reset(libxl_bitmap *bitmap, int bit)
     bitmap->map[bit / 8] &= ~(1 << (bit & 7));
 }
 
+int libxl_bitmap_or(libxl_ctx *ctx, libxl_bitmap *or_map,
+                    const libxl_bitmap *map1, const libxl_bitmap *map2)
+{
+    GC_INIT(ctx);
+    int rc;
+    uint32_t i;
+    const libxl_bitmap *large_map;
+    const libxl_bitmap *small_map;
+
+    if (map1->size > map2->size) {
+        large_map = map1;
+        small_map = map2;
+    } else {
+        large_map = map2;
+        small_map = map1;
+    }
+
+    rc = libxl_bitmap_alloc(ctx, or_map, large_map->size * 8);
+    if (rc)
+        goto out;
+
+    /*
+     *  If bitmaps aren't the same size, their union (logical or) will
+     *  be size of larger bit map.  Any bit past the end of the
+     *  smaller bit map, will match the larger one.
+     */
+    for (i = 0; i < small_map->size; i++)
+        or_map->map[i] = (small_map->map[i] | large_map->map[i]);
+
+    for (i = small_map->size; i < large_map->size; i++)
+        or_map->map[i] = large_map->map[i];
+
+out:
+    GC_FREE;
+    return rc;
+}
+
+int libxl_bitmap_and(libxl_ctx *ctx, libxl_bitmap *and_map,
+                     const libxl_bitmap *map1, const libxl_bitmap *map2)
+{
+    GC_INIT(ctx);
+    int rc;
+    uint32_t i;
+    const libxl_bitmap *large_map;
+    const libxl_bitmap *small_map;
+
+    if (map1->size > map2->size) {
+        large_map = map1;
+        small_map = map2;
+    } else {
+        large_map = map2;
+        small_map = map1;
+    }
+
+    rc = libxl_bitmap_alloc(ctx, and_map, small_map->size * 8);
+    if (rc)
+        goto out;
+
+    /*
+     *  If bitmaps aren't same size, their 'and' will be size of
+     *  smaller bit map
+     */
+    for (i = 0; i < and_map->size; i++)
+        and_map->map[i] = (large_map->map[i] & small_map->map[i]);
+
+out:
+    GC_FREE;
+    return rc;
+}
+
 int libxl_bitmap_count_set(const libxl_bitmap *bitmap)
 {
     int i, nr_set_bits = 0;
@@ -762,6 +837,74 @@ int libxl_node_bitmap_alloc(libxl_ctx *ctx, libxl_bitmap *nodemap,
 
  out:
     GC_FREE;
+    return rc;
+}
+
+int libxl__count_physical_sockets(libxl__gc *gc, int *sockets)
+{
+    int rc;
+    libxl_physinfo info;
+
+    libxl_physinfo_init(&info);
+
+    rc = libxl_get_physinfo(CTX, &info);
+    if (rc)
+        return rc;
+
+    *sockets = info.nr_cpus / info.threads_per_core
+                            / info.cores_per_socket;
+
+    libxl_physinfo_dispose(&info);
+    return 0;
+}
+
+int libxl_socket_bitmap_alloc(libxl_ctx *ctx, libxl_bitmap *socketmap,
+                              int max_sockets)
+{
+    GC_INIT(ctx);
+    int rc = 0;
+
+    if (max_sockets < 0) {
+        rc = ERROR_INVAL;
+        LOG(ERROR, "invalid number of sockets provided");
+        goto out;
+    }
+
+    if (max_sockets == 0) {
+        rc = libxl__count_physical_sockets(gc, &max_sockets);
+        if (rc) {
+            LOGE(ERROR, "failed to get system socket count");
+            goto out;
+        }
+    }
+    /* This can't fail: no need to check and log */
+    libxl_bitmap_alloc(ctx, socketmap, max_sockets);
+
+ out:
+    GC_FREE;
+    return rc;
+
+}
+
+int libxl_get_online_socketmap(libxl_ctx *ctx, libxl_bitmap *socketmap)
+{
+    libxl_cputopology *tinfo = NULL;
+    int nr_cpus = 0, i, rc = 0;
+
+    tinfo = libxl_get_cpu_topology(ctx, &nr_cpus);
+    if (tinfo == NULL) {
+        rc = ERROR_FAIL;
+        goto out;
+    }
+
+    libxl_bitmap_set_none(socketmap);
+    for (i = 0; i < nr_cpus; i++)
+        if (tinfo[i].socket != XEN_INVALID_SOCKET_ID
+            && !libxl_bitmap_test(socketmap, tinfo[i].socket))
+            libxl_bitmap_set(socketmap, tinfo[i].socket);
+
+ out:
+    libxl_cputopology_list_free(tinfo, nr_cpus);
     return rc;
 }
 
@@ -874,6 +1017,14 @@ void libxl_cputopology_list_free(libxl_cputopology *list, int nr)
     int i;
     for (i = 0; i < nr; i++)
         libxl_cputopology_dispose(&list[i]);
+    free(list);
+}
+
+void libxl_pcitopology_list_free(libxl_pcitopology *list, int nr)
+{
+    int i;
+    for (i = 0; i < nr; i++)
+        libxl_pcitopology_dispose(&list[i]);
     free(list);
 }
 

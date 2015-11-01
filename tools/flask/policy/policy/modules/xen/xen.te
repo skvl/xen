@@ -67,6 +67,10 @@ allow dom0_t xen_t:xen {
 allow dom0_t xen_t:xen2 {
     resource_op
     psr_cmt_op
+    psr_cat_op
+};
+allow dom0_t xen_t:xen2 {
+    pmu_ctrl
 };
 allow dom0_t xen_t:mmu memorymap;
 
@@ -80,7 +84,8 @@ allow dom0_t dom0_t:domain {
 	getpodtarget setpodtarget set_misc_info set_virq_handler
 };
 allow dom0_t dom0_t:domain2 {
-	set_cpuid gettsc settsc setscheduler set_max_evtchn set_vnumainfo get_vnumainfo psr_cmt_op
+	set_cpuid gettsc settsc setscheduler set_max_evtchn set_vnumainfo
+	get_vnumainfo psr_cmt_op psr_cat_op
 };
 allow dom0_t dom0_t:resource { add remove };
 
@@ -117,6 +122,20 @@ domain_comms(dom0_t, dom0_t)
 # Allow all domains to use (unprivileged parts of) the tmem hypercall
 allow domain_type xen_t:xen tmem_op;
 
+# Allow guest console output to the serial console.  This is used by PV Linux
+# and stub domains for early boot output, so don't audit even when we deny it.
+# Without XSM, this is enabled only if the Xen was compiled in debug mode.
+gen_bool(guest_writeconsole, true)
+if (guest_writeconsole) {
+	allow domain_type xen_t : xen writeconsole;
+} else {
+	dontaudit domain_type xen_t : xen writeconsole;
+}
+
+# Allow all domains to use PMU (but not to change its settings --- that's what
+# pmu_ctrl is for)
+allow domain_type xen_t:xen2 pmu_use;
+
 ###############################################################################
 #
 # Domain creation
@@ -151,18 +170,13 @@ domain_comms(domU_t, prot_domU_t)
 domain_comms(prot_domU_t, prot_domU_t)
 domain_self_comms(prot_domU_t)
 
-# domHVM_t is meant to be paired with a qemu-dm stub domain of type dm_dom_t
-declare_domain(domHVM_t)
-create_domain(dom0_t, domHVM_t)
-manage_domain(dom0_t, domHVM_t)
-domain_comms(dom0_t, domHVM_t)
-domain_self_comms(domHVM_t)
-
+# Device model for domU_t.  You can define distinct types for device models for
+# domains of other types, or add more make_device_model lines for this type.
 declare_domain(dm_dom_t)
 create_domain(dom0_t, dm_dom_t)
 manage_domain(dom0_t, dm_dom_t)
 domain_comms(dom0_t, dm_dom_t)
-make_device_model(dom0_t, dm_dom_t, domHVM_t)
+make_device_model(dom0_t, dm_dom_t, domU_t)
 
 # nomigrate_t must be built via the nomigrate_t_building label; once built,
 # dom0 cannot read its memory.
@@ -177,6 +191,10 @@ domain_self_comms(nomigrate_t)
 #
 # Device delegation
 #
+# This requires that the device be labeled with a type defined here.  You can
+# use flask-label-pci to dynamically label devices on each boot or define the
+# labels statically in tools/flask/policy/policy/device_contexts
+#
 ###############################################################################
 
 type nic_dev_t, resource_type;
@@ -185,40 +203,6 @@ admin_device(dom0_t, nic_dev_t)
 use_device(domU_t, nic_dev_t)
 
 delegate_devices(dom0_t, domU_t)
-
-###############################################################################
-#
-# Label devices for delegation
-#
-# The PCI, IRQ, memory, and I/O port ranges are hardware-specific.
-# You may also use flask-label-pci to dynamically label devices on each boot.
-#
-###############################################################################
-
-# label e1000e nic
-#pirqcon 33 system_u:object_r:nic_dev_t
-#pirqcon 55 system_u:object_r:nic_dev_t
-#iomemcon 0xfebe0-0xfebff system_u:object_r:nic_dev_t
-#iomemcon 0xfebd9 system_u:object_r:nic_dev_t
-#ioportcon 0xecc0-0xecdf system_u:object_r:nic_dev_t
-#pcidevicecon 0xc800 system_u:object_r:nic_dev_t
-
-# label e100 nic
-#pirqcon 16 system_u:object_r:nic_dev_t
-#iomemcon 0xfe5df system_u:object_r:nic_dev_t
-#iomemcon 0xfe5e0-0xfe5ff system_u:object_r:nic_dev_t
-#iomemcon 0xc2000-0xc200f system_u:object_r:nic_dev_t
-#ioportcon 0xccc0-0xcd00 system_u:object_r:nic_dev_t
-
-# label usb 1d.0-2 1d.7
-#pirqcon 23 system_u:object_r:nic_dev_t
-#pirqcon 17 system_u:object_r:nic_dev_t
-#pirqcon 18 system_u:object_r:nic_dev_t
-#ioportcon 0xff80-0xFF9F system_u:object_r:nic_dev_t
-#ioportcon 0xff60-0xff7f system_u:object_r:nic_dev_t
-#ioportcon 0xff40-0xff5f system_u:object_r:nic_dev_t
-#iomemcon 0xff980 system_u:object_r:nic_dev_t
-#ioportcon 0xff00-0xff1f system_u:object_r:nic_dev_t
 
 ################################################################################
 #

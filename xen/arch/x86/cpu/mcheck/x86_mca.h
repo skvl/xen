@@ -13,8 +13,7 @@
  * GNU General Public License for more details.
  *
  * You should have received a copy of the GNU General Public License
- * along with this program; if not, write to the Free Software
- * Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
+ * along with this program; If not, see <http://www.gnu.org/licenses/>.
  */
 
 #ifndef X86_MCA_H
@@ -87,8 +86,6 @@
 #define K8_HWCR_MCi_STATUS_WREN		(1ULL << 18)
 
 /*Intel Specific bitfield*/
-#define CMCI_THRESHOLD			0x2
-
 #define MCi_MISC_ADDRMOD_MASK (0x7UL << 6)
 #define MCi_MISC_PHYSMOD    (0x2UL << 6)
 

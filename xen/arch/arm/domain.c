@@ -344,8 +344,6 @@ unsigned long hypercall_create_continuation(
 
     if ( test_bit(_MCSF_in_multicall, &mcs->flags) )
     {
-        BUG(); /* XXX multicalls not implemented yet. */
-
         __set_bit(_MCSF_call_preempted, &mcs->flags);
 
         for ( i = 0; *p != '\0'; i++ )
@@ -501,11 +499,7 @@ int vcpu_initialise(struct vcpu *v)
 
     v->arch.sctlr = SCTLR_GUEST_INIT;
 
-    /*
-     * By default exposes an SMP system with AFF0 set to the VCPU ID
-     * TODO: Handle multi-threading processor and cluster
-     */
-    v->arch.vmpidr = MPIDR_SMP | (v->vcpu_id << MPIDR_AFF0_SHIFT);
+    v->arch.vmpidr = MPIDR_SMP | vcpuid_to_vaffinity(v->vcpu_id);
 
     v->arch.actlr = READ_SYSREG32(ACTLR_EL1);
 
@@ -531,7 +525,8 @@ void vcpu_destroy(struct vcpu *v)
     free_xenheap_pages(v->arch.stack, STACK_ORDER);
 }
 
-int arch_domain_create(struct domain *d, unsigned int domcr_flags)
+int arch_domain_create(struct domain *d, unsigned int domcr_flags,
+                       struct xen_arch_domainconfig *config)
 {
     int rc;
 
@@ -541,6 +536,7 @@ int arch_domain_create(struct domain *d, unsigned int domcr_flags)
     if ( is_idle_domain(d) )
         return 0;
 
+    ASSERT(config != NULL);
     if ( (rc = p2m_init(d)) != 0 )
         goto fail;
 
@@ -561,19 +557,57 @@ int arch_domain_create(struct domain *d, unsigned int domcr_flags)
     if ( (rc = p2m_alloc_table(d)) != 0 )
         goto fail;
 
-    if ( (rc = gicv_setup(d)) != 0 )
+    switch ( config->gic_version )
+    {
+    case XEN_DOMCTL_CONFIG_GIC_NATIVE:
+        switch ( gic_hw_version () )
+        {
+        case GIC_V2:
+            config->gic_version = XEN_DOMCTL_CONFIG_GIC_V2;
+            d->arch.vgic.version = GIC_V2;
+            break;
+
+        case GIC_V3:
+            config->gic_version = XEN_DOMCTL_CONFIG_GIC_V3;
+            d->arch.vgic.version = GIC_V3;
+            break;
+
+        default:
+            BUG();
+        }
+        break;
+
+    case XEN_DOMCTL_CONFIG_GIC_V2:
+        d->arch.vgic.version = GIC_V2;
+        break;
+
+    case XEN_DOMCTL_CONFIG_GIC_V3:
+        d->arch.vgic.version = GIC_V3;
+        break;
+
+    default:
+        rc = -EOPNOTSUPP;
+        goto fail;
+    }
+
+    if ( (rc = domain_vgic_init(d, config->nr_spis)) != 0 )
         goto fail;
 
-    if ( (rc = domain_vgic_init(d)) != 0 )
+    if ( (rc = domain_vtimer_init(d, config)) != 0 )
         goto fail;
 
-    if ( (rc = domain_vtimer_init(d)) != 0 )
-        goto fail;
-
-    if ( d->domain_id )
+    /*
+     * The hardware domain will get a PPI later in
+     * arch/arm/domain_build.c  depending on the
+     * interrupt map of the hardware.
+     */
+    if ( !is_hardware_domain(d) )
+    {
         d->arch.evtchn_irq = GUEST_EVTCHN_PPI;
-    else
-        d->arch.evtchn_irq = platform_dom0_evtchn_ppi();
+        /* At this stage vgic_reserve_virq should never fail */
+        if ( !vgic_reserve_virq(d, GUEST_EVTCHN_PPI) )
+            BUG();
+    }
 
     /*
      * Virtual UART is only used by linux early printk and decompress code.
@@ -734,8 +768,15 @@ static int relinquish_memory(struct domain *d, struct page_list_head *list)
     {
         /* Grab a reference to the page so it won't disappear from under us. */
         if ( unlikely(!get_page(page, d)) )
-            /* Couldn't get a reference -- someone is freeing this page. */
-            BUG();
+            /*
+             * Couldn't get a reference -- someone is freeing this page and
+             * has already committed to doing so, so no more to do here.
+             *
+             * Note that the page must be left on the list, a list_del
+             * here will clash with the list_del done by the other
+             * party in the race and corrupt the list head.
+             */
+            continue;
 
         if ( test_and_clear_bit(_PGC_allocated, &page->count_info) )
             put_page(page);
@@ -761,8 +802,12 @@ int domain_relinquish_resources(struct domain *d)
     switch ( d->arch.relmem )
     {
     case RELMEM_not_started:
+        ret = iommu_release_dt_devices(d);
+        if ( ret )
+            return ret;
+
         d->arch.relmem = RELMEM_xen;
-        /* Falltrough */
+        /* Fallthrough */
 
     case RELMEM_xen:
         ret = relinquish_memory(d, &d->xenpage_list);
@@ -804,7 +849,7 @@ void arch_dump_domain_info(struct domain *d)
 }
 
 
-long do_arm_vcpu_op(int cmd, int vcpuid, XEN_GUEST_HANDLE_PARAM(void) arg)
+long do_arm_vcpu_op(int cmd, unsigned int vcpuid, XEN_GUEST_HANDLE_PARAM(void) arg)
 {
     switch ( cmd )
     {
@@ -848,6 +893,20 @@ void vcpu_block_unless_event_pending(struct vcpu *v)
     vcpu_block();
     if ( local_events_need_delivery_nomask() )
         vcpu_unblock(current);
+}
+
+unsigned int domain_max_vcpus(const struct domain *d)
+{
+    /*
+     * Since evtchn_init would call domain_max_vcpus for poll_mask
+     * allocation when the vgic_ops haven't been initialised yet,
+     * we return MAX_VIRT_CPUS if d->arch.vgic.handler is null.
+     */
+    if ( !d->arch.vgic.handler )
+        return MAX_VIRT_CPUS;
+    else
+        return min_t(unsigned int, MAX_VIRT_CPUS,
+                     d->arch.vgic.handler->max_vcpus);
 }
 
 /*

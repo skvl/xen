@@ -13,18 +13,15 @@
  * more details.
  *
  * You should have received a copy of the GNU General Public License along with
- * this program; if not, write to the Free Software Foundation, Inc., 59 Temple
- * Place - Suite 330, Boston, MA 02111-1307 USA.
+ * this program; If not, see <http://www.gnu.org/licenses/>.
  */
 
 #include <public/hvm/e820.h>
-#include <xen/types.h>
+#include <xen/domain_page.h>
 #include <asm/e820.h>
 #include <asm/iocap.h>
-#include <asm/mm.h>
 #include <asm/paging.h>
 #include <asm/p2m.h>
-#include <xen/domain_page.h>
 #include <asm/mtrr.h>
 #include <asm/hvm/support.h>
 #include <asm/hvm/cacheattr.h>
@@ -791,7 +788,7 @@ HVM_REGISTER_SAVE_RESTORE(MTRR, hvm_save_mtrr_msr, hvm_load_mtrr_msr,
 
 void memory_type_changed(struct domain *d)
 {
-    if ( iommu_enabled && d->vcpu && d->vcpu[0] )
+    if ( need_iommu(d) && d->vcpu && d->vcpu[0] )
     {
         p2m_memory_type_changed(d);
         flush_all(FLUSH_CACHE);

@@ -16,8 +16,7 @@
  * Lesser General Public License for more details.
  *
  * You should have received a copy of the GNU Lesser General Public
- * License along with this library; if not, write to the Free Software
- * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301  USA
+ * License along with this library; If not, see <http://www.gnu.org/licenses/>.
  *
  * written 2006 by Gerd Hoffmann <kraxel@suse.de>.
  *
@@ -42,6 +41,7 @@
 
 #define SUPERPAGE_PFN_SHIFT  9
 #define SUPERPAGE_NR_PFNS    (1UL << SUPERPAGE_PFN_SHIFT)
+#define SUPERPAGE_BATCH_SIZE 512
 
 #define bits_to_mask(bits)       (((xen_vaddr_t)1 << (bits))-1)
 #define round_down(addr, mask)   ((addr) & ~(mask))
@@ -122,11 +122,11 @@ static int count_pgtables(struct xc_dom_image *dom, int pae,
 
         try_pfn_end = (try_virt_end - dom->parms.virt_base) >> PAGE_SHIFT_X86;
 
-        if ( try_pfn_end > dom->total_pages )
+        if ( try_pfn_end > dom->p2m_size )
         {
             xc_dom_panic(dom->xch, XC_OUT_OF_MEMORY,
                          "%s: not enough memory for initial mapping (%#"PRIpfn" > %#"PRIpfn")",
-                         __FUNCTION__, try_pfn_end, dom->total_pages);
+                         __FUNCTION__, try_pfn_end, dom->p2m_size);
             return -ENOMEM;
         }
 
@@ -440,10 +440,11 @@ pfn_error:
 
 static int alloc_magic_pages(struct xc_dom_image *dom)
 {
-    size_t p2m_size = dom->total_pages * dom->arch_hooks->sizeof_pfn;
+    size_t p2m_alloc_size = dom->p2m_size * dom->arch_hooks->sizeof_pfn;
 
     /* allocate phys2mach table */
-    if ( xc_dom_alloc_segment(dom, &dom->p2m_seg, "phys2mach", 0, p2m_size) )
+    if ( xc_dom_alloc_segment(dom, &dom->p2m_seg, "phys2mach",
+                              0, p2m_alloc_size) )
         return -1;
     dom->p2m_guest = xc_dom_seg_to_ptr(dom, &dom->p2m_seg);
     if ( dom->p2m_guest == NULL )
@@ -759,7 +760,13 @@ static int x86_shadow(xc_interface *xch, domid_t domid)
 int arch_setup_meminit(struct xc_dom_image *dom)
 {
     int rc;
-    xen_pfn_t pfn, allocsz, i, j, mfn;
+    xen_pfn_t pfn, allocsz, mfn, total, pfn_base;
+    int i, j, k;
+    xen_vmemrange_t dummy_vmemrange[1];
+    unsigned int dummy_vnode_to_pnode[1];
+    xen_vmemrange_t *vmemranges;
+    unsigned int *vnode_to_pnode;
+    unsigned int nr_vmemranges, nr_vnodes;
 
     rc = x86_compat(dom->xch, dom->guest_domid, dom->guest_type);
     if ( rc )
@@ -772,14 +779,16 @@ int arch_setup_meminit(struct xc_dom_image *dom)
             return rc;
     }
 
-    dom->p2m_host = xc_dom_malloc(dom, sizeof(xen_pfn_t) * dom->total_pages);
-    if ( dom->p2m_host == NULL )
-        return -EINVAL;
-
     if ( dom->superpages )
     {
         int count = dom->total_pages >> SUPERPAGE_PFN_SHIFT;
         xen_pfn_t extents[count];
+
+        dom->p2m_size = dom->total_pages;
+        dom->p2m_host = xc_dom_malloc(dom, sizeof(xen_pfn_t) *
+                                      dom->p2m_size);
+        if ( dom->p2m_host == NULL )
+            return -EINVAL;
 
         DOMPRINTF("Populating memory with %d superpages", count);
         for ( pfn = 0; pfn < count; pfn++ )
@@ -808,21 +817,135 @@ int arch_setup_meminit(struct xc_dom_image *dom)
             if ( rc )
                 return rc;
         }
-        /* setup initial p2m */
-        for ( pfn = 0; pfn < dom->total_pages; pfn++ )
-            dom->p2m_host[pfn] = pfn;
-        
-        /* allocate guest memory */
-        for ( i = rc = allocsz = 0;
-              (i < dom->total_pages) && !rc;
-              i += allocsz )
+
+        /* Setup dummy vNUMA information if it's not provided. Note
+         * that this is a valid state if libxl doesn't provide any
+         * vNUMA information.
+         *
+         * The dummy values make libxc allocate all pages from
+         * arbitrary physical nodes. This is the expected behaviour if
+         * no vNUMA configuration is provided to libxc.
+         *
+         * Note that the following hunk is just for the convenience of
+         * allocation code. No defaulting happens in libxc.
+         */
+        if ( dom->nr_vmemranges == 0 )
         {
-            allocsz = dom->total_pages - i;
-            if ( allocsz > 1024*1024 )
-                allocsz = 1024*1024;
-            rc = xc_domain_populate_physmap_exact(
-                dom->xch, dom->guest_domid, allocsz,
-                0, 0, &dom->p2m_host[i]);
+            nr_vmemranges = 1;
+            vmemranges = dummy_vmemrange;
+            vmemranges[0].start = 0;
+            vmemranges[0].end   = (uint64_t)dom->total_pages << PAGE_SHIFT;
+            vmemranges[0].flags = 0;
+            vmemranges[0].nid   = 0;
+
+            nr_vnodes = 1;
+            vnode_to_pnode = dummy_vnode_to_pnode;
+            vnode_to_pnode[0] = XC_NUMA_NO_NODE;
+        }
+        else
+        {
+            nr_vmemranges = dom->nr_vmemranges;
+            nr_vnodes = dom->nr_vnodes;
+            vmemranges = dom->vmemranges;
+            vnode_to_pnode = dom->vnode_to_pnode;
+        }
+
+        total = dom->p2m_size = 0;
+        for ( i = 0; i < nr_vmemranges; i++ )
+        {
+            total += ((vmemranges[i].end - vmemranges[i].start)
+                      >> PAGE_SHIFT);
+            dom->p2m_size =
+                dom->p2m_size > (vmemranges[i].end >> PAGE_SHIFT) ?
+                dom->p2m_size : (vmemranges[i].end >> PAGE_SHIFT);
+        }
+        if ( total != dom->total_pages )
+        {
+            xc_dom_panic(dom->xch, XC_INTERNAL_ERROR,
+                         "%s: vNUMA page count mismatch (0x%"PRIpfn" != 0x%"PRIpfn")",
+                         __func__, total, dom->total_pages);
+            return -EINVAL;
+        }
+
+        dom->p2m_host = xc_dom_malloc(dom, sizeof(xen_pfn_t) *
+                                      dom->p2m_size);
+        if ( dom->p2m_host == NULL )
+            return -EINVAL;
+        for ( pfn = 0; pfn < dom->p2m_size; pfn++ )
+            dom->p2m_host[pfn] = INVALID_P2M_ENTRY;
+
+        /* allocate guest memory */
+        for ( i = 0; i < nr_vmemranges; i++ )
+        {
+            unsigned int memflags;
+            uint64_t pages, super_pages;
+            unsigned int pnode = vnode_to_pnode[vmemranges[i].nid];
+            xen_pfn_t extents[SUPERPAGE_BATCH_SIZE];
+            xen_pfn_t pfn_base_idx;
+
+            memflags = 0;
+            if ( pnode != XC_NUMA_NO_NODE )
+                memflags |= XENMEMF_exact_node(pnode);
+
+            pages = (vmemranges[i].end - vmemranges[i].start)
+                >> PAGE_SHIFT;
+            super_pages = pages >> SUPERPAGE_PFN_SHIFT;
+            pfn_base = vmemranges[i].start >> PAGE_SHIFT;
+
+            for ( pfn = pfn_base; pfn < pfn_base+pages; pfn++ )
+                dom->p2m_host[pfn] = pfn;
+
+            pfn_base_idx = pfn_base;
+            while (super_pages) {
+                uint64_t count =
+                    min_t(uint64_t, super_pages,SUPERPAGE_BATCH_SIZE);
+                super_pages -= count;
+
+                for ( pfn = pfn_base_idx, j = 0;
+                      pfn < pfn_base_idx + (count << SUPERPAGE_PFN_SHIFT);
+                      pfn += SUPERPAGE_NR_PFNS, j++ )
+                    extents[j] = dom->p2m_host[pfn];
+                rc = xc_domain_populate_physmap(dom->xch, dom->guest_domid, count,
+                                                SUPERPAGE_PFN_SHIFT, memflags,
+                                                extents);
+                if ( rc < 0 )
+                    return rc;
+
+                /* Expand the returned mfns into the p2m array. */
+                pfn = pfn_base_idx;
+                for ( j = 0; j < rc; j++ )
+                {
+                    mfn = extents[j];
+                    for ( k = 0; k < SUPERPAGE_NR_PFNS; k++, pfn++ )
+                        dom->p2m_host[pfn] = mfn + k;
+                }
+                pfn_base_idx = pfn;
+            }
+
+            for ( j = pfn_base_idx - pfn_base; j < pages; j += allocsz )
+            {
+                allocsz = pages - j;
+                if ( allocsz > 1024*1024 )
+                    allocsz = 1024*1024;
+
+                rc = xc_domain_populate_physmap_exact(dom->xch,
+                         dom->guest_domid, allocsz, 0, memflags,
+                         &dom->p2m_host[pfn_base+j]);
+
+                if ( rc )
+                {
+                    if ( pnode != XC_NUMA_NO_NODE )
+                        xc_dom_panic(dom->xch, XC_INTERNAL_ERROR,
+                                     "%s: failed to allocate 0x%"PRIx64" pages (v=%d, p=%d)",
+                                     __func__, pages, i, pnode);
+                    else
+                        xc_dom_panic(dom->xch, XC_INTERNAL_ERROR,
+                                     "%s: failed to allocate 0x%"PRIx64" pages",
+                                     __func__, pages);
+                    return rc;
+                }
+            }
+            rc = 0;
         }
 
         /* Ensure no unclaimed pages are left unused.
@@ -855,7 +978,7 @@ static int map_grant_table_frames(struct xc_dom_image *dom)
     {
         rc = xc_domain_add_to_physmap(dom->xch, dom->guest_domid,
                                       XENMAPSPACE_grant_table,
-                                      i, dom->total_pages + i);
+                                      i, dom->p2m_size + i);
         if ( rc != 0 )
         {
             if ( (i > 0) && (errno == EINVAL) )
@@ -865,7 +988,8 @@ static int map_grant_table_frames(struct xc_dom_image *dom)
             }
             xc_dom_panic(dom->xch, XC_INTERNAL_ERROR,
                          "%s: mapping grant tables failed " "(pfn=0x%" PRIpfn
-                         ", rc=%d)", __FUNCTION__, dom->total_pages + i, rc);
+                         ", rc=%d, errno=%d)", __FUNCTION__, dom->p2m_size + i,
+                         rc, errno);
             return rc;
         }
     }
@@ -918,8 +1042,8 @@ int arch_setup_bootlate(struct xc_dom_image *dom)
         if ( rc != 0 )
         {
             xc_dom_panic(dom->xch, XC_INTERNAL_ERROR, "%s: mapping"
-                         " shared_info failed (pfn=0x%" PRIpfn ", rc=%d)",
-                         __FUNCTION__, dom->shared_info_pfn, rc);
+                         " shared_info failed (pfn=0x%" PRIpfn ", rc=%d, errno: %d)",
+                         __FUNCTION__, dom->shared_info_pfn, rc, errno);
             return rc;
         }
 

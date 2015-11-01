@@ -14,8 +14,7 @@
  * Lesser General Public License for more details.
  *
  * You should have received a copy of the GNU Lesser General Public
- * License along with this library; if not, write to the Free Software
- * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301  USA
+ * License along with this library; If not, see <http://www.gnu.org/licenses/>.
  */
 
 #include "xc_private.h"
@@ -388,18 +387,26 @@ void xc_osdep_log(xc_interface *xch, xentoollog_level level, int code, const cha
     va_end(args);
 }
 
-void xc_report_progress_start(xc_interface *xch, const char *doing,
-                              unsigned long total) {
+const char *xc_set_progress_prefix(xc_interface *xch, const char *doing)
+{
+    const char *old = xch->currently_progress_reporting;
+
     xch->currently_progress_reporting = doing;
-    xtl_progress(xch->error_handler, "xc", xch->currently_progress_reporting,
-                 0, total);
+    return old;
+}
+
+void xc_report_progress_single(xc_interface *xch, const char *doing)
+{
+    assert(doing);
+    xtl_progress(xch->error_handler, "xc", doing, 0, 0);
 }
 
 void xc_report_progress_step(xc_interface *xch,
-                             unsigned long done, unsigned long total) {
+                             unsigned long done, unsigned long total)
+{
     assert(xch->currently_progress_reporting);
-    xtl_progress(xch->error_handler, "xc", xch->currently_progress_reporting,
-                 done, total);
+    xtl_progress(xch->error_handler, "xc",
+                 xch->currently_progress_reporting, done, total);
 }
 
 int xc_get_pfn_type_batch(xc_interface *xch, uint32_t dom,
@@ -427,7 +434,7 @@ int xc_mmuext_op(
 {
     DECLARE_HYPERCALL;
     DECLARE_HYPERCALL_BOUNCE(op, nr_ops*sizeof(*op), XC_HYPERCALL_BUFFER_BOUNCE_BOTH);
-    long ret = -EINVAL;
+    long ret = -1;
 
     if ( xc_hypercall_bounce_pre(xch, op) )
     {
@@ -516,7 +523,7 @@ int do_memory_op(xc_interface *xch, int cmd, void *arg, size_t len)
 {
     DECLARE_HYPERCALL;
     DECLARE_HYPERCALL_BOUNCE(arg, len, XC_HYPERCALL_BUFFER_BOUNCE_BOTH);
-    long ret = -EINVAL;
+    long ret = -1;
 
     if ( xc_hypercall_bounce_pre(xch, arg) )
     {
@@ -535,9 +542,16 @@ int do_memory_op(xc_interface *xch, int cmd, void *arg, size_t len)
     return ret;
 }
 
-long xc_maximum_ram_page(xc_interface *xch)
+int xc_maximum_ram_page(xc_interface *xch, unsigned long *max_mfn)
 {
-    return do_memory_op(xch, XENMEM_maximum_ram_page, NULL, 0);
+    long rc = do_memory_op(xch, XENMEM_maximum_ram_page, NULL, 0);
+
+    if ( rc >= 0 )
+    {
+        *max_mfn = rc;
+        rc = 0;
+    }
+    return rc;
 }
 
 long long xc_domain_get_cpu_usage( xc_interface *xch, domid_t domid, int vcpu )
@@ -859,6 +873,91 @@ int write_exact(int fd, const void *data, size_t size)
 
     return 0;
 }
+
+#if defined(__MINIOS__)
+/*
+ * MiniOS's libc doesn't know about writev(). Implement it as multiple write()s.
+ */
+int writev_exact(int fd, const struct iovec *iov, int iovcnt)
+{
+    int rc, i;
+
+    for ( i = 0; i < iovcnt; ++i )
+    {
+        rc = write_exact(fd, iov[i].iov_base, iov[i].iov_len);
+        if ( rc )
+            return rc;
+    }
+
+    return 0;
+}
+#else
+int writev_exact(int fd, const struct iovec *iov, int iovcnt)
+{
+    struct iovec *local_iov = NULL;
+    int rc = 0, iov_idx = 0, saved_errno = 0;
+    ssize_t len;
+
+    while ( iov_idx < iovcnt )
+    {
+        /*
+         * Skip over iov[] entries with 0 length.
+         *
+         * This is needed to cover the case where we took a partial write and
+         * all remaining vectors are of 0 length.  In such a case, the results
+         * from writev() are indistinguishable from EOF.
+         */
+        while ( iov[iov_idx].iov_len == 0 )
+            if ( ++iov_idx == iovcnt )
+                goto out;
+
+        len = writev(fd, &iov[iov_idx], min(iovcnt - iov_idx, IOV_MAX));
+        saved_errno = errno;
+
+        if ( (len == -1) && (errno == EINTR) )
+            continue;
+        if ( len <= 0 )
+        {
+            rc = -1;
+            goto out;
+        }
+
+        /* Check iov[] to see whether we had a partial or complete write. */
+        while ( (len > 0) && (iov_idx < iovcnt) )
+        {
+            if ( len >= iov[iov_idx].iov_len )
+                len -= iov[iov_idx++].iov_len;
+            else
+            {
+                /* Partial write of iov[iov_idx]. Copy iov so we can adjust
+                 * element iov_idx and resubmit the rest. */
+                if ( !local_iov )
+                {
+                    local_iov = malloc(iovcnt * sizeof(*iov));
+                    if ( !local_iov )
+                    {
+                        saved_errno = ENOMEM;
+                        goto out;
+                    }
+
+                    iov = memcpy(local_iov, iov, iovcnt * sizeof(*iov));
+                }
+
+                local_iov[iov_idx].iov_base += len;
+                local_iov[iov_idx].iov_len  -= len;
+                break;
+            }
+        }
+    }
+
+    saved_errno = 0;
+
+ out:
+    free(local_iov);
+    errno = saved_errno;
+    return rc;
+}
+#endif
 
 int xc_ffs8(uint8_t x)
 {

@@ -20,28 +20,29 @@ else
 
 CFLAGS += -DGCC_PRINTF -Werror $(CFLAGS_libxenstat)
 LDFLAGS += $(call LDFLAGS_RPATH,../lib)
-LDLIBS += $(LDLIBS_libxenstat) $(CURSES_LIBS) $(SOCKET_LIBS) -lm
+LDLIBS += $(LDLIBS_libxenstat) $(CURSES_LIBS) $(TINFO_LIBS) $(SOCKET_LIBS) -lm -lyajl
 LDLIBS += $(LDLIBS_libxenctrl) $(LDLIBS_libxenstore)
 CFLAGS += -DHOST_$(XEN_OS)
 
-# Include configure output (config.h) to headers search path
-CFLAGS += -I$(XEN_ROOT)/tools
+# Include configure output (config.h)
+CFLAGS += -include $(XEN_ROOT)/tools/config.h
 LDFLAGS += $(APPEND_LDFLAGS)
 
 .PHONY: all
 all: xentop
 
 .PHONY: install
-install: xentop xentop.1
+install: xentop
 	$(INSTALL_DIR) $(DESTDIR)$(LIBEXEC_BIN)
 	$(INSTALL_PROG) xentop $(DESTDIR)$(LIBEXEC_BIN)/xentop
-	$(INSTALL_DIR) $(DESTDIR)$(MAN1DIR)
-	$(INSTALL_DATA) xentop.1 $(DESTDIR)$(MAN1DIR)/xentop.1
 
 endif
 
 .PHONY: clean
 clean:
 	rm -f xentop xentop.o $(DEPS)
+
+.PHONY: distclean
+distclean: clean
 
 -include $(DEPS)

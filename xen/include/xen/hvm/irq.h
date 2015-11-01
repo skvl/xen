@@ -15,8 +15,7 @@
  * more details.
  *
  * You should have received a copy of the GNU General Public License along with
- * this program; if not, write to the Free Software Foundation, Inc., 59 Temple
- * Place - Suite 330, Boston, MA 02111-1307 USA.
+ * this program; If not, see <http://www.gnu.org/licenses/>.
  */
 
 #ifndef __XEN_HVM_IRQ_H__
@@ -88,18 +87,19 @@ struct hvm_irq_dpci {
     DECLARE_BITMAP(isairq_map, NR_ISAIRQS);
     /* Record of mapped Links */
     uint8_t link_cnt[NR_LINK];
-    struct tasklet dirq_tasklet;
 };
 
 /* Machine IRQ to guest device/intx mapping. */
 struct hvm_pirq_dpci {
     uint32_t flags;
+    unsigned int state;
     bool_t masked;
     uint16_t pending;
     struct list_head digl_list;
     struct domain *dom;
     struct hvm_gmsi_info gmsi;
     struct timer timer;
+    struct list_head softirq_list;
 };
 
 void pt_pirq_init(struct domain *, struct hvm_pirq_dpci *);
@@ -109,6 +109,7 @@ int pt_pirq_iterate(struct domain *d,
                               struct hvm_pirq_dpci *, void *arg),
                     void *arg);
 
+bool_t pt_pirq_softirq_active(struct hvm_pirq_dpci *);
 /* Modify state of a PCI INTx wire. */
 void hvm_pci_intx_assert(
     struct domain *d, unsigned int device, unsigned int intx);

@@ -432,8 +432,7 @@ def libxl_C_type_parse_json(ty, w, v, indent = "    ", parent = None, discrimina
         for f in [f for f in ty.fields if not f.const and not f.type.private]:
             saved_var_name = "saved_%s" % f.name
             s += "{\n"
-            s += "    const libxl__json_object *%s = NULL;\n" % saved_var_name
-            s += "    %s = x;\n" % saved_var_name
+            s += "    const libxl__json_object *%s = x;\n" % saved_var_name
             if isinstance(f.type, idl.KeyedUnion):
                 for x in f.type.fields:
                     s += "    x = libxl__json_map_get(\"%s\", %s, JSON_MAP);\n" % \
@@ -637,15 +636,15 @@ if __name__ == '__main__':
 
 #include "libxl_internal.h"
 
-#define LIBXL_DTOR_POISON 0xa5
 
 """ % " ".join(sys.argv))
 
     for ty in [t for t in types if t.dispose_fn is not None and t.autogenerate_dispose_fn]:
         f.write("void %s(%s)\n" % (ty.dispose_fn, ty.make_arg("p")))
         f.write("{\n")
+        f.write("    if (!p) return;\n")
         f.write(libxl_C_type_dispose(ty, "p"))
-        f.write("    memset(p, LIBXL_DTOR_POISON, sizeof(*p));\n")
+        f.write("    memset(p, 0, sizeof(*p));\n")
         f.write("}\n")
         f.write("\n")
 

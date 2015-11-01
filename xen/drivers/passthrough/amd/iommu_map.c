@@ -14,8 +14,7 @@
  * GNU General Public License for more details.
  *
  * You should have received a copy of the GNU General Public License
- * along with this program; if not, write to the Free Software
- * Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307 USA
+ * along with this program; If not, see <http://www.gnu.org/licenses/>.
  */
 
 #include <xen/config.h>
@@ -42,7 +41,7 @@ void clear_iommu_pte_present(unsigned long l1_mfn, unsigned long gfn)
 {
     u64 *table, *pte;
 
-    table = map_domain_page(l1_mfn);
+    table = map_domain_page(_mfn(l1_mfn));
     pte = table + pfn_to_pde_idx(gfn, IOMMU_PAGING_MODE_LEVEL_1);
     *pte = 0;
     unmap_domain_page(table);
@@ -115,7 +114,7 @@ static bool_t set_iommu_pte_present(unsigned long pt_mfn, unsigned long gfn,
     u32 *pde;
     bool_t need_flush = 0;
 
-    table = map_domain_page(pt_mfn);
+    table = map_domain_page(_mfn(pt_mfn));
 
     pde = (u32*)(table + pfn_to_pde_idx(gfn, pde_level));
 
@@ -349,12 +348,12 @@ static int iommu_update_pde_count(struct domain *d, unsigned long pt_mfn,
     next_level = merge_level - 1;
 
     /* get pde at merge level */
-    table = map_domain_page(pt_mfn);
+    table = map_domain_page(_mfn(pt_mfn));
     pde = table + pfn_to_pde_idx(gfn, merge_level);
 
     /* get page table of next level */
     ntable_maddr = amd_iommu_get_next_table_from_pte((u32*)pde);
-    ntable = map_domain_page(ntable_maddr >> PAGE_SHIFT);
+    ntable = map_domain_page(_mfn(paddr_to_pfn(ntable_maddr)));
 
     /* get the first mfn of next level */
     first_mfn = amd_iommu_get_next_table_from_pte((u32*)ntable) >> PAGE_SHIFT;
@@ -400,7 +399,7 @@ static int iommu_merge_pages(struct domain *d, unsigned long pt_mfn,
 
     ASSERT( spin_is_locked(&hd->arch.mapping_lock) && pt_mfn );
 
-    table = map_domain_page(pt_mfn);
+    table = map_domain_page(_mfn(pt_mfn));
     pde = table + pfn_to_pde_idx(gfn, merge_level);
 
     /* get first mfn */
@@ -412,7 +411,7 @@ static int iommu_merge_pages(struct domain *d, unsigned long pt_mfn,
         return 1;
     }
 
-    ntable = map_domain_page(ntable_mfn);
+    ntable = map_domain_page(_mfn(ntable_mfn));
     first_mfn = amd_iommu_get_next_table_from_pte((u32*)ntable) >> PAGE_SHIFT;
 
     if ( first_mfn == 0 )
@@ -467,7 +466,7 @@ static int iommu_pde_from_gfn(struct domain *d, unsigned long pfn,
         unsigned int next_level = level - 1;
         pt_mfn[level] = next_table_mfn;
 
-        next_table_vaddr = map_domain_page(next_table_mfn);
+        next_table_vaddr = map_domain_page(_mfn(next_table_mfn));
         pde = next_table_vaddr + pfn_to_pde_idx(pfn, level);
 
         /* Here might be a super page frame */
@@ -556,6 +555,10 @@ static int update_paging_mode(struct domain *d, unsigned long gfn)
     void *new_root_vaddr;
     unsigned long old_root_mfn;
     struct hvm_iommu *hd = domain_hvm_iommu(d);
+
+    if ( gfn == INVALID_MFN )
+        return -EADDRNOTAVAIL;
+    ASSERT(!(gfn >> DEFAULT_DOMAIN_ADDRESS_WIDTH));
 
     level = hd->arch.paging_mode;
     old_root = hd->arch.root_table;
@@ -729,12 +732,15 @@ int amd_iommu_unmap_page(struct domain *d, unsigned long gfn)
      * we might need a deeper page table for lager gfn now */
     if ( is_hvm_domain(d) )
     {
-        if ( update_paging_mode(d, gfn) )
+        int rc = update_paging_mode(d, gfn);
+
+        if ( rc )
         {
             spin_unlock(&hd->arch.mapping_lock);
             AMD_IOMMU_DEBUG("Update page mode failed gfn = %lx\n", gfn);
-            domain_crash(d);
-            return -EFAULT;
+            if ( rc != -EADDRNOTAVAIL )
+                domain_crash(d);
+            return rc;
         }
     }
 
@@ -784,11 +790,6 @@ void amd_iommu_share_p2m(struct domain *d)
     struct hvm_iommu *hd  = domain_hvm_iommu(d);
     struct page_info *p2m_table;
     mfn_t pgd_mfn;
-
-    ASSERT( is_hvm_domain(d) && d->arch.hvm_domain.hap_enabled );
-
-    if ( !iommu_use_hap_pt(d) )
-        return;
 
     pgd_mfn = pagetable_get_mfn(p2m_get_pagetable(p2m_get_hostp2m(d)));
     p2m_table = mfn_to_page(mfn_x(pgd_mfn));

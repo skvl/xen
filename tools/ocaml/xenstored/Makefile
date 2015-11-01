@@ -2,7 +2,8 @@ XEN_ROOT = $(CURDIR)/../../..
 OCAML_TOPLEVEL = $(CURDIR)/..
 include $(OCAML_TOPLEVEL)/common.make
 
-CFLAGS += -I$(XEN_ROOT)/tools/
+# Include configure output (config.h)
+CFLAGS += -include $(XEN_ROOT)/tools/config.h
 CFLAGS-$(CONFIG_SYSTEMD)  += $(SYSTEMD_CFLAGS)
 LDFLAGS-$(CONFIG_SYSTEMD) += $(SYSTEMD_LIBS)
 
@@ -28,6 +29,8 @@ LIBS += systemd.cma systemd.cmxa
 systemd_OBJS = systemd
 systemd_C_OBJS = systemd_stubs
 OCAML_LIBRARY += systemd
+
+LIBS_systemd += $(LDFLAGS-y)
 
 OBJS = define \
 	stdext \
@@ -77,8 +80,8 @@ bins: $(PROGRAMS)
 libs: $(LIBS)
 
 install: all
-	$(INSTALL_DIR) $(DESTDIR)$(SBINDIR)
-	$(INSTALL_PROG) oxenstored $(DESTDIR)$(SBINDIR)
+	$(INSTALL_DIR) $(DESTDIR)$(sbindir)
+	$(INSTALL_PROG) oxenstored $(DESTDIR)$(sbindir)
 	$(INSTALL_DIR) $(DESTDIR)$(XEN_CONFIG_DIR)
 	$(INSTALL_DATA) oxenstored.conf $(DESTDIR)$(XEN_CONFIG_DIR)
 

@@ -14,10 +14,10 @@
  * Lesser General Public License for more details.
  *
  * You should have received a copy of the GNU Lesser General Public
- * License along with this library; if not, write to the Free Software
- * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301  USA
+ * License along with this library; If not, see <http://www.gnu.org/licenses/>.
  */
 
+#include "xc_bitops.h"
 #include "xc_private.h"
 #include <xen/hvm/hvm_op.h>
 
@@ -91,6 +91,31 @@ xc_cpumap_t xc_cpumap_alloc(xc_interface *xch)
     if (sz <= 0)
         return NULL;
     return calloc(1, sz);
+}
+
+/*
+ * xc_bitops.h has macros that do this as well - however they assume that
+ * the bitmask is word aligned but xc_cpumap_t is only guaranteed to be
+ * byte aligned and so we need byte versions for architectures which do
+ * not support misaligned accesses (which is basically everyone
+ * but x86, although even on x86 it can be inefficient).
+ */
+#define BITS_PER_CPUMAP(map) (sizeof(*map) * 8)
+#define CPUMAP_ENTRY(cpu, map) ((map))[(cpu) / BITS_PER_CPUMAP(map)]
+#define CPUMAP_SHIFT(cpu, map) ((cpu) % BITS_PER_CPUMAP(map))
+void xc_cpumap_clearcpu(int cpu, xc_cpumap_t map)
+{
+    CPUMAP_ENTRY(cpu, map) &= ~(1U << CPUMAP_SHIFT(cpu, map));
+}
+
+void xc_cpumap_setcpu(int cpu, xc_cpumap_t map)
+{
+    CPUMAP_ENTRY(cpu, map) |= (1U << CPUMAP_SHIFT(cpu, map));
+}
+
+int xc_cpumap_testcpu(int cpu, xc_cpumap_t map)
+{
+    return (CPUMAP_ENTRY(cpu, map) >> CPUMAP_SHIFT(cpu, map)) & 1;
 }
 
 xc_nodemap_t xc_nodemap_alloc(xc_interface *xch)
@@ -177,42 +202,106 @@ int xc_physinfo(xc_interface *xch,
     return 0;
 }
 
-int xc_topologyinfo(xc_interface *xch,
-                xc_topologyinfo_t *put_info)
+int xc_cputopoinfo(xc_interface *xch, unsigned *max_cpus,
+                   xc_cputopo_t *cputopo)
 {
     int ret;
     DECLARE_SYSCTL;
+    DECLARE_HYPERCALL_BOUNCE(cputopo, *max_cpus * sizeof(*cputopo),
+                             XC_HYPERCALL_BUFFER_BOUNCE_OUT);
 
-    sysctl.cmd = XEN_SYSCTL_topologyinfo;
+    if ( (ret = xc_hypercall_bounce_pre(xch, cputopo)) )
+        goto out;
 
-    memcpy(&sysctl.u.topologyinfo, put_info, sizeof(*put_info));
+    sysctl.u.cputopoinfo.num_cpus = *max_cpus;
+    set_xen_guest_handle(sysctl.u.cputopoinfo.cputopo, cputopo);
+
+    sysctl.cmd = XEN_SYSCTL_cputopoinfo;
 
     if ( (ret = do_sysctl(xch, &sysctl)) != 0 )
-        return ret;
+        goto out;
 
-    memcpy(put_info, &sysctl.u.topologyinfo, sizeof(*put_info));
+    *max_cpus = sysctl.u.cputopoinfo.num_cpus;
 
-    return 0;
+out:
+    xc_hypercall_bounce_post(xch, cputopo);
+
+    return ret;
 }
 
-int xc_numainfo(xc_interface *xch,
-                xc_numainfo_t *put_info)
+int xc_numainfo(xc_interface *xch, unsigned *max_nodes,
+                xc_meminfo_t *meminfo, uint32_t *distance)
 {
     int ret;
     DECLARE_SYSCTL;
+    DECLARE_HYPERCALL_BOUNCE(meminfo, *max_nodes * sizeof(*meminfo),
+                             XC_HYPERCALL_BUFFER_BOUNCE_OUT);
+    DECLARE_HYPERCALL_BOUNCE(distance,
+                             *max_nodes * *max_nodes * sizeof(*distance),
+                             XC_HYPERCALL_BUFFER_BOUNCE_OUT);
+
+    if ( (ret = xc_hypercall_bounce_pre(xch, meminfo)) )
+        goto out;
+    if ((ret = xc_hypercall_bounce_pre(xch, distance)) )
+        goto out;
+
+    sysctl.u.numainfo.num_nodes = *max_nodes;
+    set_xen_guest_handle(sysctl.u.numainfo.meminfo, meminfo);
+    set_xen_guest_handle(sysctl.u.numainfo.distance, distance);
 
     sysctl.cmd = XEN_SYSCTL_numainfo;
 
-    memcpy(&sysctl.u.numainfo, put_info, sizeof(*put_info));
+    if ( (ret = do_sysctl(xch, &sysctl)) != 0 )
+        goto out;
 
-    if ((ret = do_sysctl(xch, &sysctl)) != 0)
-        return ret;
+    *max_nodes = sysctl.u.numainfo.num_nodes;
 
-    memcpy(put_info, &sysctl.u.numainfo, sizeof(*put_info));
+out:
+    xc_hypercall_bounce_post(xch, meminfo);
+    xc_hypercall_bounce_post(xch, distance);
 
-    return 0;
+    return ret;
 }
 
+int xc_pcitopoinfo(xc_interface *xch, unsigned num_devs,
+                   physdev_pci_device_t *devs,
+                   uint32_t *nodes)
+{
+    int ret = 0;
+    unsigned processed = 0;
+    DECLARE_SYSCTL;
+    DECLARE_HYPERCALL_BOUNCE(devs, num_devs * sizeof(*devs),
+                             XC_HYPERCALL_BUFFER_BOUNCE_IN);
+    DECLARE_HYPERCALL_BOUNCE(nodes, num_devs* sizeof(*nodes),
+                             XC_HYPERCALL_BUFFER_BOUNCE_BOTH);
+
+    if ( (ret = xc_hypercall_bounce_pre(xch, devs)) )
+        goto out;
+    if ( (ret = xc_hypercall_bounce_pre(xch, nodes)) )
+        goto out;
+
+    sysctl.cmd = XEN_SYSCTL_pcitopoinfo;
+
+    while ( processed < num_devs )
+    {
+        sysctl.u.pcitopoinfo.num_devs = num_devs - processed;
+        set_xen_guest_handle_offset(sysctl.u.pcitopoinfo.devs, devs,
+                                    processed);
+        set_xen_guest_handle_offset(sysctl.u.pcitopoinfo.nodes, nodes,
+                                    processed);
+
+        if ( (ret = do_sysctl(xch, &sysctl)) != 0 )
+                break;
+
+        processed += sysctl.u.pcitopoinfo.num_devs;
+    }
+
+ out:
+    xc_hypercall_bounce_post(xch, devs);
+    xc_hypercall_bounce_post(xch, nodes);
+
+    return ret;
+}
 
 int xc_sched_id(xc_interface *xch,
                 int *sched_id)

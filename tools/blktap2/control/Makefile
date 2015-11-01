@@ -52,17 +52,19 @@ $(LIB_SHARED): $(CTL_PICS)
 	$(CC) $(LDFLAGS) -fPIC $(SHLIB_LDFLAGS) -rdynamic $^ -o $@ $(APPEND_LDFLAGS)
 
 install: $(IBIN) $(LIB_STATIC) $(LIB_SHARED)
-	$(INSTALL_DIR) -p $(DESTDIR)$(LIBDIR)
+	$(INSTALL_DIR) -p $(DESTDIR)$(libdir)
 	$(INSTALL_DIR) -p $(DESTDIR)$(LIBEXEC_BIN)
 	$(INSTALL_DIR) -p $(DESTDIR)$(LIBEXEC_LIB)
 	$(INSTALL_PROG) $(IBIN) $(DESTDIR)$(LIBEXEC_BIN)
-	$(INSTALL_DATA) $(LIB_STATIC) $(DESTDIR)$(LIBDIR)
+	$(INSTALL_DATA) $(LIB_STATIC) $(DESTDIR)$(libdir)
 	$(INSTALL_PROG) $(LIB_SHARED) $(DESTDIR)$(LIBEXEC_LIB)
 
 clean:
 	rm -f $(OBJS) $(PICS) $(DEPS) $(IBIN) $(LIB_STATIC) $(LIB_SHARED)
 	rm -f *~
 
-.PHONY: all build clean install
+distclean: clean
+
+.PHONY: all build clean distclean install
 
 -include $(DEPS)

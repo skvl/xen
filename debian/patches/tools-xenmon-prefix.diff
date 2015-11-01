@@ -1,4 +1,4 @@
-From 028888280b9f88d38e444f2456381a07587eff73 Mon Sep 17 00:00:00 2001
+From 45980ee259b429b29906f4737a6d809c64454500 Mon Sep 17 00:00:00 2001
 From: Bastian Blank <waldi@debian.org>
 Date: Sat, 5 Jul 2014 11:47:06 +0200
 Subject: tools-xenmon-prefix.diff
@@ -9,7 +9,7 @@ Patch-Name: tools-xenmon-prefix.diff
  1 file changed, 5 insertions(+), 4 deletions(-)
 
 diff --git a/tools/xenmon/Makefile b/tools/xenmon/Makefile
-index 3fe87ba..eb10389 100644
+index 20ea100..cb6d7f8 100644
 --- a/tools/xenmon/Makefile
 +++ b/tools/xenmon/Makefile
 @@ -16,6 +16,7 @@ include $(XEN_ROOT)/tools/Rules.mk
@@ -24,14 +24,14 @@ index 3fe87ba..eb10389 100644
  
  .PHONY: install
  install: build
--	$(INSTALL_DIR) $(DESTDIR)$(SBINDIR)
--	$(INSTALL_PROG) xenbaked $(DESTDIR)$(SBINDIR)/xenbaked
--	$(INSTALL_PROG) xentrace_setmask  $(DESTDIR)$(SBINDIR)/xentrace_setmask
--	$(INSTALL_PROG) xenmon.py  $(DESTDIR)$(SBINDIR)/xenmon.py
+-	$(INSTALL_DIR) $(DESTDIR)$(sbindir)
+-	$(INSTALL_PROG) xenbaked $(DESTDIR)$(sbindir)/xenbaked
+-	$(INSTALL_PROG) xentrace_setmask  $(DESTDIR)$(sbindir)/xentrace_setmask
+-	$(INSTALL_PROG) xenmon.py  $(DESTDIR)$(sbindir)/xenmon.py
 +	$(INSTALL_DIR) $(DESTDIR)$(LIBEXEC_BIN)
 +	$(INSTALL_PROG) xenbaked $(DESTDIR)$(LIBEXEC_BIN)/xenbaked
 +	$(INSTALL_PROG) xentrace_setmask  $(DESTDIR)$(LIBEXEC_BIN)/xentrace_setmask
 +	$(INSTALL_PROG) xenmon.py  $(DESTDIR)$(LIBEXEC_BIN)/xenmon.py
- 	$(INSTALL_DIR) $(DESTDIR)$(DOCDIR)
- 	$(INSTALL_DATA) README $(DESTDIR)$(DOCDIR)/README.xenmon
  
+ .PHONY: clean
+ clean:

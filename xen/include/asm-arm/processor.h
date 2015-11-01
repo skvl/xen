@@ -438,10 +438,21 @@ union hsr {
     } sysreg; /* HSR_EC_SYSREG */
 #endif
 
+    struct hsr_iabt {
+        unsigned long ifsc:6;  /* Instruction fault status code */
+        unsigned long res0:1;
+        unsigned long s1ptw:1; /* Stage 2 fault during stage 1 translation */
+        unsigned long res1:1;
+        unsigned long eat:1;   /* External abort type */
+        unsigned long res2:15;
+        unsigned long len:1;   /* Instruction length */
+        unsigned long ec:6;    /* Exception Class */
+    } iabt; /* HSR_EC_INSTR_ABORT_* */
+
     struct hsr_dabt {
         unsigned long dfsc:6;  /* Data Fault Status Code */
         unsigned long write:1; /* Write / not Read */
-        unsigned long s1ptw:1; /* */
+        unsigned long s1ptw:1; /* Stage 2 fault during stage 1 translation */
         unsigned long cache:1; /* Cache Maintenance */
         unsigned long eat:1;   /* External Abort Type */
 #ifdef CONFIG_ARM_32
@@ -555,8 +566,14 @@ union hsr {
 #define FSC_LL_MASK    (_AC(0x03,U)<<0)
 
 /* Time counter hypervisor control register */
-#define CNTHCTL_PA      (1u<<0)  /* Kernel/user access to physical counter */
-#define CNTHCTL_TA      (1u<<1)  /* Kernel/user access to CNTP timer */
+#define CNTHCTL_EL2_EL1PCTEN (1u<<0) /* Kernel/user access to physical counter */
+#define CNTHCTL_EL2_EL1PCEN  (1u<<1) /* Kernel/user access to CNTP timer regs */
+
+/* Time counter kernel control register */
+#define CNTKCTL_EL1_EL0PCTEN (1u<<0) /* Expose phys counters to EL0 */
+#define CNTKCTL_EL1_EL0VCTEN (1u<<1) /* Expose virt counters to EL0 */
+#define CNTKCTL_EL1_EL0VTEN  (1u<<8) /* Expose virt timer registers to EL0 */
+#define CNTKCTL_EL1_EL0PTEN  (1u<<9) /* Expose phys timer registers to EL0 */
 
 /* Timer control registers */
 #define CNTx_CTL_ENABLE   (1u<<0)  /* Enable timer */

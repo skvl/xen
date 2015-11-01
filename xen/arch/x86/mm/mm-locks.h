@@ -19,8 +19,7 @@
  * GNU General Public License for more details.
  *
  * You should have received a copy of the GNU General Public License
- * along with this program; if not, write to the Free Software
- * Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
+ * along with this program; If not, see <http://www.gnu.org/licenses/>.
  */
 
 #ifndef _MM_LOCKS_H
@@ -205,11 +204,55 @@ static inline void mm_enforce_order_unlock(int unlock_level,
  *                                                                      *
  ************************************************************************/
 
+/* Nested P2M lock (per-domain)
+ *
+ * A per-domain lock that protects the mapping from nested-CR3 to
+ * nested-p2m.  In particular it covers:
+ * - the array of nested-p2m tables, and all LRU activity therein; and
+ * - setting the "cr3" field of any p2m table to a non-P2M_BASE_EAADR value.
+ *   (i.e. assigning a p2m table to be the shadow of that cr3 */
+
 declare_mm_lock(nestedp2m)
 #define nestedp2m_lock(d)   mm_lock(nestedp2m, &(d)->arch.nested_p2m_lock)
 #define nestedp2m_unlock(d) mm_unlock(&(d)->arch.nested_p2m_lock)
 
-/* P2M lock (per-p2m-table)
+/* P2M lock (per-non-alt-p2m-table)
+ *
+ * This protects all queries and updates to the p2m table.
+ * Queries may be made under the read lock but all modifications
+ * need the main (write) lock.
+ *
+ * The write lock is recursive as it is common for a code path to look
+ * up a gfn and later mutate it.
+ *
+ * Note that this lock shares its implementation with the altp2m
+ * lock (not the altp2m list lock), so the implementation
+ * is found there.
+ *
+ * Changes made to the host p2m when in altp2m mode are propagated to the
+ * altp2ms synchronously in ept_set_entry().  At that point, we will hold
+ * the host p2m lock; propagating this change involves grabbing the
+ * altp2m_list lock, and the locks of the individual alternate p2ms.  In
+ * order to allow us to maintain locking order discipline, we split the p2m
+ * lock into p2m (for host p2ms) and altp2m (for alternate p2ms), putting
+ * the altp2mlist lock in the middle.
+ */
+
+declare_mm_rwlock(p2m);
+
+/* Alternate P2M list lock (per-domain)
+ *
+ * A per-domain lock that protects the list of alternate p2m's.
+ * Any operation that walks the list needs to acquire this lock.
+ * Additionally, before destroying an alternate p2m all VCPU's
+ * in the target domain must be paused.
+ */
+
+declare_mm_lock(altp2mlist)
+#define altp2m_list_lock(d)   mm_lock(altp2mlist, &(d)->arch.altp2m_list_lock)
+#define altp2m_list_unlock(d) mm_unlock(&(d)->arch.altp2m_list_lock)
+
+/* P2M lock (per-altp2m-table)
  *
  * This protects all queries and updates to the p2m table.
  * Queries may be made under the read lock but all modifications
@@ -219,8 +262,14 @@ declare_mm_lock(nestedp2m)
  * up a gfn and later mutate it.
  */
 
-declare_mm_rwlock(p2m);
-#define p2m_lock(p)           mm_write_lock(p2m, &(p)->lock);
+declare_mm_rwlock(altp2m);
+#define p2m_lock(p)                         \
+{                                           \
+    if ( p2m_is_altp2m(p) )                 \
+        mm_write_lock(altp2m, &(p)->lock);  \
+    else                                    \
+        mm_write_lock(p2m, &(p)->lock);     \
+}
 #define p2m_unlock(p)         mm_write_unlock(&(p)->lock);
 #define gfn_lock(p,g,o)       p2m_lock(p)
 #define gfn_unlock(p,g,o)     p2m_unlock(p)
@@ -243,14 +292,6 @@ declare_mm_order_constraint(per_page_sharing)
 #define page_sharing_mm_post_lock(l, r) \
         mm_enforce_order_lock_post_per_page_sharing((l), (r))
 #define page_sharing_mm_unlock(l, r) mm_enforce_order_unlock((l), (r))
-
-/* Nested P2M lock (per-domain)
- *
- * A per-domain lock that protects the mapping from nested-CR3 to 
- * nested-p2m.  In particular it covers:
- * - the array of nested-p2m tables, and all LRU activity therein; and
- * - setting the "cr3" field of any p2m table to a non-P2M_BASE_EAADR value.
- *   (i.e. assigning a p2m table to be the shadow of that cr3 */
 
 /* PoD lock (per-p2m-table)
  * 

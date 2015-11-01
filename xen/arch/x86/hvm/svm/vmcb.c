@@ -13,8 +13,7 @@
  * more details.
  *
  * You should have received a copy of the GNU General Public License along with
- * this program; if not, write to the Free Software Foundation, Inc., 59 Temple
- * Place - Suite 330, Boston, MA 02111-1307 USA.
+ * this program; If not, see <http://www.gnu.org/licenses/>.
  *
  */
 
@@ -118,7 +117,7 @@ static int construct_vmcb(struct vcpu *v)
         svm_disable_intercept_for_msr(v, MSR_AMD64_LWP_CBADDR);
 
     vmcb->_msrpm_base_pa = (u64)virt_to_maddr(arch_svm->msrpm);
-    vmcb->_iopm_base_pa  = (u64)virt_to_maddr(hvm_io_bitmap);
+    vmcb->_iopm_base_pa = __pa(v->domain->arch.hvm_domain.io_bitmap);
 
     /* Virtualise EFLAGS.IF and LAPIC TPR (CR8). */
     vmcb->_vintr.fields.intr_masking = 1;

@@ -219,7 +219,7 @@ static int alloc_xenoprof_struct(
     bufsize = sizeof(struct xenoprof_buf);
     i = sizeof(struct event_log);
 #ifdef CONFIG_COMPAT
-    d->xenoprof->is_compat = is_pv_32on64_domain(is_passive ? hardware_domain : d);
+    d->xenoprof->is_compat = is_pv_32bit_domain(is_passive ? hardware_domain : d);
     if ( XENOPROF_COMPAT(d->xenoprof) )
     {
         bufsize = sizeof(struct compat_oprof_buf);
@@ -239,6 +239,7 @@ static int alloc_xenoprof_struct(
     d->xenoprof->rawbuf = alloc_xenheap_pages(get_order_from_pages(npages), 0);
     if ( d->xenoprof->rawbuf == NULL )
     {
+        xfree(d->xenoprof->vcpu);
         xfree(d->xenoprof);
         d->xenoprof = NULL;
         return -ENOMEM;
@@ -286,6 +287,7 @@ void free_xenoprof_pages(struct domain *d)
         free_xenheap_pages(x->rawbuf, order);
     }
 
+    xfree(x->vcpu);
     xfree(x);
     d->xenoprof = NULL;
 }
@@ -674,15 +676,13 @@ ret_t do_xenoprof_op(int op, XEN_GUEST_HANDLE_PARAM(void) arg)
     
     if ( (op < 0) || (op > XENOPROF_last_op) )
     {
-        printk("xenoprof: invalid operation %d for domain %d\n",
-               op, current->domain->domain_id);
+        gdprintk(XENLOG_DEBUG, "invalid operation %d\n", op);
         return -EINVAL;
     }
 
     if ( !NONPRIV_OP(op) && (current->domain != xenoprof_primary_profiler) )
     {
-        printk("xenoprof: dom %d denied privileged operation %d\n",
-               current->domain->domain_id, op);
+        gdprintk(XENLOG_DEBUG, "denied privileged operation %d\n", op);
         return -EPERM;
     }
 
@@ -905,8 +905,7 @@ ret_t do_xenoprof_op(int op, XEN_GUEST_HANDLE_PARAM(void) arg)
     spin_unlock(&xenoprof_lock);
 
     if ( ret < 0 )
-        printk("xenoprof: operation %d failed for dom %d (status : %d)\n",
-               op, current->domain->domain_id, ret);
+        gdprintk(XENLOG_DEBUG, "operation %d failed: %d\n", op, ret);
 
     return ret;
 }

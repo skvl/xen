@@ -1,4 +1,4 @@
-From 6c4f6b7cf74c6a5f93b894096e8042c8bb64a64c Mon Sep 17 00:00:00 2001
+From 85fba7aaa37170064971807e1209b119b6b9cf0e Mon Sep 17 00:00:00 2001
 From: Bastian Blank <waldi@debian.org>
 Date: Sat, 5 Jul 2014 11:46:53 +0200
 Subject: tools-blktap2-prefix.diff
@@ -11,7 +11,7 @@ Patch-Name: tools-blktap2-prefix.diff
  3 files changed, 18 insertions(+), 38 deletions(-)
 
 diff --git a/tools/blktap2/control/Makefile b/tools/blktap2/control/Makefile
-index a88ff4c..d2615d9 100644
+index 767f52a..c09ed65 100644
 --- a/tools/blktap2/control/Makefile
 +++ b/tools/blktap2/control/Makefile
 @@ -1,10 +1,7 @@
@@ -55,16 +55,16 @@ index a88ff4c..d2615d9 100644
 +	$(CC) $(LDFLAGS) -fPIC $(SHLIB_LDFLAGS) -rdynamic $^ -o $@ $(APPEND_LDFLAGS)
  
  install: $(IBIN) $(LIB_STATIC) $(LIB_SHARED)
--	$(INSTALL_DIR) -p $(DESTDIR)$(SBINDIR)
--	$(INSTALL_PROG) $(IBIN) $(DESTDIR)$(SBINDIR)
-+	$(INSTALL_DIR) -p $(DESTDIR)$(LIBDIR)
+-	$(INSTALL_DIR) -p $(DESTDIR)$(sbindir)
+-	$(INSTALL_PROG) $(IBIN) $(DESTDIR)$(sbindir)
++	$(INSTALL_DIR) -p $(DESTDIR)$(libdir)
 +	$(INSTALL_DIR) -p $(DESTDIR)$(LIBEXEC_BIN)
 +	$(INSTALL_DIR) -p $(DESTDIR)$(LIBEXEC_LIB)
 +	$(INSTALL_PROG) $(IBIN) $(DESTDIR)$(LIBEXEC_BIN)
- 	$(INSTALL_DATA) $(LIB_STATIC) $(DESTDIR)$(LIBDIR)
--	$(INSTALL_PROG) $(LIB_SHARED) $(DESTDIR)$(LIBDIR)
--	ln -sf $(LIBSONAME) $(DESTDIR)$(LIBDIR)/$(LIBNAME).so
--	ln -sf $(LIB_SHARED) $(DESTDIR)$(LIBDIR)/$(LIBSONAME)
+ 	$(INSTALL_DATA) $(LIB_STATIC) $(DESTDIR)$(libdir)
+-	$(INSTALL_PROG) $(LIB_SHARED) $(DESTDIR)$(libdir)
+-	ln -sf $(LIBSONAME) $(DESTDIR)$(libdir)/$(LIBNAME).so
+-	ln -sf $(LIB_SHARED) $(DESTDIR)$(libdir)/$(LIBSONAME)
 +	$(INSTALL_PROG) $(LIB_SHARED) $(DESTDIR)$(LIBEXEC_LIB)
  
  clean:
@@ -72,9 +72,9 @@ index a88ff4c..d2615d9 100644
 -	rm -f $(LIBNAME).so $(LIBSONAME)
  	rm -f *~
  
- .PHONY: all build clean install
+ distclean: clean
 diff --git a/tools/blktap2/vhd/Makefile b/tools/blktap2/vhd/Makefile
-index fef0d36..cf8b639 100644
+index fabd665..9802805 100644
 --- a/tools/blktap2/vhd/Makefile
 +++ b/tools/blktap2/vhd/Makefile
 @@ -12,6 +12,7 @@ CFLAGS            += -Werror
@@ -86,7 +86,7 @@ index fef0d36..cf8b639 100644
  ifeq ($(CONFIG_X86_64),y)
  CFLAGS            += -fPIC
 diff --git a/tools/blktap2/vhd/lib/Makefile b/tools/blktap2/vhd/lib/Makefile
-index 99e3cdb..45fac4f 100644
+index ab2d648..bd6501d 100644
 --- a/tools/blktap2/vhd/lib/Makefile
 +++ b/tools/blktap2/vhd/lib/Makefile
 @@ -2,25 +2,19 @@ XEN_ROOT=$(CURDIR)/../../../..
@@ -101,7 +101,7 @@ index 99e3cdb..45fac4f 100644
  
 -LIBVHD-BUILD    := libvhd.a
 -
--INST-DIR         = $(LIBDIR)
+-INST-DIR         = $(libdir)
 -
  CFLAGS          += -Werror
  CFLAGS          += -Wno-unused
@@ -146,9 +146,9 @@ index 99e3cdb..45fac4f 100644
 -	$(INSTALL_PROG) libvhd.so.$(LIBVHD-MAJOR).$(LIBVHD-MINOR) $(DESTDIR)$(INST-DIR)
 -	ln -sf libvhd.so.$(LIBVHD-MAJOR).$(LIBVHD-MINOR) $(DESTDIR)$(INST-DIR)/libvhd.so.$(LIBVHD-MAJOR)
 -	ln -sf libvhd.so.$(LIBVHD-MAJOR) $(DESTDIR)$(INST-DIR)/libvhd.so
-+	$(INSTALL_DIR) -p $(DESTDIR)$(LIBDIR)
-+	$(INSTALL_DATA) libvhd.a $(DESTDIR)$(LIBDIR)
-+	$(INSTALL_PROG) libvhd.so $(DESTDIR)$(LIBDIR)
++	$(INSTALL_DIR) -p $(DESTDIR)$(libdir)
++	$(INSTALL_DATA) libvhd.a $(DESTDIR)$(libdir)
++	$(INSTALL_PROG) libvhd.so $(DESTDIR)$(libdir)
  
  clean:
  	rm -rf *.a *.so* *.o *.opic *~ $(DEPS) $(LIBVHD)

@@ -48,7 +48,7 @@ static uint64_t __initdata sinit_base, __initdata sinit_size;
 #define TXTCR_HEAP_BASE             0x0300
 #define TXTCR_HEAP_SIZE             0x0308
 
-extern char __init_begin[], __bss_start[];
+extern char __init_begin[], __bss_start[], __bss_end[];
 
 #define SHA1_SIZE      20
 typedef uint8_t   sha1_hash_t[SHA1_SIZE];
@@ -138,7 +138,7 @@ void __init tboot_probe(void)
                       TXT_PUB_CONFIG_REGS_BASE + TXTCR_SINIT_BASE);
     tboot_copy_memory((unsigned char *)&sinit_size, sizeof(sinit_size),
                       TXT_PUB_CONFIG_REGS_BASE + TXTCR_SINIT_SIZE);
-    __set_fixmap(FIX_TBOOT_MAP_ADDRESS, 0, 0);
+    clear_fixmap(FIX_TBOOT_MAP_ADDRESS);
 }
 
 /* definitions from xen/drivers/passthrough/vtd/iommu.h
@@ -161,7 +161,7 @@ static void update_iommu_mac(vmac_ctx_t *ctx, uint64_t pt_maddr, int level)
     if ( pt_maddr == 0 )
         return;
 
-    pt_vaddr = (struct dma_pte *)map_domain_page(pt_maddr >> PAGE_SHIFT_4K);
+    pt_vaddr = (struct dma_pte *)map_domain_page(_mfn(paddr_to_pfn(pt_maddr)));
     vmac_update((void *)pt_vaddr, PAGE_SIZE, ctx);
 
     for ( i = 0; i < PTE_NUM; i++ )
@@ -194,7 +194,8 @@ static void update_pagetable_mac(vmac_ctx_t *ctx)
         {
             if ( page->count_info & PGC_page_table )
             {
-                void *pg = map_domain_page(mfn);
+                void *pg = map_domain_page(_mfn(mfn));
+
                 vmac_update(pg, PAGE_SIZE, ctx);
                 unmap_domain_page(pg);
             }
@@ -374,7 +375,7 @@ void tboot_shutdown(uint32_t shutdown_type)
                                               __pa(&_stext);
         /* bss */
         g_tboot_shared->mac_regions[2].start = (uint64_t)__pa(&__bss_start);
-        g_tboot_shared->mac_regions[2].size = __pa(&_end) - __pa(&__bss_start);
+        g_tboot_shared->mac_regions[2].size = __pa(&__bss_end) - __pa(&__bss_start);
 
         /*
          * MAC domains and other Xen memory
@@ -435,13 +436,12 @@ int __init tboot_protect_mem_regions(void)
 
 int __init tboot_parse_dmar_table(acpi_table_handler dmar_handler)
 {
-    struct acpi_table_header *dmar_table;
     int rc;
     uint64_t size;
     uint32_t dmar_table_length;
     unsigned long pa;
     sinit_mle_data_t sinit_mle_data;
-    unsigned char *dmar_table_raw;
+    void *dmar_table;
 
     if ( !tboot_in_measured_env() )
         return acpi_table_parse(ACPI_SIG_DMAR, dmar_handler);
@@ -474,13 +474,12 @@ int __init tboot_parse_dmar_table(acpi_table_handler dmar_handler)
     tboot_copy_memory((unsigned char *)&dmar_table_length,
                       sizeof(dmar_table_length),
                       pa + sizeof(char) * ACPI_NAME_SIZE);
-    dmar_table_raw = xmalloc_array(unsigned char, dmar_table_length);
-    tboot_copy_memory(dmar_table_raw, dmar_table_length, pa);
-    dmar_table = (struct acpi_table_header *)dmar_table_raw;
-    __set_fixmap(FIX_TBOOT_MAP_ADDRESS, 0, 0);
+    dmar_table = xmalloc_bytes(dmar_table_length);
+    tboot_copy_memory(dmar_table, dmar_table_length, pa);
+    clear_fixmap(FIX_TBOOT_MAP_ADDRESS);
 
     rc = dmar_handler(dmar_table);
-    xfree(dmar_table_raw);
+    xfree(dmar_table);
 
     /* acpi_parse_dmar() zaps APCI DMAR signature in TXT heap table */
     /* but dom0 will read real table, so must zap it there too */

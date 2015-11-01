@@ -11,8 +11,7 @@
  * more details.
  *
  * You should have received a copy of the GNU General Public License along with
- * this program; if not, write to the Free Software Foundation, Inc., 59 Temple
- * Place - Suite 330, Boston, MA 02111-1307 USA.
+ * this program; If not, see <http://www.gnu.org/licenses/>.
  *
  * Copyright (C) Ashok Raj <ashok.raj@intel.com>
  */
@@ -51,17 +50,10 @@
 #define    DMAR_IRTA_REG   0xB8    /* intr remap */
 
 #define OFFSET_STRIDE        (9)
-#define dmar_readl(dmar, reg) readl(dmar + reg)
-#define dmar_writel(dmar, reg, val) writel(val, dmar + reg)
-#define dmar_readq(dmar, reg) ({ \
-        u32 lo, hi; \
-        lo = dmar_readl(dmar, reg); \
-        hi = dmar_readl(dmar, reg + 4); \
-        (((u64) hi) << 32) + lo; })
-#define dmar_writeq(dmar, reg, val) do {\
-        dmar_writel(dmar, reg, (u32)val); \
-        dmar_writel(dmar, reg + 4, (u32)((u64) val >> 32)); \
-    } while (0)
+#define dmar_readl(dmar, reg) readl((dmar) + (reg))
+#define dmar_readq(dmar, reg) readq((dmar) + (reg))
+#define dmar_writel(dmar, reg, val) writel(val, (dmar) + (reg))
+#define dmar_writeq(dmar, reg, val) writeq(val, (dmar) + (reg))
 
 #define VER_MAJOR(v)        (((v) & 0xf0) >> 4)
 #define VER_MINOR(v)        ((v) & 0x0f)
@@ -482,7 +474,6 @@ struct qinval_entry {
 #define VTD_PAGE_TABLE_LEVEL_3  3
 #define VTD_PAGE_TABLE_LEVEL_4  4
 
-#define DEFAULT_DOMAIN_ADDRESS_WIDTH 48
 #define MAX_IOMMU_REGS 0xc0
 
 extern struct list_head acpi_drhd_units;

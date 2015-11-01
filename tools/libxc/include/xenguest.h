@@ -16,18 +16,20 @@
  * Lesser General Public License for more details.
  *
  * You should have received a copy of the GNU Lesser General Public
- * License along with this library; if not, write to the Free Software
- * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301  USA
+ * License along with this library; If not, see <http://www.gnu.org/licenses/>.
  */
 
 #ifndef XENGUEST_H
 #define XENGUEST_H
+
+#define XC_NUMA_NO_NODE   (~0U)
 
 #define XCFLAGS_LIVE      (1 << 0)
 #define XCFLAGS_DEBUG     (1 << 1)
 #define XCFLAGS_HVM       (1 << 2)
 #define XCFLAGS_STDVGA    (1 << 3)
 #define XCFLAGS_CHECKPOINT_COMPRESS    (1 << 4)
+#define XCFLAGS_CHECKPOINTED    (1 << 5)
 
 #define X86_64_B_SIZE   64 
 #define X86_32_B_SIZE   32
@@ -64,14 +66,6 @@ struct save_callbacks {
     /* Enable qemu-dm logging dirty pages to xen */
     int (*switch_qemu_logdirty)(int domid, unsigned enable, void *data); /* HVM only */
 
-    /* Save toolstack specific data
-     * @param buf the buffer with the data to be saved
-     * @param len the length of the buffer
-     * The callee allocates the buffer, the caller frees it (buffer must
-     * be free'able).
-     */
-    int (*toolstack_save)(uint32_t domid, uint8_t **buf, uint32_t *len, void *data);
-
     /* to be provided as the last argument to each callback function */
     void* data;
 };
@@ -88,12 +82,14 @@ int xc_domain_save(xc_interface *xch, int io_fd, uint32_t dom, uint32_t max_iter
                    uint32_t max_factor, uint32_t flags /* XCFLAGS_xxx */,
                    struct save_callbacks* callbacks, int hvm);
 
-
 /* callbacks provided by xc_domain_restore */
 struct restore_callbacks {
-    /* callback to restore toolstack specific data */
-    int (*toolstack_restore)(uint32_t domid, const uint8_t *buf,
-            uint32_t size, void* data);
+    /* A checkpoint record has been found in the stream.
+     * returns: */
+#define XGR_CHECKPOINT_ERROR    0 /* Terminate processing */
+#define XGR_CHECKPOINT_SUCCESS  1 /* Continue reading more data from the stream */
+#define XGR_CHECKPOINT_FAILOVER 2 /* Failover and resume VM */
+    int (*checkpoint)(void* data);
 
     /* to be provided as the last argument to each callback function */
     void* data;
@@ -124,14 +120,6 @@ int xc_domain_restore(xc_interface *xch, int io_fd, uint32_t dom,
                       unsigned int hvm, unsigned int pae, int superpages,
                       int checkpointed_stream,
                       struct restore_callbacks *callbacks);
-/**
- * xc_domain_restore writes a file to disk that contains the device
- * model saved state.
- * The pathname of this file is XC_DEVICE_MODEL_RESTORE_FILE; The domid
- * of the new domain is automatically appended to the filename,
- * separated by a ".".
- */
-#define XC_DEVICE_MODEL_RESTORE_FILE "/var/lib/xen/qemu-resume"
 
 /**
  * This function will create a domain for a paravirtualized Linux
@@ -230,6 +218,17 @@ struct xc_hvm_build_args {
     struct xc_hvm_firmware_module smbios_module;
     /* Whether to use claim hypercall (1 - enable, 0 - disable). */
     int claim_enabled;
+
+    /* vNUMA information*/
+    xen_vmemrange_t *vmemranges;
+    unsigned int nr_vmemranges;
+    unsigned int *vnode_to_pnode;
+    unsigned int nr_vnodes;
+
+    /* Out parameters  */
+    uint64_t lowmem_end;
+    uint64_t highmem_end;
+    uint64_t mmio_start;
 };
 
 /**

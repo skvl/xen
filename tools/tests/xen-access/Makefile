@@ -7,8 +7,8 @@ CFLAGS += $(CFLAGS_libxenctrl)
 CFLAGS += $(CFLAGS_libxenguest)
 CFLAGS += $(CFLAGS_xeninclude)
 
-TARGETS-y := 
-TARGETS-$(CONFIG_X86) += xen-access
+TARGETS-y :=
+TARGETS-$(HAS_MEM_ACCESS) := xen-access
 TARGETS := $(TARGETS-y)
 
 .PHONY: all
@@ -20,6 +20,9 @@ build: $(TARGETS)
 .PHONY: clean
 clean:
 	$(RM) *.o $(TARGETS) *~ $(DEPS)
+
+.PHONY: distclean
+distclean: clean
 
 xen-access: xen-access.o Makefile
 	$(CC) -o $@ $< $(LDFLAGS) $(LDLIBS_libxenctrl) $(LDLIBS_libxenguest)

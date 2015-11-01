@@ -11,8 +11,7 @@
  * more details.
  *
  * You should have received a copy of the GNU General Public License along with
- * this program; if not, write to the Free Software Foundation, Inc., 59 Temple
- * Place - Suite 330, Boston, MA 02111-1307 USA.
+ * this program; If not, see <http://www.gnu.org/licenses/>.
  *
  * Copyright (C) Ashok Raj <ashok.raj@intel.com>
  * Copyright (C) Shaohua Li <shaohua.li@intel.com>
@@ -28,6 +27,7 @@
 #include <xen/xmalloc.h>
 #include <xen/pci.h>
 #include <xen/pci_regs.h>
+#include <asm/atomic.h>
 #include <asm/string.h>
 #include "dmar.h"
 #include "iommu.h"
@@ -80,6 +80,16 @@ static int __init acpi_register_rmrr_unit(struct acpi_rmrr_unit *rmrr)
     return 0;
 }
 
+static void scope_devices_free(struct dmar_scope *scope)
+{
+    if ( !scope )
+        return;
+
+    scope->devices_cnt = 0;
+    xfree(scope->devices);
+    scope->devices = NULL;
+}
+
 static void __init disable_all_dmar_units(void)
 {
     struct acpi_drhd_unit *drhd, *_drhd;
@@ -89,16 +99,19 @@ static void __init disable_all_dmar_units(void)
     list_for_each_entry_safe ( drhd, _drhd, &acpi_drhd_units, list )
     {
         list_del(&drhd->list);
+        scope_devices_free(&drhd->scope);
         xfree(drhd);
     }
     list_for_each_entry_safe ( rmrr, _rmrr, &acpi_rmrr_units, list )
     {
         list_del(&rmrr->list);
+        scope_devices_free(&rmrr->scope);
         xfree(rmrr);
     }
     list_for_each_entry_safe ( atsr, _atsr, &acpi_atsr_units, list )
     {
         list_del(&atsr->list);
+        scope_devices_free(&atsr->scope);
         xfree(atsr);
     }
 }
@@ -317,13 +330,13 @@ static int __init acpi_parse_dev_scope(
     if ( (cnt = scope_device_count(start, end)) < 0 )
         return cnt;
 
-    scope->devices_cnt = cnt;
     if ( cnt > 0 )
     {
         scope->devices = xzalloc_array(u16, cnt);
         if ( !scope->devices )
             return -ENOMEM;
     }
+    scope->devices_cnt = cnt;
 
     while ( start < end )
     {
@@ -426,7 +439,7 @@ static int __init acpi_parse_dev_scope(
 
  out:
     if ( ret )
-        xfree(scope->devices);
+        scope_devices_free(scope);
 
     return ret;
 }
@@ -523,7 +536,7 @@ acpi_parse_one_drhd(struct acpi_dmar_header *header)
             d = PCI_SLOT(dmaru->scope.devices[i]);
             f = PCI_FUNC(dmaru->scope.devices[i]);
 
-            if ( pci_device_detect(drhd->segment, b, d, f) == 0 )
+            if ( !pci_device_detect(drhd->segment, b, d, f) )
             {
                 dprintk(XENLOG_WARNING VTDPREFIX,
                         " Non-existent device (%04x:%02x:%02x.%u) is reported"
@@ -541,6 +554,7 @@ acpi_parse_one_drhd(struct acpi_dmar_header *header)
                     "  Workaround BIOS bug: ignore the DRHD due to all "
                     "devices under its scope are not PCI discoverable!\n");
 
+                scope_devices_free(&dmaru->scope);
                 iommu_free(dmaru);
                 xfree(dmaru);
             }
@@ -561,9 +575,11 @@ acpi_parse_one_drhd(struct acpi_dmar_header *header)
 out:
     if ( ret )
     {
+        scope_devices_free(&dmaru->scope);
         iommu_free(dmaru);
         xfree(dmaru);
     }
+
     return ret;
 }
 
@@ -635,7 +651,7 @@ acpi_parse_one_rmrr(struct acpi_dmar_header *header)
             d = PCI_SLOT(rmrru->scope.devices[i]);
             f = PCI_FUNC(rmrru->scope.devices[i]);
 
-            if ( pci_device_detect(rmrr->segment, b, d, f) == 0 )
+            if ( !pci_device_detect(rmrr->segment, b, d, f) )
             {
                 dprintk(XENLOG_WARNING VTDPREFIX,
                         " Non-existent device (%04x:%02x:%02x.%u) is reported"
@@ -657,6 +673,7 @@ acpi_parse_one_rmrr(struct acpi_dmar_header *header)
                 "  Ignore the RMRR (%"PRIx64", %"PRIx64") due to "
                 "devices under its scope are not PCI discoverable!\n",
                 rmrru->base_address, rmrru->end_address);
+            scope_devices_free(&rmrru->scope);
             xfree(rmrru);
         }
         else if ( base_addr > end_addr )
@@ -664,6 +681,7 @@ acpi_parse_one_rmrr(struct acpi_dmar_header *header)
             dprintk(XENLOG_WARNING VTDPREFIX,
                 "  The RMRR (%"PRIx64", %"PRIx64") is incorrect!\n",
                 rmrru->base_address, rmrru->end_address);
+            scope_devices_free(&rmrru->scope);
             xfree(rmrru);
             ret = -EFAULT;
         }
@@ -726,7 +744,10 @@ acpi_parse_one_atsr(struct acpi_dmar_header *header)
     }
 
     if ( ret )
+    {
+        scope_devices_free(&atsru->scope);
         xfree(atsru);
+    }
     else
         acpi_register_atsr_unit(atsru);
     return ret;
@@ -838,8 +859,7 @@ static int __init acpi_parse_dmar(struct acpi_table_header *table)
 
 out:
     /* Zap ACPI DMAR signature to prevent dom0 using vt-d HW. */
-    dmar->header.signature[0] = 'X';
-    dmar->header.checksum -= 'X'-'D';
+    acpi_dmar_zap();
     return ret;
 }
 
@@ -867,18 +887,18 @@ int __init acpi_dmar_init(void)
 
 void acpi_dmar_reinstate(void)
 {
-    if ( dmar_table == NULL )
-        return;
-    dmar_table->signature[0] = 'D';
-    dmar_table->checksum += 'X'-'D';
+    uint32_t sig = 0x52414d44; /* "DMAR" */
+
+    if ( dmar_table )
+        write_atomic((uint32_t*)&dmar_table->signature[0], sig);
 }
 
 void acpi_dmar_zap(void)
 {
-    if ( dmar_table == NULL )
-        return;
-    dmar_table->signature[0] = 'X';
-    dmar_table->checksum -= 'X'-'D';
+    uint32_t sig = 0x44414d52; /* "RMAD" - doesn't alter table checksum */
+
+    if ( dmar_table )
+        write_atomic((uint32_t*)&dmar_table->signature[0], sig);
 }
 
 int platform_supports_intremap(void)
@@ -892,4 +912,31 @@ int platform_supports_x2apic(void)
 {
     unsigned int mask = ACPI_DMAR_INTR_REMAP | ACPI_DMAR_X2APIC_OPT_OUT;
     return cpu_has_x2apic && ((dmar_flags & mask) == ACPI_DMAR_INTR_REMAP);
+}
+
+int intel_iommu_get_reserved_device_memory(iommu_grdm_t *func, void *ctxt)
+{
+    struct acpi_rmrr_unit *rmrr, *rmrr_cur = NULL;
+    unsigned int i;
+    u16 bdf;
+
+    for_each_rmrr_device ( rmrr, bdf, i )
+    {
+        int rc;
+
+        if ( rmrr == rmrr_cur )
+            continue;
+
+        rc = func(PFN_DOWN(rmrr->base_address),
+                  PFN_UP(rmrr->end_address) - PFN_DOWN(rmrr->base_address),
+                  PCI_SBDF2(rmrr->segment, bdf), ctxt);
+
+        if ( unlikely(rc < 0) )
+            return rc;
+
+        if ( rc )
+            rmrr_cur = rmrr;
+    }
+
+    return 0;
 }

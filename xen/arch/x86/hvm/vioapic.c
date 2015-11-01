@@ -18,8 +18,7 @@
  *  Lesser General Public License for more details.
  *
  *  You should have received a copy of the GNU Lesser General Public
- *  License along with this library; if not, write to the Free Software
- *  Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307 USA
+ *  License along with this library; If not, see <http://www.gnu.org/licenses/>.
  *
  *  Yunhong Jiang <yunhong.jiang@intel.com>
  *  Ported to xen by using virtual IRQ line.
@@ -46,27 +45,33 @@
 
 static void vioapic_deliver(struct hvm_hw_vioapic *vioapic, int irq);
 
-static unsigned long vioapic_read_indirect(struct hvm_hw_vioapic *vioapic,
-                                           unsigned long addr,
-                                           unsigned long length)
+static uint32_t vioapic_read_indirect(const struct hvm_hw_vioapic *vioapic)
 {
-    unsigned long result = 0;
+    uint32_t result = 0;
 
     switch ( vioapic->ioregsel )
     {
     case VIOAPIC_REG_VERSION:
-        result = ((((VIOAPIC_NUM_PINS-1) & 0xff) << 16)
-                  | (VIOAPIC_VERSION_ID & 0xff));
+        result = ((union IO_APIC_reg_01){
+                  .bits = { .version = VIOAPIC_VERSION_ID,
+                            .entries = VIOAPIC_NUM_PINS - 1 }
+                  }).raw;
         break;
 
     case VIOAPIC_REG_APIC_ID:
+        /*
+         * Using union IO_APIC_reg_02 for the ID register too, as
+         * union IO_APIC_reg_00's ID field is 8 bits wide for some reason.
+         */
     case VIOAPIC_REG_ARB_ID:
-        result = ((vioapic->id & 0xf) << 24);
+        result = ((union IO_APIC_reg_02){
+                  .bits = { .arbitration = vioapic->id }
+                  }).raw;
         break;
 
     default:
     {
-        uint32_t redir_index = (vioapic->ioregsel - 0x10) >> 1;
+        uint32_t redir_index = (vioapic->ioregsel - VIOAPIC_REG_RTE0) >> 1;
         uint64_t redir_content;
 
         if ( redir_index >= VIOAPIC_NUM_PINS )
@@ -77,9 +82,8 @@ static unsigned long vioapic_read_indirect(struct hvm_hw_vioapic *vioapic,
         }
 
         redir_content = vioapic->redirtbl[redir_index].bits;
-        result = (vioapic->ioregsel & 0x1)?
-            (redir_content >> 32) & 0xffffffff :
-            redir_content & 0xffffffff;
+        result = (vioapic->ioregsel & 1) ? (redir_content >> 32)
+                                         : redir_content;
         break;
     }
     }
@@ -89,23 +93,21 @@ static unsigned long vioapic_read_indirect(struct hvm_hw_vioapic *vioapic,
 
 static int vioapic_read(
     struct vcpu *v, unsigned long addr,
-    unsigned long length, unsigned long *pval)
+    unsigned int length, unsigned long *pval)
 {
-    struct hvm_hw_vioapic *vioapic = domain_vioapic(v->domain);
+    const struct hvm_hw_vioapic *vioapic = domain_vioapic(v->domain);
     uint32_t result;
 
     HVM_DBG_LOG(DBG_LEVEL_IOAPIC, "addr %lx", addr);
 
-    addr &= 0xff;
-
-    switch ( addr )
+    switch ( addr & 0xff )
     {
     case VIOAPIC_REG_SELECT:
         result = vioapic->ioregsel;
         break;
 
     case VIOAPIC_REG_WINDOW:
-        result = vioapic_read_indirect(vioapic, addr, length);
+        result = vioapic_read_indirect(vioapic);
         break;
 
     default:
@@ -169,7 +171,7 @@ static void vioapic_write_redirent(
 }
 
 static void vioapic_write_indirect(
-    struct hvm_hw_vioapic *vioapic, unsigned long length, unsigned long val)
+    struct hvm_hw_vioapic *vioapic, uint32_t val)
 {
     switch ( vioapic->ioregsel )
     {
@@ -178,7 +180,12 @@ static void vioapic_write_indirect(
         break;
 
     case VIOAPIC_REG_APIC_ID:
-        vioapic->id = (val >> 24) & 0xf;
+        /*
+         * Presumably because we emulate an Intel IOAPIC which only has a
+         * 4 bit ID field (compared to 8 for AMD), using union IO_APIC_reg_02
+         * for the ID register (union IO_APIC_reg_00's ID field is 8 bits).
+         */
+        vioapic->id = ((union IO_APIC_reg_02){ .raw = val }).bits.arbitration;
         break;
 
     case VIOAPIC_REG_ARB_ID:
@@ -186,10 +193,10 @@ static void vioapic_write_indirect(
 
     default:
     {
-        uint32_t redir_index = (vioapic->ioregsel - 0x10) >> 1;
+        uint32_t redir_index = (vioapic->ioregsel - VIOAPIC_REG_RTE0) >> 1;
 
-        HVM_DBG_LOG(DBG_LEVEL_IOAPIC, "change redir index %x val %lx",
-                    redir_index, val);
+        HVM_DBG_LOG(DBG_LEVEL_IOAPIC, "rte[%02x].%s = %08x",
+                    redir_index, vioapic->ioregsel & 1 ? "hi" : "lo", val);
 
         if ( redir_index >= VIOAPIC_NUM_PINS )
         {
@@ -207,20 +214,18 @@ static void vioapic_write_indirect(
 
 static int vioapic_write(
     struct vcpu *v, unsigned long addr,
-    unsigned long length, unsigned long val)
+    unsigned int length, unsigned long val)
 {
     struct hvm_hw_vioapic *vioapic = domain_vioapic(v->domain);
 
-    addr &= 0xff;
-
-    switch ( addr )
+    switch ( addr & 0xff )
     {
     case VIOAPIC_REG_SELECT:
         vioapic->ioregsel = val;
         break;
 
     case VIOAPIC_REG_WINDOW:
-        vioapic_write_indirect(vioapic, length, val);
+        vioapic_write_indirect(vioapic, val);
         break;
 
 #if VIOAPIC_VERSION_ID >= 0x20
@@ -244,10 +249,10 @@ static int vioapic_range(struct vcpu *v, unsigned long addr)
              (addr < vioapic->base_address + VIOAPIC_MEM_LENGTH)));
 }
 
-const struct hvm_mmio_handler vioapic_mmio_handler = {
-    .check_handler = vioapic_range,
-    .read_handler = vioapic_read,
-    .write_handler = vioapic_write
+static const struct hvm_mmio_ops vioapic_mmio_ops = {
+    .check = vioapic_range,
+    .read = vioapic_read,
+    .write = vioapic_write
 };
 
 static void ioapic_inj_irq(
@@ -380,7 +385,7 @@ void vioapic_irq_positive_edge(struct domain *d, unsigned int irq)
     }
 }
 
-void vioapic_update_EOI(struct domain *d, int vector)
+void vioapic_update_EOI(struct domain *d, u8 vector)
 {
     struct hvm_hw_vioapic *vioapic = domain_vioapic(d);
     struct hvm_irq *hvm_irq = &d->arch.hvm_domain.irq;
@@ -449,6 +454,8 @@ int vioapic_init(struct domain *d)
 
     d->arch.hvm_domain.vioapic->domain = d;
     vioapic_reset(d);
+
+    register_mmio_handler(d, &vioapic_mmio_ops);
 
     return 0;
 }

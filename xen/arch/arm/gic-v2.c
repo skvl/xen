@@ -28,6 +28,7 @@
 #include <xen/list.h>
 #include <xen/device_tree.h>
 #include <xen/libfdt/libfdt.h>
+#include <xen/sizes.h>
 #include <asm/p2m.h>
 #include <asm/domain.h>
 #include <asm/platform.h>
@@ -63,13 +64,9 @@
 
 /* Global state */
 static struct {
-    paddr_t dbase;            /* Address of distributor registers */
     void __iomem * map_dbase; /* IO mapped Address of distributor registers */
-    paddr_t cbase;            /* Address of CPU interface registers */
     void __iomem * map_cbase[2]; /* IO mapped Address of CPU interface registers */
-    paddr_t hbase;            /* Address of virtual interface registers */
     void __iomem * map_hbase; /* IO Address of virtual interface registers */
-    paddr_t vbase;            /* Address of virtual cpu interface registers */
     spinlock_t lock;
 } gicv2;
 
@@ -211,7 +208,7 @@ static void gicv2_set_irq_properties(struct irq_desc *desc,
                                    const cpumask_t *cpu_mask,
                                    unsigned int priority)
 {
-    uint32_t cfg, edgebit;
+    uint32_t cfg, actual, edgebit;
     unsigned int mask = gicv2_cpu_mask(cpu_mask);
     unsigned int irq = desc->irq;
     unsigned int type = desc->arch.type;
@@ -229,6 +226,20 @@ static void gicv2_set_irq_properties(struct irq_desc *desc,
         cfg |= edgebit;
     writel_gicd(cfg, GICD_ICFGR + (irq / 16) * 4);
 
+    actual = readl_gicd(GICD_ICFGR + (irq / 16) * 4);
+    if ( ( cfg & edgebit ) ^ ( actual & edgebit ) )
+    {
+        printk(XENLOG_WARNING "GICv2: WARNING: "
+               "CPU%d: Failed to configure IRQ%u as %s-triggered. "
+               "H/w forces to %s-triggered.\n",
+               smp_processor_id(), desc->irq,
+               cfg & edgebit ? "Edge" : "Level",
+               actual & edgebit ? "Edge" : "Level");
+        desc->arch.type = actual & edgebit ?
+            DT_IRQ_TYPE_EDGE_RISING :
+            DT_IRQ_TYPE_LEVEL_HIGH;
+    }
+
     /* Set target CPU mask (RAZ/WI on uniprocessor) */
     writeb_gicd(mask, GICD_ITARGETSR + irq);
     /* Set priority */
@@ -242,6 +253,7 @@ static void __init gicv2_dist_init(void)
     uint32_t type;
     uint32_t cpumask;
     uint32_t gic_cpus;
+    unsigned int nr_lines;
     int i;
 
     cpumask = readl_gicd(GICD_ITARGETSR) & 0xff;
@@ -252,30 +264,33 @@ static void __init gicv2_dist_init(void)
     writel_gicd(0, GICD_CTLR);
 
     type = readl_gicd(GICD_TYPER);
-    gicv2_info.nr_lines = 32 * ((type & GICD_TYPE_LINES) + 1);
+    nr_lines = 32 * ((type & GICD_TYPE_LINES) + 1);
     gic_cpus = 1 + ((type & GICD_TYPE_CPUS) >> 5);
     printk("GICv2: %d lines, %d cpu%s%s (IID %8.8x).\n",
-           gicv2_info.nr_lines, gic_cpus, (gic_cpus == 1) ? "" : "s",
+           nr_lines, gic_cpus, (gic_cpus == 1) ? "" : "s",
            (type & GICD_TYPE_SEC) ? ", secure" : "",
            readl_gicd(GICD_IIDR));
 
     /* Default all global IRQs to level, active low */
-    for ( i = 32; i < gicv2_info.nr_lines; i += 16 )
+    for ( i = 32; i < nr_lines; i += 16 )
         writel_gicd(0x0, GICD_ICFGR + (i / 16) * 4);
 
     /* Route all global IRQs to this CPU */
-    for ( i = 32; i < gicv2_info.nr_lines; i += 4 )
+    for ( i = 32; i < nr_lines; i += 4 )
         writel_gicd(cpumask, GICD_ITARGETSR + (i / 4) * 4);
 
     /* Default priority for global interrupts */
-    for ( i = 32; i < gicv2_info.nr_lines; i += 4 )
+    for ( i = 32; i < nr_lines; i += 4 )
         writel_gicd(GIC_PRI_IRQ << 24 | GIC_PRI_IRQ << 16 |
                     GIC_PRI_IRQ << 8 | GIC_PRI_IRQ,
                     GICD_IPRIORITYR + (i / 4) * 4);
 
     /* Disable all global interrupts */
-    for ( i = 32; i < gicv2_info.nr_lines; i += 32 )
+    for ( i = 32; i < nr_lines; i += 32 )
         writel_gicd(~0x0, GICD_ICENABLER + (i / 32) * 4);
+
+    /* Only 1020 interrupts are supported */
+    gicv2_info.nr_lines = min(1020U, nr_lines);
 
     /* Turn on the distributor */
     writel_gicd(GICD_CTL_ENABLE, GICD_CTLR);
@@ -327,8 +342,6 @@ static void __cpuinit gicv2_hyp_init(void)
     vtr = readl_gich(GICH_VTR);
     nr_lrs  = (vtr & GICH_V2_VTR_NRLRGS) + 1;
     gicv2_info.nr_lrs = nr_lrs;
-
-    writel_gich(GICH_MISR_EOI, GICH_MISR);
 }
 
 static void __cpuinit gicv2_hyp_disable(void)
@@ -397,13 +410,8 @@ static void gicv2_update_lr(int lr, const struct pending_irq *p,
               ((p->irq & GICH_V2_LR_VIRTUAL_MASK) << GICH_V2_LR_VIRTUAL_SHIFT));
 
     if ( p->desc != NULL )
-    {
-        if ( platform_has_quirk(PLATFORM_QUIRK_GUEST_PIRQ_NEED_EOI) )
-            lr_reg |= GICH_V2_LR_MAINTENANCE_IRQ;
-        else
-            lr_reg |= GICH_V2_LR_HW | ((p->desc->irq & GICH_V2_LR_PHYSICAL_MASK )
-                            << GICH_V2_LR_PHYSICAL_SHIFT);
-    }
+        lr_reg |= GICH_V2_LR_HW | ((p->desc->irq & GICH_V2_LR_PHYSICAL_MASK )
+                                   << GICH_V2_LR_PHYSICAL_SHIFT);
 
     writel_gich(lr_reg, GICH_LR + lr * 4);
 }
@@ -411,47 +419,6 @@ static void gicv2_update_lr(int lr, const struct pending_irq *p,
 static void gicv2_clear_lr(int lr)
 {
     writel_gich(0, GICH_LR + lr * 4);
-}
-
-static int gicv2v_setup(struct domain *d)
-{
-    int ret;
-
-    /*
-     * The hardware domain gets the hardware address.
-     * Guests get the virtual platform layout.
-     */
-    if ( is_hardware_domain(d) )
-    {
-        d->arch.vgic.dbase = gicv2.dbase;
-        d->arch.vgic.cbase = gicv2.cbase;
-    }
-    else
-    {
-        d->arch.vgic.dbase = GUEST_GICD_BASE;
-        d->arch.vgic.cbase = GUEST_GICC_BASE;
-    }
-
-    /*
-     * Map the gic virtual cpu interface in the gic cpu interface
-     * region of the guest.
-     *
-     * The second page is always mapped at +4K irrespective of the
-     * GIC_64K_STRIDE quirk. The DTB passed to the guest reflects this.
-     */
-    ret = map_mmio_regions(d, paddr_to_pfn(d->arch.vgic.cbase), 1,
-                            paddr_to_pfn(gicv2.vbase));
-    if ( ret )
-        return ret;
-
-    if ( !platform_has_quirk(PLATFORM_QUIRK_GIC_64K_STRIDE) )
-        ret = map_mmio_regions(d, paddr_to_pfn(d->arch.vgic.cbase + PAGE_SIZE),
-                               2, paddr_to_pfn(gicv2.vbase + PAGE_SIZE));
-    else
-        ret = map_mmio_regions(d, paddr_to_pfn(d->arch.vgic.cbase + PAGE_SIZE),
-                               2, paddr_to_pfn(gicv2.vbase + 16*PAGE_SIZE));
-
-    return ret;
 }
 
 static void gicv2_read_lr(int lr, struct gic_lr *lr_reg)
@@ -584,13 +551,14 @@ static void gicv2_irq_set_affinity(struct irq_desc *desc, const cpumask_t *cpu_m
     spin_unlock(&gicv2.lock);
 }
 
-static int gicv2_make_dt_node(const struct domain *d,
-                              const struct dt_device_node *node, void *fdt)
+static int gicv2_make_hwdom_dt_node(const struct domain *d,
+                                    const struct dt_device_node *node,
+                                    void *fdt)
 {
     const struct dt_device_node *gic = dt_interrupt_controller;
     const void *compatible = NULL;
     u32 len;
-    __be32 *new_cells, *tmp;
+    const __be32 *regs;
     int res = 0;
 
     compatible = dt_get_property(gic, "compatible", &len);
@@ -600,35 +568,26 @@ static int gicv2_make_dt_node(const struct domain *d,
         return -FDT_ERR_XEN(ENOENT);
     }
 
-    res = fdt_begin_node(fdt, "interrupt-controller");
-    if ( res )
-        return res;
-
     res = fdt_property(fdt, "compatible", compatible, len);
     if ( res )
         return res;
 
-    res = fdt_property_cell(fdt, "#interrupt-cells", 3);
-    if ( res )
-        return res;
-
-    res = fdt_property(fdt, "interrupt-controller", NULL, 0);
-
-    if ( res )
-        return res;
+    /*
+     * DTB provides up to 4 regions to handle virtualization
+     * (in order GICD, GICC, GICH and GICV interfaces)
+     * however dom0 just needs GICD and GICC provided by Xen.
+     */
+    regs = dt_get_property(gic, "reg", &len);
+    if ( !regs )
+    {
+        dprintk(XENLOG_ERR, "Can't find reg property for the gic node\n");
+        return -FDT_ERR_XEN(ENOENT);
+    }
 
     len = dt_cells_to_size(dt_n_addr_cells(node) + dt_n_size_cells(node));
-    len *= 2; /* GIC has two memory regions: Distributor + CPU interface */
-    new_cells = xzalloc_bytes(len);
-    if ( new_cells == NULL )
-        return -FDT_ERR_XEN(ENOMEM);
+    len *= 2;
 
-    tmp = new_cells;
-    dt_set_range(&tmp, node, d->arch.vgic.dbase, PAGE_SIZE);
-    dt_set_range(&tmp, node, d->arch.vgic.cbase, PAGE_SIZE * 2);
-
-    res = fdt_property(fdt, "reg", new_cells, len);
-    xfree(new_cells);
+    res = fdt_property(fdt, "reg", regs, len);
 
     return res;
 }
@@ -656,13 +615,88 @@ static hw_irq_controller gicv2_guest_irq_type = {
     .set_affinity = gicv2_irq_set_affinity,
 };
 
+static int __init gicv2_init(void)
+{
+    int res;
+    paddr_t hbase, dbase, cbase, vbase;
+    const struct dt_device_node *node = gicv2_info.node;
+
+    res = dt_device_get_address(node, 0, &dbase, NULL);
+    if ( res )
+        panic("GICv2: Cannot find a valid address for the distributor");
+
+    res = dt_device_get_address(node, 1, &cbase, NULL);
+    if ( res )
+        panic("GICv2: Cannot find a valid address for the CPU");
+
+    res = dt_device_get_address(node, 2, &hbase, NULL);
+    if ( res )
+        panic("GICv2: Cannot find a valid address for the hypervisor");
+
+    res = dt_device_get_address(node, 3, &vbase, NULL);
+    if ( res )
+        panic("GICv2: Cannot find a valid address for the virtual CPU");
+
+    res = platform_get_irq(node, 0);
+    if ( res < 0 )
+        panic("GICv2: Cannot find the maintenance IRQ");
+    gicv2_info.maintenance_irq = res;
+
+    /* TODO: Add check on distributor, cpu size */
+
+    printk("GICv2 initialization:\n"
+              "        gic_dist_addr=%"PRIpaddr"\n"
+              "        gic_cpu_addr=%"PRIpaddr"\n"
+              "        gic_hyp_addr=%"PRIpaddr"\n"
+              "        gic_vcpu_addr=%"PRIpaddr"\n"
+              "        gic_maintenance_irq=%u\n",
+              dbase, cbase, hbase, vbase,
+              gicv2_info.maintenance_irq);
+
+    if ( (dbase & ~PAGE_MASK) || (cbase & ~PAGE_MASK) ||
+         (hbase & ~PAGE_MASK) || (vbase & ~PAGE_MASK) )
+        panic("GICv2 interfaces not page aligned");
+
+    gicv2.map_dbase = ioremap_nocache(dbase, PAGE_SIZE);
+    if ( !gicv2.map_dbase )
+        panic("GICv2: Failed to ioremap for GIC distributor\n");
+
+    gicv2.map_cbase[0] = ioremap_nocache(cbase, PAGE_SIZE);
+
+    if ( platform_has_quirk(PLATFORM_QUIRK_GIC_64K_STRIDE) )
+        gicv2.map_cbase[1] = ioremap_nocache(cbase + SZ_64K, PAGE_SIZE);
+    else
+        gicv2.map_cbase[1] = ioremap_nocache(cbase + PAGE_SIZE, PAGE_SIZE);
+
+    if ( !gicv2.map_cbase[0] || !gicv2.map_cbase[1] )
+        panic("GICv2: Failed to ioremap for GIC CPU interface\n");
+
+    gicv2.map_hbase = ioremap_nocache(hbase, PAGE_SIZE);
+    if ( !gicv2.map_hbase )
+        panic("GICv2: Failed to ioremap for GIC Virtual interface\n");
+
+    vgic_v2_setup_hw(dbase, cbase, vbase);
+
+    /* Global settings: interrupt distributor */
+    spin_lock_init(&gicv2.lock);
+    spin_lock(&gicv2.lock);
+
+    gicv2_dist_init();
+    gicv2_cpu_init();
+    gicv2_hyp_init();
+
+    spin_unlock(&gicv2.lock);
+
+    return 0;
+}
+
 const static struct gic_hw_operations gicv2_ops = {
     .info                = &gicv2_info,
+    .init                = gicv2_init,
     .secondary_init      = gicv2_secondary_cpu_init,
     .save_state          = gicv2_save_state,
     .restore_state       = gicv2_restore_state,
     .dump_state          = gicv2_dump_state,
-    .gicv_setup          = gicv2v_setup,
     .gic_host_irq_type   = &gicv2_host_irq_type,
     .gic_guest_irq_type  = &gicv2_guest_irq_type,
     .eoi_irq             = gicv2_eoi_irq,
@@ -678,101 +712,29 @@ const static struct gic_hw_operations gicv2_ops = {
     .write_lr            = gicv2_write_lr,
     .read_vmcr_priority  = gicv2_read_vmcr_priority,
     .read_apr            = gicv2_read_apr,
-    .make_dt_node        = gicv2_make_dt_node,
+    .make_hwdom_dt_node  = gicv2_make_hwdom_dt_node,
 };
 
 /* Set up the GIC */
-static int __init gicv2_init(struct dt_device_node *node, const void *data)
+static int __init gicv2_preinit(struct dt_device_node *node, const void *data)
 {
-    int res;
-
-    dt_device_set_used_by(node, DOMID_XEN);
-
-    res = dt_device_get_address(node, 0, &gicv2.dbase, NULL);
-    if ( res || !gicv2.dbase || (gicv2.dbase & ~PAGE_MASK) )
-        panic("GICv2: Cannot find a valid address for the distributor");
-
-    res = dt_device_get_address(node, 1, &gicv2.cbase, NULL);
-    if ( res || !gicv2.cbase || (gicv2.cbase & ~PAGE_MASK) )
-        panic("GICv2: Cannot find a valid address for the CPU");
-
-    res = dt_device_get_address(node, 2, &gicv2.hbase, NULL);
-    if ( res || !gicv2.hbase || (gicv2.hbase & ~PAGE_MASK) )
-        panic("GICv2: Cannot find a valid address for the hypervisor");
-
-    res = dt_device_get_address(node, 3, &gicv2.vbase, NULL);
-    if ( res || !gicv2.vbase || (gicv2.vbase & ~PAGE_MASK) )
-        panic("GICv2: Cannot find a valid address for the virtual CPU");
-
-    res = platform_get_irq(node, 0);
-    if ( res < 0 )
-        panic("GICv2: Cannot find the maintenance IRQ");
-    gicv2_info.maintenance_irq = res;
-
-    /* Set the GIC as the primary interrupt controller */
-    dt_interrupt_controller = node;
-
-    /* TODO: Add check on distributor, cpu size */
-
-    printk("GICv2 initialization:\n"
-              "        gic_dist_addr=%"PRIpaddr"\n"
-              "        gic_cpu_addr=%"PRIpaddr"\n"
-              "        gic_hyp_addr=%"PRIpaddr"\n"
-              "        gic_vcpu_addr=%"PRIpaddr"\n"
-              "        gic_maintenance_irq=%u\n",
-              gicv2.dbase, gicv2.cbase, gicv2.hbase, gicv2.vbase,
-              gicv2_info.maintenance_irq);
-
-    if ( (gicv2.dbase & ~PAGE_MASK) || (gicv2.cbase & ~PAGE_MASK) ||
-         (gicv2.hbase & ~PAGE_MASK) || (gicv2.vbase & ~PAGE_MASK) )
-        panic("GICv2 interfaces not page aligned");
-
-    gicv2.map_dbase = ioremap_nocache(gicv2.dbase, PAGE_SIZE);
-    if ( !gicv2.map_dbase )
-        panic("GICv2: Failed to ioremap for GIC distributor\n");
-
-    gicv2.map_cbase[0] = ioremap_nocache(gicv2.cbase, PAGE_SIZE);
-
-    if ( platform_has_quirk(PLATFORM_QUIRK_GIC_64K_STRIDE) )
-        gicv2.map_cbase[1] = ioremap_nocache(gicv2.cbase + PAGE_SIZE * 0x10,
-                                           PAGE_SIZE);
-    else
-        gicv2.map_cbase[1] = ioremap_nocache(gicv2.cbase + PAGE_SIZE, PAGE_SIZE);
-
-    if ( !gicv2.map_cbase[0] || !gicv2.map_cbase[1] )
-        panic("GICv2: Failed to ioremap for GIC CPU interface\n");
-
-    gicv2.map_hbase = ioremap_nocache(gicv2.hbase, PAGE_SIZE);
-    if ( !gicv2.map_hbase )
-        panic("GICv2: Failed to ioremap for GIC Virtual interface\n");
-
-    /* Global settings: interrupt distributor */
-    spin_lock_init(&gicv2.lock);
-    spin_lock(&gicv2.lock);
-
-    gicv2_dist_init();
-    gicv2_cpu_init();
-    gicv2_hyp_init();
-
-    spin_unlock(&gicv2.lock);
-
     gicv2_info.hw_version = GIC_V2;
+    gicv2_info.node = node;
     register_gic_ops(&gicv2_ops);
+    dt_irq_xlate = gic_irq_xlate;
 
     return 0;
 }
 
-static const char * const gicv2_dt_compat[] __initconst =
+static const struct dt_device_match gicv2_dt_match[] __initconst =
 {
-    DT_COMPAT_GIC_CORTEX_A15,
-    DT_COMPAT_GIC_CORTEX_A7,
-    DT_COMPAT_GIC_400,
-    NULL
+    DT_MATCH_GIC_V2,
+    { /* sentinel */ },
 };
 
-DT_DEVICE_START(gicv2, "GICv2:", DEVICE_GIC)
-        .compatible = gicv2_dt_compat,
-        .init = gicv2_init,
+DT_DEVICE_START(gicv2, "GICv2", DEVICE_GIC)
+        .dt_match = gicv2_dt_match,
+        .init = gicv2_preinit,
 DT_DEVICE_END
 
 /*

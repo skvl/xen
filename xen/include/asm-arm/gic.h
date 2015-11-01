@@ -153,18 +153,16 @@
 #include <xen/irq.h>
 #include <asm-arm/vgic.h>
 
-#define DT_COMPAT_GIC_400            "arm,gic-400"
-#define DT_COMPAT_GIC_CORTEX_A15     "arm,cortex-a15-gic"
-#define DT_COMPAT_GIC_CORTEX_A7      "arm,cortex-a7-gic"
+#define DT_COMPAT_GIC_CORTEX_A15 "arm,cortex-a15-gic"
 
-#define DT_MATCH_GIC_V2 DT_MATCH_COMPATIBLE(DT_COMPAT_GIC_CORTEX_A15), \
-                        DT_MATCH_COMPATIBLE(DT_COMPAT_GIC_CORTEX_A7), \
-                        DT_MATCH_COMPATIBLE(DT_COMPAT_GIC_400)
+#define DT_MATCH_GIC_V2                                             \
+    DT_MATCH_COMPATIBLE(DT_COMPAT_GIC_CORTEX_A15),                  \
+    DT_MATCH_COMPATIBLE("arm,cortex-a7-gic"),                       \
+    DT_MATCH_COMPATIBLE("arm,gic-400")
 
-#define DT_COMPAT_GIC_V3             "arm,gic-v3"
+#define DT_MATCH_GIC_V3 DT_MATCH_COMPATIBLE("arm,gic-v3")
 
-#define DT_MATCH_GIC_V3 DT_MATCH_COMPATIBLE(DT_COMPAT_GIC_V3)
-
+#ifdef HAS_GICV3
 /*
  * GICv3 registers that needs to be saved/restored
  */
@@ -174,6 +172,7 @@ struct gic_v3 {
     uint32_t apr1[4];
     uint64_t lr[16];
 };
+#endif
 
 /*
  * GICv2 register that needs to be saved/restored
@@ -191,7 +190,9 @@ struct gic_v2 {
  */
 union gic_state_data {
     struct gic_v2 v2;
+#ifdef HAS_GICV3
     struct gic_v3 v3;
+#endif
 };
 
 /*
@@ -219,9 +220,13 @@ extern enum gic_version gic_hw_version(void);
 /* Program the GIC to route an interrupt */
 extern void gic_route_irq_to_xen(struct irq_desc *desc, const cpumask_t *cpu_mask,
                                  unsigned int priority);
-extern void gic_route_irq_to_guest(struct domain *, struct irq_desc *desc,
-                                   const cpumask_t *cpu_mask,
-                                   unsigned int priority);
+extern int gic_route_irq_to_guest(struct domain *, unsigned int virq,
+                                  struct irq_desc *desc,
+                                  unsigned int priority);
+
+/* Remove an IRQ passthrough to a guest */
+int gic_remove_irq_from_guest(struct domain *d, unsigned int virq,
+                              struct irq_desc *desc);
 
 extern void gic_inject(void);
 extern void gic_clear_pending_irqs(struct vcpu *v);
@@ -235,6 +240,10 @@ extern void gic_remove_from_queues(struct vcpu *v, unsigned int virtual_irq);
 
 /* Accept an interrupt from the GIC and dispatch its handler */
 extern void gic_interrupt(struct cpu_user_regs *regs, int is_fiq);
+/* Find the interrupt controller and set up the callback to translate
+ * device tree IRQ.
+ */
+extern void gic_preinit(void);
 /* Bring up the interrupt controller, and report # cpus attached */
 extern void gic_init(void);
 /* Bring up a secondary CPU's per-CPU GIC interface */
@@ -287,19 +296,21 @@ struct gic_info {
     uint8_t nr_lrs;
     /* Maintenance irq number */
     unsigned int maintenance_irq;
+    /* Pointer to the device tree node representing the interrupt controller */
+    const struct dt_device_node *node;
 };
 
 struct gic_hw_operations {
     /* Hold GIC HW information */
     const struct gic_info *info;
+    /* Initialize the GIC and the boot CPU */
+    int (*init)(void);
     /* Save GIC registers */
     void (*save_state)(struct vcpu *);
     /* Restore GIC registers */
     void (*restore_state)(const struct vcpu *);
     /* Dump GIC LR register information */
     void (*dump_state)(const struct vcpu *);
-    /* Map MMIO region of GIC */
-    int (*gicv_setup)(struct domain *);
 
     /* hw_irq_controller to enable/disable/eoi host irq */
     hw_irq_controller *gic_host_irq_type;
@@ -339,13 +350,14 @@ struct gic_hw_operations {
     unsigned int (*read_apr)(int apr_reg);
     /* Secondary CPU init */
     int (*secondary_init)(void);
-    int (*make_dt_node)(const struct domain *d,
-                        const struct dt_device_node *node, void *fdt);
+    int (*make_hwdom_dt_node)(const struct domain *d,
+                              const struct dt_device_node *node, void *fdt);
 };
 
 void register_gic_ops(const struct gic_hw_operations *ops);
-int gic_make_node(const struct domain *d,const struct dt_device_node *node,
-                  void *fdt);
+int gic_make_hwdom_dt_node(const struct domain *d,
+                           const struct dt_device_node *node,
+                           void *fdt);
 
 #endif /* __ASSEMBLY__ */
 #endif

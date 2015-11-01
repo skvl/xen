@@ -11,8 +11,7 @@
  * more details.
  *
  * You should have received a copy of the GNU General Public License along with
- * this program; if not, write to the Free Software Foundation, Inc., 59 Temple
- * Place - Suite 330, Boston, MA 02111-1307 USA.
+ * this program; If not, see <http://www.gnu.org/licenses/>.
  *
  * Copyright (C) Allen Kay <allen.m.kay@intel.com>
  */
@@ -25,11 +24,12 @@
 #include <xen/pci.h>
 #include <public/hvm/ioreq.h>
 #include <public/domctl.h>
+#include <asm/device.h>
 #include <asm/iommu.h>
 
 extern bool_t iommu_enable, iommu_enabled;
 extern bool_t force_iommu, iommu_verbose;
-extern bool_t iommu_workaround_bios_bug, iommu_passthrough;
+extern bool_t iommu_workaround_bios_bug, iommu_igfx, iommu_passthrough;
 extern bool_t iommu_snoop, iommu_qinval, iommu_intremap;
 extern bool_t iommu_hap_pt_share;
 extern bool_t iommu_debug;
@@ -64,6 +64,8 @@ int arch_iommu_domain_init(struct domain *d);
 int arch_iommu_populate_page_table(struct domain *d);
 void arch_iommu_check_autotranslated_hwdom(struct domain *d);
 
+int iommu_construct(struct domain *d);
+
 /* Function used internally, use iommu_domain_destroy */
 void iommu_teardown(struct domain *d);
 
@@ -90,7 +92,6 @@ void pt_pci_init(void);
 
 struct pirq;
 int hvm_do_IRQ_dpci(struct domain *, struct pirq *);
-int dpci_ioport_intercept(ioreq_t *p);
 int pt_irq_create_bind(struct domain *, xen_domctl_bind_pt_irq_t *);
 int pt_irq_destroy_bind(struct domain *, xen_domctl_bind_pt_irq_t *);
 
@@ -114,31 +115,37 @@ void iommu_read_msi_from_ire(struct msi_desc *msi_desc, struct msi_msg *msg);
 int iommu_assign_dt_device(struct domain *d, struct dt_device_node *dev);
 int iommu_deassign_dt_device(struct domain *d, struct dt_device_node *dev);
 int iommu_dt_domain_init(struct domain *d);
-void iommu_dt_domain_destroy(struct domain *d);
+int iommu_release_dt_devices(struct domain *d);
+
+int iommu_do_dt_domctl(struct xen_domctl *, struct domain *,
+                       XEN_GUEST_HANDLE_PARAM(xen_domctl_t));
 
 #endif /* HAS_DEVICE_TREE */
 
 struct page_info;
 
+/*
+ * Any non-zero value returned from callbacks of this type will cause the
+ * function the callback was handed to terminate its iteration. Assigning
+ * meaning of these non-zero values is left to the top level caller /
+ * callback pair.
+ */
+typedef int iommu_grdm_t(xen_pfn_t start, xen_ulong_t nr, u32 id, void *ctxt);
+
 struct iommu_ops {
     int (*init)(struct domain *d);
     void (*hwdom_init)(struct domain *d);
-#ifdef HAS_PCI
-    int (*add_device)(u8 devfn, struct pci_dev *);
-    int (*enable_device)(struct pci_dev *pdev);
-    int (*remove_device)(u8 devfn, struct pci_dev *);
-    int (*assign_device)(struct domain *, u8 devfn, struct pci_dev *);
+    int (*add_device)(u8 devfn, device_t *dev);
+    int (*enable_device)(device_t *dev);
+    int (*remove_device)(u8 devfn, device_t *dev);
+    int (*assign_device)(struct domain *, u8 devfn, device_t *dev, u32 flag);
     int (*reassign_device)(struct domain *s, struct domain *t,
-			   u8 devfn, struct pci_dev *);
+                           u8 devfn, device_t *dev);
+#ifdef HAS_PCI
     int (*get_device_group_id)(u16 seg, u8 bus, u8 devfn);
     int (*update_ire_from_msi)(struct msi_desc *msi_desc, struct msi_msg *msg);
     void (*read_msi_from_ire)(struct msi_desc *msi_desc, struct msi_msg *msg);
 #endif /* HAS_PCI */
-#ifdef HAS_DEVICE_TREE
-    int (*assign_dt_device)(struct domain *d, const struct dt_device_node *dev);
-    int (*reassign_dt_device)(struct domain *s, struct domain *t,
-                              const struct dt_device_node *dev);
-#endif
 
     void (*teardown)(struct domain *d);
     int (*map_page)(struct domain *d, unsigned long gfn, unsigned long mfn,
@@ -156,12 +163,14 @@ struct iommu_ops {
     void (*crash_shutdown)(void);
     void (*iotlb_flush)(struct domain *d, unsigned long gfn, unsigned int page_count);
     void (*iotlb_flush_all)(struct domain *d);
+    int (*get_reserved_device_memory)(iommu_grdm_t *, void *);
     void (*dump_p2m_table)(struct domain *d);
 };
 
 void iommu_suspend(void);
 void iommu_resume(void);
 void iommu_crash_shutdown(void);
+int iommu_get_reserved_device_memory(iommu_grdm_t *, void *);
 
 void iommu_share_p2m_table(struct domain *d);
 

@@ -1,32 +1,42 @@
-From 1c52a39aa878db11da7fbef9c573f39fcaaa5d37 Mon Sep 17 00:00:00 2001
+From fa1d487e1c8245cb886d6b69e27bf35319cc5c9c Mon Sep 17 00:00:00 2001
 From: Bastian Blank <waldi@debian.org>
 Date: Sat, 5 Jul 2014 11:47:09 +0200
 Subject: tools-xenstat-prefix.diff
 
 Patch-Name: tools-xenstat-prefix.diff
 ---
- tools/xenstat/libxenstat/Makefile | 3 ++-
+ tools/xenstat/libxenstat/Makefile | 6 ++++--
  tools/xenstat/xentop/Makefile     | 6 ++++--
- 2 files changed, 6 insertions(+), 3 deletions(-)
+ 2 files changed, 8 insertions(+), 4 deletions(-)
 
 diff --git a/tools/xenstat/libxenstat/Makefile b/tools/xenstat/libxenstat/Makefile
-index 3469385..661ab16 100644
+index 7c13c06..75b4b68 100644
 --- a/tools/xenstat/libxenstat/Makefile
 +++ b/tools/xenstat/libxenstat/Makefile
-@@ -46,9 +46,10 @@ $(SHLIB): $(OBJECTS-y)
+@@ -20,7 +20,7 @@ MAKE_LINK=ln -sf
+ 
+ LIB=src/libxenstat.a
+ SHLIB=src/libxenstat.so
+-OBJECTS-y=src/xenstat.o
++OBJECTS-y=src/xenstat.o src/xenstat_qmp.o
+ OBJECTS-$(CONFIG_Linux) += src/xenstat_linux.o
+ OBJECTS-$(CONFIG_SunOS) += src/xenstat_solaris.o
+ OBJECTS-$(CONFIG_NetBSD) += src/xenstat_netbsd.o
+@@ -46,9 +46,11 @@ $(SHLIB): $(OBJECTS-y)
  
  .PHONY: install
  install: all
-+	$(INSTALL_DIR) $(DESTDIR)$(LIBDIR) $(DESTDIR)$(LIBEXEC_LIB)
- 	$(INSTALL_DATA) src/xenstat.h $(DESTDIR)$(INCLUDEDIR)
- 	$(INSTALL_DATA) $(LIB) $(DESTDIR)$(LIBDIR)/libxenstat.a
--	$(INSTALL_PROG) src/libxenstat.so $(DESTDIR)$(LIBDIR)
++	$(INSTALL_DIR) $(DESTDIR)$(includedir)
++	$(INSTALL_DIR) $(DESTDIR)$(LIBEXEC_LIB)
+ 	$(INSTALL_DATA) src/xenstat.h $(DESTDIR)$(includedir)
+ 	$(INSTALL_DATA) $(LIB) $(DESTDIR)$(libdir)/libxenstat.a
+-	$(INSTALL_PROG) src/libxenstat.so $(DESTDIR)$(libdir)
 +	$(INSTALL_PROG) src/libxenstat.so $(DESTDIR)$(LIBEXEC_LIB)
  
  PYLIB=bindings/swig/python/_xenstat.so
  PYMOD=bindings/swig/python/xenstat.py
 diff --git a/tools/xenstat/xentop/Makefile b/tools/xenstat/xentop/Makefile
-index 076e44c..33e8740 100644
+index 1cc393f..167e5db 100644
 --- a/tools/xenstat/xentop/Makefile
 +++ b/tools/xenstat/xentop/Makefile
 @@ -19,7 +19,9 @@ all install xentop:
@@ -34,19 +44,19 @@ index 076e44c..33e8740 100644
  
  CFLAGS += -DGCC_PRINTF -Werror $(CFLAGS_libxenstat)
 +LDFLAGS += $(call LDFLAGS_RPATH,../lib)
- LDLIBS += $(LDLIBS_libxenstat) $(CURSES_LIBS) $(SOCKET_LIBS) -lm
+ LDLIBS += $(LDLIBS_libxenstat) $(CURSES_LIBS) $(TINFO_LIBS) $(SOCKET_LIBS) -lm -lyajl
 +LDLIBS += $(LDLIBS_libxenctrl) $(LDLIBS_libxenstore)
  CFLAGS += -DHOST_$(XEN_OS)
  
- # Include configure output (config.h) to headers search path
+ # Include configure output (config.h)
 @@ -31,8 +33,8 @@ all: xentop
  
  .PHONY: install
- install: xentop xentop.1
--	$(INSTALL_DIR) $(DESTDIR)$(SBINDIR)
--	$(INSTALL_PROG) xentop $(DESTDIR)$(SBINDIR)/xentop
+ install: xentop
+-	$(INSTALL_DIR) $(DESTDIR)$(sbindir)
+-	$(INSTALL_PROG) xentop $(DESTDIR)$(sbindir)/xentop
 +	$(INSTALL_DIR) $(DESTDIR)$(LIBEXEC_BIN)
 +	$(INSTALL_PROG) xentop $(DESTDIR)$(LIBEXEC_BIN)/xentop
- 	$(INSTALL_DIR) $(DESTDIR)$(MAN1DIR)
- 	$(INSTALL_DATA) xentop.1 $(DESTDIR)$(MAN1DIR)/xentop.1
+ 
+ endif
  

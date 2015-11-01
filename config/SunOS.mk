@@ -2,6 +2,7 @@ AS         = $(CROSS_COMPILE)gas
 LD         = $(CROSS_COMPILE)gld
 CC         = $(CROSS_COMPILE)gcc
 CPP        = $(CROSS_COMPILE)gcc -E
+CXX        = $(CROSS_COMPILE)g++
 AR         = $(CROSS_COMPILE)gar
 RANLIB     = $(CROSS_COMPILE)granlib
 NM         = $(CROSS_COMPILE)gnm
@@ -18,6 +19,7 @@ INSTALL_DATA = $(INSTALL) -m0644 -p
 INSTALL_PROG = $(INSTALL) -m0755 -p
 
 BOOT_DIR ?= /boot
+DEBUG_DIR ?= /usr/lib/debug
 
 SunOS_LIBDIR = /usr/sfw/lib
 SunOS_LIBDIR_x86_64 = /usr/sfw/lib/amd64

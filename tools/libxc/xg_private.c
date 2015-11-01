@@ -14,8 +14,7 @@
  * Lesser General Public License for more details.
  *
  * You should have received a copy of the GNU Lesser General Public
- * License along with this library; if not, write to the Free Software
- * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301  USA
+ * License along with this library; If not, see <http://www.gnu.org/licenses/>.
  */
 
 #include <stdlib.h>
@@ -37,7 +36,7 @@ char *xc_read_image(xc_interface *xch,
 
     if ( (kernel_fd = open(filename, O_RDONLY)) < 0 )
     {
-        PERROR("Could not open kernel image");
+        PERROR("Could not open kernel image '%s'", filename);
         goto out;
     }
 

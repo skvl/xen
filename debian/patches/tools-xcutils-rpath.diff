@@ -1,4 +1,4 @@
-From afbcfac4ca655a752d1e92534311571d2833dbdd Mon Sep 17 00:00:00 2001
+From 49c46e9c43c267676a9dc70d664316d48df05851 Mon Sep 17 00:00:00 2001
 From: Bastian Blank <waldi@debian.org>
 Date: Sat, 5 Jul 2014 11:47:05 +0200
 Subject: tools-xcutils-rpath.diff
@@ -9,7 +9,7 @@ Patch-Name: tools-xcutils-rpath.diff
  1 file changed, 2 insertions(+)
 
 diff --git a/tools/xcutils/Makefile b/tools/xcutils/Makefile
-index 1c5237c..298981b 100644
+index fff519d..fb813b0 100644
 --- a/tools/xcutils/Makefile
 +++ b/tools/xcutils/Makefile
 @@ -19,6 +19,8 @@ CFLAGS += -Werror

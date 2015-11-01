@@ -14,8 +14,7 @@
  * more details.
  *
  * You should have received a copy of the GNU General Public License along with
- * this program; if not, write to the Free Software Foundation, Inc., 59 Temple
- * Place - Suite 330, Boston, MA 02111-1307 USA.
+ * this program; If not, see <http://www.gnu.org/licenses/>.
  */
 
 #ifndef __ASM_X86_HVM_DOMAIN_H__
@@ -46,6 +45,7 @@ struct hvm_ioreq_vcpu {
     struct list_head list_entry;
     struct vcpu      *vcpu;
     evtchn_port_t    ioreq_evtchn;
+    bool_t           pending;
 };
 
 #define NR_IO_RANGE_TYPES (HVMOP_IO_RANGE_PCI + 1)
@@ -70,6 +70,7 @@ struct hvm_ioreq_server {
     evtchn_port_t          bufioreq_evtchn;
     struct rangeset        *range[NR_IO_RANGE_TYPES];
     bool_t                 enabled;
+    bool_t                 bufioreq_atomic;
 };
 
 struct hvm_domain {
@@ -83,7 +84,6 @@ struct hvm_domain {
     struct {
         spinlock_t       lock;
         ioservid_t       id;
-        bool_t           waiting;
         struct list_head list;
     } ioreq_server;
     struct hvm_ioreq_server *default_ioreq_server;
@@ -94,6 +94,7 @@ struct hvm_domain {
     struct pl_time         pl_time;
 
     struct hvm_io_handler *io_handler;
+    unsigned int          io_handler_count;
 
     /* Lock protects access to irq, vpic and vioapic. */
     spinlock_t             irq_lock;
@@ -135,13 +136,14 @@ struct hvm_domain {
     bool_t                 mem_sharing_enabled;
     bool_t                 qemu_mapcache_invalidate;
     bool_t                 is_s3_suspended;
-    bool_t                 introspection_enabled;
 
     /*
      * TSC value that VCPUs use to calculate their tsc_offset value.
      * Used during initialization and save/restore.
      */
     uint64_t sync_tsc;
+
+    unsigned long *io_bitmap;
 
     union {
         struct vmx_domain vmx;

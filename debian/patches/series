@@ -22,6 +22,13 @@ tools-xentrace-prefix.diff
 tools-pygrub-remove-static-solaris-support
 tools-include-install.diff
 tools-xenmon-install.diff
-tools-hotplug-udevrules.diff
 tools-xenstore-compatibility.diff
-xl-coredumps-to-var-lib-xen-dump.diff
+CVE-2015-7812.diff
+CVE-2015-7813.diff
+CVE-2015-7814.diff
+CVE-2015-7835.diff
+CVE-2015-7969.diff
+CVE-2015-7970.diff
+CVE-2015-7969.1.diff
+CVE-2015-7971.diff
+CVE-2015-7972.diff

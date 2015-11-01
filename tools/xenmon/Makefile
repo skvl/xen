@@ -35,15 +35,16 @@ install: build
 	$(INSTALL_DIR) $(DESTDIR)$(LIBEXEC_BIN)
 	$(INSTALL_PROG) xenbaked $(DESTDIR)$(LIBEXEC_BIN)/xenbaked
 	$(INSTALL_PROG) xentrace_setmask  $(DESTDIR)$(LIBEXEC_BIN)/xentrace_setmask
-	$(INSTALL_PROG) xenmon.py  $(DESTDIR)$(LIBEXEC_BIN)/xenmon
-	$(INSTALL_DIR) $(DESTDIR)$(DOCDIR)
-	$(INSTALL_DATA) README $(DESTDIR)$(DOCDIR)/README.xenmon
+	$(INSTALL_PROG) xenmon.py  $(DESTDIR)$(LIBEXEC_BIN)/xenmon.py
 
 .PHONY: clean
 clean:
 	$(RM) -f $(DEPS)
 	$(RM) -f xenbaked xenbaked.o
 	$(RM) -f xentrace_setmask setmask.o
+
+.PHONY: distclean
+distclean: clean
 
 xenbaked: xenbaked.o Makefile
 	$(CC) $(LDFLAGS) $< -o $@ $(LDLIBS) $(APPEND_LDFLAGS)

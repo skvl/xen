@@ -126,21 +126,86 @@ void gic_route_irq_to_xen(struct irq_desc *desc, const cpumask_t *cpu_mask,
 /* Program the GIC to route an interrupt to a guest
  *   - desc.lock must be held
  */
-void gic_route_irq_to_guest(struct domain *d, struct irq_desc *desc,
-                            const cpumask_t *cpu_mask, unsigned int priority)
+int gic_route_irq_to_guest(struct domain *d, unsigned int virq,
+                           struct irq_desc *desc, unsigned int priority)
 {
-    struct pending_irq *p;
+    unsigned long flags;
+    /* Use vcpu0 to retrieve the pending_irq struct. Given that we only
+     * route SPIs to guests, it doesn't make any difference. */
+    struct vcpu *v_target = vgic_get_target_vcpu(d->vcpu[0], virq);
+    struct vgic_irq_rank *rank = vgic_rank_irq(v_target, virq);
+    struct pending_irq *p = irq_to_pending(v_target, virq);
+    int res = -EBUSY;
+
     ASSERT(spin_is_locked(&desc->lock));
+    /* Caller has already checked that the IRQ is an SPI */
+    ASSERT(virq >= 32);
+    ASSERT(virq < vgic_num_irqs(d));
+
+    vgic_lock_rank(v_target, rank, flags);
+
+    if ( p->desc ||
+         /* The VIRQ should not be already enabled by the guest */
+         test_bit(GIC_IRQ_GUEST_ENABLED, &p->status) )
+        goto out;
 
     desc->handler = gic_hw_ops->gic_guest_irq_type;
     set_bit(_IRQ_GUEST, &desc->status);
 
-    gic_set_irq_properties(desc, cpumask_of(smp_processor_id()), GIC_PRI_IRQ);
+    gic_set_irq_properties(desc, cpumask_of(v_target->processor), priority);
 
-    /* Use vcpu0 to retrieve the pending_irq struct. Given that we only
-     * route SPIs to guests, it doesn't make any difference. */
-    p = irq_to_pending(d->vcpu[0], desc->irq);
     p->desc = desc;
+    res = 0;
+
+out:
+    vgic_unlock_rank(v_target, rank, flags);
+
+    return res;
+}
+
+/* This function only works with SPIs for now */
+int gic_remove_irq_from_guest(struct domain *d, unsigned int virq,
+                              struct irq_desc *desc)
+{
+    struct vcpu *v_target = vgic_get_target_vcpu(d->vcpu[0], virq);
+    struct vgic_irq_rank *rank = vgic_rank_irq(v_target, virq);
+    struct pending_irq *p = irq_to_pending(v_target, virq);
+    unsigned long flags;
+
+    ASSERT(spin_is_locked(&desc->lock));
+    ASSERT(test_bit(_IRQ_GUEST, &desc->status));
+    ASSERT(p->desc == desc);
+
+    vgic_lock_rank(v_target, rank, flags);
+
+    if ( d->is_dying )
+    {
+        desc->handler->shutdown(desc);
+
+        /* EOI the IRQ if it has not been done by the guest */
+        if ( test_bit(_IRQ_INPROGRESS, &desc->status) )
+            gic_hw_ops->deactivate_irq(desc);
+        clear_bit(_IRQ_INPROGRESS, &desc->status);
+    }
+    else
+    {
+        /*
+         * TODO: Handle eviction from LRs For now, deny
+         * remove if the IRQ is inflight or not disabled.
+         */
+        if ( test_bit(_IRQ_INPROGRESS, &desc->status) ||
+             !test_bit(_IRQ_DISABLED, &desc->status) )
+            return -EBUSY;
+    }
+
+    clear_bit(_IRQ_GUEST, &desc->status);
+    desc->handler = &no_irq_type;
+
+    p->desc = NULL;
+
+    vgic_unlock_rank(v_target, rank, flags);
+
+    return 0;
 }
 
 int gic_irq_xlate(const u32 *intspec, unsigned int intsize,
@@ -163,8 +228,10 @@ int gic_irq_xlate(const u32 *intspec, unsigned int intsize,
     return 0;
 }
 
-/* Set up the GIC */
-void __init gic_init(void)
+/* Find the interrupt controller and set up the callback to translate
+ * device tree IRQ.
+ */
+void __init gic_preinit(void)
 {
     int rc;
     struct dt_device_node *node;
@@ -189,6 +256,16 @@ void __init gic_init(void)
     if ( !num_gics )
         panic("Unable to find compatible GIC in the device tree");
 
+    /* Set the GIC as the primary interrupt controller */
+    dt_interrupt_controller = node;
+    dt_device_set_used_by(node, DOMID_XEN);
+}
+
+/* Set up the GIC */
+void __init gic_init(void)
+{
+    if ( gic_hw_ops->init() )
+        panic("Failed to initialize the GIC drivers");
     /* Clear LR mask for cpu0 */
     clear_cpu_lr_mask();
 }
@@ -368,11 +445,7 @@ static void gic_update_one_lr(struct vcpu *v, int i)
         clear_bit(i, &this_cpu(lr_mask));
 
         if ( p->desc != NULL )
-        {
             clear_bit(_IRQ_INPROGRESS, &p->desc->status);
-            if ( platform_has_quirk(PLATFORM_QUIRK_GUEST_PIRQ_NEED_EOI) )
-                gic_hw_ops->deactivate_irq(p->desc);
-        }
         clear_bit(GIC_IRQ_GUEST_VISIBLE, &p->status);
         clear_bit(GIC_IRQ_GUEST_ACTIVE, &p->status);
         p->lr = GIC_INVALID_LR;
@@ -536,6 +609,8 @@ static void do_sgi(struct cpu_user_regs *regs, enum gic_sgi sgi)
     /* Lower the priority */
     struct irq_desc *desc = irq_to_desc(sgi);
 
+    perfc_incr(ipis);
+
     /* Lower the priority */
     gic_hw_ops->eoi_irq(desc);
 
@@ -568,7 +643,7 @@ void gic_interrupt(struct cpu_user_regs *regs, int is_fiq)
         /* Reading IRQ will ACK it */
         irq = gic_hw_ops->read_irq();
 
-        if ( likely(irq >= 16 && irq < 1021) )
+        if ( likely(irq >= 16 && irq < 1020) )
         {
             local_irq_enable();
             do_IRQ(regs, irq, is_fiq);
@@ -586,11 +661,6 @@ void gic_interrupt(struct cpu_user_regs *regs, int is_fiq)
     } while (1);
 }
 
-int gicv_setup(struct domain *d)
-{
-    return gic_hw_ops->gicv_setup(d);
-}
-
 static void maintenance_interrupt(int irq, void *dev_id, struct cpu_user_regs *regs)
 {
     /*
@@ -604,6 +674,7 @@ static void maintenance_interrupt(int irq, void *dev_id, struct cpu_user_regs *r
      * GICH_HCR_UIE is cleared before reading GICC_IAR. As a consequence
      * this handler is not called.
      */
+    perfc_incr(maintenance_irqs);
 }
 
 void gic_dump_info(struct vcpu *v)
@@ -615,7 +686,7 @@ void gic_dump_info(struct vcpu *v)
 
     list_for_each_entry ( p, &v->arch.vgic.inflight_irqs, inflight )
     {
-        printk("Inflight irq=%d lr=%u\n", p->irq, p->lr);
+        printk("Inflight irq=%u lr=%u\n", p->irq, p->lr);
     }
 
     list_for_each_entry( p, &v->arch.vgic.lr_pending, lr_queue )
@@ -630,10 +701,11 @@ void __cpuinit init_maintenance_interrupt(void)
                 "irq-maintenance", NULL);
 }
 
-int gic_make_node(const struct domain *d,const struct dt_device_node *node,
-                   void *fdt)
+int gic_make_hwdom_dt_node(const struct domain *d,
+                           const struct dt_device_node *node,
+                           void *fdt)
 {
-    return gic_hw_ops->make_dt_node(d, node, fdt);
+    return gic_hw_ops->make_hwdom_dt_node(d, node, fdt);
 }
 
 /*

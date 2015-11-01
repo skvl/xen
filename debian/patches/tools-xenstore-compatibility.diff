@@ -1,4 +1,4 @@
-From 72b172f063b63df29fc61442fa64d74806b3a247 Mon Sep 17 00:00:00 2001
+From b00b02f0283fa7536ab44264a21c2dcdaa22d631 Mon Sep 17 00:00:00 2001
 From: Bastian Blank <waldi@debian.org>
 Date: Sat, 5 Jul 2014 11:47:36 +0200
 Subject: tools-xenstore-compatibility.diff
@@ -11,10 +11,10 @@ Patch-Name: tools-xenstore-compatibility.diff
  3 files changed, 5 insertions(+), 2 deletions(-)
 
 diff --git a/tools/xenstore/include/xenstore.h b/tools/xenstore/include/xenstore.h
-index b4b113e..be2491b 100644
+index 42c0dc7..8a9c5c2 100644
 --- a/tools/xenstore/include/xenstore.h
 +++ b/tools/xenstore/include/xenstore.h
-@@ -26,6 +26,7 @@
+@@ -25,6 +25,7 @@
  
  #define XS_OPEN_READONLY	1UL<<0
  #define XS_OPEN_SOCKETONLY      1UL<<1
@@ -23,10 +23,10 @@ index b4b113e..be2491b 100644
  /*
   * Setting XS_UNWATCH_FILTER arranges that after xs_unwatch, no
 diff --git a/tools/xenstore/xenstore_client.c b/tools/xenstore/xenstore_client.c
-index 1054f18..e6fa58d 100644
+index 3d14d37..d7ae1ec 100644
 --- a/tools/xenstore/xenstore_client.c
 +++ b/tools/xenstore/xenstore_client.c
-@@ -635,7 +635,7 @@ main(int argc, char **argv)
+@@ -636,7 +636,7 @@ main(int argc, char **argv)
  	    max_width = ws.ws_col - 2;
      }
  
@@ -36,10 +36,10 @@ index 1054f18..e6fa58d 100644
  
  again:
 diff --git a/tools/xenstore/xs.c b/tools/xenstore/xs.c
-index 968141d..738d86f 100644
+index d1e01ba..be82927 100644
 --- a/tools/xenstore/xs.c
 +++ b/tools/xenstore/xs.c
-@@ -282,17 +282,19 @@ struct xs_handle *xs_daemon_open_readonly(void)
+@@ -281,17 +281,19 @@ struct xs_handle *xs_daemon_open_readonly(void)
  
  struct xs_handle *xs_domain_open(void)
  {

@@ -1,6 +1,22 @@
 #include "libxl_internal.h"
 #include "libxl_arch.h"
 
+int libxl__arch_domain_prepare_config(libxl__gc *gc,
+                                      libxl_domain_config *d_config,
+                                      xc_domain_configuration_t *xc_config)
+{
+    /* No specific configuration right now */
+
+    return 0;
+}
+
+int libxl__arch_domain_save_config(libxl__gc *gc,
+                                   libxl_domain_config *d_config,
+                                   const xc_domain_configuration_t *xc_config)
+{
+    return 0;
+}
+
 static const char *e820_names(int type)
 {
     switch (type) {
@@ -207,6 +223,25 @@ static int e820_sanitize(libxl_ctx *ctx, struct e820entry src[],
     return 0;
 }
 
+static int e820_host_sanitize(libxl__gc *gc,
+                              libxl_domain_build_info *b_info,
+                              struct e820entry map[],
+                              uint32_t *nr)
+{
+    int rc;
+
+    rc = xc_get_machine_memory_map(CTX->xch, map, *nr);
+    if (rc < 0)
+        return ERROR_FAIL;
+
+    *nr = rc;
+
+    rc = e820_sanitize(CTX, map, nr, b_info->target_memkb,
+                       (b_info->max_memkb - b_info->target_memkb) +
+                       b_info->u.pv.slack_memkb);
+    return rc;
+}
+
 static int libxl__e820_alloc(libxl__gc *gc, uint32_t domid,
         libxl_domain_config *d_config)
 {
@@ -223,24 +258,16 @@ static int libxl__e820_alloc(libxl__gc *gc, uint32_t domid,
     if (!libxl_defbool_val(b_info->u.pv.e820_host))
         return ERROR_INVAL;
 
-    rc = xc_get_machine_memory_map(ctx->xch, map, E820MAX);
-    if (rc < 0) {
-        errno = rc;
-        return ERROR_FAIL;
-    }
-    nr = rc;
-    rc = e820_sanitize(ctx, map, &nr, b_info->target_memkb,
-                       (b_info->max_memkb - b_info->target_memkb) +
-                       b_info->u.pv.slack_memkb);
+    nr = E820MAX;
+    rc = e820_host_sanitize(gc, b_info, map, &nr);
     if (rc)
         return ERROR_FAIL;
 
     rc = xc_domain_set_memory_map(ctx->xch, domid, map, nr);
 
-    if (rc < 0) {
-        errno  = rc;
+    if (rc < 0)
         return ERROR_FAIL;
-    }
+
     return 0;
 }
 
@@ -279,10 +306,16 @@ int libxl__arch_domain_create(libxl__gc *gc, libxl_domain_config *d_config,
     rtc_timeoffset = d_config->b_info.rtc_timeoffset;
     if (libxl_defbool_val(d_config->b_info.localtime)) {
         time_t t;
-        struct tm *tm;
+        struct tm *tm, result;
 
         t = time(NULL);
-        tm = localtime(&t);
+        tm = localtime_r(&t, &result);
+
+        if (!tm) {
+            LOGE(ERROR, "Failed to call localtime_r");
+            ret = ERROR_FAIL;
+            goto out;
+        }
 
         rtc_timeoffset += tm->tm_gmtoff;
     }
@@ -308,11 +341,13 @@ int libxl__arch_domain_create(libxl__gc *gc, libxl_domain_config *d_config,
         }
     }
 
+out:
     return ret;
 }
 
 int libxl__arch_domain_init_hw_description(libxl__gc *gc,
                                            libxl_domain_build_info *info,
+                                           libxl__domain_build_state *state,
                                            struct xc_dom_image *dom)
 {
     return 0;
@@ -324,3 +359,185 @@ int libxl__arch_domain_finalise_hw_description(libxl__gc *gc,
 {
     return 0;
 }
+
+/* Return 0 on success, ERROR_* on failure. */
+int libxl__arch_vnuma_build_vmemrange(libxl__gc *gc,
+                                      uint32_t domid,
+                                      libxl_domain_build_info *b_info,
+                                      libxl__domain_build_state *state)
+{
+    int nid, nr_vmemrange, rc;
+    uint32_t nr_e820, e820_count;
+    struct e820entry map[E820MAX];
+    xen_vmemrange_t *vmemranges;
+    unsigned int array_size;
+
+    /* If e820_host is not set, call the generic function */
+    if (!(b_info->type == LIBXL_DOMAIN_TYPE_PV &&
+          libxl_defbool_val(b_info->u.pv.e820_host)))
+        return libxl__vnuma_build_vmemrange_pv_generic(gc, domid, b_info,
+                                                       state);
+
+    assert(state->vmemranges == NULL);
+
+    nr_e820 = E820MAX;
+    rc = e820_host_sanitize(gc, b_info, map, &nr_e820);
+    if (rc) goto out;
+
+    e820_count = 0;
+    nr_vmemrange = 0;
+    vmemranges = NULL;
+    array_size = 0;
+    for (nid = 0; nid < b_info->num_vnuma_nodes; nid++) {
+        libxl_vnode_info *p = &b_info->vnuma_nodes[nid];
+        uint64_t remaining_bytes = (p->memkb << 10), bytes;
+
+        while (remaining_bytes > 0) {
+            if (e820_count >= nr_e820) {
+                rc = ERROR_NOMEM;
+                goto out;
+            }
+
+            /* Skip non RAM region */
+            if (map[e820_count].type != E820_RAM) {
+                e820_count++;
+                continue;
+            }
+
+            if (nr_vmemrange >= array_size) {
+                array_size += 32;
+                GCREALLOC_ARRAY(vmemranges, array_size);
+            }
+
+            bytes = map[e820_count].size >= remaining_bytes ?
+                remaining_bytes : map[e820_count].size;
+
+            vmemranges[nr_vmemrange].start = map[e820_count].addr;
+            vmemranges[nr_vmemrange].end = map[e820_count].addr + bytes;
+
+            if (map[e820_count].size >= remaining_bytes) {
+                map[e820_count].addr += bytes;
+                map[e820_count].size -= bytes;
+            } else {
+                e820_count++;
+            }
+
+            remaining_bytes -= bytes;
+
+            vmemranges[nr_vmemrange].flags = 0;
+            vmemranges[nr_vmemrange].nid = nid;
+            nr_vmemrange++;
+        }
+    }
+
+    state->vmemranges = vmemranges;
+    state->num_vmemranges = nr_vmemrange;
+
+    rc = 0;
+out:
+    return rc;
+}
+
+int libxl__arch_domain_map_irq(libxl__gc *gc, uint32_t domid, int irq)
+{
+    int ret;
+
+    ret = xc_physdev_map_pirq(CTX->xch, domid, irq, &irq);
+    if (ret)
+        return ret;
+
+    ret = xc_domain_irq_permission(CTX->xch, domid, irq, 1);
+
+    return ret;
+}
+
+/*
+ * Here we're just trying to set these kinds of e820 mappings:
+ *
+ * #1. Low memory region
+ *
+ * Low RAM starts at least from 1M to make sure all standard regions
+ * of the PC memory map, like BIOS, VGA memory-mapped I/O and vgabios,
+ * have enough space.
+ * Note: Those stuffs below 1M are still constructed with multiple
+ * e820 entries by hvmloader. At this point we don't change anything.
+ *
+ * #2. RDM region if it exists
+ *
+ * #3. High memory region if it exists
+ *
+ * Note: these regions are not overlapping since we already check
+ * to adjust them. Please refer to libxl__domain_device_construct_rdm().
+ */
+#define GUEST_LOW_MEM_START_DEFAULT 0x100000
+int libxl__arch_domain_construct_memmap(libxl__gc *gc,
+                                        libxl_domain_config *d_config,
+                                        uint32_t domid,
+                                        struct xc_hvm_build_args *args)
+{
+    int rc = 0;
+    unsigned int nr = 0, i;
+    /* We always own at least one lowmem entry. */
+    unsigned int e820_entries = 1;
+    struct e820entry *e820 = NULL;
+    uint64_t highmem_size =
+                    args->highmem_end ? args->highmem_end - (1ull << 32) : 0;
+
+    /* Add all rdm entries. */
+    for (i = 0; i < d_config->num_rdms; i++)
+        if (d_config->rdms[i].policy != LIBXL_RDM_RESERVE_POLICY_INVALID)
+            e820_entries++;
+
+
+    /* If we should have a highmem range. */
+    if (highmem_size)
+        e820_entries++;
+
+    if (e820_entries >= E820MAX) {
+        LOG(ERROR, "Ooops! Too many entries in the memory map!");
+        rc = ERROR_INVAL;
+        goto out;
+    }
+
+    e820 = libxl__malloc(gc, sizeof(struct e820entry) * e820_entries);
+
+    /* Low memory */
+    e820[nr].addr = GUEST_LOW_MEM_START_DEFAULT;
+    e820[nr].size = args->lowmem_end - GUEST_LOW_MEM_START_DEFAULT;
+    e820[nr].type = E820_RAM;
+    nr++;
+
+    /* RDM mapping */
+    for (i = 0; i < d_config->num_rdms; i++) {
+        if (d_config->rdms[i].policy == LIBXL_RDM_RESERVE_POLICY_INVALID)
+            continue;
+
+        e820[nr].addr = d_config->rdms[i].start;
+        e820[nr].size = d_config->rdms[i].size;
+        e820[nr].type = E820_RESERVED;
+        nr++;
+    }
+
+    /* High memory */
+    if (highmem_size) {
+        e820[nr].addr = ((uint64_t)1 << 32);
+        e820[nr].size = highmem_size;
+        e820[nr].type = E820_RAM;
+    }
+
+    if (xc_domain_set_memory_map(CTX->xch, domid, e820, e820_entries) != 0) {
+        rc = ERROR_FAIL;
+        goto out;
+    }
+
+out:
+    return rc;
+}
+
+/*
+ * Local variables:
+ * mode: C
+ * c-basic-offset: 4
+ * indent-tabs-mode: nil
+ * End:
+ */

@@ -47,8 +47,11 @@
 #define NR_CPUS 128
 #endif
 
+#ifdef CONFIG_ARM_64
+#define MAX_VIRT_CPUS 128
+#else
 #define MAX_VIRT_CPUS 8
-#define MAX_HVM_VCPUS MAX_VIRT_CPUS
+#endif
 
 #define asmlinkage /* Nothing needed */
 
@@ -187,6 +190,8 @@
 #define PAGE_MASK           (~(PAGE_SIZE-1))
 #define PAGE_FLAG_MASK      (~0)
 
+#define NR_hypercalls 64
+
 #define STACK_ORDER 3
 #define STACK_SIZE  (PAGE_SIZE << STACK_ORDER)
 
@@ -195,8 +200,6 @@ extern unsigned long xen_phys_start;
 extern unsigned long xenheap_phys_end;
 extern unsigned long frametable_virt_end;
 #endif
-
-#define supervisor_mode_kernel (0)
 
 #define watchdog_disable() ((void)0)
 #define watchdog_enable()  ((void)0)

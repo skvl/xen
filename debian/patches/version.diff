@@ -1,35 +1,32 @@
-From bc6195d65e5765928d9ab890b1bff72701e9ff23 Mon Sep 17 00:00:00 2001
+From 200fc5d2a81fd82c09c574bb5fe69060a6ba2554 Mon Sep 17 00:00:00 2001
 From: Bastian Blank <waldi@debian.org>
 Date: Sat, 5 Jul 2014 11:46:43 +0200
 Subject: version
 
 Patch-Name: version.diff
 ---
- xen/Makefile                 | 11 +++++------
+ xen/Makefile                 |  8 +++++---
  xen/common/kernel.c          |  4 ++--
  xen/common/version.c         | 21 +++++++++++----------
  xen/drivers/char/console.c   |  9 +++------
  xen/include/xen/compile.h.in |  8 ++++----
  xen/include/xen/version.h    |  8 ++++----
- 6 files changed, 29 insertions(+), 32 deletions(-)
+ 6 files changed, 29 insertions(+), 29 deletions(-)
 
 diff --git a/xen/Makefile b/xen/Makefile
-index 5720393..11c7369 100644
+index 4c54e9b..007b1a0 100644
 --- a/xen/Makefile
 +++ b/xen/Makefile
-@@ -125,20 +125,19 @@ delete-unfresh-files:
+@@ -129,7 +129,7 @@ delete-unfresh-files:
  	@mv -f $@.tmp $@
  
  # compile.h contains dynamic build info. Rebuilt on every 'make' invocation.
 -include/xen/compile.h: include/xen/compile.h.in .banner
 +include/xen/compile.h: include/xen/compile.h.in
- 	@sed -e 's/@@date@@/$(shell LC_ALL=C date)/g' \
- 	    -e 's/@@time@@/$(shell LC_ALL=C date +%T)/g' \
--	    -e 's/@@whoami@@/$(XEN_WHOAMI)/g' \
--	    -e 's/@@domain@@/$(XEN_DOMAIN)/g' \
--	    -e 's/@@hostname@@/$(shell hostname)/g' \
- 	    -e 's!@@compiler@@!$(shell $(CC) $(CFLAGS) --version 2>&1 | head -1)!g' \
- 	    -e 's/@@version@@/$(XEN_VERSION)/g' \
+ 	@sed -e 's/@@date@@/$(XEN_BUILD_DATE)/g' \
+ 	    -e 's/@@time@@/$(XEN_BUILD_TIME)/g' \
+ 	    -e 's/@@whoami@@/$(XEN_WHOAMI)/g' \
+@@ -140,9 +140,11 @@ include/xen/compile.h: include/xen/compile.h.in .banner
  	    -e 's/@@subversion@@/$(XEN_SUBVERSION)/g' \
  	    -e 's/@@extraversion@@/$(XEN_EXTRAVERSION)/g' \
  	    -e 's!@@changeset@@!$(shell tools/scmversion $(XEN_ROOT) || echo "unavailable")!g' \
@@ -44,10 +41,10 @@ index 5720393..11c7369 100644
  
  include/asm-$(TARGET_ARCH)/asm-offsets.h: arch/$(TARGET_ARCH)/asm-offsets.s
 diff --git a/xen/common/kernel.c b/xen/common/kernel.c
-index bafd44f..4a140ad 100644
+index 6a3196a..80c1950 100644
 --- a/xen/common/kernel.c
 +++ b/xen/common/kernel.c
-@@ -254,8 +254,8 @@ DO(xen_version)(int cmd, XEN_GUEST_HANDLE_PARAM(void) arg)
+@@ -251,8 +251,8 @@ DO(xen_version)(int cmd, XEN_GUEST_HANDLE_PARAM(void) arg)
  
          memset(&info, 0, sizeof(info));
          safe_strcpy(info.compiler,       xen_compiler());
@@ -102,7 +99,7 @@ index b152e27..7b5af55 100644
 -    return XEN_BANNER;
 -}
 diff --git a/xen/drivers/char/console.c b/xen/drivers/char/console.c
-index 0b8d3d4..99507df 100644
+index fce4cc8..0bd02ce 100644
 --- a/xen/drivers/char/console.c
 +++ b/xen/drivers/char/console.c
 @@ -727,14 +727,11 @@ void __init console_init_preirq(void)

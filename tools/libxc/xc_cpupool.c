@@ -14,8 +14,7 @@
  * Lesser General Public License for more details.
  *
  * You should have received a copy of the GNU Lesser General Public
- * License along with this library; if not, write to the Free Software
- * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301  USA
+ * License along with this library; If not, see <http://www.gnu.org/licenses/>.
  *
  * Copyright (c) 2009, J Gross.
  */
@@ -190,11 +189,11 @@ xc_cpumap_t xc_cpupool_freeinfo(xc_interface *xch)
     err = do_sysctl_save(xch, &sysctl);
 
     if ( err < 0 )
-	goto out;
+        goto out;
 
     cpumap = xc_cpumap_alloc(xch);
     if (cpumap == NULL)
-	goto out;
+        goto out;
 
     memcpy(cpumap, local, mapsize);
 

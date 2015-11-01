@@ -58,10 +58,9 @@ void evtchn_move_pirqs(struct vcpu *v);
 typedef void (*xen_event_channel_notification_t)(
     struct vcpu *v, unsigned int port);
 int alloc_unbound_xen_event_channel(
-    struct vcpu *local_vcpu, domid_t remote_domid,
+    struct domain *ld, unsigned int lvcpu, domid_t remote_domid,
     xen_event_channel_notification_t notification_fn);
-void free_xen_event_channel(
-    struct vcpu *local_vcpu, int port);
+void free_xen_event_channel(struct domain *d, int port);
 
 /* Query if event channel is in use by the guest */
 int guest_enabled_event(struct vcpu *v, uint32_t virq);
@@ -90,11 +89,7 @@ static inline bool_t port_is_valid(struct domain *d, unsigned int p)
 {
     if ( p >= d->max_evtchns )
         return 0;
-    if ( !d->evtchn )
-        return 0;
-    if ( p < EVTCHNS_PER_BUCKET )
-        return 1;
-    return group_from_port(d, p) != NULL && bucket_from_port(d, p) != NULL;
+    return p < read_atomic(&d->valid_evtchns);
 }
 
 static inline struct evtchn *evtchn_from_port(struct domain *d, unsigned int p)
@@ -152,10 +147,11 @@ static inline void evtchn_port_init(struct domain *d, struct evtchn *evtchn)
         d->evtchn_port_ops->init(d, evtchn);
 }
 
-static inline void evtchn_port_set_pending(struct vcpu *v,
+static inline void evtchn_port_set_pending(struct domain *d,
+                                           unsigned int vcpu_id,
                                            struct evtchn *evtchn)
 {
-    v->domain->evtchn_port_ops->set_pending(v, evtchn);
+    d->evtchn_port_ops->set_pending(d->vcpu[vcpu_id], evtchn);
 }
 
 static inline void evtchn_port_clear_pending(struct domain *d,

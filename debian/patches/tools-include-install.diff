@@ -1,4 +1,4 @@
-From c828f7babbc35771e43e323b13374aca2d7146bc Mon Sep 17 00:00:00 2001
+From 4dfebbec5ff7d54473b56bd3cef0352802967294 Mon Sep 17 00:00:00 2001
 From: Bastian Blank <waldi@debian.org>
 Date: Sat, 5 Jul 2014 11:47:30 +0200
 Subject: tools-include-install.diff
@@ -9,10 +9,10 @@ Patch-Name: tools-include-install.diff
  1 file changed, 2 deletions(-)
 
 diff --git a/tools/include/Makefile b/tools/include/Makefile
-index f7a6256..615f5bb 100644
+index dec8b3d..cdc8505 100644
 --- a/tools/include/Makefile
 +++ b/tools/include/Makefile
-@@ -11,7 +11,6 @@ xen-foreign:
+@@ -14,7 +14,6 @@ xen-foreign:
  xen/.dir:
  	@rm -rf xen
  	mkdir -p xen/libelf
@@ -20,11 +20,11 @@ index f7a6256..615f5bb 100644
  	ln -sf $(wildcard $(XEN_ROOT)/xen/include/public/*.h) xen
  	ln -sf $(addprefix $(XEN_ROOT)/xen/include/public/,arch-x86 arch-arm hvm io xsm) xen
  	ln -sf ../xen-sys/$(XEN_OS) xen/sys
-@@ -30,7 +29,6 @@ install: all
- 	$(INSTALL_DIR) $(DESTDIR)$(INCLUDEDIR)/xen/io
- 	$(INSTALL_DIR) $(DESTDIR)$(INCLUDEDIR)/xen/sys
- 	$(INSTALL_DIR) $(DESTDIR)$(INCLUDEDIR)/xen/xsm
--	$(INSTALL_DATA) xen/COPYING $(DESTDIR)$(INCLUDEDIR)/xen
- 	$(INSTALL_DATA) xen/*.h $(DESTDIR)$(INCLUDEDIR)/xen
- 	$(INSTALL_DATA) xen/arch-x86/*.h $(DESTDIR)$(INCLUDEDIR)/xen/arch-x86
- 	$(INSTALL_DATA) xen/arch-x86/hvm/*.h $(DESTDIR)$(INCLUDEDIR)/xen/arch-x86/hvm
+@@ -42,7 +41,6 @@ install: all
+ 	$(INSTALL_DIR) $(DESTDIR)$(includedir)/xen/io
+ 	$(INSTALL_DIR) $(DESTDIR)$(includedir)/xen/sys
+ 	$(INSTALL_DIR) $(DESTDIR)$(includedir)/xen/xsm
+-	$(INSTALL_DATA) xen/COPYING $(DESTDIR)$(includedir)/xen
+ 	$(INSTALL_DATA) xen/*.h $(DESTDIR)$(includedir)/xen
+ 	$(INSTALL_DATA) xen/arch-x86/*.h $(DESTDIR)$(includedir)/xen/arch-x86
+ 	$(INSTALL_DATA) xen/arch-x86/hvm/*.h $(DESTDIR)$(includedir)/xen/arch-x86/hvm

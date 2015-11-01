@@ -1,4 +1,4 @@
-From e36cf5d946d4b1422c3f00450089395c8c70fdb5 Mon Sep 17 00:00:00 2001
+From a8f7ae30f31b8332e7a802c3b26f520e2a465ece Mon Sep 17 00:00:00 2001
 From: Bastian Blank <waldi@debian.org>
 Date: Sat, 5 Jul 2014 11:46:45 +0200
 Subject: config-prefix.diff
@@ -6,24 +6,24 @@ Subject: config-prefix.diff
 Patch-Name: config-prefix.diff
 ---
  Config.mk          | 2 +-
- config/Paths.mk.in | 5 +++--
- 2 files changed, 4 insertions(+), 3 deletions(-)
+ config/Paths.mk.in | 9 +++++++--
+ 2 files changed, 8 insertions(+), 3 deletions(-)
 
 diff --git a/Config.mk b/Config.mk
-index b9a89a1..a604aca 100644
+index 54fbb9d..675bc18 100644
 --- a/Config.mk
 +++ b/Config.mk
 @@ -75,7 +75,7 @@ EXTRA_LIB += $(EXTRA_PREFIX)/lib
  endif
  
  PYTHON      ?= python
--PYTHON_PREFIX_ARG ?= --prefix="$(PREFIX)"
+-PYTHON_PREFIX_ARG ?= --prefix="$(prefix)"
 +PYTHON_PREFIX_ARG ?= --home="$(LIBEXEC)"
- # The above requires that PREFIX contains *no spaces*. This variable is here
+ # The above requires that prefix contains *no spaces*. This variable is here
  # to permit the user to set PYTHON_PREFIX_ARG to '' to workaround this bug:
  #  https://bugs.launchpad.net/ubuntu/+bug/362570
 diff --git a/config/Paths.mk.in b/config/Paths.mk.in
-index fe10f76..c3b9200 100644
+index d36504f..c3b043f 100644
 --- a/config/Paths.mk.in
 +++ b/config/Paths.mk.in
 @@ -13,6 +13,7 @@
@@ -34,12 +34,16 @@ index fe10f76..c3b9200 100644
  prefix                   := @prefix@
  bindir                   := @bindir@
  sbindir                  := @sbindir@
-@@ -33,8 +34,8 @@ PREFIX                   := $(prefix)
+@@ -29,8 +30,12 @@ includedir               := @includedir@
+ localstatedir            := @localstatedir@
+ sysconfdir               := @sysconfdir@
  
- SBINDIR                  := $(sbindir)
- BINDIR                   := $(bindir)
 -LIBEXEC                  := $(libexecdir)/$(PACKAGE_TARNAME)
 -LIBEXEC_BIN              := @LIBEXEC_BIN@
++PREFIX                   := $(prefix)
++
++SBINDIR                  := $(sbindir)
++BINDIR                   := $(bindir)
 +LIBEXEC                  := $(libexecdir)/$(PACKAGE_TARNAME)-$(PACKAGE_VERSION)
 +LIBEXEC_BIN              := $(LIBEXEC)/bin
  LIBEXEC_LIB              := $(LIBEXEC)/lib

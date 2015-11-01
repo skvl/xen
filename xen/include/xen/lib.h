@@ -8,9 +8,6 @@
 #include <xen/string.h>
 #include <asm/bug.h>
 
-void noreturn __bug(char *file, int line);
-void __warn(char *file, int line);
-
 #define BUG_ON(p)  do { if (unlikely(p)) BUG();  } while (0)
 #define WARN_ON(p) do { if (unlikely(p)) WARN(); } while (0)
 
@@ -27,15 +24,6 @@ void __warn(char *file, int line);
 #else
 #define BUILD_BUG_ON_ZERO(cond) sizeof(struct { int:-!!(cond); })
 #define BUILD_BUG_ON(cond) ((void)BUILD_BUG_ON_ZERO(cond))
-#endif
-
-#ifndef assert_failed
-#define assert_failed(p)                                        \
-do {                                                            \
-    printk("Assertion '%s' failed, line %d, file %s\n", p ,     \
-                   __LINE__, __FILE__);                         \
-    BUG();                                                      \
-} while (0)
 #endif
 
 #ifndef NDEBUG
@@ -92,9 +80,33 @@ extern void guest_printk(const struct domain *d, const char *format, ...)
     __attribute__ ((format (printf, 2, 3)));
 extern void noreturn panic(const char *format, ...)
     __attribute__ ((format (printf, 1, 2)));
-extern long vm_assist(struct domain *, unsigned int, unsigned int);
+extern long vm_assist(struct domain *, unsigned int cmd, unsigned int type,
+                      unsigned long valid);
 extern int __printk_ratelimit(int ratelimit_ms, int ratelimit_burst);
 extern int printk_ratelimit(void);
+
+#define gprintk(lvl, fmt, args...) \
+    printk(XENLOG_GUEST lvl "%pv " fmt, current, ## args)
+
+#ifdef NDEBUG
+
+static inline void
+__attribute__ ((__format__ (__printf__, 2, 3)))
+dprintk(const char *lvl, const char *fmt, ...) {}
+
+static inline void
+__attribute__ ((__format__ (__printf__, 2, 3)))
+gdprintk(const char *lvl, const char *fmt, ...) {}
+
+#else
+
+#define dprintk(lvl, fmt, args...) \
+    printk(lvl "%s:%d: " fmt, __FILE__, __LINE__, ## args)
+#define gdprintk(lvl, fmt, args...) \
+    printk(XENLOG_GUEST lvl "%s:%d:%pv " fmt, \
+           __FILE__, __LINE__, current, ## args)
+
+#endif
 
 /* vsprintf.c */
 #define sprintf __xen_has_no_sprintf__

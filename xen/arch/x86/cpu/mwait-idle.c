@@ -14,8 +14,7 @@
  * more details.
  *
  * You should have received a copy of the GNU General Public License along with
- * this program; if not, write to the Free Software Foundation, Inc.,
- * 51 Franklin St - Fifth Floor, Boston, MA 02110-1301 USA.
+ * this program; If not, see <http://www.gnu.org/licenses/>.
  */
 
 /*
@@ -196,31 +195,59 @@ static const struct cpuidle_state byt_cstates[] = {
 		.target_residency = 1,
 	},
 	{
-		.name = "C1E-BYT",
-		.flags = MWAIT2flg(0x01),
-		.exit_latency = 15,
-		.target_residency = 30,
-	},
-	{
 		.name = "C6N-BYT",
 		.flags = MWAIT2flg(0x58) | CPUIDLE_FLAG_TLB_FLUSHED,
-		.exit_latency = 40,
+		.exit_latency = 300,
 		.target_residency = 275,
 	},
 	{
 		.name = "C6S-BYT",
 		.flags = MWAIT2flg(0x52) | CPUIDLE_FLAG_TLB_FLUSHED,
-		.exit_latency = 140,
+		.exit_latency = 500,
 		.target_residency = 560,
 	},
 	{
 		.name = "C7-BYT",
 		.flags = MWAIT2flg(0x60) | CPUIDLE_FLAG_TLB_FLUSHED,
 		.exit_latency = 1200,
-		.target_residency = 1500,
+		.target_residency = 4000,
 	},
 	{
 		.name = "C7S-BYT",
+		.flags = MWAIT2flg(0x64) | CPUIDLE_FLAG_TLB_FLUSHED,
+		.exit_latency = 10000,
+		.target_residency = 20000,
+	},
+	{}
+};
+
+static const struct cpuidle_state cht_cstates[] = {
+	{
+		.name = "C1-CHT",
+		.flags = MWAIT2flg(0x00),
+		.exit_latency = 1,
+		.target_residency = 1,
+	},
+	{
+		.name = "C6N-CHT",
+		.flags = MWAIT2flg(0x58) | CPUIDLE_FLAG_TLB_FLUSHED,
+		.exit_latency = 80,
+		.target_residency = 275,
+	},
+	{
+		.name = "C6S-CHT",
+		.flags = MWAIT2flg(0x52) | CPUIDLE_FLAG_TLB_FLUSHED,
+		.exit_latency = 200,
+		.target_residency = 560,
+	},
+	{
+		.name = "C7-CHT",
+		.flags = MWAIT2flg(0x60) | CPUIDLE_FLAG_TLB_FLUSHED,
+		.exit_latency = 1200,
+		.target_residency = 4000,
+	},
+	{
+		.name = "C7S-CHT",
 		.flags = MWAIT2flg(0x64) | CPUIDLE_FLAG_TLB_FLUSHED,
 		.exit_latency = 10000,
 		.target_residency = 20000,
@@ -536,7 +563,6 @@ static void mwait_idle(void)
 		return;
 	}
 
-	power->last_state = cx;
 	eax = cx->address;
 	cstate = ((eax >> MWAIT_SUBSTATE_SIZE) & MWAIT_CSTATE_MASK) + 1;
 
@@ -555,6 +581,8 @@ static void mwait_idle(void)
 	before = cpuidle_get_tick();
 	TRACE_4D(TRC_PM_IDLE_ENTRY, cx->type, before, exp, pred);
 
+	update_last_cx_stat(power, cx, before);
+
 	if (cpu_is_haltable(cpu))
 		mwait_idle_with_hints(eax, MWAIT_ECX_INTERRUPT_BREAK);
 
@@ -565,14 +593,12 @@ static void mwait_idle(void)
 	TRACE_6D(TRC_PM_IDLE_EXIT, cx->type, after,
 		irq_traced[0], irq_traced[1], irq_traced[2], irq_traced[3]);
 
+	/* Now back in C0. */
 	update_idle_stats(power, cx, before, after);
 	local_irq_enable();
 
 	if (!(lapic_timer_reliable_states & (1 << cstate)))
 		lapic_timer_on();
-
-	/* Now back in C0. */
-	power->last_state = &power->states[0];
 
 	sched_tick_resume();
 	cpufreq_dbs_timer_resume();
@@ -631,6 +657,12 @@ static const struct idle_cpu idle_cpu_byt = {
 	.byt_auto_demotion_disable_flag = 1,
 };
 
+static const struct idle_cpu idle_cpu_cht = {
+	.state_table = cht_cstates,
+	.disable_promotion_to_c1e = 1,
+	.byt_auto_demotion_disable_flag = 1,
+};
+
 static const struct idle_cpu idle_cpu_ivb = {
 	.state_table = ivb_cstates,
 	.disable_promotion_to_c1e = 1,
@@ -656,12 +688,11 @@ static const struct idle_cpu idle_cpu_avn = {
 	.disable_promotion_to_c1e = 1,
 };
 
-#define ICPU(model, cpu) { 6, model, &idle_cpu_##cpu }
+#define ICPU(model, cpu) \
+    { X86_VENDOR_INTEL, 6, model, X86_FEATURE_MWAIT, \
+        &idle_cpu_##cpu}
 
-static struct intel_idle_id {
-	unsigned int family, model;
-	const struct idle_cpu *data;
-} intel_idle_ids[] __initdata = {
+static const struct x86_cpu_id intel_idle_ids[] __initconst = {
 	ICPU(0x1a, nehalem),
 	ICPU(0x1e, nehalem),
 	ICPU(0x1f, nehalem),
@@ -675,6 +706,7 @@ static struct intel_idle_id {
 	ICPU(0x2d, snb),
 	ICPU(0x36, atom),
 	ICPU(0x37, byt),
+	ICPU(0x4c, cht),
 	ICPU(0x3a, ivb),
 	ICPU(0x3e, ivt),
 	ICPU(0x3c, hsw),
@@ -683,6 +715,7 @@ static struct intel_idle_id {
 	ICPU(0x46, hsw),
 	ICPU(0x4d, avn),
 	ICPU(0x3d, bdw),
+	ICPU(0x47, bdw),
 	ICPU(0x4f, bdw),
 	ICPU(0x56, bdw),
 	{}
@@ -722,22 +755,16 @@ static void __init mwait_idle_state_table_update(void)
 static int __init mwait_idle_probe(void)
 {
 	unsigned int eax, ebx, ecx;
-	const struct intel_idle_id *id;
+	const struct x86_cpu_id *id = x86_match_cpu(intel_idle_ids);
 
-	if (boot_cpu_data.x86_vendor != X86_VENDOR_INTEL ||
-	    !boot_cpu_has(X86_FEATURE_MWAIT) ||
-	    boot_cpu_data.cpuid_level < CPUID_MWAIT_LEAF)
-		return -ENODEV;
-
-	for (id = intel_idle_ids; id->family; ++id)
-		if (id->family == boot_cpu_data.x86 &&
-		    id->model == boot_cpu_data.x86_model)
-			break;
-	if (!id->family) {
+	if (!id) {
 		pr_debug(PREFIX "does not run on family %d model %d\n",
 			 boot_cpu_data.x86, boot_cpu_data.x86_model);
 		return -ENODEV;
 	}
+
+	if (boot_cpu_data.cpuid_level < CPUID_MWAIT_LEAF)
+		return -ENODEV;
 
 	cpuid(CPUID_MWAIT_LEAF, &eax, &ebx, &ecx, &mwait_substates);
 
@@ -753,7 +780,7 @@ static int __init mwait_idle_probe(void)
 
 	pr_debug(PREFIX "MWAIT substates: %#x\n", mwait_substates);
 
-	icpu = id->data;
+	icpu = id->driver_data;
 	cpuidle_state_table = icpu->state_table;
 
 	if (boot_cpu_has(X86_FEATURE_ARAT))

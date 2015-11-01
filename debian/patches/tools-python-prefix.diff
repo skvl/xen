@@ -1,4 +1,4 @@
-From df9f1c2c05a08348650cc2231557109b412c6c5c Mon Sep 17 00:00:00 2001
+From b18c27e57939f8a7d1b59234640d5fc0436811c5 Mon Sep 17 00:00:00 2001
 From: Bastian Blank <waldi@debian.org>
 Date: Sat, 5 Jul 2014 11:47:02 +0200
 Subject: tools-python-prefix.diff
@@ -9,7 +9,7 @@ Patch-Name: tools-python-prefix.diff
  1 file changed, 4 insertions(+)
 
 diff --git a/tools/python/setup.py b/tools/python/setup.py
-index 439c429..7e3684f 100644
+index 5bf81be..3439066 100644
 --- a/tools/python/setup.py
 +++ b/tools/python/setup.py
 @@ -5,6 +5,7 @@ import os, sys

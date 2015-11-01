@@ -434,7 +434,7 @@ void __init sync_Arb_IDs(void)
  */
 void __init init_bsp_APIC(void)
 {
-    unsigned long value, ver;
+    unsigned long value;
 
     /*
      * Don't do the setup now if we have a SMP BIOS as the
@@ -443,9 +443,6 @@ void __init init_bsp_APIC(void)
     if (smp_found_config || !cpu_has_apic)
         return;
 
-    value = apic_read(APIC_LVR);
-    ver = GET_APIC_VERSION(value);
-    
     /*
      * Do not trust the local APIC being empty at bootup.
      */
@@ -995,7 +992,7 @@ void __init init_apic_mappings(void)
         apic_phys = mp_lapic_addr;
 
     set_fixmap_nocache(FIX_APIC_BASE, apic_phys);
-    apic_printk(APIC_VERBOSE, "mapped APIC to %08lx (%08lx)\n", APIC_BASE,
+    apic_printk(APIC_VERBOSE, "mapped APIC to %08Lx (%08lx)\n", APIC_BASE,
                 apic_phys);
 
 __next:
@@ -1151,7 +1148,7 @@ static int __init calibrate_APIC_clock(void)
      * We wrapped around just now. Let's start:
      */
     if (cpu_has_tsc)
-        rdtscll(t1);
+        t1 = rdtsc();
     tt1 = apic_read(APIC_TMCCT);
 
     /*
@@ -1162,7 +1159,7 @@ static int __init calibrate_APIC_clock(void)
 
     tt2 = apic_read(APIC_TMCCT);
     if (cpu_has_tsc)
-        rdtscll(t2);
+        t2 = rdtsc();
 
     /*
      * The APIC bus clock counter is 32 bits only, it
@@ -1324,7 +1321,18 @@ out: ;
 
 void error_interrupt(struct cpu_user_regs *regs)
 {
-    unsigned long v, v1;
+    static const char *const esr_fields[] = {
+        "Send CS error",
+        "Receive CS error",
+        "Send accept error",
+        "Receive accept error",
+        "Redirectable IPI",
+        "Send illegal vector",
+        "Received illegal vector",
+        "Illegal register address",
+    };
+    unsigned int v, v1;
+    int i;
 
     /* First tickle the hardware, only then report what went on. -- REW */
     v = apic_read(APIC_ESR);
@@ -1332,18 +1340,12 @@ void error_interrupt(struct cpu_user_regs *regs)
     v1 = apic_read(APIC_ESR);
     ack_APIC_irq();
 
-    /* Here is what the APIC error bits mean:
-       0: Send CS error
-       1: Receive CS error
-       2: Send accept error
-       3: Receive accept error
-       4: Reserved
-       5: Send illegal vector
-       6: Received illegal vector
-       7: Illegal register address
-    */
-    printk (KERN_DEBUG "APIC error on CPU%d: %02lx(%02lx)\n",
+    printk(XENLOG_DEBUG "APIC error on CPU%u: %02x(%02x)",
             smp_processor_id(), v , v1);
+    for ( i = 7; i >= 0; --i )
+        if ( v1 & (1 << i) )
+            printk(", %s", esr_fields[i]);
+    printk("\n");
 }
 
 /*

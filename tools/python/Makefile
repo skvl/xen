@@ -4,6 +4,8 @@ include $(XEN_ROOT)/tools/Rules.mk
 .PHONY: all
 all: build
 
+PY_CFLAGS = $(CFLAGS) $(PY_NOOPT_CFLAGS) $(LDFLAGS) $(APPEND_LDFLAGS)
+
 .PHONY: build
 build: genwrap.py $(XEN_ROOT)/tools/libxl/libxl_types.idl \
 		$(XEN_ROOT)/tools/libxl/idl.py
@@ -11,12 +13,17 @@ build: genwrap.py $(XEN_ROOT)/tools/libxl/libxl_types.idl \
 		$(XEN_ROOT)/tools/libxl/libxl_types.idl \
 		xen/lowlevel/xl/_pyxl_types.h \
 		xen/lowlevel/xl/_pyxl_types.c
-	CC="$(CC)" CFLAGS="$(CFLAGS) $(LDFLAGS) $(APPEND_LDFLAGS)" $(PYTHON) setup.py build
+	CC="$(CC)" CFLAGS="$(PY_CFLAGS)" $(PYTHON) setup.py build
 
 .PHONY: install
 install:
-	CC="$(CC)" CFLAGS="$(CFLAGS) $(LDFLAGS) $(APPEND_LDFLAGS)" $(PYTHON) setup.py install \
+	$(INSTALL_DIR) $(DESTDIR)$(LIBEXEC_BIN)
+
+	CC="$(CC)" CFLAGS="$(PY_CFLAGS)" $(PYTHON) setup.py install \
 		$(PYTHON_PREFIX_ARG) --root="$(DESTDIR)" --force
+
+	$(INSTALL_PROG) scripts/convert-legacy-stream $(DESTDIR)$(LIBEXEC_BIN)
+	$(INSTALL_PROG) scripts/verify-stream-v2 $(DESTDIR)$(LIBEXEC_BIN)
 
 .PHONY: test
 test:
@@ -27,5 +34,8 @@ clean:
 	find . \( -name "*.py[ocd]" -o -name "*~" -o -name "_*.[hc]" \) -delete
 	rm -rf build/
 	rm -f $(DEPS)
+
+.PHONY: distclean
+distclean: clean
 
 -include $(DEPS)

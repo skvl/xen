@@ -17,8 +17,7 @@
  * GNU General Public License for more details.
  * 
  * You should have received a copy of the GNU General Public License
- * along with this program; if not, write to the Free Software
- * Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
+ * along with this program; If not, see <http://www.gnu.org/licenses/>.
  */
 
 /* Operand sizes: 8-bit operands or specified/overridden size. */
@@ -313,17 +312,11 @@ struct operand {
     enum { OP_REG, OP_MEM, OP_IMM, OP_NONE } type;
     unsigned int bytes;
 
-    /* Up to 128-byte operand value, addressable as ulong or uint32_t[]. */
-    union {
-        unsigned long val;
-        uint32_t bigval[4];
-    };
+    /* Operand value. */
+    unsigned long val;
 
-    /* Up to 128-byte operand value, addressable as ulong or uint32_t[]. */
-    union {
-        unsigned long orig_val;
-        uint32_t orig_bigval[4];
-    };
+    /* Original operand value. */
+    unsigned long orig_val;
 
     /* OP_REG: Pointer to register field. */
     unsigned long *reg;
@@ -438,7 +431,7 @@ typedef union {
 /* Before executing instruction: restore necessary bits in EFLAGS. */
 #define _PRE_EFLAGS(_sav, _msk, _tmp)                           \
 /* EFLAGS = (_sav & _msk) | (EFLAGS & ~_msk); _sav &= ~_msk; */ \
-"movl %"_sav",%"_LO32 _tmp"; "                                  \
+"movl %"_LO32 _sav",%"_LO32 _tmp"; "                            \
 "push %"_tmp"; "                                                \
 "push %"_tmp"; "                                                \
 "movl %"_msk",%"_LO32 _tmp"; "                                  \
@@ -458,7 +451,7 @@ typedef union {
 "pushf; "                                       \
 "pop  %"_tmp"; "                                \
 "andl %"_msk",%"_LO32 _tmp"; "                  \
-"orl  %"_LO32 _tmp",%"_sav"; "
+"orl  %"_LO32 _tmp",%"_LO32 _sav"; "
 
 /* Raw emulation: instruction has two explicit operands. */
 #define __emulate_2op_nobyte(_op,_src,_dst,_eflags,_wx,_wy,_lx,_ly,_qx,_qy)\
@@ -470,18 +463,16 @@ do{ unsigned long _tmp;                                                    \
             _PRE_EFLAGS("0","4","2")                                       \
             _op"w %"_wx"3,%1; "                                            \
             _POST_EFLAGS("0","4","2")                                      \
-            : "=m" (_eflags), "=m" ((_dst).val), "=&r" (_tmp)              \
-            : _wy ((_src).val), "i" (EFLAGS_MASK),                         \
-              "m" (_eflags), "m" ((_dst).val) );                           \
+            : "+g" (_eflags), "+m" ((_dst).val), "=&r" (_tmp)              \
+            : _wy ((_src).val), "i" (EFLAGS_MASK) );                       \
         break;                                                             \
     case 4:                                                                \
         asm volatile (                                                     \
             _PRE_EFLAGS("0","4","2")                                       \
             _op"l %"_lx"3,%1; "                                            \
             _POST_EFLAGS("0","4","2")                                      \
-            : "=m" (_eflags), "=m" ((_dst).val), "=&r" (_tmp)              \
-            : _ly ((_src).val), "i" (EFLAGS_MASK),                         \
-              "m" (_eflags), "m" ((_dst).val) );                           \
+            : "+g" (_eflags), "+m" ((_dst).val), "=&r" (_tmp)              \
+            : _ly ((_src).val), "i" (EFLAGS_MASK) );                       \
         break;                                                             \
     case 8:                                                                \
         __emulate_2op_8byte(_op, _src, _dst, _eflags, _qx, _qy);           \
@@ -497,9 +488,8 @@ do{ unsigned long _tmp;                                                    \
             _PRE_EFLAGS("0","4","2")                                       \
             _op"b %"_bx"3,%1; "                                            \
             _POST_EFLAGS("0","4","2")                                      \
-            : "=m" (_eflags), "=m" ((_dst).val), "=&r" (_tmp)              \
-            : _by ((_src).val), "i" (EFLAGS_MASK),                         \
-              "m" (_eflags), "m" ((_dst).val) );                           \
+            : "+g" (_eflags), "+m" ((_dst).val), "=&r" (_tmp)              \
+            : _by ((_src).val), "i" (EFLAGS_MASK) );                       \
         break;                                                             \
     default:                                                               \
         __emulate_2op_nobyte(_op,_src,_dst,_eflags,_wx,_wy,_lx,_ly,_qx,_qy);\
@@ -529,24 +519,24 @@ do{ unsigned long _tmp;                                                    \
             _PRE_EFLAGS("0","3","2")                                       \
             _op"b %1; "                                                    \
             _POST_EFLAGS("0","3","2")                                      \
-            : "=m" (_eflags), "=m" ((_dst).val), "=&r" (_tmp)              \
-            : "i" (EFLAGS_MASK), "m" (_eflags), "m" ((_dst).val) );        \
+            : "+g" (_eflags), "+m" ((_dst).val), "=&r" (_tmp)              \
+            : "i" (EFLAGS_MASK) );                                         \
         break;                                                             \
     case 2:                                                                \
         asm volatile (                                                     \
             _PRE_EFLAGS("0","3","2")                                       \
             _op"w %1; "                                                    \
             _POST_EFLAGS("0","3","2")                                      \
-            : "=m" (_eflags), "=m" ((_dst).val), "=&r" (_tmp)              \
-            : "i" (EFLAGS_MASK), "m" (_eflags), "m" ((_dst).val) );        \
+            : "+g" (_eflags), "+m" ((_dst).val), "=&r" (_tmp)              \
+            : "i" (EFLAGS_MASK) );                                         \
         break;                                                             \
     case 4:                                                                \
         asm volatile (                                                     \
             _PRE_EFLAGS("0","3","2")                                       \
             _op"l %1; "                                                    \
             _POST_EFLAGS("0","3","2")                                      \
-            : "=m" (_eflags), "=m" ((_dst).val), "=&r" (_tmp)              \
-            : "i" (EFLAGS_MASK), "m" (_eflags), "m" ((_dst).val) );        \
+            : "+g" (_eflags), "+m" ((_dst).val), "=&r" (_tmp)              \
+            : "i" (EFLAGS_MASK) );                                         \
         break;                                                             \
     case 8:                                                                \
         __emulate_1op_8byte(_op, _dst, _eflags);                           \
@@ -561,17 +551,16 @@ do{ asm volatile (                                                      \
         _PRE_EFLAGS("0","4","2")                                        \
         _op"q %"_qx"3,%1; "                                             \
         _POST_EFLAGS("0","4","2")                                       \
-        : "=m" (_eflags), "=m" ((_dst).val), "=&r" (_tmp)               \
-        : _qy ((_src).val), "i" (EFLAGS_MASK),                          \
-          "m" (_eflags), "m" ((_dst).val) );                            \
+        : "+g" (_eflags), "+m" ((_dst).val), "=&r" (_tmp)               \
+        : _qy ((_src).val), "i" (EFLAGS_MASK) );                        \
 } while (0)
 #define __emulate_1op_8byte(_op, _dst, _eflags)                         \
 do{ asm volatile (                                                      \
         _PRE_EFLAGS("0","3","2")                                        \
         _op"q %1; "                                                     \
         _POST_EFLAGS("0","3","2")                                       \
-        : "=m" (_eflags), "=m" ((_dst).val), "=&r" (_tmp)               \
-        : "i" (EFLAGS_MASK), "m" (_eflags), "m" ((_dst).val) );         \
+        : "+g" (_eflags), "+m" ((_dst).val), "=&r" (_tmp)               \
+        : "i" (EFLAGS_MASK) );                                          \
 } while (0)
 #elif defined(__i386__)
 #define __emulate_2op_8byte(_op, _src, _dst, _eflags, _qx, _qy)
@@ -583,7 +572,8 @@ do{ asm volatile (                                                      \
 ({ unsigned long _x = 0, _eip = _regs.eip;                              \
    if ( !mode_64bit() ) _eip = (uint32_t)_eip; /* ignore upper dword */ \
    _regs.eip += (_size); /* real hardware doesn't truncate */           \
-   generate_exception_if((uint8_t)(_regs.eip - ctxt->regs->eip) > 15,   \
+   generate_exception_if((uint8_t)(_regs.eip -                          \
+                                   ctxt->regs->eip) > MAX_INST_LEN,     \
                          EXC_GP, 0);                                    \
    rc = ops->insn_fetch(x86_seg_cs, _eip, &_x, (_size), ctxt);          \
    if ( rc ) goto done;                                                 \
@@ -679,10 +669,14 @@ do{ (_fic)->exn_raised = 0;                                     \
     rc = ops->get_fpu(fpu_handle_exception, _fic, _type, ctxt); \
     if ( rc ) goto done;                                        \
 } while (0)
-#define put_fpu(_fic)                                           \
-do{                                                             \
+#define _put_fpu()                                              \
+do {                                                            \
     if ( ops->put_fpu != NULL )                                 \
-        ops->put_fpu(ctxt);                                     \
+        (ops->put_fpu)(ctxt);                                   \
+} while (0)
+#define put_fpu(_fic)                                           \
+do {                                                            \
+    _put_fpu();                                                 \
     generate_exception_if((_fic)->exn_raised, EXC_MF, -1);      \
 } while (0)
 
@@ -722,11 +716,15 @@ do{ struct fpu_insn_ctxt fic;                           \
 } while (0)
 
 #define emulate_fpu_insn_stub(_bytes...)                                \
-do{ uint8_t stub[] = { _bytes, 0xc3 };                                  \
-    struct fpu_insn_ctxt fic = { .insn_bytes = sizeof(stub)-1 };        \
+do {                                                                    \
+    uint8_t *buf = get_stub(stub);                                      \
+    unsigned int _nr = sizeof((uint8_t[]){ _bytes });                   \
+    struct fpu_insn_ctxt fic = { .insn_bytes = _nr };                   \
+    memcpy(buf, ((uint8_t[]){ _bytes, 0xc3 }), _nr + 1);                \
     get_fpu(X86EMUL_FPU_fpu, &fic);                                     \
-    (*(void(*)(void))stub)();                                           \
+    stub.func();                                                        \
     put_fpu(&fic);                                                      \
+    put_stub(stub);                                                     \
 } while (0)
 
 static unsigned long _get_rep_prefix(
@@ -815,10 +813,9 @@ static int read_ulong(
  */
 static bool_t mul_dbl(unsigned long m[2])
 {
-    bool_t rc;
-    asm ( "mul %4; seto %b2"
-          : "=a" (m[0]), "=d" (m[1]), "=q" (rc)
-          : "0" (m[0]), "1" (m[1]), "2" (0) );
+    bool_t rc = 0;
+    asm ( "mul %1; seto %b2"
+          : "+a" (m[0]), "+d" (m[1]), "+q" (rc) );
     return rc;
 }
 
@@ -829,10 +826,9 @@ static bool_t mul_dbl(unsigned long m[2])
  */
 static bool_t imul_dbl(unsigned long m[2])
 {
-    bool_t rc;
-    asm ( "imul %4; seto %b2"
-          : "=a" (m[0]), "=d" (m[1]), "=q" (rc)
-          : "0" (m[0]), "1" (m[1]), "2" (0) );
+    bool_t rc = 0;
+    asm ( "imul %1; seto %b2"
+          : "+a" (m[0]), "+d" (m[1]), "+q" (rc) );
     return rc;
 }
 
@@ -846,9 +842,7 @@ static bool_t div_dbl(unsigned long u[2], unsigned long v)
 {
     if ( (v == 0) || (u[1] >= v) )
         return 1;
-    asm ( "div %4"
-          : "=a" (u[0]), "=d" (u[1])
-          : "0" (u[0]), "1" (u[1]), "r" (v) );
+    asm ( "div %2" : "+a" (u[0]), "+d" (u[1]) : "r" (v) );
     return 0;
 }
 
@@ -1467,6 +1461,7 @@ x86_emulate(
     struct operand src = { .reg = REG_POISON };
     struct operand dst = { .reg = REG_POISON };
     enum x86_swint_type swint_type;
+    struct x86_emulate_stub stub = {};
     DECLARE_ALIGNED(mmval_t, mmval);
     /*
      * Data operand effective address (usually computed from ModRM).
@@ -2573,15 +2568,25 @@ x86_emulate(
     }
 
     case 0xaa ... 0xab: /* stos */ {
-        /* unsigned long max_reps = */get_rep_prefix();
-        dst.type  = OP_MEM;
+        unsigned long nr_reps = get_rep_prefix();
         dst.bytes = (d & ByteOp) ? 1 : op_bytes;
         dst.mem.seg = x86_seg_es;
         dst.mem.off = truncate_ea(_regs.edi);
-        dst.val   = _regs.eax;
+        if ( (nr_reps == 1) || !ops->rep_stos ||
+             ((rc = ops->rep_stos(&_regs.eax,
+                                  dst.mem.seg, dst.mem.off, dst.bytes,
+                                  &nr_reps, ctxt)) == X86EMUL_UNHANDLEABLE) )
+        {
+            dst.val = _regs.eax;
+            dst.type = OP_MEM;
+            nr_reps = 1;
+        }
+        else if ( rc != X86EMUL_OKAY )
+            goto done;
         register_address_increment(
-            _regs.edi, (_regs.eflags & EFLG_DF) ? -dst.bytes : dst.bytes);
-        put_rep_prefix(1);
+            _regs.edi,
+            nr_reps * ((_regs.eflags & EFLG_DF) ? -dst.bytes : dst.bytes));
+        put_rep_prefix(nr_reps);
         break;
     }
 
@@ -3780,6 +3785,7 @@ x86_emulate(
         break;
     }
 
+ no_writeback:
     /* Inject #DB if single-step tracing was enabled at instruction start. */
     if ( (ctxt->regs->eflags & EFLG_TF) && (rc == X86EMUL_OKAY) &&
          (ops->inject_hw_exception != NULL) )
@@ -3790,6 +3796,8 @@ x86_emulate(
     *ctxt->regs = _regs;
 
  done:
+    _put_fpu();
+    put_stub(stub);
     return rc;
 
  twobyte_insn:
@@ -3808,25 +3816,31 @@ x86_emulate(
         struct segment_register reg;
         unsigned long base, limit, cr0, cr0w;
 
-        if ( modrm == 0xdf ) /* invlpga */
+        switch( modrm )
         {
+        case 0xdf: /* invlpga */
             generate_exception_if(!in_protmode(ctxt, ops), EXC_UD, -1);
             generate_exception_if(!mode_ring0(), EXC_GP, 0);
             fail_if(ops->invlpg == NULL);
             if ( (rc = ops->invlpg(x86_seg_none, truncate_ea(_regs.eax),
                                    ctxt)) )
                 goto done;
-            break;
-        }
-
-        if ( modrm == 0xf9 ) /* rdtscp */
-        {
+            goto no_writeback;
+        case 0xf9: /* rdtscp */ {
             uint64_t tsc_aux;
             fail_if(ops->read_msr == NULL);
             if ( (rc = ops->read_msr(MSR_TSC_AUX, &tsc_aux, ctxt)) != 0 )
                 goto done;
             _regs.ecx = (uint32_t)tsc_aux;
             goto rdtsc;
+        }
+        case 0xd4: /* vmfunc */
+            generate_exception_if(lock_prefix | rep_prefix() | (vex.pfx == vex_66),
+                                  EXC_UD, -1);
+            fail_if(ops->vmfunc == NULL);
+            if ( (rc = ops->vmfunc(ctxt) != X86EMUL_OKAY) )
+                goto done;
+            goto no_writeback;
         }
 
         switch ( modrm_reg & 7 )
@@ -4005,9 +4019,15 @@ x86_emulate(
                /* {,v}movss xmm,xmm/m32 */
                /* {,v}movsd xmm,xmm/m64 */
     {
-        uint8_t stub[] = { 0x3e, 0x3e, 0x0f, b, modrm, 0xc3 };
-        struct fpu_insn_ctxt fic = { .insn_bytes = sizeof(stub)-1 };
+        uint8_t *buf = get_stub(stub);
+        struct fpu_insn_ctxt fic = { .insn_bytes = 5 };
 
+        buf[0] = 0x3e;
+        buf[1] = 0x3e;
+        buf[2] = 0x0f;
+        buf[3] = b;
+        buf[4] = modrm;
+        buf[5] = 0xc3;
         if ( vex.opcx == vex_none )
         {
             if ( vex.pfx & VEX_PREFIX_DOUBLE_MASK )
@@ -4015,7 +4035,7 @@ x86_emulate(
             else
                 vcpu_must_have_sse();
             ea.bytes = 16;
-            SET_SSE_PREFIX(stub[0], vex.pfx);
+            SET_SSE_PREFIX(buf[0], vex.pfx);
             get_fpu(X86EMUL_FPU_xmm, &fic);
         }
         else
@@ -4042,15 +4062,16 @@ x86_emulate(
             /* convert memory operand to (%rAX) */
             rex_prefix &= ~REX_B;
             vex.b = 1;
-            stub[4] &= 0x38;
+            buf[4] &= 0x38;
         }
         if ( !rc )
         {
-           copy_REX_VEX(stub, rex_prefix, vex);
-           asm volatile ( "call *%0" : : "r" (stub), "a" (mmvalp)
+           copy_REX_VEX(buf, rex_prefix, vex);
+           asm volatile ( "call *%0" : : "r" (stub.func), "a" (mmvalp)
                                      : "memory" );
         }
         put_fpu(&fic);
+        put_stub(stub);
         if ( !rc && (b & 1) && (ea.type == OP_MEM) )
             rc = ops->write(ea.mem.seg, ea.mem.off, mmvalp,
                             ea.bytes, ctxt);
@@ -4240,9 +4261,15 @@ x86_emulate(
                /* {,v}movdq{a,u} xmm,xmm/m128 */
                /* vmovdq{a,u} ymm,ymm/m256 */
     {
-        uint8_t stub[] = { 0x3e, 0x3e, 0x0f, b, modrm, 0xc3 };
-        struct fpu_insn_ctxt fic = { .insn_bytes = sizeof(stub)-1 };
+        uint8_t *buf = get_stub(stub);
+        struct fpu_insn_ctxt fic = { .insn_bytes = 5 };
 
+        buf[0] = 0x3e;
+        buf[1] = 0x3e;
+        buf[2] = 0x0f;
+        buf[3] = b;
+        buf[4] = modrm;
+        buf[5] = 0xc3;
         if ( vex.opcx == vex_none )
         {
             switch ( vex.pfx )
@@ -4250,7 +4277,7 @@ x86_emulate(
             case vex_66:
             case vex_f3:
                 vcpu_must_have_sse2();
-                stub[0] = 0x66; /* movdqa */
+                buf[0] = 0x66; /* movdqa */
                 get_fpu(X86EMUL_FPU_xmm, &fic);
                 ea.bytes = 16;
                 break;
@@ -4286,15 +4313,16 @@ x86_emulate(
             /* convert memory operand to (%rAX) */
             rex_prefix &= ~REX_B;
             vex.b = 1;
-            stub[4] &= 0x38;
+            buf[4] &= 0x38;
         }
         if ( !rc )
         {
-           copy_REX_VEX(stub, rex_prefix, vex);
-           asm volatile ( "call *%0" : : "r" (stub), "a" (mmvalp)
+           copy_REX_VEX(buf, rex_prefix, vex);
+           asm volatile ( "call *%0" : : "r" (stub.func), "a" (mmvalp)
                                      : "memory" );
         }
         put_fpu(&fic);
+        put_stub(stub);
         if ( !rc && (b != 0x6f) && (ea.type == OP_MEM) )
             rc = ops->write(ea.mem.seg, ea.mem.off, mmvalp,
                             ea.bytes, ctxt);
@@ -4346,7 +4374,8 @@ x86_emulate(
         /* Save real source value, then compare EAX against destination. */
         src.orig_val = src.val;
         src.val = _regs.eax;
-        emulate_2op_SrcV("cmp", src, dst, _regs.eflags);
+        /* cmp: %%eax - dst ==> dst and src swapped for macro invocation */
+        emulate_2op_SrcV("cmp", dst, src, _regs.eflags);
         if ( _regs.eflags & EFLG_ZF )
         {
             /* Success: write back to memory. */
@@ -4634,5 +4663,7 @@ x86_emulate(
     goto writeback;
 
  cannot_emulate:
+    _put_fpu();
+    put_stub(stub);
     return X86EMUL_UNHANDLEABLE;
 }

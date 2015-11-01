@@ -16,8 +16,7 @@
  * GNU General Public License for more details.
  * 
  * You should have received a copy of the GNU General Public License
- * along with this program; if not, write to the Free Software
- * Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
+ * along with this program; If not, see <http://www.gnu.org/licenses/>.
  */
 
 #ifndef _XEN_SHADOW_H
@@ -49,11 +48,13 @@
 
 /* Set up the shadow-specific parts of a domain struct at start of day.
  * Called from paging_domain_init(). */
-void shadow_domain_init(struct domain *d, unsigned int domcr_flags);
+int shadow_domain_init(struct domain *d, unsigned int domcr_flags);
 
 /* Setup the shadow-specific parts of a vcpu struct. It is called by
  * paging_vcpu_init() in paging.c */
 void shadow_vcpu_init(struct vcpu *v);
+
+#ifdef CONFIG_SHADOW_PAGING
 
 /* Enable an arbitrary shadow mode.  Call once at domain creation. */
 int shadow_enable(struct domain *d, u32 mode);
@@ -72,47 +73,44 @@ int shadow_domctl(struct domain *d,
                   XEN_GUEST_HANDLE_PARAM(void) u_domctl);
 
 /* Call when destroying a domain */
-void shadow_teardown(struct domain *d);
+void shadow_teardown(struct domain *d, int *preempted);
 
 /* Call once all of the references to the domain have gone away */
 void shadow_final_teardown(struct domain *d);
 
-/* shadow code to call when log dirty is enabled */
-int shadow_enable_log_dirty(struct domain *d, bool_t log_global);
-
-/* shadow code to call when log dirty is disabled */
-int shadow_disable_log_dirty(struct domain *d);
-
-/* shadow code to call when bitmap is being cleaned */
-void shadow_clean_dirty_bitmap(struct domain *d);
-
-/* Update all the things that are derived from the guest's CR0/CR3/CR4.
- * Called to initialize paging structures if the paging mode
- * has changed, and when bringing up a VCPU for the first time. */
-void shadow_update_paging_modes(struct vcpu *v);
-
-
-/* Remove all mappings of the guest page from the shadows. 
- * This is called from common code.  It does not flush TLBs. */
-int sh_remove_all_mappings(struct vcpu *v, mfn_t target_mfn);
-static inline void 
-shadow_drop_references(struct domain *d, struct page_info *p)
-{
-    if ( unlikely(shadow_mode_enabled(d)) )
-        /* See the comment about locking in sh_remove_all_mappings */
-        sh_remove_all_mappings(d->vcpu[0], _mfn(page_to_mfn(p)));
-}
-
-/* Remove all shadows of the guest mfn. */
-void sh_remove_shadows(struct vcpu *v, mfn_t gmfn, int fast, int all);
-static inline void shadow_remove_all_shadows(struct vcpu *v, mfn_t gmfn)
-{
-    /* See the comment about locking in sh_remove_shadows */
-    sh_remove_shadows(v, gmfn, 0 /* Be thorough */, 1 /* Must succeed */);
-}
+void sh_remove_shadows(struct domain *d, mfn_t gmfn, int fast, int all);
 
 /* Discard _all_ mappings from the domain's shadows. */
 void shadow_blow_tables_per_domain(struct domain *d);
+
+#else /* !CONFIG_SHADOW_PAGING */
+
+#define shadow_teardown(d, p) ASSERT(is_pv_domain(d))
+#define shadow_final_teardown(d) ASSERT(is_pv_domain(d))
+#define shadow_enable(d, mode) \
+    ({ ASSERT(is_pv_domain(d)); -EOPNOTSUPP; })
+#define shadow_track_dirty_vram(d, begin_pfn, nr, bitmap) \
+    ({ ASSERT_UNREACHABLE(); -EOPNOTSUPP; })
+
+static inline void sh_remove_shadows(struct domain *d, mfn_t gmfn,
+                                     bool_t fast, bool_t all) {}
+
+static inline void shadow_blow_tables_per_domain(struct domain *d) {}
+
+static inline int shadow_domctl(struct domain *d, xen_domctl_shadow_op_t *sc,
+                                XEN_GUEST_HANDLE_PARAM(void) u_domctl)
+{
+    return -EINVAL;
+}
+
+#endif /* CONFIG_SHADOW_PAGING */
+
+/* Remove all shadows of the guest mfn. */
+static inline void shadow_remove_all_shadows(struct domain *d, mfn_t gmfn)
+{
+    /* See the comment about locking in sh_remove_shadows */
+    sh_remove_shadows(d, gmfn, 0 /* Be thorough */, 1 /* Must succeed */);
+}
 
 #endif /* _XEN_SHADOW_H */
 

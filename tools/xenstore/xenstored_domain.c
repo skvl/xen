@@ -13,8 +13,7 @@
     GNU General Public License for more details.
 
     You should have received a copy of the GNU General Public License
-    along with this program; if not, write to the Free Software
-    Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
+    along with this program; If not, see <http://www.gnu.org/licenses/>.
 */
 
 #include <stdio.h>
@@ -172,7 +171,7 @@ static void *map_interface(domid_t domid, unsigned long mfn)
 			GNTTAB_RESERVED_XENSTORE, PROT_READ|PROT_WRITE);
 	} else {
 		return xc_map_foreign_range(*xc_handle, domid,
-			getpagesize(), PROT_READ|PROT_WRITE, mfn);
+			XC_PAGE_SIZE, PROT_READ|PROT_WRITE, mfn);
 	}
 }
 
@@ -181,7 +180,7 @@ static void unmap_interface(void *interface)
 	if (*xcg_handle != NULL)
 		xc_gnttab_munmap(*xcg_handle, interface, 1);
 	else
-		munmap(interface, getpagesize());
+		munmap(interface, XC_PAGE_SIZE);
 }
 
 static int destroy_domain(void *_domain)

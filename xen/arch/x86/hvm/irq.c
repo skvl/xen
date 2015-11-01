@@ -15,8 +15,7 @@
  * more details.
  *
  * You should have received a copy of the GNU General Public License along with
- * this program; if not, write to the Free Software Foundation, Inc., 59 Temple
- * Place - Suite 330, Boston, MA 02111-1307 USA.
+ * this program; If not, see <http://www.gnu.org/licenses/>.
  */
 
 #include <xen/config.h>
@@ -218,7 +217,13 @@ void hvm_assert_evtchn_irq(struct vcpu *v)
         return;
     }
 
-    if ( is_hvm_pv_evtchn_vcpu(v) )
+    if ( v->arch.hvm_vcpu.evtchn_upcall_vector != 0 )
+    {
+        uint8_t vector = v->arch.hvm_vcpu.evtchn_upcall_vector;
+
+        vlapic_set_irq(vcpu_vlapic(v), vector, 0);
+    }
+    else if ( is_hvm_pv_evtchn_vcpu(v) )
         vcpu_kick(v);
     else if ( v->vcpu_id == 0 )
         hvm_set_callback_irq_level(v);

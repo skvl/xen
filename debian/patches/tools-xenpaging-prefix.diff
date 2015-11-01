@@ -1,4 +1,4 @@
-From 78a248bfa98c3f18aea03fd284d0aeec6e65c136 Mon Sep 17 00:00:00 2001
+From 96a45c8ccb73dc6763aca3f1233a79ab97fb0c88 Mon Sep 17 00:00:00 2001
 From: Bastian Blank <waldi@debian.org>
 Date: Sat, 5 Jul 2014 11:47:08 +0200
 Subject: tools-xenpaging-prefix.diff
@@ -9,7 +9,7 @@ Patch-Name: tools-xenpaging-prefix.diff
  1 file changed, 1 insertion(+), 1 deletion(-)
 
 diff --git a/tools/xenpaging/Makefile b/tools/xenpaging/Makefile
-index c742e62..ffdc29b 100644
+index 2407a30..f3747b3 100644
 --- a/tools/xenpaging/Makefile
 +++ b/tools/xenpaging/Makefile
 @@ -4,7 +4,7 @@ include $(XEN_ROOT)/tools/Rules.mk

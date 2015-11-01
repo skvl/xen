@@ -119,7 +119,7 @@ unsigned int compat_iret(void)
         }
         else if ( ksp > regs->_esp )
         {
-            for (i = 9; i > 0; ++i)
+            for ( i = 9; i > 0; --i )
             {
                 rc |= __get_user(x, (u32 *)regs->rsp + i);
                 rc |= __put_user(x, (u32 *)(unsigned long)ksp + i);
@@ -164,7 +164,7 @@ unsigned int compat_iret(void)
     return regs->_eax;
 
  exit_and_crash:
-    gdprintk(XENLOG_ERR, "Fatal error\n");
+    gprintk(XENLOG_ERR, "Fatal IRET error\n");
     domain_crash(v->domain);
     return 0;
 }

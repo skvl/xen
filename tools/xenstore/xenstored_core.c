@@ -13,8 +13,7 @@
     GNU General Public License for more details.
 
     You should have received a copy of the GNU General Public License
-    along with this program; if not, write to the Free Software
-    Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
+    along with this program; If not, see <http://www.gnu.org/licenses/>.
 */
 
 #include <sys/types.h>
@@ -40,7 +39,6 @@
 #include <signal.h>
 #include <assert.h>
 #include <setjmp.h>
-#include <config.h>
 
 #include "utils.h"
 #include "list.h"
@@ -89,9 +87,14 @@ static void check_store(void);
 #define log(...)							\
 	do {								\
 		char *s = talloc_asprintf(NULL, __VA_ARGS__);		\
-		trace("%s\n", s);					\
-		syslog(LOG_ERR, "%s",  s);				\
-		talloc_free(s);						\
+		if (s) {						\
+			trace("%s\n", s);				\
+			syslog(LOG_ERR, "%s",  s);			\
+			talloc_free(s);					\
+		} else {						\
+			trace("talloc failure during logging\n");	\
+			syslog(LOG_ERR, "talloc failure during logging\n"); \
+		}							\
 	} while (0)
 
 
@@ -1479,13 +1482,35 @@ static void manual_node(const char *name, const char *child)
 	talloc_free(node);
 }
 
+static void tdb_logger(TDB_CONTEXT *tdb, int level, const char * fmt, ...)
+{
+	va_list ap;
+	char *s;
+
+	va_start(ap, fmt);
+	s = talloc_vasprintf(NULL, fmt, ap);
+	va_end(ap);
+
+	if (s) {
+		trace("TDB: %s\n", s);
+		syslog(LOG_ERR, "TDB: %s",  s);
+		if (verbose)
+			xprintf("TDB: %s", s);
+		talloc_free(s);
+	} else {
+		trace("talloc failure during logging\n");
+		syslog(LOG_ERR, "talloc failure during logging\n");
+	}
+}
+
 static void setup_structure(void)
 {
 	char *tdbname;
 	tdbname = talloc_strdup(talloc_autofree_context(), xs_daemon_tdb());
 
 	if (!(tdb_flags & TDB_INTERNAL))
-		tdb_ctx = tdb_open(tdbname, 0, tdb_flags, O_RDWR, 0);
+		tdb_ctx = tdb_open_ex(tdbname, 0, tdb_flags, O_RDWR, 0,
+				      &tdb_logger, NULL);
 
 	if (tdb_ctx) {
 		/* XXX When we make xenstored able to restart, this will have
@@ -1516,8 +1541,8 @@ static void setup_structure(void)
 		talloc_free(tlocal);
 	}
 	else {
-		tdb_ctx = tdb_open(tdbname, 7919, tdb_flags, O_RDWR|O_CREAT,
-				   0640);
+		tdb_ctx = tdb_open_ex(tdbname, 7919, tdb_flags, O_RDWR|O_CREAT,
+				      0640, &tdb_logger, NULL);
 		if (!tdb_ctx)
 			barf_perror("Could not create tdb file %s", tdbname);
 
@@ -1756,7 +1781,10 @@ static int xs_validate_active_socket(const char *connect_to)
 	return xs_get_sd_fd(connect_to);
 }
 
-static void xen_claim_active_sockets(int **psock, int **pro_sock)
+/* Return true if started by systemd and false if not. Exit with
+ * error if things go wrong.
+ */
+static bool systemd_checkin(int **psock, int **pro_sock)
 {
 	int *sock, *ro_sock;
 	const char *soc_str = xs_daemon_socket();
@@ -1764,7 +1792,11 @@ static void xen_claim_active_sockets(int **psock, int **pro_sock)
 	int n;
 
 	n = sd_listen_fds(0);
-	if (n <= 0) {
+
+	if (n == 0)
+		return false;
+
+	if (n < 0) {
 		sd_notifyf(0, "STATUS=Failed to get any active sockets: %s\n"
 			   "ERRNO=%i",
 			   strerror(errno),
@@ -1791,6 +1823,8 @@ static void xen_claim_active_sockets(int **psock, int **pro_sock)
 
 	talloc_set_destructor(sock, destroy_fd);
 	talloc_set_destructor(ro_sock, destroy_fd);
+
+	return true;
 }
 #endif
 
@@ -1852,21 +1886,21 @@ static void usage(void)
 "\n"
 "where options may include:\n"
 "\n"
-"  --no-domain-init    to state that xenstored should not initialise dom0,\n"
-"  --pid-file <file>   giving a file for the daemon's pid to be written,\n"
-"  --help              to output this message,\n"
-"  --no-fork           to request that the daemon does not fork,\n"
-"  --output-pid        to request that the pid of the daemon is output,\n"
-"  --trace-file <file> giving the file for logging, and\n"
-"  --entry-nb <nb>     limit the number of entries per domain,\n"
-"  --entry-size <size> limit the size of entry per domain, and\n"
-"  --watch-nb <nb>     limit the number of watches per domain,\n"
-"  --transaction <nb>  limit the number of transaction allowed per domain,\n"
-"  --no-recovery       to request that no recovery should be attempted when\n"
-"                      the store is corrupted (debug only),\n"
-"  --internal-db       store database in memory, not on disk\n"
-"  --preserve-local    to request that /local is preserved on start-up,\n"
-"  --verbose           to request verbose execution.\n");
+"  -D, --no-domain-init    to state that xenstored should not initialise dom0,\n"
+"  -F, --pid-file <file>   giving a file for the daemon's pid to be written,\n"
+"  -H, --help              to output this message,\n"
+"  -N, --no-fork           to request that the daemon does not fork,\n"
+"  -P, --output-pid        to request that the pid of the daemon is output,\n"
+"  -T, --trace-file <file> giving the file for logging, and\n"
+"  -E, --entry-nb <nb>     limit the number of entries per domain,\n"
+"  -S, --entry-size <size> limit the size of entry per domain, and\n"
+"  -W, --watch-nb <nb>     limit the number of watches per domain,\n"
+"  -t, --transaction <nb>  limit the number of transaction allowed per domain,\n"
+"  -R, --no-recovery       to request that no recovery should be attempted when\n"
+"                          the store is corrupted (debug only),\n"
+"  -I, --internal-db       store database in memory, not on disk\n"
+"  -L, --preserve-local    to request that /local is preserved on start-up,\n"
+"  -V, --verbose           to request verbose execution.\n");
 }
 
 
@@ -1897,13 +1931,16 @@ int priv_domid = 0;
 
 int main(int argc, char *argv[])
 {
-	int opt, *sock, *ro_sock;
+	int opt, *sock = NULL, *ro_sock = NULL;
 	int sock_pollfd_idx = -1, ro_sock_pollfd_idx = -1;
 	bool dofork = true;
 	bool outputpid = false;
 	bool no_domain_init = false;
 	const char *pidfile = NULL;
 	int timeout;
+#if defined(XEN_SYSTEMD_ENABLED)
+	bool systemd;
+#endif
 
 	while ((opt = getopt_long(argc, argv, "DE:F:HNPS:t:T:RLVW:", options,
 				  NULL)) != -1) {
@@ -1965,10 +2002,11 @@ int main(int argc, char *argv[])
 		barf("%s: No arguments desired", argv[0]);
 
 #if defined(XEN_SYSTEMD_ENABLED)
-	if (sd_booted()) {
+	systemd = systemd_checkin(&sock, &ro_sock);
+	if (systemd) {
 		dofork = false;
 		if (pidfile)
-			barf("%s: PID file not needed on systemd", argv[0]);
+			xprintf("%s: PID file not needed on systemd", argv[0]);
 		pidfile = NULL;
 	}
 #endif
@@ -1995,9 +2033,7 @@ int main(int argc, char *argv[])
 	signal(SIGPIPE, SIG_IGN);
 
 #if defined(XEN_SYSTEMD_ENABLED)
-	if (sd_booted())
-		xen_claim_active_sockets(&sock, &ro_sock);
-	else
+	if (!systemd)
 #endif
 		init_sockets(&sock, &ro_sock);
 
@@ -2032,7 +2068,7 @@ int main(int argc, char *argv[])
 	xenbus_notify_running();
 
 #if defined(XEN_SYSTEMD_ENABLED)
-	if (sd_booted()) {
+	if (systemd) {
 		sd_notify(1, "READY=1");
 		fprintf(stderr, SD_NOTICE "xenstored is ready\n");
 	}

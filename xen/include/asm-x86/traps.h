@@ -13,8 +13,7 @@
  * GNU General Public License for more details.
  *
  * You should have received a copy of the GNU General Public License
- * along with this program; if not, write to the Free Software
- * Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
+ * along with this program; If not, see <http://www.gnu.org/licenses/>.
  */
 
 #ifndef ASM_TRAP_H
@@ -48,8 +47,8 @@ extern int send_guest_trap(struct domain *d, uint16_t vcpuid,
 				unsigned int trap_nr);
 
 uint32_t guest_io_read(unsigned int port, unsigned int bytes,
-                       struct vcpu *, struct cpu_user_regs *);
+                       struct domain *);
 void guest_io_write(unsigned int port, unsigned int bytes, uint32_t data,
-                    struct vcpu *, struct cpu_user_regs *);
+                    struct domain *);
 
 #endif /* ASM_TRAP_H */

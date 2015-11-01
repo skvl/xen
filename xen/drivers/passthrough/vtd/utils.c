@@ -11,8 +11,7 @@
  * more details.
  *
  * You should have received a copy of the GNU General Public License along with
- * this program; if not, write to the Free Software Foundation, Inc., 59 Temple
- * Place - Suite 330, Boston, MA 02111-1307 USA.
+ * this program; If not, see <http://www.gnu.org/licenses/>.
  *
  * Copyright (C) Allen Kay <allen.m.kay@intel.com>
  */
@@ -28,13 +27,6 @@
 #include "vtd.h"
 #include "extern.h"
 #include <asm/io_apic.h>
-
-int is_usb_device(u16 seg, u8 bus, u8 devfn)
-{
-    u16 class = pci_conf_read16(seg, bus, PCI_SLOT(devfn), PCI_FUNC(devfn),
-                                PCI_CLASS_DEVICE);
-    return (class == 0xc03);
-}
 
 /* Disable vt-d protected memory registers. */
 void disable_pmr(struct iommu *iommu)

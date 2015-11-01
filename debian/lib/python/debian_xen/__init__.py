@@ -2,7 +2,7 @@ def _setup():
     import os.path, sys
     version = None
     rules = os.path.join(__path__[0], "../../../rules.defs")
-    f = file(rules)
+    f = open(rules)
     for l in f:
         l = l.strip().split()
         if l[0] == 'KERNELVERSION':

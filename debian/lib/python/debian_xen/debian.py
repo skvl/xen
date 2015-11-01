@@ -3,7 +3,7 @@ from debian_linux.debian import Version
 
 
 class VersionXen(Version):
-    _version_xen_rules = ur"""
+    _version_xen_rules = r"""
 ^
 (?P<version>
     \d+\.\d+

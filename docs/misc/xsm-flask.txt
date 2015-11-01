@@ -87,7 +87,7 @@ __HYPERVISOR_domctl (xen/include/public/domctl.h)
  * XEN_DOMCTL_set_machine_address_size
  * XEN_DOMCTL_debug_op
  * XEN_DOMCTL_gethvmcontext_partial
- * XEN_DOMCTL_mem_event_op
+ * XEN_DOMCTL_vm_event_op
  * XEN_DOMCTL_mem_sharing_op
  * XEN_DOMCTL_setvcpuextstate
  * XEN_DOMCTL_getvcpuextstate
@@ -116,7 +116,7 @@ __HYPERVISOR_sysctl (xen/include/public/sysctl.h)
  * XEN_SYSCTL_pm_op
  * XEN_SYSCTL_page_offline_op
  * XEN_SYSCTL_lockprof_op
- * XEN_SYSCTL_topologyinfo
+ * XEN_SYSCTL_cputopoinfo
  * XEN_SYSCTL_numainfo
  * XEN_SYSCTL_cpupool_op
  * XEN_SYSCTL_scheduler_op
@@ -213,9 +213,9 @@ that can be used without dom0 disaggregation. The main types for domUs are:
  - nomigrate_t is a domain that must be created via the nomigrate_t_building
    type, and whose memory cannot be read by dom0 once created
 
-HVM domains with stubdomain device models use two types (one per domain):
- - domHVM_t is an HVM domain that uses a stubdomain device model
- - dm_dom_t is the device model for a domain with type domHVM_t
+HVM domains with stubdomain device models also need a type for the stub domain.
+The example policy defines dm_dom_t for the device model of a domU_t domain;
+there are no device model types defined for the other domU types.
 
 One disadvantage of using type enforcement to enforce isolation is that a new
 type is needed for each group of domains. The user field can be used to address
@@ -335,33 +335,8 @@ memory, or even changing certain BIOS settings). Dynamic labeling requires that
 the domain performing the labeling be trusted to label all the devices in the
 system properly.
 
-To enable static device labeling, a checkpolicy >= 2.0.20 and libsepol >=2.0.39
-are required. The policy Makefile (tools/flask/policy/Makefile) must also be
-changed as follows:
-
-########################################
-#
-# Build a binary policy locally
-#
-$(POLVER): policy.conf
-        @echo "Compiling $(NAME) $(POLVER)"
-       $(QUIET) $(CHECKPOLICY) $^ -o $@            (Comment out this line)
-# Uncomment line below to enable policies for devices
-#        $(QUIET) $(CHECKPOLICY) -t Xen $^ -o $@   (Uncomment this line)
-
-########################################
-#
-# Install a binary policy
-#
-$(LOADPATH): policy.conf
-        @echo "Compiling and installing $(NAME) $(LOADPATH)"
-       $(QUIET) $(CHECKPOLICY) $^ -o $@            (Comment out this line)
-# Uncomment line below to enable policies for devices
-#        $(QUIET) $(CHECKPOLICY) -t Xen $^ -o $@   (Uncomment this line)
-
-
-IRQs, PCI devices, I/O memory and ports can all be labeled.  There are
-commented out lines in xen.te policy for examples on how to label devices.
+IRQs, PCI devices, I/O memory and x86 IO ports can all have labels defined.
+There are examples commented out in tools/flask/policy/policy/device_contexts.
 
 Device Labeling
 ---------------
@@ -378,7 +353,7 @@ lspci output is..
         Region 2: I/O ports at ecc0 [size=32]
         Kernel modules: e1000e
 
-The labeling can be done with these commands
+The labeling can be done with these lines in device_contexts:
 
 pirqcon 33 system_u:object_r:nicP_t
 iomemcon 0xfebe0-0xfebff system_u:object_r:nicP_t
@@ -396,32 +371,3 @@ the ranges being denied to more easily determine what resources are required.
 When running in permissive mode, only the first denial of a given
 source/destination is printed to the log, so labeling devices using this method
 may require multiple passes to find all required ranges.
-
-Additional notes on XSM:FLASK
------------------------------
-
-1) xen command line parameters
-
-	a) flask_enforcing
-	
-	The default value for flask_enforcing is '0'.  This parameter causes the 
-	platform to boot in permissive mode which means that the policy is loaded 
-	but not enforced.  This mode is often helpful for developing new systems 
-	and policies as the policy violations are reported on the xen console and 
-	may be viewed in dom0 through 'xl dmesg'.
-	
-	To boot the platform into enforcing mode, which means that the policy is
-	loaded and enforced, append 'flask_enforcing=1' on the grub line.
-	
-	This parameter may also be changed through the flask hypercall.
-	
-	b) flask_enabled
-	
-	The default value for flask_enabled is '1'.  This parameter causes the
-	platform to enable the FLASK security module under the XSM framework.
-	The parameter may be enabled/disabled only once per boot.  If the parameter
-	is set to '0', only a reboot can re-enable flask.  When flask_enabled is '0'
-	the DUMMY module is enforced.
-
-	This parameter may also be changed through the flask hypercall.  But may
-	only be performed once per boot.

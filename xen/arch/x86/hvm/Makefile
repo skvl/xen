@@ -3,6 +3,7 @@ subdir-y += vmx
 
 obj-y += asid.o
 obj-y += emulate.o
+obj-y += event.o
 obj-y += hpet.o
 obj-y += hvm.o
 obj-y += i8254.o
@@ -22,4 +23,3 @@ obj-y += vlapic.o
 obj-y += vmsi.o
 obj-y += vpic.o
 obj-y += vpt.o
-obj-y += vpmu.o

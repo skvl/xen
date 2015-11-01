@@ -71,24 +71,25 @@
 /*
  * Intel CPU features in CR4
  */
-#define X86_CR4_VME		0x0001	/* enable vm86 extensions */
-#define X86_CR4_PVI		0x0002	/* virtual interrupts flag enable */
-#define X86_CR4_TSD		0x0004	/* disable time stamp at ipl 3 */
-#define X86_CR4_DE		0x0008	/* enable debugging extensions */
-#define X86_CR4_PSE		0x0010	/* enable page size extensions */
-#define X86_CR4_PAE		0x0020	/* enable physical address extensions */
-#define X86_CR4_MCE		0x0040	/* Machine check enable */
-#define X86_CR4_PGE		0x0080	/* enable global pages */
-#define X86_CR4_PCE		0x0100	/* enable performance counters at ipl 3 */
-#define X86_CR4_OSFXSR		0x0200	/* enable fast FPU save and restore */
-#define X86_CR4_OSXMMEXCPT	0x0400	/* enable unmasked SSE exceptions */
-#define X86_CR4_VMXE		0x2000  /* enable VMX */
-#define X86_CR4_SMXE		0x4000  /* enable SMX */
-#define X86_CR4_FSGSBASE	0x10000 /* enable {rd,wr}{fs,gs}base */
-#define X86_CR4_PCIDE		0x20000 /* enable PCID */
-#define X86_CR4_OSXSAVE	0x40000 /* enable XSAVE/XRSTOR */
-#define X86_CR4_SMEP		0x100000/* enable SMEP */
-#define X86_CR4_SMAP		0x200000/* enable SMAP */
+#define X86_CR4_VME        0x00000001 /* enable vm86 extensions */
+#define X86_CR4_PVI        0x00000002 /* virtual interrupts flag enable */
+#define X86_CR4_TSD        0x00000004 /* disable time stamp at ipl 3 */
+#define X86_CR4_DE         0x00000008 /* enable debugging extensions */
+#define X86_CR4_PSE        0x00000010 /* enable page size extensions */
+#define X86_CR4_PAE        0x00000020 /* enable physical address extensions */
+#define X86_CR4_MCE        0x00000040 /* Machine check enable */
+#define X86_CR4_PGE        0x00000080 /* enable global pages */
+#define X86_CR4_PCE        0x00000100 /* enable performance counters at ipl 3 */
+#define X86_CR4_OSFXSR     0x00000200 /* enable fast FPU save and restore */
+#define X86_CR4_OSXMMEXCPT 0x00000400 /* enable unmasked SSE exceptions */
+#define X86_CR4_VMXE       0x00002000 /* enable VMX */
+#define X86_CR4_SMXE       0x00004000 /* enable SMX */
+#define X86_CR4_FSGSBASE   0x00010000 /* enable {rd,wr}{fs,gs}base */
+#define X86_CR4_PCIDE      0x00020000 /* enable PCID */
+#define X86_CR4_OSXSAVE    0x00040000 /* enable XSAVE/XRSTOR */
+#define X86_CR4_SMEP       0x00100000 /* enable SMEP */
+#define X86_CR4_SMAP       0x00200000 /* enable SMAP */
+#define X86_CR4_PKE        0x00400000 /* enable PKE */
 
 /*
  * Trap/fault mnemonics.
@@ -142,7 +143,7 @@
 #define PFEC_page_paged     (1U<<5)
 #define PFEC_page_shared    (1U<<6)
 
-#define XEN_MINIMAL_CR4 (X86_CR4_PSE | X86_CR4_PGE | X86_CR4_PAE)
+#define XEN_MINIMAL_CR4 (X86_CR4_PGE | X86_CR4_PAE)
 
 #define XEN_SYSCALL_MASK (X86_EFLAGS_AC|X86_EFLAGS_VM|X86_EFLAGS_RF|    \
                           X86_EFLAGS_NT|X86_EFLAGS_DF|X86_EFLAGS_IF|    \
@@ -163,6 +164,14 @@ struct vcpu;
     pc;                                             \
 })
 
+struct x86_cpu_id {
+    uint16_t vendor;
+    uint16_t family;
+    uint16_t model;
+    uint16_t feature;   /* bit index */
+    const void *driver_data;
+};
+
 struct cpuinfo_x86 {
     __u8 x86;            /* CPU family */
     __u8 x86_vendor;     /* CPU vendor */
@@ -180,9 +189,9 @@ struct cpuinfo_x86 {
     __u32 booted_cores;  /* number of cores as seen by OS */
     __u32 x86_num_siblings; /* cpuid logical cpus per chip value */
     __u32 apicid;
-    int   phys_proc_id; /* package ID of each logical CPU */
-    int   cpu_core_id; /* core ID of each logical CPU*/
-    int   compute_unit_id; /* AMD compute unit ID of each logical CPU */
+    __u32 phys_proc_id;    /* package ID of each logical CPU */
+    __u32 cpu_core_id;     /* core ID of each logical CPU*/
+    __u32 compute_unit_id; /* AMD compute unit ID of each logical CPU */
     unsigned short x86_clflush_size;
 } __cacheline_aligned;
 
@@ -203,6 +212,8 @@ extern u32 cpuid_ext_features;
 
 /* Maximum width of physical addresses supported by the hardware */
 extern unsigned int paddr_bits;
+
+extern const struct x86_cpu_id *x86_match_cpu(const struct x86_cpu_id table[]);
 
 extern void identify_cpu(struct cpuinfo_x86 *);
 extern void setup_clear_cpu_cap(unsigned int);
@@ -234,8 +245,8 @@ unsigned int apicid_to_socket(unsigned int);
 
 /* Some CPUID calls want 'count' to be placed in ecx */
 static inline void cpuid_count(
-    int op,
-    int count,
+    unsigned int op,
+    unsigned int count,
     unsigned int *eax,
     unsigned int *ebx,
     unsigned int *ecx,
@@ -444,9 +455,12 @@ struct __packed __cacheline_aligned tss_struct {
  * descriptor table entry. */
 static always_inline void set_ist(idt_entry_t *idt, unsigned long ist)
 {
+    idt_entry_t new = *idt;
+
     /* IST is a 3 bit field, 32 bits into the IDT entry. */
     ASSERT(ist <= IST_MAX);
-    idt->a = (idt->a & ~(7UL << 32)) | (ist << 32);
+    new.a = (idt->a & ~(7UL << 32)) | (ist << 32);
+    _write_gate_lower(idt, &new);
 }
 
 #define IDT_ENTRIES 256
@@ -529,11 +543,23 @@ void trap_nop(void);
 void enable_nmis(void);
 void do_reserved_trap(struct cpu_user_regs *regs);
 
-void syscall_enter(void);
 void sysenter_entry(void);
 void sysenter_eflags_saved(void);
 void compat_hypercall(void);
 void int80_direct_trap(void);
+
+#define STUBS_PER_PAGE (PAGE_SIZE / STUB_BUF_SIZE)
+
+struct stubs {
+    union {
+        void(*func)(void);
+        unsigned long addr;
+    };
+    unsigned long mfn;
+};
+
+DECLARE_PER_CPU(struct stubs, stubs);
+unsigned long alloc_stub_page(unsigned int cpu, unsigned long *mfn);
 
 extern int hypercall(void);
 
@@ -544,8 +570,15 @@ int wrmsr_hypervisor_regs(uint32_t idx, uint64_t val);
 
 void microcode_set_module(unsigned int);
 int microcode_update(XEN_GUEST_HANDLE_PARAM(const_void), unsigned long len);
-int microcode_resume_cpu(int cpu);
+int microcode_resume_cpu(unsigned int cpu);
 
+enum get_cpu_vendor {
+   gcv_host_early,
+   gcv_host_late,
+   gcv_guest
+};
+
+int get_cpu_vendor(const char vendor_id[], enum get_cpu_vendor);
 void pv_cpuid(struct cpu_user_regs *regs);
 
 #endif /* !__ASSEMBLY__ */

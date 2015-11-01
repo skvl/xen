@@ -16,8 +16,7 @@
  * GNU General Public License for more details.
  *
  * You should have received a copy of the GNU General Public License
- * along with this program; if not, write to the Free Software
- * Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
+ * along with this program; If not, see <http://www.gnu.org/licenses/>.
  */
 #ifndef __MEM_SHARING_H__
 #define __MEM_SHARING_H__
@@ -90,9 +89,7 @@ static inline int mem_sharing_unshare_page(struct domain *d,
  */
 int mem_sharing_notify_enomem(struct domain *d, unsigned long gfn,
                                 bool_t allow_sleep);
-int mem_sharing_sharing_resume(struct domain *d);
-int mem_sharing_memop(struct domain *d, 
-                       xen_mem_sharing_op_t *mec);
+int mem_sharing_memop(XEN_GUEST_HANDLE_PARAM(xen_mem_sharing_op_t) arg);
 int mem_sharing_domctl(struct domain *d, 
                        xen_domctl_mem_sharing_op_t *mec);
 int mem_sharing_audit(void);

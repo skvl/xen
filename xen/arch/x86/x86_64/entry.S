@@ -13,9 +13,8 @@
 #include <public/xen.h>
 #include <irq_vectors.h>
 
-        ALIGN
 /* %rbx: struct vcpu */
-switch_to_kernel:
+ENTRY(switch_to_kernel)
         leaq  VCPU_trap_bounce(%rbx),%rdx
         /* TB_eip = (32-bit syscall && syscall32_addr) ?
          *          syscall32_addr : syscall_addr */
@@ -113,23 +112,22 @@ restore_all_xen:
  * When entering SYSCALL from user mode:
  *  Vector directly to the registered arch.syscall_addr.
  *
- * Initial work is done by per-CPU stack trampolines. At this point %rsp
- * has been initialised to point at the correct Xen stack, and %rsp, %rflags
- * and %cs have been saved. All other registers are still to be saved onto
- * the stack, starting with %rip, and an appropriate %ss must be saved into
- * the space left by the trampoline.
+ * Initial work is done by per-CPU trampolines. At this point %rsp has been
+ * initialised to point at the correct Xen stack, %rsp has been saved, and
+ * %rax needs to be restored from the %ss save slot. All other registers are
+ * still to be saved onto the stack, starting with RFLAGS, and an appropriate
+ * %ss must be saved into the space left by the trampoline.
  */
-ENTRY(syscall_enter)
+ENTRY(lstar_enter)
         sti
-        movl  $FLAT_KERNEL_SS,24(%rsp)
+        movq  8(%rsp),%rax /* Restore %rax. */
+        movq  $FLAT_KERNEL_SS,8(%rsp)
+        pushq %r11
+        pushq $FLAT_KERNEL_CS64
         pushq %rcx
         pushq $0
-        movq  24(%rsp),%r11 /* Re-load user RFLAGS into %r11 before saving */
         SAVE_VOLATILE TRAP_syscall
         GET_CURRENT(%rbx)
-        movq  VCPU_domain(%rbx),%rcx
-        testb $1,DOMAIN_is_32bit_pv(%rcx)
-        jnz   compat_syscall
         testb $TF_kernel_mode,VCPU_thread_flags(%rbx)
         jz    switch_to_kernel
 
@@ -626,6 +624,7 @@ ENTRY(double_fault)
 
         .pushsection .init.text, "ax", @progbits
 ENTRY(early_page_fault)
+        movl  $TRAP_page_fault,4(%rsp)
         SAVE_ALL
         movq  %rsp,%rdi
         call  do_early_page_fault
@@ -764,6 +763,8 @@ ENTRY(hypercall_table)
         .quad do_domctl
         .quad do_kexec_op
         .quad do_tmem_op
+        .quad do_ni_hypercall       /* reserved for XenClient */
+        .quad do_xenpmu_op          /* 40 */
         .rept __HYPERVISOR_arch_0-((.-hypercall_table)/8)
         .quad do_ni_hypercall
         .endr
@@ -813,6 +814,8 @@ ENTRY(hypercall_args_table)
         .byte 1 /* do_domctl            */
         .byte 2 /* do_kexec             */
         .byte 1 /* do_tmem_op           */
+        .byte 0 /* reserved for XenClient */
+        .byte 2 /* do_xenpmu_op         */  /* 40 */
         .rept __HYPERVISOR_arch_0-(.-hypercall_args_table)
         .byte 0 /* do_ni_hypercall      */
         .endr

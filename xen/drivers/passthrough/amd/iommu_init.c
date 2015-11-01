@@ -14,8 +14,7 @@
  * GNU General Public License for more details.
  *
  * You should have received a copy of the GNU General Public License
- * along with this program; if not, write to the Free Software
- * Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307 USA
+ * along with this program; If not, see <http://www.gnu.org/licenses/>.
  */
 
 #include <xen/config.h>
@@ -451,7 +450,7 @@ static void iommu_msi_unmask(struct irq_desc *desc)
     spin_lock_irqsave(&iommu->lock, flags);
     amd_iommu_msi_enable(iommu, IOMMU_CONTROL_ENABLED);
     spin_unlock_irqrestore(&iommu->lock, flags);
-    iommu->msi.msi_attrib.masked = 0;
+    iommu->msi.msi_attrib.host_masked = 0;
 }
 
 static void iommu_msi_mask(struct irq_desc *desc)
@@ -464,7 +463,7 @@ static void iommu_msi_mask(struct irq_desc *desc)
     spin_lock_irqsave(&iommu->lock, flags);
     amd_iommu_msi_enable(iommu, IOMMU_CONTROL_DISABLED);
     spin_unlock_irqrestore(&iommu->lock, flags);
-    iommu->msi.msi_attrib.masked = 1;
+    iommu->msi.msi_attrib.host_masked = 1;
 }
 
 static unsigned int iommu_msi_startup(struct irq_desc *desc)

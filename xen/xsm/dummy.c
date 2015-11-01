@@ -81,6 +81,8 @@ void xsm_fixup_ops (struct xsm_operations *ops)
     set_to_dummy_if_null(ops, map_domain_irq);
     set_to_dummy_if_null(ops, unmap_domain_pirq);
     set_to_dummy_if_null(ops, unmap_domain_irq);
+    set_to_dummy_if_null(ops, bind_pt_irq);
+    set_to_dummy_if_null(ops, unbind_pt_irq);
     set_to_dummy_if_null(ops, irq_permission);
     set_to_dummy_if_null(ops, iomem_permission);
     set_to_dummy_if_null(ops, iomem_mapping);
@@ -94,6 +96,12 @@ void xsm_fixup_ops (struct xsm_operations *ops)
     set_to_dummy_if_null(ops, deassign_device);
 #endif
 
+#if defined(HAS_PASSTHROUGH) && defined(HAS_DEVICE_TREE)
+    set_to_dummy_if_null(ops, test_assign_dtdevice);
+    set_to_dummy_if_null(ops, assign_dtdevice);
+    set_to_dummy_if_null(ops, deassign_dtdevice);
+#endif
+
     set_to_dummy_if_null(ops, resource_plug_core);
     set_to_dummy_if_null(ops, resource_unplug_core);
     set_to_dummy_if_null(ops, resource_plug_pci);
@@ -104,10 +112,11 @@ void xsm_fixup_ops (struct xsm_operations *ops)
 
     set_to_dummy_if_null(ops, page_offline);
     set_to_dummy_if_null(ops, tmem_op);
-    set_to_dummy_if_null(ops, tmem_control);
     set_to_dummy_if_null(ops, hvm_param);
     set_to_dummy_if_null(ops, hvm_control);
     set_to_dummy_if_null(ops, hvm_param_nested);
+    set_to_dummy_if_null(ops, hvm_param_altp2mhvm);
+    set_to_dummy_if_null(ops, hvm_altp2mhvm_op);
 
     set_to_dummy_if_null(ops, do_xsm_op);
 #ifdef CONFIG_COMPAT
@@ -118,9 +127,18 @@ void xsm_fixup_ops (struct xsm_operations *ops)
     set_to_dummy_if_null(ops, remove_from_physmap);
     set_to_dummy_if_null(ops, map_gmfn_foreign);
 
+    set_to_dummy_if_null(ops, vm_event_control);
+
 #ifdef HAS_MEM_ACCESS
-    set_to_dummy_if_null(ops, mem_event_control);
-    set_to_dummy_if_null(ops, mem_event_op);
+    set_to_dummy_if_null(ops, mem_access);
+#endif
+
+#ifdef HAS_MEM_PAGING
+    set_to_dummy_if_null(ops, mem_paging);
+#endif
+
+#ifdef HAS_MEM_SHARING
+    set_to_dummy_if_null(ops, mem_sharing);
 #endif
 
 #ifdef CONFIG_X86
@@ -140,9 +158,8 @@ void xsm_fixup_ops (struct xsm_operations *ops)
     set_to_dummy_if_null(ops, mmuext_op);
     set_to_dummy_if_null(ops, update_va_mapping);
     set_to_dummy_if_null(ops, priv_mapping);
-    set_to_dummy_if_null(ops, bind_pt_irq);
-    set_to_dummy_if_null(ops, unbind_pt_irq);
     set_to_dummy_if_null(ops, ioport_permission);
     set_to_dummy_if_null(ops, ioport_mapping);
+    set_to_dummy_if_null(ops, pmu_op);
 #endif
 }
