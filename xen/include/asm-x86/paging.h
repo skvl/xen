@@ -18,8 +18,7 @@
  * GNU General Public License for more details.
  *
  * You should have received a copy of the GNU General Public License
- * along with this program; if not, write to the Free Software
- * Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
+ * along with this program; If not, see <http://www.gnu.org/licenses/>.
  */
 
 #ifndef _XEN_PAGING_H
@@ -39,7 +38,11 @@
 #define PG_SH_shift    20
 #define PG_HAP_shift   21
 /* We're in one of the shadow modes */
+#ifdef CONFIG_SHADOW_PAGING
 #define PG_SH_enable   (1U << PG_SH_shift)
+#else
+#define PG_SH_enable   0
+#endif
 #define PG_HAP_enable  (1U << PG_HAP_shift)
 
 /* common paging mode bits */
@@ -74,6 +77,7 @@
 
 struct sh_emulate_ctxt;
 struct shadow_paging_mode {
+#ifdef CONFIG_SHADOW_PAGING
     void          (*detach_old_tables     )(struct vcpu *v);
     int           (*x86_emulate_write     )(struct vcpu *v, unsigned long va,
                                             void *src, u32 bytes,
@@ -88,6 +92,7 @@ struct shadow_paging_mode {
     int           (*guess_wrmap           )(struct vcpu *v, 
                                             unsigned long vaddr, mfn_t gmfn);
     void          (*pagetable_dying       )(struct vcpu *v, paddr_t gpa);
+#endif
     /* For outsiders to tell what mode we're in */
     unsigned int shadow_levels;
 };
@@ -150,6 +155,8 @@ void paging_log_dirty_init(struct domain *d,
 
 /* mark a page as dirty */
 void paging_mark_dirty(struct domain *d, unsigned long guest_mfn);
+/* mark a page as dirty with taking guest pfn as parameter */
+void paging_mark_gfn_dirty(struct domain *d, unsigned long pfn);
 
 /* is this guest page dirty? 
  * This is called from inside paging code, with the paging lock held. */
@@ -247,7 +254,6 @@ static inline int paging_invlpg(struct vcpu *v, unsigned long va)
  * pfec[0] is used to determine which kind of access this is when
  * walking the tables.  The caller should set the PFEC_page_present bit
  * in pfec[0]; in the failure case, that bit will be cleared if appropriate. */
-#define INVALID_GFN (-1UL)
 unsigned long paging_gva_to_gfn(struct vcpu *v,
                                 unsigned long va,
                                 uint32_t *pfec);
@@ -369,7 +375,7 @@ guest_map_l1e(struct vcpu *v, unsigned long addr, unsigned long *gl1mfn)
          != _PAGE_PRESENT )
         return NULL;
     *gl1mfn = l2e_get_pfn(l2e);
-    return (l1_pgentry_t *)map_domain_page(*gl1mfn) + l1_table_offset(addr);
+    return (l1_pgentry_t *)map_domain_page(_mfn(*gl1mfn)) + l1_table_offset(addr);
 }
 
 /* Pull down the mapping we got from guest_map_l1e() */

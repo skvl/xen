@@ -18,8 +18,7 @@
  *  Lesser General Public License for more details.
  *
  *  You should have received a copy of the GNU Lesser General Public
- *  License along with this library; if not, write to the Free Software
- *  Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307 USA
+ *  License along with this library; If not, see <http://www.gnu.org/licenses/>.
  *
  * Support for virtual MSI logic
  * Will be merged it with virtual IOAPIC logic, since most is the same
@@ -153,12 +152,15 @@ struct msixtbl_entry
     /* TODO: resolve the potential race by destruction of pdev */
     struct pci_dev *pdev;
     unsigned long gtable;       /* gpa of msix table */
-    unsigned long table_len;
-    unsigned long table_flags[BITS_TO_LONGS(MAX_MSIX_TABLE_ENTRIES)];
+    DECLARE_BITMAP(table_flags, MAX_MSIX_TABLE_ENTRIES);
 #define MAX_MSIX_ACC_ENTRIES 3
+    unsigned int table_len;
     struct { 
         uint32_t msi_ad[3];	/* Shadow of address low, high and data */
     } gentries[MAX_MSIX_ACC_ENTRIES];
+    DECLARE_BITMAP(acc_valid, 3 * MAX_MSIX_ACC_ENTRIES);
+#define acc_bit(what, ent, slot, idx) \
+        what##_bit((slot) * 3 + (idx), (ent)->acc_valid)
     struct rcu_head rcu;
 };
 
@@ -178,49 +180,35 @@ static struct msixtbl_entry *msixtbl_find_entry(
     return NULL;
 }
 
-static struct msi_desc *virt_to_msi_desc(struct pci_dev *dev, void *virt)
+static struct msi_desc *msixtbl_addr_to_desc(
+    const struct msixtbl_entry *entry, unsigned long addr)
 {
+    unsigned int nr_entry;
     struct msi_desc *desc;
 
-    list_for_each_entry( desc, &dev->msi_list, list )
-        if ( desc->msi_attrib.type == PCI_CAP_ID_MSIX  &&
-             virt >= desc->mask_base &&
-             virt < desc->mask_base + PCI_MSIX_ENTRY_SIZE ) 
+    if ( !entry || !entry->pdev )
+        return NULL;
+
+    nr_entry = (addr - entry->gtable) / PCI_MSIX_ENTRY_SIZE;
+
+    list_for_each_entry( desc, &entry->pdev->msi_list, list )
+        if ( desc->msi_attrib.type == PCI_CAP_ID_MSIX &&
+             desc->msi_attrib.entry_nr == nr_entry )
             return desc;
 
     return NULL;
 }
 
-static void __iomem *msixtbl_addr_to_virt(
-    struct msixtbl_entry *entry, unsigned long addr)
-{
-    unsigned int idx, nr_page;
-
-    if ( !entry || !entry->pdev )
-        return NULL;
-
-    nr_page = (addr >> PAGE_SHIFT) -
-              (entry->gtable >> PAGE_SHIFT);
-
-    idx = entry->pdev->msix->table_idx[nr_page];
-    if ( !idx )
-        return NULL;
-
-    return (void *)(fix_to_virt(idx) +
-                    (addr & ((1UL << PAGE_SHIFT) - 1)));
-}
-
 static int msixtbl_read(
     struct vcpu *v, unsigned long address,
-    unsigned long len, unsigned long *pval)
+    unsigned int len, unsigned long *pval)
 {
     unsigned long offset;
     struct msixtbl_entry *entry;
-    void *virt;
     unsigned int nr_entry, index;
     int r = X86EMUL_UNHANDLEABLE;
 
-    if ( len != 4 || (address & 3) )
+    if ( (len != 4 && len != 8) || (address & (len - 1)) )
         return r;
 
     rcu_read_lock(&msixtbl_rcu_lock);
@@ -233,17 +221,33 @@ static int msixtbl_read(
     if ( offset != PCI_MSIX_ENTRY_VECTOR_CTRL_OFFSET )
     {
         nr_entry = (address - entry->gtable) / PCI_MSIX_ENTRY_SIZE;
-        if ( nr_entry >= MAX_MSIX_ACC_ENTRIES )
-            goto out;
         index = offset / sizeof(uint32_t);
-        *pval = entry->gentries[nr_entry].msi_ad[index];
-    }
-    else 
-    {
-        virt = msixtbl_addr_to_virt(entry, address);
-        if ( !virt )
+        if ( nr_entry >= MAX_MSIX_ACC_ENTRIES ||
+             !acc_bit(test, entry, nr_entry, index) )
             goto out;
-        *pval = readl(virt);
+        *pval = entry->gentries[nr_entry].msi_ad[index];
+        if ( len == 8 )
+        {
+            if ( index )
+                offset = PCI_MSIX_ENTRY_VECTOR_CTRL_OFFSET;
+            else if ( acc_bit(test, entry, nr_entry, 1) )
+                *pval |= (u64)entry->gentries[nr_entry].msi_ad[1] << 32;
+            else
+                goto out;
+        }
+    }
+    if ( offset == PCI_MSIX_ENTRY_VECTOR_CTRL_OFFSET )
+    {
+        const struct msi_desc *msi_desc = msixtbl_addr_to_desc(entry, address);
+
+        if ( !msi_desc )
+            goto out;
+        if ( len == 4 )
+            *pval = MASK_INSR(msi_desc->msi_attrib.guest_masked,
+                              PCI_MSIX_VECTOR_BITMASK);
+        else
+            *pval |= (u64)MASK_INSR(msi_desc->msi_attrib.guest_masked,
+                                    PCI_MSIX_VECTOR_BITMASK) << 32;
     }
     
     r = X86EMUL_OKAY;
@@ -253,18 +257,17 @@ out:
 }
 
 static int msixtbl_write(struct vcpu *v, unsigned long address,
-                         unsigned long len, unsigned long val)
+                         unsigned int len, unsigned long val)
 {
     unsigned long offset;
     struct msixtbl_entry *entry;
     const struct msi_desc *msi_desc;
-    void *virt;
     unsigned int nr_entry, index;
     int r = X86EMUL_UNHANDLEABLE;
-    unsigned long flags, orig;
+    unsigned long flags;
     struct irq_desc *desc;
 
-    if ( len != 4 || (address & 3) )
+    if ( (len != 4 && len != 8) || (address & (len - 1)) )
         return r;
 
     rcu_read_lock(&msixtbl_rcu_lock);
@@ -275,30 +278,34 @@ static int msixtbl_write(struct vcpu *v, unsigned long address,
     nr_entry = (address - entry->gtable) / PCI_MSIX_ENTRY_SIZE;
 
     offset = address & (PCI_MSIX_ENTRY_SIZE - 1);
-    if ( offset != PCI_MSIX_ENTRY_VECTOR_CTRL_OFFSET)
+    if ( offset != PCI_MSIX_ENTRY_VECTOR_CTRL_OFFSET )
     {
+        index = offset / sizeof(uint32_t);
         if ( nr_entry < MAX_MSIX_ACC_ENTRIES ) 
         {
-            index = offset / sizeof(uint32_t);
             entry->gentries[nr_entry].msi_ad[index] = val;
+            acc_bit(set, entry, nr_entry, index);
+            if ( len == 8 && !index )
+            {
+                entry->gentries[nr_entry].msi_ad[1] = val >> 32;
+                acc_bit(set, entry, nr_entry, 1);
+            }
         }
         set_bit(nr_entry, &entry->table_flags);
-        goto out;
+        if ( len != 8 || !index )
+            goto out;
+        val >>= 32;
     }
 
-    /* exit to device model if address/data has been modified */
-    if ( test_and_clear_bit(nr_entry, &entry->table_flags) )
+    /* Exit to device model when unmasking and address/data got modified. */
+    if ( !(val & PCI_MSIX_VECTOR_BITMASK) &&
+         test_and_clear_bit(nr_entry, &entry->table_flags) )
     {
-        if ( !(val & PCI_MSIX_VECTOR_BITMASK) )
-            v->arch.hvm_vcpu.hvm_io.msix_unmask_address = address;
+        v->arch.hvm_vcpu.hvm_io.msix_unmask_address = address;
         goto out;
     }
 
-    virt = msixtbl_addr_to_virt(entry, address);
-    if ( !virt )
-        goto out;
-
-    msi_desc = virt_to_msi_desc(entry->pdev, virt);
+    msi_desc = msixtbl_addr_to_desc(entry, address);
     if ( !msi_desc || msi_desc->irq < 0 )
         goto out;
     
@@ -313,41 +320,12 @@ static int msixtbl_write(struct vcpu *v, unsigned long address,
 
     ASSERT(msi_desc == desc->msi_desc);
    
-    orig = readl(virt);
-
-    /*
-     * Do not allow guest to modify MSI-X control bit if it is masked 
-     * by Xen. We'll only handle the case where Xen thinks that
-     * bit is unmasked, but hardware has silently masked the bit
-     * (in case of SR-IOV VF reset, etc). On the other hand, if Xen 
-     * thinks that the bit is masked, but it's really not, 
-     * we log a warning.
-     */
-    if ( msi_desc->msi_attrib.masked )
-    {
-        if ( !(orig & PCI_MSIX_VECTOR_BITMASK) )
-            printk(XENLOG_WARNING "MSI-X control bit is unmasked when"
-                   " it is expected to be masked [%04x:%02x:%02x.%u]\n", 
-                   entry->pdev->seg, entry->pdev->bus,
-                   PCI_SLOT(entry->pdev->devfn), 
-                   PCI_FUNC(entry->pdev->devfn));
-
-        goto unlock;
-    }
-
-    /*
-     * The mask bit is the only defined bit in the word. But we 
-     * ought to preserve the reserved bits. Clearing the reserved 
-     * bits can result in undefined behaviour (see PCI Local Bus
-     * Specification revision 2.3).
-     */
-    val &= PCI_MSIX_VECTOR_BITMASK;
-    val |= (orig & ~PCI_MSIX_VECTOR_BITMASK);
-    writel(val, virt);
+    guest_mask_msi_irq(desc, !!(val & PCI_MSIX_VECTOR_BITMASK));
 
 unlock:
     spin_unlock_irqrestore(&desc->lock, flags);
-    r = X86EMUL_OKAY;
+    if ( len == 4 )
+        r = X86EMUL_OKAY;
 
 out:
     rcu_read_unlock(&msixtbl_rcu_lock);
@@ -356,23 +334,19 @@ out:
 
 static int msixtbl_range(struct vcpu *v, unsigned long addr)
 {
-    struct msixtbl_entry *entry;
-    void *virt;
+    const struct msi_desc *desc;
 
     rcu_read_lock(&msixtbl_rcu_lock);
-
-    entry = msixtbl_find_entry(v, addr);
-    virt = msixtbl_addr_to_virt(entry, addr);
-
+    desc = msixtbl_addr_to_desc(msixtbl_find_entry(v, addr), addr);
     rcu_read_unlock(&msixtbl_rcu_lock);
 
-    return !!virt;
+    return !!desc;
 }
 
-const struct hvm_mmio_handler msixtbl_mmio_handler = {
-    .check_handler = msixtbl_range,
-    .read_handler = msixtbl_read,
-    .write_handler = msixtbl_write
+static const struct hvm_mmio_ops msixtbl_mmio_ops = {
+    .check = msixtbl_range,
+    .read = msixtbl_read,
+    .write = msixtbl_write
 };
 
 static void add_msixtbl_entry(struct domain *d,
@@ -380,16 +354,11 @@ static void add_msixtbl_entry(struct domain *d,
                               uint64_t gtable,
                               struct msixtbl_entry *entry)
 {
-    u32 len;
-
-    memset(entry, 0, sizeof(struct msixtbl_entry));
-        
     INIT_LIST_HEAD(&entry->list);
     INIT_RCU_HEAD(&entry->rcu);
     atomic_set(&entry->refcnt, 0);
 
-    len = pci_msix_get_table_len(pdev);
-    entry->table_len = len;
+    entry->table_len = pci_msix_get_table_len(pdev);
     entry->pdev = pdev;
     entry->gtable = (unsigned long) gtable;
 
@@ -426,7 +395,7 @@ int msixtbl_pt_register(struct domain *d, struct pirq *pirq, uint64_t gtable)
      * xmalloc() with irq_disabled causes the failure of check_lock() 
      * for xenpool->lock. So we allocate an entry beforehand.
      */
-    new_entry = xmalloc(struct msixtbl_entry);
+    new_entry = xzalloc(struct msixtbl_entry);
     if ( !new_entry )
         return -ENOMEM;
 
@@ -509,6 +478,14 @@ found:
 
     spin_unlock(&d->arch.hvm_domain.msixtbl_list_lock);
     spin_unlock_irq(&irq_desc->lock);
+}
+
+void msixtbl_init(struct domain *d)
+{
+    INIT_LIST_HEAD(&d->arch.hvm_domain.msixtbl_list);
+    spin_lock_init(&d->arch.hvm_domain.msixtbl_list_lock);
+
+    register_mmio_handler(d, &msixtbl_mmio_ops);
 }
 
 void msixtbl_pt_cleanup(struct domain *d)

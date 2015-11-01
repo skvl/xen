@@ -52,10 +52,16 @@ else
 LIBXL_OBJS-y += libxl_nonetbuffer.o
 endif
 
+ifeq ($(CONFIG_X86),y)
+LIBXL_OBJS-y += libxl_convert_callout.o
+else
+LIBXL_OBJS-y += libxl_no_convert_callout.o
+endif
+
 LIBXL_OBJS-y += libxl_remus_device.o libxl_remus_disk_drbd.o
 
 LIBXL_OBJS-$(CONFIG_X86) += libxl_cpuid.o libxl_x86.o libxl_psr.o
-LIBXL_OBJS-$(CONFIG_ARM) += libxl_nocpuid.o libxl_arm.o
+LIBXL_OBJS-$(CONFIG_ARM) += libxl_nocpuid.o libxl_arm.o libxl_libfdt_compat.o
 
 ifeq ($(CONFIG_NetBSD),y)
 LIBXL_OBJS-y += libxl_netbsd.o
@@ -89,13 +95,18 @@ LIBXL_LIBS += -lyajl
 LIBXL_OBJS = flexarray.o libxl.o libxl_create.o libxl_dm.o libxl_pci.o \
 			libxl_dom.o libxl_exec.o libxl_xshelp.o libxl_device.o \
 			libxl_internal.o libxl_utils.o libxl_uuid.o \
-			libxl_json.o libxl_aoutils.o libxl_numa.o \
+			libxl_json.o libxl_aoutils.o libxl_numa.o libxl_vnuma.o \
+			libxl_stream_read.o libxl_stream_write.o \
 			libxl_save_callout.o _libxl_save_msgs_callout.o \
-			libxl_qmp.o libxl_event.o libxl_fork.o $(LIBXL_OBJS-y)
+			libxl_qmp.o libxl_event.o libxl_fork.o \
+			libxl_dom_suspend.o $(LIBXL_OBJS-y)
 LIBXL_OBJS += libxl_genid.o
 LIBXL_OBJS += _libxl_types.o libxl_flask.o _libxl_types_internal.o
 
 LIBXL_TESTS += timedereg
+LIBXL_TESTS_PROGS = $(LIBXL_TESTS) fdderegrace
+LIBXL_TESTS_INSIDE = $(LIBXL_TESTS) fdevent
+
 # Each entry FOO in LIBXL_TESTS has two main .c files:
 #   libxl_test_FOO.c  "inside libxl" code to support the test case
 #   test_FOO.c        "outside libxl" code to exercise the test case
@@ -105,11 +116,17 @@ LIBXL_TESTS += timedereg
 # "outside libxl" file is compiled exactly like a piece of application
 # code.  They must share information via explicit libxl entrypoints.
 # Unlike proper parts of libxl, it is permissible for libxl_test_FOO.c
-# to use private global variables for its state.
+# to use private global variables for its state.  Note that all the
+# "inside" parts are compiled into a single test library, so their
+# symbol names must be unique.
+#
+# To run these tests, either use LD_PRELOAD to get libxenlight_test.so
+# loaded, or rename it to libxenlight.so so it is the target of the
+# appropriate symlinks.
 
-LIBXL_TEST_OBJS += $(foreach t, $(LIBXL_TESTS),libxl_test_$t.o)
-TEST_PROG_OBJS += $(foreach t, $(LIBXL_TESTS),test_$t.o) test_common.o
-TEST_PROGS += $(foreach t, $(LIBXL_TESTS),test_$t)
+LIBXL_TEST_OBJS += $(foreach t, $(LIBXL_TESTS_INSIDE),libxl_test_$t.o)
+TEST_PROG_OBJS += $(foreach t, $(LIBXL_TESTS_PROGS),test_$t.o) test_common.o
+TEST_PROGS += $(foreach t, $(LIBXL_TESTS_PROGS),test_$t)
 
 $(LIBXL_OBJS) $(LIBXL_TEST_OBJS): CFLAGS += $(CFLAGS_LIBXL) -include $(XEN_ROOT)/tools/config.h
 
@@ -139,13 +156,15 @@ $(XEN_INIT_DOM0_OBJS): CFLAGS += $(CFLAGS_libxenstore)
 SAVE_HELPER_OBJS = libxl_save_helper.o _libxl_save_msgs_helper.o
 $(SAVE_HELPER_OBJS): CFLAGS += $(CFLAGS_libxenctrl)
 
+PKG_CONFIG = xenlight.pc xlutil.pc
+
 testidl.o: CFLAGS += $(CFLAGS_libxenctrl) $(CFLAGS_libxenlight)
 testidl.c: libxl_types.idl gentest.py libxl.h $(AUTOINCS)
 	$(PYTHON) gentest.py libxl_types.idl testidl.c.new
 	mv testidl.c.new testidl.c
 
 .PHONY: all
-all: $(CLIENTS) $(TEST_PROGS) \
+all: $(CLIENTS) $(TEST_PROGS) $(PKG_CONFIG) \
 		libxenlight.so libxenlight.a libxlutil.so libxlutil.a \
 	$(AUTOSRCS) $(AUTOINCS)
 
@@ -238,31 +257,42 @@ libxl-save-helper: $(SAVE_HELPER_OBJS) libxenlight.so
 testidl: testidl.o libxlutil.so libxenlight.so
 	$(CC) $(LDFLAGS) -o $@ testidl.o libxlutil.so $(LDLIBS_libxenlight) $(LDLIBS_libxenctrl) $(APPEND_LDFLAGS)
 
+$(PKG_CONFIG): % : %.in Makefile
+	@sed -e 's/@@version@@/$(MAJOR).$(MINOR)/g' < $< > $@.new
+	@mv -f $@.new $@
+
 .PHONY: install
 install: all
-	$(INSTALL_DIR) $(DESTDIR)$(LIBDIR)
-	$(INSTALL_DIR) $(DESTDIR)$(INCLUDEDIR)
+	$(INSTALL_DIR) $(DESTDIR)$(libdir)
+	$(INSTALL_DIR) $(DESTDIR)$(includedir)
 	$(INSTALL_DIR) $(DESTDIR)$(BASH_COMPLETION_DIR)
 	$(INSTALL_DIR) $(DESTDIR)$(LIBEXEC_BIN)
+	$(INSTALL_DIR) $(DESTDIR)$(SHAREDIR)/pkgconfig
 	$(INSTALL_PROG) xl $(DESTDIR)$(LIBEXEC_BIN)
 	$(INSTALL_PROG) xen-init-dom0 $(DESTDIR)$(LIBEXEC_BIN)
 	$(INSTALL_PROG) libxl-save-helper $(DESTDIR)$(LIBEXEC_BIN)
-	$(INSTALL_SHLIB) libxenlight-$(PACKAGE_VERSION).so $(DESTDIR)$(LIBDIR)
-	$(SYMLINK_SHLIB) libxenlight-$(PACKAGE_VERSION).so $(DESTDIR)$(LIBDIR)/libxenlight.so
-	$(INSTALL_DATA) libxenlight.a $(DESTDIR)$(LIBDIR)
-	$(INSTALL_SHLIB) libxlutil-$(PACKAGE_VERSION).so $(DESTDIR)$(LIBDIR)
-	$(SYMLINK_SHLIB) libxlutil-$(PACKAGE_VERSION).so $(DESTDIR)$(LIBDIR)/libxlutil.so
-	$(INSTALL_DATA) libxlutil.a $(DESTDIR)$(LIBDIR)
-	$(INSTALL_DATA) libxl.h libxl_event.h libxl_json.h _libxl_types.h _libxl_types_json.h _libxl_list.h libxl_utils.h libxl_uuid.h libxlutil.h $(DESTDIR)$(INCLUDEDIR)
+	$(INSTALL_SHLIB) libxenlight-$(PACKAGE_VERSION).so $(DESTDIR)$(libdir)
+	$(SYMLINK_SHLIB) libxenlight-$(PACKAGE_VERSION).so $(DESTDIR)$(libdir)/libxenlight.so
+	$(INSTALL_DATA) libxenlight.a $(DESTDIR)$(libdir)
+	$(INSTALL_SHLIB) libxlutil-$(PACKAGE_VERSION).so $(DESTDIR)$(libdir)
+	$(SYMLINK_SHLIB) libxlutil-$(PACKAGE_VERSION).so $(DESTDIR)$(libdir)/libxlutil.so
+	$(SYMLINK_SHLIB) libxlutil.so.$(XLUMAJOR) $(DESTDIR)$(libdir)/libxlutil.so
+	$(INSTALL_DATA) libxlutil.a $(DESTDIR)$(libdir)
+	$(INSTALL_DATA) libxl.h libxl_event.h libxl_json.h _libxl_types.h _libxl_types_json.h _libxl_list.h libxl_utils.h libxl_uuid.h libxlutil.h $(DESTDIR)$(includedir)
 	$(INSTALL_DATA) bash-completion $(DESTDIR)$(BASH_COMPLETION_DIR)/xl.sh
+	$(INSTALL_DATA) xenlight.pc $(DESTDIR)$(SHAREDIR)/pkgconfig/
+	$(INSTALL_DATA) xlutil.pc $(DESTDIR)$(SHAREDIR)/pkgconfig/
 
 .PHONY: clean
 clean:
 	$(RM) -f _*.h *.o *.so* *.a $(CLIENTS) $(DEPS)
 	$(RM) -f _*.c *.pyc _paths.*.tmp _*.api-for-check
 	$(RM) -f testidl.c.new testidl.c *.api-ok
+	$(RM) -f xenlight.pc
+	$(RM) -f xlutil.pc
 
 distclean: clean
+	$(RM) -f xenlight.pc.in xlutil.pc.in
 
 realclean: distclean
 	$(RM) -f $(AUTOSRCS) $(AUTOINCS)

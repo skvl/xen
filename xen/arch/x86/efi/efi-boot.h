@@ -148,12 +148,16 @@ static void __init efi_arch_process_memory_map(EFI_SYSTEM_TABLE *SystemTable,
 
         switch ( desc->Type )
         {
-        default:
-            type = E820_RESERVED;
-            break;
-        case EfiConventionalMemory:
         case EfiBootServicesCode:
         case EfiBootServicesData:
+            if ( map_bs )
+            {
+        default:
+                type = E820_RESERVED;
+                break;
+            }
+            /* fall through */
+        case EfiConventionalMemory:
             if ( !trampoline_phys && desc->PhysicalStart + len <= 0x100000 &&
                  len >= cfg.size && desc->PhysicalStart + len > cfg.addr )
                 cfg.addr = (desc->PhysicalStart + len - cfg.size) & PAGE_MASK;
@@ -190,10 +194,10 @@ static void __init efi_arch_process_memory_map(EFI_SYSTEM_TABLE *SystemTable,
 
 }
 
-static void *__init efi_arch_allocate_mmap_buffer(UINTN *map_size)
+static void *__init efi_arch_allocate_mmap_buffer(UINTN map_size)
 {
     place_string(&mbi.mem_upper, NULL);
-    mbi.mem_upper -= *map_size;
+    mbi.mem_upper -= map_size;
     mbi.mem_upper &= -__alignof__(EFI_MEMORY_DESCRIPTOR);
     if ( mbi.mem_upper < xen_phys_start )
         return NULL;
@@ -614,6 +618,13 @@ static void __init efi_arch_blexit(void)
         efi_bs->FreePages(ucode.addr, PFN_UP(ucode.size));
 }
 
+static void __init efi_arch_halt(void)
+{
+    local_irq_disable();
+    for ( ; ; )
+        halt();
+}
+
 static void __init efi_arch_load_addr_check(EFI_LOADED_IMAGE *loaded_image)
 {
     xen_phys_start = (UINTN)loaded_image->ImageBase;
@@ -628,6 +639,8 @@ static bool_t __init efi_arch_use_config_file(EFI_SYSTEM_TABLE *SystemTable)
 {
     return 1; /* x86 always uses a config file */
 }
+
+static void efi_arch_flush_dcache_area(const void *vaddr, UINTN size) { }
 
 /*
  * Local variables:

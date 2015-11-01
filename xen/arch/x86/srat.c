@@ -25,40 +25,85 @@ static struct acpi_table_slit *__read_mostly acpi_slit;
 
 static nodemask_t memory_nodes_parsed __initdata;
 static nodemask_t processor_nodes_parsed __initdata;
-static nodemask_t nodes_found __initdata;
 static struct node nodes[MAX_NUMNODES] __initdata;
-static u8 __read_mostly pxm2node[256] = { [0 ... 255] = NUMA_NO_NODE };
 
+struct pxm2node {
+	unsigned pxm;
+	nodeid_t node;
+};
+static struct pxm2node __read_mostly pxm2node[MAX_NUMNODES] =
+	{ [0 ... MAX_NUMNODES - 1] = {.node = NUMA_NO_NODE} };
+
+static unsigned node_to_pxm(nodeid_t n);
 
 static int num_node_memblks;
 static struct node node_memblk_range[NR_NODE_MEMBLKS];
-static int memblk_nodeid[NR_NODE_MEMBLKS];
+static nodeid_t memblk_nodeid[NR_NODE_MEMBLKS];
+static __initdata DECLARE_BITMAP(memblk_hotplug, NR_NODE_MEMBLKS);
 
-
-static int node_to_pxm(int n);
-
-int pxm_to_node(int pxm)
+static inline bool_t node_found(unsigned idx, unsigned pxm)
 {
-	if ((unsigned)pxm >= 256)
-		return -1;
-	/* Extend 0xff to (int)-1 */
-	return (signed char)pxm2node[pxm];
+	return ((pxm2node[idx].pxm == pxm) &&
+		(pxm2node[idx].node != NUMA_NO_NODE));
 }
 
-__devinit int setup_node(int pxm)
+nodeid_t pxm_to_node(unsigned pxm)
 {
-	unsigned node = pxm2node[pxm];
-	if (node == 0xff) {
-		if (nodes_weight(nodes_found) >= MAX_NUMNODES)
-			return -1;
-		node = first_unset_node(nodes_found); 
-		node_set(node, nodes_found);
-		pxm2node[pxm] = node;
+	unsigned i;
+
+	if ((pxm < ARRAY_SIZE(pxm2node)) && node_found(pxm, pxm))
+		return pxm2node[pxm].node;
+
+	for (i = 0; i < ARRAY_SIZE(pxm2node); i++)
+		if (node_found(i, pxm))
+			return pxm2node[i].node;
+
+	return NUMA_NO_NODE;
+}
+
+nodeid_t setup_node(unsigned pxm)
+{
+	nodeid_t node;
+	unsigned idx;
+	static bool_t warned;
+	static unsigned nodes_found;
+
+	BUILD_BUG_ON(MAX_NUMNODES >= NUMA_NO_NODE);
+
+	if (pxm < ARRAY_SIZE(pxm2node)) {
+		if (node_found(pxm, pxm))
+			return pxm2node[pxm].node;
+
+		/* Try to maintain indexing of pxm2node by pxm */
+		if (pxm2node[pxm].node == NUMA_NO_NODE) {
+			idx = pxm;
+			goto finish;
+		}
 	}
-	return pxm2node[pxm];
+
+	for (idx = 0; idx < ARRAY_SIZE(pxm2node); idx++)
+		if (pxm2node[idx].node == NUMA_NO_NODE)
+			goto finish;
+
+	if (!warned) {
+		printk(KERN_WARNING "SRAT: Too many proximity domains (%#x)\n",
+		       pxm);
+		warned = 1;
+	}
+
+	return NUMA_NO_NODE;
+
+ finish:
+	node = nodes_found++;
+	if (node >= MAX_NUMNODES)
+		return NUMA_NO_NODE;
+	pxm2node[idx].pxm = pxm;
+	pxm2node[idx].node = node;
+
+	return node;
 }
 
-int valid_numa_range(u64 start, u64 end, int node)
+int valid_numa_range(u64 start, u64 end, nodeid_t node)
 {
 	int i;
 
@@ -82,9 +127,9 @@ static __init int conflicting_memblks(u64 start, u64 end)
 		if (nd->start == nd->end)
 			continue;
 		if (nd->end > start && nd->start < end)
-			return memblk_nodeid[i];
+			return i;
 		if (nd->end == end && nd->start == start)
-			return memblk_nodeid[i];
+			return i;
 	}
 	return -1;
 }
@@ -112,7 +157,7 @@ static __init void bad_srat(void)
 	for (i = 0; i < MAX_LOCAL_APIC; i++)
 		apicid_to_node[i] = NUMA_NO_NODE;
 	for (i = 0; i < ARRAY_SIZE(pxm2node); i++)
-		pxm2node[i] = NUMA_NO_NODE;
+		pxm2node[i].node = NUMA_NO_NODE;
 	mem_hotplug = 0;
 }
 
@@ -162,8 +207,9 @@ void __init acpi_numa_slit_init(struct acpi_table_slit *slit)
 void __init
 acpi_numa_x2apic_affinity_init(struct acpi_srat_x2apic_cpu_affinity *pa)
 {
-	int pxm, node;
-	int apic_id;
+	unsigned pxm;
+	nodeid_t node;
+	u32 apic_id;
 
 	if (srat_disabled())
 		return;
@@ -175,8 +221,7 @@ acpi_numa_x2apic_affinity_init(struct acpi_srat_x2apic_cpu_affinity *pa)
 		return;
 	pxm = pa->proximity_domain;
 	node = setup_node(pxm);
-	if (node < 0) {
-		printk(KERN_ERR "SRAT: Too many proximity domains %x\n", pxm);
+	if (node == NUMA_NO_NODE) {
 		bad_srat();
 		return;
 	}
@@ -192,7 +237,9 @@ acpi_numa_x2apic_affinity_init(struct acpi_srat_x2apic_cpu_affinity *pa)
 void __init
 acpi_numa_processor_affinity_init(struct acpi_srat_cpu_affinity *pa)
 {
-	int pxm, node;
+	unsigned pxm;
+	nodeid_t node;
+
 	if (srat_disabled())
 		return;
 	if (pa->header.length != sizeof(struct acpi_srat_cpu_affinity)) {
@@ -208,8 +255,7 @@ acpi_numa_processor_affinity_init(struct acpi_srat_cpu_affinity *pa)
 		pxm |= pa->proximity_domain_hi[2] << 24;
 	}
 	node = setup_node(pxm);
-	if (node < 0) {
-		printk(KERN_ERR "SRAT: Too many proximity domains %x\n", pxm);
+	if (node == NUMA_NO_NODE) {
 		bad_srat();
 		return;
 	}
@@ -224,9 +270,9 @@ acpi_numa_processor_affinity_init(struct acpi_srat_cpu_affinity *pa)
 void __init
 acpi_numa_memory_affinity_init(struct acpi_srat_mem_affinity *ma)
 {
-	struct node *nd;
 	u64 start, end;
-	int node, pxm;
+	unsigned pxm;
+	nodeid_t node;
 	int i;
 
 	if (srat_disabled())
@@ -252,37 +298,46 @@ acpi_numa_memory_affinity_init(struct acpi_srat_mem_affinity *ma)
 	if (srat_rev < 2)
 		pxm &= 0xff;
 	node = setup_node(pxm);
-	if (node < 0) {
-		printk(KERN_ERR "SRAT: Too many proximity domains.\n");
+	if (node == NUMA_NO_NODE) {
 		bad_srat();
 		return;
 	}
 	/* It is fine to add this area to the nodes data it will be used later*/
 	i = conflicting_memblks(start, end);
-	if (i == node) {
-		printk(KERN_WARNING
-		"SRAT: Warning: PXM %d (%"PRIx64"-%"PRIx64") overlaps with itself (%"
-		PRIx64"-%"PRIx64")\n", pxm, start, end, nodes[i].start, nodes[i].end);
-	} else if (i >= 0) {
+	if (i < 0)
+		/* everything fine */;
+	else if (memblk_nodeid[i] == node) {
+		bool_t mismatch = !(ma->flags & ACPI_SRAT_MEM_HOT_PLUGGABLE) !=
+		                  !test_bit(i, memblk_hotplug);
+
+		printk("%sSRAT: PXM %u (%"PRIx64"-%"PRIx64") overlaps with itself (%"PRIx64"-%"PRIx64")\n",
+		       mismatch ? KERN_ERR : KERN_WARNING, pxm, start, end,
+		       node_memblk_range[i].start, node_memblk_range[i].end);
+		if (mismatch) {
+			bad_srat();
+			return;
+		}
+	} else {
 		printk(KERN_ERR
-		       "SRAT: PXM %d (%"PRIx64"-%"PRIx64") overlaps with PXM %d (%"
-		       PRIx64"-%"PRIx64")\n", pxm, start, end, node_to_pxm(i),
-			   nodes[i].start, nodes[i].end);
+		       "SRAT: PXM %u (%"PRIx64"-%"PRIx64") overlaps with PXM %u (%"PRIx64"-%"PRIx64")\n",
+		       pxm, start, end, node_to_pxm(memblk_nodeid[i]),
+		       node_memblk_range[i].start, node_memblk_range[i].end);
 		bad_srat();
 		return;
 	}
-	nd = &nodes[node];
-	if (!node_test_and_set(node, memory_nodes_parsed)) {
-		nd->start = start;
-		nd->end = end;
-	} else {
-		if (start < nd->start)
+	if (!(ma->flags & ACPI_SRAT_MEM_HOT_PLUGGABLE)) {
+		struct node *nd = &nodes[node];
+
+		if (!node_test_and_set(node, memory_nodes_parsed)) {
 			nd->start = start;
-		if (nd->end < end)
 			nd->end = end;
+		} else {
+			if (start < nd->start)
+				nd->start = start;
+			if (nd->end < end)
+				nd->end = end;
+		}
 	}
-	if ((ma->flags & ACPI_SRAT_MEM_HOT_PLUGGABLE) && end > mem_hotplug)
-		mem_hotplug = end;
 	printk(KERN_INFO "SRAT: Node %u PXM %u %"PRIx64"-%"PRIx64"%s\n",
 	       node, pxm, start, end,
 	       ma->flags & ACPI_SRAT_MEM_HOT_PLUGGABLE ? " (hotplug)" : "");
@@ -290,12 +345,17 @@ acpi_numa_memory_affinity_init(struct acpi_srat_mem_affinity *ma)
 	node_memblk_range[num_node_memblks].start = start;
 	node_memblk_range[num_node_memblks].end = end;
 	memblk_nodeid[num_node_memblks] = node;
+	if (ma->flags & ACPI_SRAT_MEM_HOT_PLUGGABLE) {
+		__set_bit(num_node_memblks, memblk_hotplug);
+		if (end > mem_hotplug)
+			mem_hotplug = end;
+	}
 	num_node_memblks++;
 }
 
 /* Sanity check to catch more bad SRATs (they are amazingly common).
    Make sure the PXMs cover all memory. */
-static int nodes_cover_memory(void)
+static int __init nodes_cover_memory(void)
 {
 	int i;
 
@@ -438,25 +498,33 @@ int __init acpi_scan_nodes(u64 start, u64 end)
 	return 0;
 }
 
-static int node_to_pxm(int n)
+static unsigned node_to_pxm(nodeid_t n)
 {
-       int i;
-       if (pxm2node[n] == n)
-               return n;
-       for (i = 0; i < 256; i++)
-               if (pxm2node[i] == n)
-                       return i;
-       return 0;
+	unsigned i;
+
+	if ((n < ARRAY_SIZE(pxm2node)) && (pxm2node[n].node == n))
+		return pxm2node[n].pxm;
+	for (i = 0; i < ARRAY_SIZE(pxm2node); i++)
+		if (pxm2node[i].node == n)
+			return pxm2node[i].pxm;
+	return 0;
 }
 
-int __node_distance(int a, int b)
+u8 __node_distance(nodeid_t a, nodeid_t b)
 {
-	int index;
+	unsigned index;
+	u8 slit_val;
 
 	if (!acpi_slit)
 		return a == b ? 10 : 20;
 	index = acpi_slit->locality_count * node_to_pxm(a);
-	return acpi_slit->entry[index + node_to_pxm(b)];
+	slit_val = acpi_slit->entry[index + node_to_pxm(b)];
+
+	/* ACPI defines 0xff as an unreachable node and 0-9 are undefined */
+	if ((slit_val == 0xff) || (slit_val <= 9))
+		return NUMA_NO_DISTANCE;
+	else
+		return slit_val;
 }
 
 EXPORT_SYMBOL(__node_distance);

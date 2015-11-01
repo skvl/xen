@@ -1147,21 +1147,6 @@ void panic(const char *fmt, ...)
         machine_restart(5000);
 }
 
-void __bug(char *file, int line)
-{
-    console_start_sync();
-    printk("Xen BUG at %s:%d\n", file, line);
-    dump_execution_state();
-    panic("Xen BUG at %s:%d", file, line);
-}
-
-void __warn(char *file, int line)
-{
-    printk("Xen WARN at %s:%d\n", file, line);
-    dump_execution_state();
-}
-
-
 /*
  * **************************************************************
  * ****************** Console suspend/resume ********************

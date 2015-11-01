@@ -12,12 +12,8 @@
  * more details.
  *
  * You should have received a copy of the GNU General Public License along with
- * this program; if not, write to the Free Software Foundation, Inc., 59 Temple
- * Place - Suite 330, Boston, MA 02111-1307 USA.
+ * this program; If not, see <http://www.gnu.org/licenses/>.
  */
-
-/* Include output from configure */
-#include <config.h>
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -1097,6 +1093,7 @@ void choose_cpus(void)
                     this->init();
                 return;
             }
+            /* fallthrough */
         case KEY_F(4):
             exit(EXIT_SUCCESS);
         }

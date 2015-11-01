@@ -49,6 +49,7 @@
 #include <xen/cpu.h>
 #include <asm/nmi.h>
 #include <asm/alternative.h>
+#include <asm/mc146818rtc.h>
 
 /* opt_nosmp: If true, secondary processors are ignored. */
 static bool_t __initdata opt_nosmp;
@@ -100,7 +101,7 @@ unsigned long __read_mostly xen_virt_end;
 
 DEFINE_PER_CPU(struct tss_struct, init_tss);
 
-char __attribute__ ((__section__(".bss.stack_aligned"))) cpu0_stack[STACK_SIZE];
+char __section(".bss.stack_aligned") cpu0_stack[STACK_SIZE];
 
 struct cpuinfo_x86 __read_mostly boot_cpu_data = { 0, 0, 0, 0, -1 };
 
@@ -140,13 +141,21 @@ static void __init parse_acpi_param(char *s)
 static const module_t *__initdata initial_images;
 static unsigned int __initdata nr_initial_images;
 
-unsigned long __init initial_images_nrpages(void)
+unsigned long __init initial_images_nrpages(nodeid_t node)
 {
+    unsigned long node_start = node_start_pfn(node);
+    unsigned long node_end = node_end_pfn(node);
     unsigned long nr;
     unsigned int i;
 
     for ( nr = i = 0; i < nr_initial_images; ++i )
-        nr += PFN_UP(initial_images[i].mod_end);
+    {
+        unsigned long start = initial_images[i].mod_start;
+        unsigned long end = start + PFN_UP(initial_images[i].mod_end);
+
+        if ( end > node_start && node_end > start )
+            nr += min(node_end, end) - max(node_start, start);
+    }
 
     return nr;
 }
@@ -177,7 +186,7 @@ static void free_xen_data(char *s, char *e)
     memguard_guard_range(__va(__pa(s)), e-s);
 }
 
-extern char __init_begin[], __init_end[], __bss_start[];
+extern char __init_begin[], __init_end[], __bss_start[], __bss_end[];
 
 static void __init init_idle_domain(void)
 {
@@ -188,7 +197,7 @@ static void __init init_idle_domain(void)
 
 void __devinit srat_detect_node(int cpu)
 {
-    unsigned node;
+    nodeid_t node;
     u32 apicid = x86_cpu_to_apicid[cpu];
 
     node = apicid_to_node[apicid];
@@ -386,8 +395,13 @@ static void __init setup_max_pdx(unsigned long top_page)
     if ( max_pdx > FRAMETABLE_NR )
         max_pdx = FRAMETABLE_NR;
 
+    if ( max_pdx > MPT_VIRT_SIZE / sizeof(unsigned long) )
+        max_pdx = MPT_VIRT_SIZE / sizeof(unsigned long);
+
+#ifdef PAGE_LIST_NULL
     if ( max_pdx >= PAGE_LIST_NULL )
         max_pdx = PAGE_LIST_NULL - 1;
+#endif
 
     max_page = pdx_to_pfn(max_pdx - 1) + 1;
 }
@@ -493,12 +507,33 @@ static void __init kexec_reserve_area(struct e820map *e820)
 
 static void noinline init_done(void)
 {
+    system_state = SYS_STATE_active;
+
+    domain_unpause_by_systemcontroller(hardware_domain);
+
     /* Free (or page-protect) the init areas. */
     memset(__init_begin, 0xcc, __init_end - __init_begin); /* int3 poison */
     free_xen_data(__init_begin, __init_end);
     printk("Freed %ldkB init memory.\n", (long)(__init_end-__init_begin)>>10);
 
     startup_cpu_idle_loop();
+}
+
+/* Reinitalise all state referring to the old virtual address of the stack. */
+static void __init noreturn reinit_bsp_stack(void)
+{
+    unsigned long *stack = (void*)(get_stack_bottom() & ~(STACK_SIZE - 1));
+
+    /* Update TSS and ISTs */
+    load_system_tables();
+
+    /* Update SYSCALL trampolines */
+    percpu_traps_init();
+
+    stack_base[0] = stack;
+    memguard_guard_stack(stack);
+
+    reset_stack_and_jump(init_done);
 }
 
 static bool_t __init loader_is_grub2(const char *loader_name)
@@ -659,9 +694,6 @@ void __init noreturn __start_xen(unsigned long mbi_p)
     /* Check that we have at least one Multiboot module. */
     if ( !(mbi->flags & MBI_MODULES) || (mbi->mods_count == 0) )
         panic("dom0 kernel not specified. Check bootloader configuration.");
-
-    if ( ((unsigned long)cpu0_stack & (STACK_SIZE-1)) != 0 )
-        panic("Misaligned CPU0 stack.");
 
     if ( efi_enabled )
     {
@@ -887,7 +919,7 @@ void __init noreturn __start_xen(unsigned long mbi_p)
             /* The only data mappings to be relocated are in the Xen area. */
             pl2e = __va(__pa(l2_xenmap));
             *pl2e++ = l2e_from_pfn(xen_phys_start >> PAGE_SHIFT,
-                                   PAGE_HYPERVISOR | _PAGE_PSE);
+                                   PAGE_HYPERVISOR_RWX | _PAGE_PSE);
             for ( i = 1; i < L2_PAGETABLE_ENTRIES; i++, pl2e++ )
             {
                 if ( !(l2e_get_flags(*pl2e) & _PAGE_PRESENT) )
@@ -970,7 +1002,7 @@ void __init noreturn __start_xen(unsigned long mbi_p)
 
     setup_max_pdx(raw_max_page);
     if ( highmem_start )
-        xenheap_max_mfn(PFN_DOWN(highmem_start));
+        xenheap_max_mfn(PFN_DOWN(highmem_start - 1));
 
     /*
      * Walk every RAM region and map it in its entirety (on x86/64, at least)
@@ -1074,7 +1106,7 @@ void __init noreturn __start_xen(unsigned long mbi_p)
             /* This range must not be passed to the boot allocator and
              * must also not be mapped with _PAGE_GLOBAL. */
             map_pages_to_xen((unsigned long)__va(map_e), PFN_DOWN(map_e),
-                             PFN_DOWN(e - map_e), __PAGE_HYPERVISOR);
+                             PFN_DOWN(e - map_e), __PAGE_HYPERVISOR_RW);
         }
         if ( s < map_s )
         {
@@ -1151,9 +1183,6 @@ void __init noreturn __start_xen(unsigned long mbi_p)
 
     numa_initmem_init(0, raw_max_page);
 
-    end_boot_allocator();
-    system_state = SYS_STATE_boot;
-
     if ( max_page - 1 > virt_to_mfn(HYPERVISOR_VIRT_END - 1) )
     {
         unsigned long limit = virt_to_mfn(HYPERVISOR_VIRT_END - 1);
@@ -1161,6 +1190,8 @@ void __init noreturn __start_xen(unsigned long mbi_p)
 
         if ( !highmem_start )
             xenheap_max_mfn(limit);
+
+        end_boot_allocator();
 
         /* Pass the remaining memory to the allocator. */
         for ( i = 0; i < boot_e820.nr_map; i++ )
@@ -1185,6 +1216,10 @@ void __init noreturn __start_xen(unsigned long mbi_p)
            opt_tmem = 0;
         }
     }
+    else
+        end_boot_allocator();
+
+    system_state = SYS_STATE_boot;
 
     vm_init();
     console_init_ring();
@@ -1198,9 +1233,6 @@ void __init noreturn __start_xen(unsigned long mbi_p)
     paging_init();
 
     tboot_probe();
-
-    /* Unmap the first page of CPU0's stack. */
-    memguard_guard_stack(cpu0_stack);
 
     open_softirq(NEW_TLBFLUSH_CLOCK_PERIOD_SOFTIRQ, new_tlbflush_clock_period);
 
@@ -1255,16 +1287,6 @@ void __init noreturn __start_xen(unsigned long mbi_p)
 
     timer_init();
 
-    init_idle_domain();
-
-    trap_init();
-
-    rcu_init();
-    
-    early_time_init();
-
-    arch_init_memory();
-
     identify_cpu(&boot_cpu_data);
 
     if ( cpu_has_fxsr )
@@ -1284,6 +1306,20 @@ void __init noreturn __start_xen(unsigned long mbi_p)
 
     if ( cpu_has_fsgsbase )
         set_in_cr4(X86_CR4_FSGSBASE);
+
+    init_idle_domain();
+
+    this_cpu(stubs.addr) = alloc_stub_page(smp_processor_id(),
+                                           &this_cpu(stubs).mfn);
+    BUG_ON(!this_cpu(stubs.addr));
+
+    trap_init();
+
+    rcu_init();
+
+    early_time_init();
+
+    arch_init_memory();
 
     alternative_instructions();
 
@@ -1347,8 +1383,12 @@ void __init noreturn __start_xen(unsigned long mbi_p)
     if ( opt_dom0pvh )
         domcr_flags |= DOMCRF_pvh | DOMCRF_hap;
 
-    /* Create initial domain 0. */
-    dom0 = domain_create(0, domcr_flags, 0);
+    /*
+     * Create initial domain 0.
+     * x86 doesn't support arch-configuration. So it's fine to pass
+     * NULL.
+     */
+    dom0 = domain_create(0, domcr_flags, 0, NULL);
     if ( IS_ERR(dom0) || (alloc_dom0_vcpu0(dom0) == NULL) )
         panic("Error creating domain 0");
 
@@ -1402,6 +1442,10 @@ void __init noreturn __start_xen(unsigned long mbi_p)
     if ( cpu_has_smap )
         write_cr4(read_cr4() & ~X86_CR4_SMAP);
 
+    printk("%sNX (Execute Disable) protection %sactive\n",
+           cpu_has_nx ? XENLOG_INFO : XENLOG_WARNING "Warning: ",
+           cpu_has_nx ? "" : "not ");
+
     /*
      * We're going to setup domain0 using the module(s) that we stashed safely
      * above our heap. The second module, if present, is an initrd ramdisk.
@@ -1429,11 +1473,13 @@ void __init noreturn __start_xen(unsigned long mbi_p)
 
     dmi_end_boot();
 
-    system_state = SYS_STATE_active;
+    setup_io_bitmap(dom0);
 
-    domain_unpause_by_systemcontroller(dom0);
-
-    reset_stack_and_jump(init_done);
+    /* Jump to the 1:1 virtual mappings of cpu0_stack. */
+    asm volatile ("mov %[stk], %%rsp; jmp %c[fn]" ::
+                  [stk] "g" (__va(__pa(get_stack_bottom()))),
+                  [fn] "i" (reinit_bsp_stack) : "memory");
+    unreachable();
 }
 
 void arch_get_xen_caps(xen_capabilities_info_t *info)
@@ -1480,7 +1526,7 @@ int __hwdom_init xen_in_range(unsigned long mfn)
         xen_regions[region_text].e = __pa(&__init_begin);
         /* bss */
         xen_regions[region_bss].s = __pa(&__bss_start);
-        xen_regions[region_bss].e = __pa(&_end);
+        xen_regions[region_bss].e = __pa(&__bss_end);
     }
 
     start = (paddr_t)mfn << PAGE_SHIFT;
@@ -1490,6 +1536,42 @@ int __hwdom_init xen_in_range(unsigned long mfn)
             return 1;
 
     return 0;
+}
+
+static int __hwdom_init io_bitmap_cb(unsigned long s, unsigned long e,
+                                     void *ctx)
+{
+    struct domain *d = ctx;
+    unsigned int i;
+
+    ASSERT(e <= INT_MAX);
+    for ( i = s; i <= e; i++ )
+        __clear_bit(i, d->arch.hvm_domain.io_bitmap);
+
+    return 0;
+}
+
+void __hwdom_init setup_io_bitmap(struct domain *d)
+{
+    int rc;
+
+    if ( has_hvm_container_domain(d) )
+    {
+        bitmap_fill(d->arch.hvm_domain.io_bitmap, 0x10000);
+        rc = rangeset_report_ranges(d->arch.ioport_caps, 0, 0x10000,
+                                    io_bitmap_cb, d);
+        BUG_ON(rc);
+        /*
+         * NB: we need to trap accesses to 0xcf8 in order to intercept
+         * 4 byte accesses, that need to be handled by Xen in order to
+         * keep consistency.
+         * Access to 1 byte RTC ports also needs to be trapped in order
+         * to keep consistency with PV.
+         */
+        __set_bit(0xcf8, d->arch.hvm_domain.io_bitmap);
+        __set_bit(RTC_PORT(0), d->arch.hvm_domain.io_bitmap);
+        __set_bit(RTC_PORT(1), d->arch.hvm_domain.io_bitmap);
+    }
 }
 
 /*

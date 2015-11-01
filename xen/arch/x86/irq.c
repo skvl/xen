@@ -153,7 +153,7 @@ int __init bind_irq_vector(int irq, int vector, const cpumask_t *cpu_mask)
 /*
  * Dynamic irq allocate and deallocation for MSI
  */
-int create_irq(int node)
+int create_irq(nodeid_t node)
 {
     int irq, ret;
     struct irq_desc *desc;
@@ -173,7 +173,7 @@ int create_irq(int node)
     {
         cpumask_t *mask = NULL;
 
-        if (node != NUMA_NO_NODE && node >= 0)
+        if ( node != NUMA_NO_NODE )
         {
             mask = &node_to_cpumask(node);
             if (cpumask_empty(mask))
@@ -217,9 +217,9 @@ void destroy_irq(unsigned int irq)
     }
 
     spin_lock_irqsave(&desc->lock, flags);
-    desc->status  |= IRQ_DISABLED;
     desc->status  &= ~IRQ_GUEST;
     desc->handler->shutdown(desc);
+    desc->status |= IRQ_DISABLED;
     action = desc->action;
     desc->action  = NULL;
     desc->msi_desc = NULL;
@@ -995,8 +995,8 @@ void __init release_irq(unsigned int irq, const void *dev_id)
     spin_lock_irqsave(&desc->lock,flags);
     action = desc->action;
     desc->action  = NULL;
-    desc->status |= IRQ_DISABLED;
     desc->handler->shutdown(desc);
+    desc->status |= IRQ_DISABLED;
     spin_unlock_irqrestore(&desc->lock,flags);
 
     /* Wait to make sure it's not being used on another CPU */
@@ -1073,13 +1073,19 @@ bool_t cpu_has_pending_apic_eoi(void)
 static inline void set_pirq_eoi(struct domain *d, unsigned int irq)
 {
     if ( d->arch.pirq_eoi_map )
+    {
+        ASSERT(irq < PAGE_SIZE * BITS_PER_BYTE);
         set_bit(irq, d->arch.pirq_eoi_map);
+    }
 }
 
 static inline void clear_pirq_eoi(struct domain *d, unsigned int irq)
 {
     if ( d->arch.pirq_eoi_map )
+    {
+        ASSERT(irq < PAGE_SIZE * BITS_PER_BYTE);
         clear_bit(irq, d->arch.pirq_eoi_map);
+    }
 }
 
 static void set_eoi_ready(void *data);
@@ -1450,7 +1456,7 @@ void desc_guest_eoi(struct irq_desc *desc, struct pirq *pirq)
         
     cpumask_copy(&cpu_eoi_map, action->cpu_eoi_map);
 
-    if ( cpumask_test_and_clear_cpu(smp_processor_id(), &cpu_eoi_map) )
+    if ( __cpumask_test_and_clear_cpu(smp_processor_id(), &cpu_eoi_map) )
     {
         __set_eoi_ready(desc);
         spin_unlock(&desc->lock);
@@ -1608,12 +1614,13 @@ int pirq_guest_bind(struct vcpu *v, struct pirq *pirq, int will_share)
         init_timer(&action->eoi_timer, irq_guest_eoi_timer_fn, desc, 0);
 
         desc->status |= IRQ_GUEST;
-        desc->status &= ~IRQ_DISABLED;
-        desc->handler->startup(desc);
 
         /* Attempt to bind the interrupt target to the correct CPU. */
         if ( !opt_noirqbalance && (desc->handler->set_affinity != NULL) )
             desc->handler->set_affinity(desc, cpumask_of(v->processor));
+
+        desc->status &= ~IRQ_DISABLED;
+        desc->handler->startup(desc);
     }
     else if ( !will_share || !action->shareable )
     {
@@ -1725,8 +1732,8 @@ static irq_guest_action_t *__pirq_guest_unbind(
     BUG_ON(action->in_flight != 0);
 
     /* Disabling IRQ before releasing the desc_lock avoids an IRQ storm. */
-    desc->status |= IRQ_DISABLED;
     desc->handler->disable(desc);
+    desc->status |= IRQ_DISABLED;
 
     /*
      * Mark any remaining pending EOIs as ready to flush.
@@ -1899,7 +1906,7 @@ int map_domain_pirq(
     if ( !irq_access_permitted(current->domain, irq))
         return -EPERM;
 
-    if ( pirq < 0 || pirq >= d->nr_pirqs || irq < 0 || irq >= nr_irqs )
+    if ( pirq < 0 || pirq >= d->nr_pirqs || irq <= 0 || irq >= nr_irqs )
     {
         dprintk(XENLOG_G_ERR, "dom%d: invalid pirq %d or irq %d\n",
                 d->domain_id, pirq, irq);
@@ -1912,8 +1919,9 @@ int map_domain_pirq(
     if ( (old_irq > 0 && (old_irq != irq) ) ||
          (old_pirq && (old_pirq != pirq)) )
     {
-        dprintk(XENLOG_G_WARNING, "dom%d: pirq %d or irq %d already mapped\n",
-                d->domain_id, pirq, irq);
+        dprintk(XENLOG_G_WARNING,
+                "dom%d: pirq %d or irq %d already mapped (%d,%d)\n",
+                d->domain_id, pirq, irq, old_pirq, old_irq);
         return 0;
     }
 
@@ -2493,6 +2501,25 @@ int unmap_domain_pirq_emuirq(struct domain *d, int pirq)
 
  done:
     return ret;
+}
+
+void arch_evtchn_bind_pirq(struct domain *d, int pirq)
+{
+    int irq = domain_pirq_to_irq(d, pirq);
+    struct irq_desc *desc;
+    unsigned long flags;
+
+    if ( irq <= 0 )
+        return;
+
+    if ( is_hvm_domain(d) )
+        map_domain_emuirq_pirq(d, pirq, IRQ_PT);
+
+    desc = irq_to_desc(irq);
+    spin_lock_irqsave(&desc->lock, flags);
+    if ( desc->msi_desc )
+        guest_mask_msi_irq(desc, 0);
+    spin_unlock_irqrestore(&desc->lock, flags);
 }
 
 bool_t hvm_domain_use_pirq(const struct domain *d, const struct pirq *pirq)

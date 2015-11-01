@@ -23,17 +23,38 @@
 #include <assert.h>
 #include <regex.h>
 
-#define XLU_ConfigList XLU_ConfigSetting
-
 #include "libxlutil.h"
 
-struct XLU_ConfigSetting { /* transparent */
+struct XLU_ConfigList {
+    int avalues; /* available slots */
+    int nvalues; /* actual occupied slots */
+    XLU_ConfigValue **values;
+};
+
+typedef struct YYLTYPE
+{
+  int first_line;
+  int first_column;
+  int last_line;
+  int last_column;
+} YYLTYPE;
+#define YYLTYPE_IS_DECLARED
+
+struct XLU_ConfigValue {
+    enum XLU_ConfigValueType type;
+    union {
+        char *string;
+        XLU_ConfigList list;
+    } u;
+    YYLTYPE loc;
+};
+
+typedef struct XLU_ConfigSetting { /* transparent */
     struct XLU_ConfigSetting *next;
     char *name;
-    int nvalues, avalues; /* lists have avalues>1 */
-    char **values;
+    XLU_ConfigValue *value;
     int lineno;
-};
+} XLU_ConfigSetting;
 
 struct XLU_Config {
     XLU_ConfigSetting *settings;

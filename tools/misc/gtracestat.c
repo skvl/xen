@@ -12,8 +12,7 @@
  * more details.
  *
  * You should have received a copy of the GNU General Public License along with
- * this program; if not, write to the Free Software Foundation, Inc., 59 Temple
- * Place - Suite 330, Boston, MA 02111-1307 USA.
+ * this program; If not, see <http://www.gnu.org/licenses/>.
  */
 
 #include <stdio.h>
@@ -167,6 +166,7 @@ int main(int argc, char *argv[])
             tsc2phase = atoll(optarg);
             if (tsc2phase <= 0)
                 tsc2phase = 55800000UL;
+            break;
         case 'd':
             is_digest = 1;
             break;

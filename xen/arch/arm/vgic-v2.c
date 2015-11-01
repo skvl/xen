@@ -24,13 +24,31 @@
 #include <xen/softirq.h>
 #include <xen/irq.h>
 #include <xen/sched.h>
+#include <xen/sizes.h>
 
 #include <asm/current.h>
-#include <asm/device.h>
 
 #include <asm/mmio.h>
-#include <asm/gic.h>
+#include <asm/platform.h>
 #include <asm/vgic.h>
+
+static struct {
+    bool_t enabled;
+    /* Distributor interface address */
+    paddr_t dbase;
+    /* CPU interface address */
+    paddr_t cbase;
+    /* Virtual CPU interface address */
+    paddr_t vbase;
+} vgic_v2_hw;
+
+void vgic_v2_setup_hw(paddr_t dbase, paddr_t cbase, paddr_t vbase)
+{
+    vgic_v2_hw.enabled = 1;
+    vgic_v2_hw.dbase = dbase;
+    vgic_v2_hw.cbase = cbase;
+    vgic_v2_hw.vbase = vbase;
+}
 
 static int vgic_v2_distr_mmio_read(struct vcpu *v, mmio_info_t *info)
 {
@@ -40,6 +58,8 @@ static int vgic_v2_distr_mmio_read(struct vcpu *v, mmio_info_t *info)
     struct vgic_irq_rank *rank;
     int gicd_reg = (int)(info->gpa - v->domain->arch.vgic.dbase);
     unsigned long flags;
+
+    perfc_incr(vgicd_reads);
 
     switch ( gicd_reg )
     {
@@ -54,7 +74,7 @@ static int vgic_v2_distr_mmio_read(struct vcpu *v, mmio_info_t *info)
         /* No secure world support for guests. */
         vgic_lock(v);
         *r = ( ((v->domain->max_vcpus - 1) << GICD_TYPE_CPUS_SHIFT) )
-            |( ((v->domain->arch.vgic.nr_spis / 32)) & GICD_TYPE_LINES );
+            | DIV_ROUND_UP(v->domain->arch.vgic.nr_spis, 32);
         vgic_unlock(v);
         return 1;
     case GICD_IIDR:
@@ -92,41 +112,15 @@ static int vgic_v2_distr_mmio_read(struct vcpu *v, mmio_info_t *info)
         vgic_unlock_rank(v, rank, flags);
         return 1;
 
+    /* Read the pending status of an IRQ via GICD is not supported */
     case GICD_ISPENDR ... GICD_ISPENDRN:
-        if ( dabt.size != DABT_WORD ) goto bad_width;
-        rank = vgic_rank_offset(v, 1, gicd_reg - GICD_ISPENDR, DABT_WORD);
-        if ( rank == NULL) goto read_as_zero;
-        vgic_lock_rank(v, rank, flags);
-        *r = vgic_byte_read(rank->ipend, dabt.sign, gicd_reg);
-        vgic_unlock_rank(v, rank, flags);
-        return 1;
-
     case GICD_ICPENDR ... GICD_ICPENDRN:
-        if ( dabt.size != DABT_WORD ) goto bad_width;
-        rank = vgic_rank_offset(v, 0, gicd_reg - GICD_ICPENDR, DABT_WORD);
-        if ( rank == NULL) goto read_as_zero;
-        vgic_lock_rank(v, rank, flags);
-        *r = vgic_byte_read(rank->ipend, dabt.sign, gicd_reg);
-        vgic_unlock_rank(v, rank, flags);
-        return 1;
+        goto read_as_zero;
 
+    /* Read the active status of an IRQ via GICD is not supported */
     case GICD_ISACTIVER ... GICD_ISACTIVERN:
-        if ( dabt.size != DABT_WORD ) goto bad_width;
-        rank = vgic_rank_offset(v, 1, gicd_reg - GICD_ISACTIVER, DABT_WORD);
-        if ( rank == NULL) goto read_as_zero;
-        vgic_lock_rank(v, rank, flags);
-        *r = rank->iactive;
-        vgic_unlock_rank(v, rank, flags);
-        return 1;
-
     case GICD_ICACTIVER ... GICD_ICACTIVERN:
-        if ( dabt.size != DABT_WORD ) goto bad_width;
-        rank = vgic_rank_offset(v, 1, gicd_reg - GICD_ICACTIVER, DABT_WORD);
-        if ( rank == NULL) goto read_as_zero;
-        vgic_lock_rank(v, rank, flags);
-        *r = rank->iactive;
-        vgic_unlock_rank(v, rank, flags);
-        return 1;
+        goto read_as_zero;
 
     case GICD_ITARGETSR ... GICD_ITARGETSRN:
         if ( dabt.size != DABT_BYTE && dabt.size != DABT_WORD ) goto bad_width;
@@ -172,23 +166,10 @@ static int vgic_v2_distr_mmio_read(struct vcpu *v, mmio_info_t *info)
         *r = 0xdeadbeef;
         return 1;
 
+    /* Setting/Clearing the SGI pending bit via GICD is not supported */
     case GICD_CPENDSGIR ... GICD_CPENDSGIRN:
-        if ( dabt.size != DABT_BYTE && dabt.size != DABT_WORD ) goto bad_width;
-        rank = vgic_rank_offset(v, 1, gicd_reg - GICD_CPENDSGIR, DABT_WORD);
-        if ( rank == NULL) goto read_as_zero;
-        vgic_lock_rank(v, rank, flags);
-        *r = vgic_byte_read(rank->pendsgi, dabt.sign, gicd_reg);
-        vgic_unlock_rank(v, rank, flags);
-        return 1;
-
     case GICD_SPENDSGIR ... GICD_SPENDSGIRN:
-        if ( dabt.size != DABT_BYTE && dabt.size != DABT_WORD ) goto bad_width;
-        rank = vgic_rank_offset(v, 1, gicd_reg - GICD_SPENDSGIR, DABT_WORD);
-        if ( rank == NULL) goto read_as_zero;
-        vgic_lock_rank(v, rank, flags);
-        *r = vgic_byte_read(rank->pendsgi, dabt.sign, gicd_reg);
-        vgic_unlock_rank(v, rank, flags);
-        return 1;
+        goto read_as_zero;
 
     /* Implementation defined -- read as zero */
     case 0xfd0 ... 0xfe4:
@@ -237,16 +218,17 @@ static int vgic_v2_to_sgi(struct vcpu *v, register_t sgir)
     int virq;
     int irqmode;
     enum gic_sgi_mode sgi_mode;
-    unsigned long vcpu_mask = 0;
+    struct sgi_target target;
 
     irqmode = (sgir & GICD_SGI_TARGET_LIST_MASK) >> GICD_SGI_TARGET_LIST_SHIFT;
     virq = (sgir & GICD_SGI_INTID_MASK);
-    vcpu_mask = (sgir & GICD_SGI_TARGET_MASK) >> GICD_SGI_TARGET_SHIFT;
 
     /* Map GIC sgi value to enum value */
     switch ( irqmode )
     {
     case GICD_SGI_TARGET_LIST_VAL:
+        sgi_target_init(&target);
+        target.list = (sgir & GICD_SGI_TARGET_MASK) >> GICD_SGI_TARGET_SHIFT;
         sgi_mode = SGI_TARGET_LIST;
         break;
     case GICD_SGI_TARGET_OTHERS_VAL:
@@ -262,7 +244,7 @@ static int vgic_v2_to_sgi(struct vcpu *v, register_t sgir)
         return 0;
     }
 
-    return vgic_to_sgi(v, sgir, sgi_mode, virq, vcpu_mask);
+    return vgic_to_sgi(v, sgir, sgi_mode, virq, &target);
 }
 
 static int vgic_v2_distr_mmio_write(struct vcpu *v, mmio_info_t *info)
@@ -274,6 +256,8 @@ static int vgic_v2_distr_mmio_write(struct vcpu *v, mmio_info_t *info)
     int gicd_reg = (int)(info->gpa - v->domain->arch.vgic.dbase);
     uint32_t tr;
     unsigned long flags;
+
+    perfc_incr(vgicd_writes);
 
     switch ( gicd_reg )
     {
@@ -345,21 +329,17 @@ static int vgic_v2_distr_mmio_write(struct vcpu *v, mmio_info_t *info)
 
     case GICD_ISACTIVER ... GICD_ISACTIVERN:
         if ( dabt.size != DABT_WORD ) goto bad_width;
-        rank = vgic_rank_offset(v, 1, gicd_reg - GICD_ISACTIVER, DABT_WORD);
-        if ( rank == NULL) goto write_ignore;
-        vgic_lock_rank(v, rank, flags);
-        rank->iactive &= ~*r;
-        vgic_unlock_rank(v, rank, flags);
-        return 1;
+        printk(XENLOG_G_ERR
+               "%pv: vGICD: unhandled word write %#"PRIregister" to ISACTIVER%d\n",
+               v, *r, gicd_reg - GICD_ISACTIVER);
+        return 0;
 
     case GICD_ICACTIVER ... GICD_ICACTIVERN:
         if ( dabt.size != DABT_WORD ) goto bad_width;
-        rank = vgic_rank_offset(v, 1, gicd_reg - GICD_ICACTIVER, DABT_WORD);
-        if ( rank == NULL) goto write_ignore;
-        vgic_lock_rank(v, rank, flags);
-        rank->iactive &= ~*r;
-        vgic_unlock_rank(v, rank, flags);
-        return 1;
+        printk(XENLOG_G_ERR
+               "%pv: vGICD: unhandled word write %#"PRIregister" to ICACTIVER%d\n",
+               v, *r, gicd_reg - GICD_ICACTIVER);
+        return 0;
 
     case GICD_ITARGETSR ... GICD_ITARGETSR + 7:
         /* SGI/PPI target is read only */
@@ -565,14 +545,50 @@ static int vgic_v2_vcpu_init(struct vcpu *v)
 
 static int vgic_v2_domain_init(struct domain *d)
 {
-    int i;
+    int i, ret;
+
+    /*
+     * The hardware domain gets the hardware address.
+     * Guests get the virtual platform layout.
+     */
+    if ( is_hardware_domain(d) )
+    {
+        d->arch.vgic.dbase = vgic_v2_hw.dbase;
+        d->arch.vgic.cbase = vgic_v2_hw.cbase;
+    }
+    else
+    {
+        d->arch.vgic.dbase = GUEST_GICD_BASE;
+        d->arch.vgic.cbase = GUEST_GICC_BASE;
+    }
+
+    /*
+     * Map the gic virtual cpu interface in the gic cpu interface
+     * region of the guest.
+     *
+     * The second page is always mapped at +4K irrespective of the
+     * GIC_64K_STRIDE quirk. The DTB passed to the guest reflects this.
+     */
+    ret = map_mmio_regions(d, paddr_to_pfn(d->arch.vgic.cbase), 1,
+                           paddr_to_pfn(vgic_v2_hw.vbase));
+    if ( ret )
+        return ret;
+
+    if ( !platform_has_quirk(PLATFORM_QUIRK_GIC_64K_STRIDE) )
+        ret = map_mmio_regions(d, paddr_to_pfn(d->arch.vgic.cbase + PAGE_SIZE),
+                               1, paddr_to_pfn(vgic_v2_hw.vbase + PAGE_SIZE));
+    else
+        ret = map_mmio_regions(d, paddr_to_pfn(d->arch.vgic.cbase + PAGE_SIZE),
+                               1, paddr_to_pfn(vgic_v2_hw.vbase + SZ_64K));
+
+    if ( ret )
+        return ret;
 
     /* By default deliver to CPU0 */
     for ( i = 0; i < DOMAIN_NR_RANKS(d); i++ )
         memset(d->arch.vgic.shared_irqs[i].v2.itargets, 0x1,
                sizeof(d->arch.vgic.shared_irqs[i].v2.itargets));
 
-    /* We rely on gicv_setup() to initialize dbase(vGIC distributor base) */
     register_mmio_handler(d, &vgic_v2_distr_mmio_handler, d->arch.vgic.dbase,
                           PAGE_SIZE);
 
@@ -584,10 +600,19 @@ static const struct vgic_ops vgic_v2_ops = {
     .domain_init = vgic_v2_domain_init,
     .get_irq_priority = vgic_v2_get_irq_priority,
     .get_target_vcpu = vgic_v2_get_target_vcpu,
+    .max_vcpus = 8,
 };
 
 int vgic_v2_init(struct domain *d)
 {
+    if ( !vgic_v2_hw.enabled )
+    {
+        printk(XENLOG_G_ERR
+               "d%d: vGICv2 is not supported on this platform.\n",
+               d->domain_id);
+        return -ENODEV;
+    }
+
     register_vgic_ops(d, &vgic_v2_ops);
 
     return 0;

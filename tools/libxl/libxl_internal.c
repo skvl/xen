@@ -127,21 +127,33 @@ void *libxl__realloc(libxl__gc *gc, void *ptr, size_t new_size)
     return new_ptr;
 }
 
-char *libxl__sprintf(libxl__gc *gc, const char *fmt, ...)
+char *libxl__vsprintf(libxl__gc *gc, const char *fmt, va_list ap)
 {
     char *s;
-    va_list ap;
+    va_list aq;
     int ret;
 
-    va_start(ap, fmt);
-    ret = vsnprintf(NULL, 0, fmt, ap);
-    va_end(ap);
+    va_copy(aq, ap);
+    ret = vsnprintf(NULL, 0, fmt, aq);
+    va_end(aq);
 
     assert(ret >= 0);
 
     s = libxl__zalloc(gc, ret + 1);
+    va_copy(aq, ap);
+    ret = vsnprintf(s, ret + 1, fmt, aq);
+    va_end(aq);
+
+    return s;
+}
+
+char *libxl__sprintf(libxl__gc *gc, const char *fmt, ...)
+{
+    char *s;
+    va_list ap;
+
     va_start(ap, fmt);
-    ret = vsnprintf(s, ret + 1, fmt, ap);
+    s = libxl__vsprintf(gc, fmt, ap);
     va_end(ap);
 
     return s;
@@ -149,7 +161,11 @@ char *libxl__sprintf(libxl__gc *gc, const char *fmt, ...)
 
 char *libxl__strdup(libxl__gc *gc, const char *c)
 {
-    char *s = strdup(c);
+    char *s;
+
+    if (!c) return NULL;
+
+    s = strdup(c);
 
     if (!s) libxl__alloc_failed(CTX, __func__, strlen(c), 1);
 
@@ -160,7 +176,11 @@ char *libxl__strdup(libxl__gc *gc, const char *c)
 
 char *libxl__strndup(libxl__gc *gc, const char *c, size_t n)
 {
-    char *s = strndup(c, n);
+    char *s;
+
+    if (!c) return NULL;
+
+    s = strndup(c, n);
 
     if (!s) libxl__alloc_failed(CTX, __func__, n, 1);
 
@@ -221,8 +241,7 @@ void libxl__log(libxl_ctx *ctx, xentoollog_level msglevel, int errnoval,
 
 char *libxl__abs_path(libxl__gc *gc, const char *s, const char *path)
 {
-    if (!s || s[0] == '/')
-        return libxl__strdup(gc, s);
+    if (s[0] == '/') return libxl__strdup(gc, s);
     return libxl__sprintf(gc, "%s/%s", path, s);
 }
 
@@ -321,19 +340,18 @@ _hidden int libxl__init_recursive_mutex(libxl_ctx *ctx, pthread_mutex_t *lock)
     int rc = 0;
 
     if (pthread_mutexattr_init(&attr) != 0) {
-        LIBXL__LOG_ERRNO(ctx, LIBXL__LOG_ERROR, 
-                         "Failed to init mutex attributes\n");
+        LIBXL__LOG_ERRNO(ctx, LIBXL__LOG_ERROR,
+                         "Failed to init mutex attributes");
         return ERROR_FAIL;
     }
     if (pthread_mutexattr_settype(&attr, PTHREAD_MUTEX_RECURSIVE) != 0) {
-        LIBXL__LOG_ERRNO(ctx, LIBXL__LOG_ERROR, 
-                         "Failed to set mutex attributes\n");
+        LIBXL__LOG_ERRNO(ctx, LIBXL__LOG_ERROR,
+                         "Failed to set mutex attributes");
         rc = ERROR_FAIL;
         goto out;
     }
     if (pthread_mutex_init(lock, &attr) != 0) {
-        LIBXL__LOG_ERRNO(ctx, LIBXL__LOG_ERROR, 
-                         "Failed to init mutex\n");
+        LIBXL__LOG_ERRNO(ctx, LIBXL__LOG_ERROR, "Failed to init mutex");
         rc = ERROR_FAIL;
         goto out;
     }
@@ -364,25 +382,6 @@ int libxl__device_model_version_running(libxl__gc *gc, uint32_t domid)
     return value;
 }
 
-int libxl__hotplug_settings(libxl__gc *gc, xs_transaction_t t)
-{
-    int rc = 0;
-    char *val;
-
-    val = libxl__xs_read(gc, t, DISABLE_UDEV_PATH);
-    if (!val && errno != ENOENT) {
-        LOGE(ERROR, "cannot read %s from xenstore", DISABLE_UDEV_PATH);
-        rc = ERROR_FAIL;
-        goto out;
-    }
-    if (!val) val = "0";
-
-    rc = !!atoi(val);
-
-out:
-    return rc;
-}
-
 /* Portability note: this lock utilises flock(2) so a proper implementation of
  * flock(2) is required.
  */
@@ -405,7 +404,7 @@ libxl__domain_userdata_lock *libxl__lock_domain_userdata(libxl__gc *gc,
         fd = open(lockfile, O_RDWR|O_CREAT, 0666);
         if (fd < 0)
             LOGE(ERROR, "cannot open lockfile %s, errno=%d", lockfile, errno);
-        lock->lock_carefd = libxl__carefd_opened(CTX, fd);
+        lock->carefd = libxl__carefd_opened(CTX, fd);
         if (fd < 0) goto out;
 
         /* Lock the file in exclusive mode, wait indefinitely to
@@ -440,7 +439,7 @@ libxl__domain_userdata_lock *libxl__lock_domain_userdata(libxl__gc *gc,
                 break;
         }
 
-        libxl__carefd_close(lock->lock_carefd);
+        libxl__carefd_close(lock->carefd);
     }
 
     /* Check the domain is still there, if not we should release the
@@ -458,8 +457,22 @@ out:
 
 void libxl__unlock_domain_userdata(libxl__domain_userdata_lock *lock)
 {
+    /* It's important to unlink the file before closing fd to avoid
+     * the following race (if close before unlink):
+     *
+     *   P1 LOCK                         P2 UNLOCK
+     *   fd1 = open(lockfile)
+     *                                   close(fd2)
+     *   flock(fd1)
+     *   fstat and stat check success
+     *                                   unlink(lockfile)
+     *   return lock
+     *
+     * In above case P1 thinks it has got hold of the lock but
+     * actually lock is released by P2 (lockfile unlinked).
+     */
     if (lock->path) unlink(lock->path);
-    if (lock->lock_carefd) libxl__carefd_close(lock->lock_carefd);
+    if (lock->carefd) libxl__carefd_close(lock->carefd);
     free(lock->path);
     free(lock);
 }
@@ -539,6 +552,22 @@ void libxl__update_domain_configuration(libxl__gc *gc,
 
     /* video ram */
     dst->b_info.video_memkb = src->b_info.video_memkb;
+}
+
+char *libxl__device_model_xs_path(libxl__gc *gc, uint32_t dm_domid,
+                                  uint32_t domid, const char *format,  ...)
+{
+    char *s, *fmt;
+    va_list ap;
+
+    fmt = GCSPRINTF("/local/domain/%u/device-model/%u%s", dm_domid,
+                    domid, format);
+
+    va_start(ap, format);
+    s = libxl__vsprintf(gc, fmt, ap);
+    va_end(ap);
+
+    return s;
 }
 
 /*

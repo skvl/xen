@@ -36,19 +36,17 @@ const char *libxl__device_model_savefile(libxl__gc *gc, uint32_t domid)
 
 static const char *qemu_xen_path(libxl__gc *gc)
 {
-#ifdef QEMU_XEN_PATH
     return QEMU_XEN_PATH;
-#else
-    return libxl__abs_path(gc, "qemu-system-i386", libxl__private_bindir_path());
-#endif
 }
 
 static int libxl__create_qemu_logfile(libxl__gc *gc, char *name)
 {
     char *logfile;
-    int logfile_w;
+    int rc, logfile_w;
 
-    libxl_create_logfile(CTX, name, &logfile);
+    rc = libxl_create_logfile(CTX, name, &logfile);
+    if (rc) return rc;
+
     logfile_w = open(logfile, O_WRONLY|O_CREAT|O_APPEND, 0644);
     free(logfile);
 
@@ -81,13 +79,288 @@ const char *libxl__domain_device_model(libxl__gc *gc,
             break;
         default:
             LIBXL__LOG(ctx, LIBXL__LOG_ERROR,
-                       "invalid device model version %d\n",
+                       "invalid device model version %d",
                        info->device_model_version);
             dm = NULL;
             break;
         }
     }
     return dm;
+}
+
+static int
+libxl__xc_device_get_rdm(libxl__gc *gc,
+                         uint32_t flags,
+                         uint16_t seg,
+                         uint8_t bus,
+                         uint8_t devfn,
+                         unsigned int *nr_entries,
+                         struct xen_reserved_device_memory **xrdm)
+{
+    int rc = 0, r;
+
+    /*
+     * We really can't presume how many entries we can get in advance.
+     */
+    *nr_entries = 0;
+    r = xc_reserved_device_memory_map(CTX->xch, flags, seg, bus, devfn,
+                                      NULL, nr_entries);
+    assert(r <= 0);
+    /* "0" means we have no any rdm entry. */
+    if (!r) goto out;
+
+    if (errno != ENOBUFS) {
+        rc = ERROR_FAIL;
+        goto out;
+    }
+
+    GCNEW_ARRAY(*xrdm, *nr_entries);
+    r = xc_reserved_device_memory_map(CTX->xch, flags, seg, bus, devfn,
+                                      *xrdm, nr_entries);
+    if (r)
+        rc = ERROR_FAIL;
+
+ out:
+    if (rc) {
+        *nr_entries = 0;
+        *xrdm = NULL;
+        LOG(ERROR, "Could not get reserved device memory maps.");
+    }
+    return rc;
+}
+
+/*
+ * Check whether there exists rdm hole in the specified memory range.
+ * Returns true if exists, else returns false.
+ */
+static bool overlaps_rdm(uint64_t start, uint64_t memsize,
+                         uint64_t rdm_start, uint64_t rdm_size)
+{
+    return (start + memsize > rdm_start) && (start < rdm_start + rdm_size);
+}
+
+static void
+add_rdm_entry(libxl__gc *gc, libxl_domain_config *d_config,
+              uint64_t rdm_start, uint64_t rdm_size, int rdm_policy)
+{
+    d_config->rdms = libxl__realloc(NOGC, d_config->rdms,
+                    (d_config->num_rdms+1) * sizeof(libxl_device_rdm));
+
+    d_config->rdms[d_config->num_rdms].start = rdm_start;
+    d_config->rdms[d_config->num_rdms].size = rdm_size;
+    d_config->rdms[d_config->num_rdms].policy = rdm_policy;
+    d_config->num_rdms++;
+}
+
+/*
+ * Check reported RDM regions and handle potential gfn conflicts according
+ * to user preferred policy.
+ *
+ * RDM can reside in address space beyond 4G theoretically, but we never
+ * see this in real world. So in order to avoid breaking highmem layout
+ * we don't solve highmem conflict. Note this means highmem rmrr could
+ * still be supported if no conflict.
+ *
+ * But in the case of lowmem, RDM probably scatter the whole RAM space.
+ * Especially multiple RDM entries would worsen this to lead a complicated
+ * memory layout. And then its hard to extend hvm_info_table{} to work
+ * hvmloader out. So here we're trying to figure out a simple solution to
+ * avoid breaking existing layout. So when a conflict occurs,
+ *
+ * #1. Above a predefined boundary (default 2G)
+ * - Move lowmem_end below reserved region to solve conflict;
+ *
+ * #2. Below a predefined boundary (default 2G)
+ * - Check strict/relaxed policy.
+ * "strict" policy leads to fail libxl.
+ * "relaxed" policy issue a warning message and also mask this entry
+ * INVALID to indicate we shouldn't expose this entry to hvmloader.
+ * Note when both policies are specified on a given region, the per-device
+ * policy should override the global policy.
+ */
+int libxl__domain_device_construct_rdm(libxl__gc *gc,
+                                       libxl_domain_config *d_config,
+                                       uint64_t rdm_mem_boundary,
+                                       struct xc_hvm_build_args *args)
+{
+    int i, j, conflict, rc;
+    struct xen_reserved_device_memory *xrdm = NULL;
+    uint32_t strategy = d_config->b_info.u.hvm.rdm.strategy;
+    uint16_t seg;
+    uint8_t bus, devfn;
+    uint64_t rdm_start, rdm_size;
+    uint64_t highmem_end = args->highmem_end ? args->highmem_end : (1ull<<32);
+
+    /*
+     * We just want to construct RDM once since RDM is specific to the
+     * given platform, so this shouldn't change again.
+     */
+    if (d_config->num_rdms)
+        return 0;
+
+    /* Might not expose rdm. */
+    if (strategy == LIBXL_RDM_RESERVE_STRATEGY_IGNORE &&
+        !d_config->num_pcidevs)
+        return 0;
+
+    /* Query all RDM entries in this platform */
+    if (strategy == LIBXL_RDM_RESERVE_STRATEGY_HOST) {
+        unsigned int nr_entries;
+
+        /* Collect all rdm info if exist. */
+        rc = libxl__xc_device_get_rdm(gc, XENMEM_RDM_ALL,
+                                      0, 0, 0, &nr_entries, &xrdm);
+        if (rc)
+            goto out;
+        if (!nr_entries)
+            return 0;
+
+        assert(xrdm);
+
+        for (i = 0; i < nr_entries; i++)
+        {
+            add_rdm_entry(gc, d_config,
+                          pfn_to_paddr(xrdm[i].start_pfn),
+                          pfn_to_paddr(xrdm[i].nr_pages),
+                          d_config->b_info.u.hvm.rdm.policy);
+        }
+    }
+
+    /* Query RDM entries per-device */
+    for (i = 0; i < d_config->num_pcidevs; i++) {
+        unsigned int nr_entries;
+        bool new = true;
+
+        seg = d_config->pcidevs[i].domain;
+        bus = d_config->pcidevs[i].bus;
+        devfn = PCI_DEVFN(d_config->pcidevs[i].dev,
+                          d_config->pcidevs[i].func);
+        nr_entries = 0;
+        rc = libxl__xc_device_get_rdm(gc, 0,
+                                      seg, bus, devfn, &nr_entries, &xrdm);
+        if (rc)
+            goto out;
+        /* No RDM to associated with this device. */
+        if (!nr_entries)
+            continue;
+
+        assert(xrdm);
+
+        /*
+         * Need to check whether this entry is already saved in the array.
+         * This could come from two cases:
+         *
+         *   - user may configure to get all RDMs in this platform, which
+         *   is already queried before this point
+         *   - or two assigned devices may share one RDM entry
+         *
+         * Different policies may be configured on the same RDM due to
+         * above two cases. But we don't allow to assign such a group
+         * devies right now so it doesn't come true in our case.
+         */
+        for (j = 0; j < d_config->num_rdms; j++) {
+            if (d_config->rdms[j].start == pfn_to_paddr(xrdm[0].start_pfn))
+            {
+                /*
+                 * So the per-device policy always override the global
+                 * policy in this case.
+                 */
+                d_config->rdms[j].policy = d_config->pcidevs[i].rdm_policy;
+                new = false;
+                break;
+            }
+        }
+
+        if (new) {
+            add_rdm_entry(gc, d_config,
+                          pfn_to_paddr(xrdm[0].start_pfn),
+                          pfn_to_paddr(xrdm[0].nr_pages),
+                          d_config->pcidevs[i].rdm_policy);
+        }
+    }
+
+    /*
+     * Next step is to check and avoid potential conflict between RDM
+     * entries and guest RAM. To avoid intrusive impact to existing
+     * memory layout {lowmem, mmio, highmem} which is passed around
+     * various function blocks, below conflicts are not handled which
+     * are rare and handling them would lead to a more scattered
+     * layout:
+     *  - RDM  in highmem area (>4G)
+     *  - RDM lower than a defined memory boundary (e.g. 2G)
+     * Otherwise for conflicts between boundary and 4G, we'll simply
+     * move lowmem end below reserved region to solve conflict.
+     *
+     * If a conflict is detected on a given RDM entry, an error will
+     * be returned if 'strict' policy is specified. Instead, if
+     * 'relaxed' policy specified, this conflict is treated just as a
+     * warning, but we mark this RDM entry as INVALID to indicate that
+     * this entry shouldn't be exposed to hvmloader.
+     *
+     * Firstly we should check the case of rdm < 4G because we may
+     * need to expand highmem_end.
+     */
+    for (i = 0; i < d_config->num_rdms; i++) {
+        rdm_start = d_config->rdms[i].start;
+        rdm_size = d_config->rdms[i].size;
+        conflict = overlaps_rdm(0, args->lowmem_end, rdm_start, rdm_size);
+
+        if (!conflict)
+            continue;
+
+        /* Just check if RDM > our memory boundary. */
+        if (rdm_start > rdm_mem_boundary) {
+            /*
+             * We will move downwards lowmem_end so we have to expand
+             * highmem_end.
+             */
+            highmem_end += (args->lowmem_end - rdm_start);
+            /* Now move downwards lowmem_end. */
+            args->lowmem_end = rdm_start;
+        }
+    }
+
+    /* Sync highmem_end. */
+    args->highmem_end = highmem_end;
+
+    /*
+     * Finally we can take same policy to check lowmem(< 2G) and
+     * highmem adjusted above.
+     */
+    for (i = 0; i < d_config->num_rdms; i++) {
+        rdm_start = d_config->rdms[i].start;
+        rdm_size = d_config->rdms[i].size;
+        /* Does this entry conflict with lowmem? */
+        conflict = overlaps_rdm(0, args->lowmem_end,
+                                rdm_start, rdm_size);
+        /* Does this entry conflict with highmem? */
+        conflict |= overlaps_rdm((1ULL<<32),
+                                 args->highmem_end - (1ULL<<32),
+                                 rdm_start, rdm_size);
+
+        if (!conflict)
+            continue;
+
+        if (d_config->rdms[i].policy == LIBXL_RDM_RESERVE_POLICY_STRICT) {
+            LOG(ERROR, "RDM conflict at 0x%"PRIx64".\n",
+                       d_config->rdms[i].start);
+            goto out;
+        } else {
+            LOG(WARN, "Ignoring RDM conflict at 0x%"PRIx64".\n",
+                      d_config->rdms[i].start);
+
+            /*
+             * Then mask this INVALID to indicate we shouldn't expose this
+             * to hvmloader.
+             */
+            d_config->rdms[i].policy = LIBXL_RDM_RESERVE_POLICY_INVALID;
+        }
+    }
+
+    return 0;
+
+ out:
+    return ERROR_FAIL;
 }
 
 const libxl_vnc_info *libxl__dm_vnc(const libxl_domain_config *guest_config)
@@ -122,9 +395,10 @@ static const char *dm_keymap(const libxl_domain_config *guest_config)
         return NULL;
 }
 
-static char ** libxl__build_device_model_args_old(libxl__gc *gc,
+static int libxl__build_device_model_args_old(libxl__gc *gc,
                                         const char *dm, int domid,
                                         const libxl_domain_config *guest_config,
+                                        char ***args, char ***envs,
                                         const libxl__domain_build_state *state)
 {
     const libxl_domain_create_info *c_info = &guest_config->c_info;
@@ -135,8 +409,9 @@ static char ** libxl__build_device_model_args_old(libxl__gc *gc,
     const int num_nics = guest_config->num_nics;
     const char *keymap = dm_keymap(guest_config);
     int i;
-    flexarray_t *dm_args;
+    flexarray_t *dm_args, *dm_envs;
     dm_args = flexarray_make(gc, 16, 1);
+    dm_envs = flexarray_make(gc, 16, 1);
 
     flexarray_vappend(dm_args, dm,
                       "-d", libxl__sprintf(gc, "%d", domid), NULL);
@@ -161,7 +436,7 @@ static char ** libxl__build_device_model_args_old(libxl__gc *gc,
             if (strchr(vnc->listen, ':') != NULL) {
                 if (vnc->display) {
                     LOG(ERROR, "vncdisplay set, vnclisten contains display");
-                    return NULL;
+                    return ERROR_INVAL;
                 }
                 vncarg = vnc->listen;
             } else {
@@ -194,7 +469,10 @@ static char ** libxl__build_device_model_args_old(libxl__gc *gc,
         if (!libxl_defbool_val(sdl->opengl)) {
             flexarray_append(dm_args, "-disable-opengl");
         }
-        /* XXX sdl->{display,xauthority} into $DISPLAY/$XAUTHORITY */
+        if (sdl->display)
+            flexarray_append_pair(dm_envs, "DISPLAY", sdl->display);
+        if (sdl->xauthority)
+            flexarray_append_pair(dm_envs, "XAUTHORITY", sdl->xauthority);
     }
     if (keymap) {
         flexarray_vappend(dm_args, "-k", keymap, NULL);
@@ -207,14 +485,14 @@ static char ** libxl__build_device_model_args_old(libxl__gc *gc,
         if (b_info->kernel) {
             LOG(ERROR, "HVM direct kernel boot is not supported by "
                 "qemu-xen-traditional");
-            return NULL;
+            return ERROR_INVAL;
         }
 
         if (b_info->u.hvm.serial || b_info->u.hvm.serial_list) {
             if ( b_info->u.hvm.serial && b_info->u.hvm.serial_list )
             {
                 LOG(ERROR, "Both serial and serial_list set");
-                return NULL;
+                return ERROR_INVAL;
             }
             if (b_info->u.hvm.serial) {
                 flexarray_vappend(dm_args,
@@ -251,6 +529,8 @@ static char ** libxl__build_device_model_args_old(libxl__gc *gc,
         case LIBXL_VGA_INTERFACE_TYPE_NONE:
             flexarray_append_pair(dm_args, "-vga", "none");
             break;
+        case LIBXL_VGA_INTERFACE_TYPE_QXL:
+            break;
         }
 
         if (b_info->u.hvm.boot) {
@@ -262,7 +542,7 @@ static char ** libxl__build_device_model_args_old(libxl__gc *gc,
             if ( b_info->u.hvm.usbdevice && b_info->u.hvm.usbdevice_list )
             {
                 LOG(ERROR, "Both usbdevice and usbdevice_list set");
-                return NULL;
+                return ERROR_INVAL;
             }
             flexarray_append(dm_args, "-usb");
             if (b_info->u.hvm.usbdevice) {
@@ -353,7 +633,11 @@ static char ** libxl__build_device_model_args_old(libxl__gc *gc,
         abort();
     }
     flexarray_append(dm_args, NULL);
-    return (char **) flexarray_contents(dm_args);
+    *args = (char **) flexarray_contents(dm_args);
+    flexarray_append(dm_envs, NULL);
+    if (envs)
+        *envs = (char **) flexarray_contents(dm_envs);
+    return 0;
 }
 
 static const char *qemu_disk_format_string(libxl_disk_format format)
@@ -405,12 +689,21 @@ static char *dm_spice_options(libxl__gc *gc,
     if (!libxl_defbool_val(spice->clipboard_sharing))
         opt = libxl__sprintf(gc, "%s,disable-copy-paste", opt);
 
+    if (spice->image_compression)
+        opt = libxl__sprintf(gc, "%s,image-compression=%s", opt,
+                             spice->image_compression);
+
+    if (spice->streaming_video)
+        opt = libxl__sprintf(gc, "%s,streaming-video=%s", opt,
+                             spice->streaming_video);
+
     return opt;
 }
 
-static char ** libxl__build_device_model_args_new(libxl__gc *gc,
+static int libxl__build_device_model_args_new(libxl__gc *gc,
                                         const char *dm, int guest_domid,
                                         const libxl_domain_config *guest_config,
+                                        char ***args, char ***envs,
                                         const libxl__domain_build_state *state,
                                         int *dm_state_fd)
 {
@@ -425,12 +718,13 @@ static char ** libxl__build_device_model_args_new(libxl__gc *gc,
     const libxl_sdl_info *sdl = dm_sdl(guest_config);
     const char *keymap = dm_keymap(guest_config);
     char *machinearg;
-    flexarray_t *dm_args;
+    flexarray_t *dm_args, *dm_envs;
     int i, connection, devid;
     uint64_t ram_size;
     const char *path, *chardev;
 
     dm_args = flexarray_make(gc, 16, 1);
+    dm_envs = flexarray_make(gc, 16, 1);
 
     flexarray_vappend(dm_args, dm,
                       "-xen-domid",
@@ -442,8 +736,18 @@ static char ** libxl__build_device_model_args_new(libxl__gc *gc,
                                     "path=%s/qmp-libxl-%d,server,nowait",
                                     libxl__run_dir_path(), guest_domid));
 
+    flexarray_append(dm_args, "-no-shutdown");
     flexarray_append(dm_args, "-mon");
     flexarray_append(dm_args, "chardev=libxl-cmd,mode=control");
+
+    flexarray_append(dm_args, "-chardev");
+    flexarray_append(dm_args,
+                     libxl__sprintf(gc, "socket,id=libxenstat-cmd,"
+                                    "path=%s/qmp-libxenstat-%d,server,nowait",
+                                    libxl__run_dir_path(), guest_domid));
+
+    flexarray_append(dm_args, "-mon");
+    flexarray_append(dm_args, "chardev=libxenstat-cmd,mode=control");
 
     for (i = 0; i < guest_config->num_channels; i++) {
         connection = guest_config->channels[i].connection;
@@ -461,7 +765,7 @@ static char ** libxl__build_device_model_args_new(libxl__gc *gc,
                 /* We've forgotten to add the clause */
                 LOG(ERROR, "%s: unknown channel connection %d",
                     __func__, connection);
-                return NULL;
+                return ERROR_INVAL;
         }
         flexarray_append(dm_args, "-chardev");
         flexarray_append(dm_args, (void*)chardev);
@@ -498,7 +802,7 @@ static char ** libxl__build_device_model_args_new(libxl__gc *gc,
             if (strchr(vnc->listen, ':') != NULL) {
                 if (vnc->display) {
                     LOG(ERROR, "vncdisplay set, vnclisten contains display");
-                    return NULL;
+                    return ERROR_INVAL;
                 }
                 vncarg = vnc->listen;
             } else {
@@ -534,7 +838,10 @@ static char ** libxl__build_device_model_args_new(libxl__gc *gc,
 
     if (sdl) {
         flexarray_append(dm_args, "-sdl");
-        /* XXX sdl->{display,xauthority} into $DISPLAY/$XAUTHORITY */
+        if (sdl->display)
+            flexarray_append_pair(dm_envs, "DISPLAY", sdl->display);
+        if (sdl->xauthority)
+            flexarray_append_pair(dm_envs, "XAUTHORITY", sdl->xauthority);
     }
 
     if (keymap) {
@@ -557,7 +864,7 @@ static char ** libxl__build_device_model_args_new(libxl__gc *gc,
             if ( b_info->u.hvm.serial && b_info->u.hvm.serial_list )
             {
                 LOG(ERROR, "Both serial and serial_list set");
-                return NULL;
+                return ERROR_INVAL;
             }
             if (b_info->u.hvm.serial) {
                 flexarray_vappend(dm_args,
@@ -582,7 +889,7 @@ static char ** libxl__build_device_model_args_new(libxl__gc *gc,
             const libxl_spice_info *spice = &b_info->u.hvm.spice;
             char *spiceoptions = dm_spice_options(gc, spice);
             if (!spiceoptions)
-                return NULL;
+                return ERROR_INVAL;
 
             flexarray_append(dm_args, "-spice");
             flexarray_append(dm_args, spiceoptions);
@@ -607,6 +914,12 @@ static char ** libxl__build_device_model_args_new(libxl__gc *gc,
             break;
         case LIBXL_VGA_INTERFACE_TYPE_NONE:
             break;
+        case LIBXL_VGA_INTERFACE_TYPE_QXL:
+            /* QXL have 2 ram regions, ram and vram */
+            flexarray_append_pair(dm_args, "-device",
+                GCSPRINTF("qxl-vga,vram_size_mb=%"PRIu64",ram_size_mb=%"PRIu64,
+                (b_info->video_memkb/2/1024), (b_info->video_memkb/2/1024) ) );
+            break;
         }
 
         if (b_info->u.hvm.boot) {
@@ -619,7 +932,7 @@ static char ** libxl__build_device_model_args_new(libxl__gc *gc,
             if ( b_info->u.hvm.usbdevice && b_info->u.hvm.usbdevice_list )
             {
                 LOG(ERROR, "Both usbdevice and usbdevice_list set");
-                return NULL;
+                return ERROR_INVAL;
             }
             flexarray_append(dm_args, "-usb");
             if (b_info->u.hvm.usbdevice) {
@@ -657,7 +970,7 @@ static char ** libxl__build_device_model_args_new(libxl__gc *gc,
             default:
                 LOG(ERROR, "usbversion parameter is invalid, "
                     "must be between 1 and 3");
-                return NULL;
+                return ERROR_INVAL;
             }
             if (b_info->u.hvm.spice.usbredirection >= 0 &&
                 b_info->u.hvm.spice.usbredirection < 5) {
@@ -669,7 +982,7 @@ static char ** libxl__build_device_model_args_new(libxl__gc *gc,
             } else {
                 LOG(ERROR, "usbredirection parameter is invalid, "
                     "it must be between 1 and 4");
-                return NULL;
+                return ERROR_INVAL;
             }
         }
         if (b_info->u.hvm.soundhw) {
@@ -778,6 +1091,8 @@ static char ** libxl__build_device_model_args_new(libxl__gc *gc,
     flexarray_append(dm_args, libxl__sprintf(gc, "%"PRId64, ram_size));
 
     if (b_info->type == LIBXL_DOMAIN_TYPE_HVM) {
+        if (b_info->u.hvm.hdtype == LIBXL_HDTYPE_AHCI)
+            flexarray_append_pair(dm_args, "-device", "ahci,id=ahci0");
         for (i = 0; i < num_disks; i++) {
             int disk, part;
             int dev_number =
@@ -795,13 +1110,18 @@ static char ** libxl__build_device_model_args_new(libxl__gc *gc,
             if (disks[i].is_cdrom) {
                 if (disks[i].format == LIBXL_DISK_FORMAT_EMPTY)
                     drive = libxl__sprintf
-                        (gc, "if=ide,index=%d,media=cdrom,cache=writeback,id=ide-%i",
-                         disk, dev_number);
+                        (gc, "if=ide,index=%d,readonly=%s,media=cdrom,cache=writeback,id=ide-%i",
+                         disk, disks[i].readwrite ? "off" : "on", dev_number);
                 else
                     drive = libxl__sprintf
-                        (gc, "file=%s,if=ide,index=%d,media=cdrom,format=%s,cache=writeback,id=ide-%i",
-                         disks[i].pdev_path, disk, format, dev_number);
+                        (gc, "file=%s,if=ide,index=%d,readonly=%s,media=cdrom,format=%s,cache=writeback,id=ide-%i",
+                         disks[i].pdev_path, disk, disks[i].readwrite ? "off" : "on", format, dev_number);
             } else {
+                if (!disks[i].readwrite) {
+                    LIBXL__LOG(ctx, LIBXL__LOG_ERROR, "qemu-xen doesn't support read-only disk drivers");
+                    return ERROR_INVAL;
+                }
+
                 if (disks[i].format == LIBXL_DISK_FORMAT_EMPTY) {
                     LIBXL__LOG(ctx, LIBXL__LOG_WARNING, "cannot support"
                                " empty disk format for %s", disks[i].vdev);
@@ -832,7 +1152,14 @@ static char ** libxl__build_device_model_args_new(libxl__gc *gc,
                     drive = libxl__sprintf
                         (gc, "file=%s,if=scsi,bus=0,unit=%d,format=%s,cache=writeback",
                          pdev_path, disk, format);
-                else if (disk < 4)
+                else if (disk < 6 && b_info->u.hvm.hdtype == LIBXL_HDTYPE_AHCI) {
+                    flexarray_vappend(dm_args, "-drive",
+                        GCSPRINTF("file=%s,if=none,id=ahcidisk-%d,format=%s,cache=writeback",
+                        pdev_path, disk, format),
+                        "-device", GCSPRINTF("ide-hd,bus=ahci0.%d,unit=0,drive=ahcidisk-%d",
+                        disk, disk), NULL);
+                    continue;
+                } else if (disk < 4)
                     drive = libxl__sprintf
                         (gc, "file=%s,if=ide,index=%d,media=disk,format=%s,cache=writeback",
                          pdev_path, disk, format);
@@ -854,12 +1181,17 @@ static char ** libxl__build_device_model_args_new(libxl__gc *gc,
         }
     }
     flexarray_append(dm_args, NULL);
-    return (char **) flexarray_contents(dm_args);
+    *args = (char **) flexarray_contents(dm_args);
+    flexarray_append(dm_envs, NULL);
+    if (envs)
+        *envs = (char **) flexarray_contents(dm_envs);
+    return 0;
 }
 
-static char ** libxl__build_device_model_args(libxl__gc *gc,
+static int libxl__build_device_model_args(libxl__gc *gc,
                                         const char *dm, int guest_domid,
                                         const libxl_domain_config *guest_config,
+                                        char ***args, char ***envs,
                                         const libxl__domain_build_state *state,
                                         int *dm_state_fd)
 /* dm_state_fd may be NULL iff caller knows we are using old stubdom
@@ -871,17 +1203,19 @@ static char ** libxl__build_device_model_args(libxl__gc *gc,
     case LIBXL_DEVICE_MODEL_VERSION_QEMU_XEN_TRADITIONAL:
         return libxl__build_device_model_args_old(gc, dm,
                                                   guest_domid, guest_config,
+                                                  args, envs,
                                                   state);
     case LIBXL_DEVICE_MODEL_VERSION_QEMU_XEN:
         assert(dm_state_fd != NULL);
         assert(*dm_state_fd < 0);
         return libxl__build_device_model_args_new(gc, dm,
                                                   guest_domid, guest_config,
+                                                  args, envs,
                                                   state, dm_state_fd);
     default:
         LIBXL__LOG_ERRNO(ctx, LIBXL__LOG_ERROR, "unknown device model version %d",
                          guest_config->b_info.device_model_version);
-        return NULL;
+        return ERROR_INVAL;
     }
 }
 
@@ -954,7 +1288,7 @@ static int libxl__write_stub_dmargs(libxl__gc *gc,
         i++;
     }
     dmargs_size++;
-    dmargs = (char *) malloc(dmargs_size);
+    dmargs = (char *) libxl__malloc(gc, dmargs_size);
     i = 1;
     dmargs[0] = '\0';
     while (args[i] != NULL) {
@@ -974,7 +1308,6 @@ retry_transaction:
     if (!xs_transaction_end(ctx->xsh, t, 0))
         if (errno == EAGAIN)
             goto retry_transaction;
-    free(dmargs);
     return 0;
 }
 
@@ -989,9 +1322,8 @@ static void stubdom_pvqemu_cb(libxl__egc *egc,
                               libxl__multidev *aodevs,
                               int rc);
 
-static void spaw_stubdom_pvqemu_destroy_cb(libxl__egc *egc,
-                                           libxl__destroy_domid_state *dis,
-                                           int rc);
+static void stubdom_xswait_cb(libxl__egc *egc, libxl__xswait_state *xswait,
+                              int rc, const char *p);
 
 char *libxl__stub_dm_name(libxl__gc *gc, const char *guest_name)
 {
@@ -1040,7 +1372,8 @@ void libxl__spawn_stub_dm(libxl__egc *egc, libxl__stub_dm_spawn_state *sdss)
     libxl_domain_build_info_init_type(&dm_config->b_info, LIBXL_DOMAIN_TYPE_PV);
 
     dm_config->b_info.max_vcpus = 1;
-    dm_config->b_info.max_memkb = 32 * 1024;
+    dm_config->b_info.max_memkb = 28 * 1024 +
+        guest_config->b_info.video_memkb;
     dm_config->b_info.target_memkb = dm_config->b_info.max_memkb;
 
     dm_config->b_info.u.pv.features = "";
@@ -1080,7 +1413,8 @@ void libxl__spawn_stub_dm(libxl__egc *egc, libxl__stub_dm_spawn_state *sdss)
     stubdom_state->pv_ramdisk.path = "";
 
     /* fixme: this function can leak the stubdom if it fails */
-    ret = libxl__domain_make(gc, &dm_config->c_info, &sdss->pvqemu.guest_domid);
+    ret = libxl__domain_make(gc, dm_config, &sdss->pvqemu.guest_domid,
+                             &stubdom_state->config);
     if (ret)
         goto out;
     uint32_t dm_domid = sdss->pvqemu.guest_domid;
@@ -1088,9 +1422,10 @@ void libxl__spawn_stub_dm(libxl__egc *egc, libxl__stub_dm_spawn_state *sdss)
     if (ret)
         goto out;
 
-    args = libxl__build_device_model_args(gc, "stubdom-dm", guest_domid,
-                                          guest_config, d_state, NULL);
-    if (!args) {
+    ret = libxl__build_device_model_args(gc, "stubdom-dm", guest_domid,
+                                         guest_config, &args, NULL,
+                                         d_state, NULL);
+    if (ret) {
         ret = ERROR_FAIL;
         goto out;
     }
@@ -1121,9 +1456,10 @@ void libxl__spawn_stub_dm(libxl__egc *egc, libxl__stub_dm_spawn_state *sdss)
 retry_transaction:
     t = xs_transaction_start(ctx->xsh);
     xs_mkdir(ctx->xsh, t,
-        libxl__sprintf(gc, "/local/domain/0/device-model/%d", guest_domid));
+             libxl__device_model_xs_path(gc, dm_domid, guest_domid, ""));
     xs_set_permissions(ctx->xsh, t,
-        libxl__sprintf(gc, "/local/domain/0/device-model/%d", guest_domid),
+                       libxl__device_model_xs_path(gc, dm_domid,
+                                                   guest_domid, ""),
                        perm, ARRAY_SIZE(perm));
     if (!xs_transaction_end(ctx->xsh, t, 0))
         if (errno == EAGAIN)
@@ -1183,10 +1519,6 @@ static void spawn_stub_launch_dm(libxl__egc *egc,
         num_console++;
 
     console = libxl__calloc(gc, num_console, sizeof(libxl__device_console));
-    if (!console) {
-        ret = ERROR_NOMEM;
-        goto out;
-    }
 
     for (i = 0; i < num_console; i++) {
         libxl__device device;
@@ -1202,7 +1534,8 @@ static void spawn_stub_launch_dm(libxl__egc *egc,
             case STUBDOM_CONSOLE_LOGGING:
                 name = libxl__sprintf(gc, "qemu-dm-%s",
                                       libxl_domid_to_name(ctx, guest_domid));
-                libxl_create_logfile(ctx, name, &filename);
+                ret = libxl_create_logfile(ctx, name, &filename);
+                if (ret) goto out;
                 console[i].output = libxl__sprintf(gc, "file:%s", filename);
                 free(filename);
                 break;
@@ -1273,6 +1606,8 @@ static void stubdom_pvqemu_cb(libxl__egc *egc,
     STATE_AO_GC(sdss->dm.spawn.ao);
     uint32_t dm_domid = sdss->pvqemu.guest_domid;
 
+    libxl__xswait_init(&sdss->xswait);
+
     if (rc) {
         LOGE(ERROR, "error connecting nics devices");
         goto out;
@@ -1281,30 +1616,41 @@ static void stubdom_pvqemu_cb(libxl__egc *egc,
     rc = libxl_domain_unpause(CTX, dm_domid);
     if (rc) goto out;
 
+    sdss->xswait.ao = ao;
+    sdss->xswait.what = GCSPRINTF("Stubdom %u for %u startup",
+                                  dm_domid, sdss->dm.guest_domid);
+    sdss->xswait.path =
+        libxl__device_model_xs_path(gc, dm_domid, sdss->dm.guest_domid,
+                                    "/state");
+    sdss->xswait.timeout_ms = LIBXL_STUBDOM_START_TIMEOUT * 1000;
+    sdss->xswait.callback = stubdom_xswait_cb;
+    rc = libxl__xswait_start(gc, &sdss->xswait);
+    if (rc) goto out;
+
+    return;
+
  out:
-    if (rc) {
-        if (dm_domid) {
-            sdss->dis.ao = ao;
-            sdss->dis.domid = dm_domid;
-            sdss->dis.callback = spaw_stubdom_pvqemu_destroy_cb;
-            libxl__destroy_domid(egc, &sdss->dis);
-            return;
-        }
-    }
-    sdss->callback(egc, &sdss->dm, rc);
+    stubdom_xswait_cb(egc, &sdss->xswait, rc, NULL);
 }
 
-static void spaw_stubdom_pvqemu_destroy_cb(libxl__egc *egc,
-                                           libxl__destroy_domid_state *dis,
-                                           int rc)
+static void stubdom_xswait_cb(libxl__egc *egc, libxl__xswait_state *xswait,
+                              int rc, const char *p)
 {
-    libxl__stub_dm_spawn_state *sdss = CONTAINER_OF(dis, *sdss, dis);
-    STATE_AO_GC(sdss->dis.ao);
+    EGC_GC;
+    libxl__stub_dm_spawn_state *sdss = CONTAINER_OF(xswait, *sdss, xswait);
 
-    if (rc)
-        LOG(ERROR, "destruction of domain %u after failed creation failed",
-                   sdss->pvqemu.guest_domid);
+    if (rc) {
+        if (rc == ERROR_TIMEDOUT)
+            LOG(ERROR, "%s: startup timed out", xswait->what);
+        goto out;
+    }
 
+    if (!p) return;
+
+    if (strcmp(p, "running"))
+        return;
+ out:
+    libxl__xswait_stop(gc, xswait);
     sdss->callback(egc, &sdss->dm, rc);
 }
 
@@ -1312,7 +1658,8 @@ static void spaw_stubdom_pvqemu_destroy_cb(libxl__egc *egc,
 static void device_model_confirm(libxl__egc *egc, libxl__spawn_state *spawn,
                                  const char *xsdata);
 static void device_model_startup_failed(libxl__egc *egc,
-                                        libxl__spawn_state *spawn);
+                                        libxl__spawn_state *spawn,
+                                        int rc);
 static void device_model_detached(libxl__egc *egc,
                                   libxl__spawn_state *spawn);
 
@@ -1338,7 +1685,7 @@ void libxl__spawn_local_dm(libxl__egc *egc, libxl__dm_spawn_state *dmss)
     char *path;
     int logfile_w, null;
     int rc;
-    char **args, **arg;
+    char **args, **arg, **envs;
     xs_transaction_t t;
     char *vm_path;
     char **pass_stuff;
@@ -1360,12 +1707,11 @@ void libxl__spawn_local_dm(libxl__egc *egc, libxl__dm_spawn_state *dmss)
         rc = ERROR_FAIL;
         goto out;
     }
-    args = libxl__build_device_model_args(gc, dm, domid, guest_config, state,
+    rc = libxl__build_device_model_args(gc, dm, domid, guest_config,
+                                          &args, &envs, state,
                                           &dm_state_fd);
-    if (!args) {
-        rc = ERROR_FAIL;
+    if (rc)
         goto out;
-    }
 
     if (b_info->type == LIBXL_DOMAIN_TYPE_HVM) {
         path = xs_get_domain_path(ctx->xsh, domid);
@@ -1373,17 +1719,19 @@ void libxl__spawn_local_dm(libxl__egc *egc, libxl__dm_spawn_state *dmss)
                         libxl__sprintf(gc, "%s/hvmloader/bios", path),
                         "%s", libxl_bios_type_to_string(b_info->u.hvm.bios));
         /* Disable relocating memory to make the MMIO hole larger
-         * unless we're running qemu-traditional */
+         * unless we're running qemu-traditional and vNUMA is not
+         * configured. */
         libxl__xs_write(gc, XBT_NULL,
                         libxl__sprintf(gc,
                                        "%s/hvmloader/allow-memory-relocate",
                                        path),
                         "%d",
-                        b_info->device_model_version==LIBXL_DEVICE_MODEL_VERSION_QEMU_XEN_TRADITIONAL);
+                        b_info->device_model_version==LIBXL_DEVICE_MODEL_VERSION_QEMU_XEN_TRADITIONAL &&
+                        !libxl__vnuma_configured(b_info));
         free(path);
     }
 
-    path = libxl__sprintf(gc, "/local/domain/0/device-model/%d", domid);
+    path = libxl__device_model_xs_path(gc, LIBXL_TOOLSTACK_DOMID, domid, "");
     xs_mkdir(ctx->xsh, XBT_NULL, path);
 
     if (b_info->type == LIBXL_DOMAIN_TYPE_HVM &&
@@ -1430,9 +1778,15 @@ retry_transaction:
     LIBXL__LOG(CTX, XTL_DEBUG, "Spawning device-model %s with arguments:", dm);
     for (arg = args; *arg; arg++)
         LIBXL__LOG(CTX, XTL_DEBUG, "  %s", *arg);
+    if (*envs) {
+        LOG(DEBUG, "Spawning device-model %s with additional environment:", dm);
+        for (arg = envs; *arg; arg += 2)
+            LOG(DEBUG, "  %s=%s", arg[0], arg[1]);
+    }
 
     spawn->what = GCSPRINTF("domain %d device model", domid);
-    spawn->xspath = GCSPRINTF("/local/domain/0/device-model/%d/state", domid);
+    spawn->xspath = libxl__device_model_xs_path(gc, LIBXL_TOOLSTACK_DOMID,
+                                                domid, "/state");
     spawn->timeout_ms = LIBXL_DEVICE_MODEL_START_TIMEOUT * 1000;
     spawn->pidpath = GCSPRINTF("%s/image/device-model-pid", dom_path);
     spawn->midproc_cb = libxl__spawn_record_pid;
@@ -1445,7 +1799,7 @@ retry_transaction:
         goto out_close;
     if (!rc) { /* inner child */
         setsid();
-        libxl__exec(gc, null, logfile_w, logfile_w, dm, args, NULL);
+        libxl__exec(gc, null, logfile_w, logfile_w, dm, args, envs);
     }
 
     rc = 0;
@@ -1475,10 +1829,11 @@ static void device_model_confirm(libxl__egc *egc, libxl__spawn_state *spawn,
 }
 
 static void device_model_startup_failed(libxl__egc *egc,
-                                        libxl__spawn_state *spawn)
+                                        libxl__spawn_state *spawn,
+                                        int rc)
 {
     libxl__dm_spawn_state *dmss = CONTAINER_OF(spawn, *dmss, spawn);
-    device_model_spawn_outcome(egc, dmss, ERROR_FAIL);
+    device_model_spawn_outcome(egc, dmss, rc);
 }
 
 static void device_model_detached(libxl__egc *egc,
@@ -1520,7 +1875,7 @@ void libxl__spawn_qdisk_backend(libxl__egc *egc, libxl__dm_spawn_state *dmss)
     flexarray_t *dm_args;
     char **args;
     const char *dm;
-    int logfile_w, null, rc;
+    int logfile_w, null = -1, rc;
     uint32_t domid = dmss->guest_domid;
 
     /* Always use qemu-xen as device model */
@@ -1546,6 +1901,10 @@ void libxl__spawn_qdisk_backend(libxl__egc *egc, libxl__dm_spawn_state *dmss)
         goto error;
     }
     null = open("/dev/null", O_RDONLY);
+    if (null < 0) {
+       rc = ERROR_FAIL;
+       goto error;
+    }
 
     dmss->guest_config = NULL;
     /*
@@ -1580,6 +1939,8 @@ void libxl__spawn_qdisk_backend(libxl__egc *egc, libxl__dm_spawn_state *dmss)
 
 error:
     assert(rc);
+    if (logfile_w >= 0) close(logfile_w);
+    if (null >= 0) close(null);
     dmss->callback(egc, dmss, rc);
     return;
 }
@@ -1637,6 +1998,11 @@ out:
 
 int libxl__destroy_device_model(libxl__gc *gc, uint32_t domid)
 {
+    char *path = libxl__device_model_xs_path(gc, LIBXL_TOOLSTACK_DOMID,
+                                             domid, "");
+    if (!xs_rm(CTX->xsh, XBT_NULL, path))
+        LOG(ERROR, "xs_rm failed for %s", path);
+    /* We should try to destroy the device model anyway. */
     return kill_device_model(gc,
                 GCSPRINTF("/local/domain/%d/image/device-model-pid", domid));
 }

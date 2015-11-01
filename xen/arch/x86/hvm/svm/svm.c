@@ -13,8 +13,7 @@
  * more details.
  *
  * You should have received a copy of the GNU General Public License along with
- * this program; if not, write to the Free Software Foundation, Inc., 59 Temple
- * Place - Suite 330, Boston, MA 02111-1307 USA.
+ * this program; If not, see <http://www.gnu.org/licenses/>.
  */
 
 #include <xen/config.h>
@@ -36,12 +35,11 @@
 #include <asm/cpufeature.h>
 #include <asm/processor.h>
 #include <asm/amd.h>
-#include <asm/types.h>
+#include <asm/guest_access.h>
 #include <asm/debugreg.h>
 #include <asm/msr.h>
 #include <asm/i387.h>
 #include <asm/iocap.h>
-#include <asm/spinlock.h>
 #include <asm/hvm/emulate.h>
 #include <asm/hvm/hvm.h>
 #include <asm/hvm/support.h>
@@ -106,7 +104,7 @@ void __update_guest_eip(struct cpu_user_regs *regs, unsigned int inst_len)
     if ( unlikely(inst_len == 0) )
         return;
 
-    if ( unlikely(inst_len > 15) )
+    if ( unlikely(inst_len > MAX_INST_LEN) )
     {
         gdprintk(XENLOG_ERR, "Bad instruction length %u\n", inst_len);
         svm_crash_or_fault(curr);
@@ -805,7 +803,7 @@ static void svm_set_tsc_offset(struct vcpu *v, u64 offset, u64 at_tsc)
         if ( at_tsc )
             host_tsc = at_tsc;
         else
-            rdtscll(host_tsc);
+            host_tsc = rdtsc();
         offset = svm_get_tsc_offset(host_tsc, guest_tsc, vcpu_tsc_ratio(v));
     }
 
@@ -859,7 +857,7 @@ static unsigned int svm_get_insn_bytes(struct vcpu *v, uint8_t *buf)
     if ( len != 0 )
     {
         /* Latch and clear the cached instruction. */
-        memcpy(buf, vmcb->guest_ins, 15);
+        memcpy(buf, vmcb->guest_ins, MAX_INST_LEN);
         v->arch.hvm_svm.cached_insn_len = 0;
     }
 
@@ -1166,7 +1164,9 @@ static int svm_vcpu_initialise(struct vcpu *v)
         return rc;
     }
 
-    vpmu_initialise(v);
+    /* PVH's VPMU is initialized via hypercall */
+    if ( is_hvm_vcpu(v) )
+        vpmu_initialise(v);
 
     svm_guest_osvw_init(v);
 
@@ -1707,7 +1707,8 @@ static int svm_msr_read_intercept(unsigned int msr, uint64_t *msr_content)
     case MSR_AMD_FAM15H_EVNTSEL3:
     case MSR_AMD_FAM15H_EVNTSEL4:
     case MSR_AMD_FAM15H_EVNTSEL5:
-        vpmu_do_rdmsr(msr, msr_content);
+        if ( vpmu_do_rdmsr(msr, msr_content) )
+            goto gpf;
         break;
 
     case MSR_AMD64_DR0_ADDRESS_MASK:
@@ -1858,7 +1859,8 @@ static int svm_msr_write_intercept(unsigned int msr, uint64_t msr_content)
     case MSR_AMD_FAM15H_EVNTSEL3:
     case MSR_AMD_FAM15H_EVNTSEL4:
     case MSR_AMD_FAM15H_EVNTSEL5:
-        vpmu_do_wrmsr(msr, msr_content, 0);
+        if ( vpmu_do_wrmsr(msr, msr_content, 0) )
+            goto gpf;
         break;
 
     case MSR_IA32_MCx_MISC(4): /* Threshold register */
@@ -1946,7 +1948,7 @@ static void svm_do_msr_access(struct cpu_user_regs *regs)
         if ( (inst_len = __get_instruction_length(v, INSTR_WRMSR)) == 0 )
             return;
         msr_content = ((uint64_t)regs->edx << 32) | (uint32_t)regs->eax;
-        rc = hvm_msr_write_intercept(regs->ecx, msr_content);
+        rc = hvm_msr_write_intercept(regs->ecx, msr_content, 1);
     }
 
     if ( rc == X86EMUL_OKAY )
@@ -1989,7 +1991,7 @@ static void svm_vmexit_do_pause(struct cpu_user_regs *regs)
      * Do something useful, like reschedule the guest
      */
     perfc_incr(pauseloop_exits);
-    do_sched_op_compat(SCHEDOP_yield, 0);
+    do_sched_op(SCHEDOP_yield, guest_handle_from_ptr(NULL, void));
 }
 
 static void
@@ -2275,12 +2277,8 @@ static struct hvm_function_table __initdata svm_function_table = {
     .nhvm_vcpu_initialise = nsvm_vcpu_initialise,
     .nhvm_vcpu_destroy = nsvm_vcpu_destroy,
     .nhvm_vcpu_reset = nsvm_vcpu_reset,
-    .nhvm_vcpu_hostrestore = nsvm_vcpu_hostrestore,
-    .nhvm_vcpu_vmexit = nsvm_vcpu_vmexit_inject,
     .nhvm_vcpu_vmexit_trap = nsvm_vcpu_vmexit_trap,
-    .nhvm_vcpu_guestcr3 = nsvm_vcpu_guestcr3,
     .nhvm_vcpu_p2m_base = nsvm_vcpu_hostcr3,
-    .nhvm_vcpu_asid = nsvm_vcpu_asid,
     .nhvm_vmcx_guest_intercepts_trap = nsvm_vmcb_guest_intercepts_trap,
     .nhvm_vmcx_hap_enabled = nsvm_vmcb_hap_enabled,
     .nhvm_intr_blocked = nsvm_intr_blocked,
@@ -2378,6 +2376,7 @@ void svm_vmexit_handler(struct cpu_user_regs *regs)
             case NESTEDHVM_VMEXIT_ERROR:
                 break;
             }
+            /* fallthrough */
         case NESTEDHVM_VMEXIT_ERROR:
             gdprintk(XENLOG_ERR,
                 "nestedsvm_check_intercepts() returned NESTEDHVM_VMEXIT_ERROR\n");

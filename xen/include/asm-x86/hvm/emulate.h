@@ -32,13 +32,21 @@ struct hvm_emulate_ctxt {
     struct hvm_trap trap;
 
     uint32_t intr_shadow;
+
+    bool_t set_context;
+};
+
+enum emul_kind {
+    EMUL_KIND_NORMAL,
+    EMUL_KIND_NOWRITE,
+    EMUL_KIND_SET_CONTEXT
 };
 
 int hvm_emulate_one(
     struct hvm_emulate_ctxt *hvmemul_ctxt);
 int hvm_emulate_one_no_write(
     struct hvm_emulate_ctxt *hvmemul_ctxt);
-void hvm_mem_event_emulate_one(bool_t nowrite,
+void hvm_mem_access_emulate_one(enum emul_kind kind,
     unsigned int trapnr,
     unsigned int errcode);
 void hvm_emulate_prepare(
@@ -50,11 +58,22 @@ struct segment_register *hvmemul_get_seg_reg(
     enum x86_segment seg,
     struct hvm_emulate_ctxt *hvmemul_ctxt);
 
-int hvmemul_do_pio(
-    unsigned long port, unsigned long *reps, int size,
-    paddr_t ram_gpa, int dir, int df, void *p_data);
+int hvmemul_do_pio_buffer(uint16_t port,
+                          unsigned int size,
+                          uint8_t dir,
+                          void *buffer);
 
 void hvm_dump_emulation_state(const char *prefix,
                               struct hvm_emulate_ctxt *hvmemul_ctxt);
 
 #endif /* __ASM_X86_HVM_EMULATE_H__ */
+
+/*
+ * Local variables:
+ * mode: C
+ * c-file-style: "BSD"
+ * c-basic-offset: 4
+ * tab-width: 4
+ * indent-tabs-mode: nil
+ * End:
+ */

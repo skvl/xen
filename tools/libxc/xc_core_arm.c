@@ -10,8 +10,7 @@
  * Lesser General Public License for more details.
  *
  * You should have received a copy of the GNU Lesser General Public
- * License along with this library; if not, write to the Free Software
- * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301  USA
+ * License along with this library; If not, see <http://www.gnu.org/licenses/>.
  *
  * Copyright (c) 2011 Citrix Systems
  *
@@ -30,12 +29,6 @@ xc_core_arch_gpfn_may_present(struct xc_core_arch_context *arch_ctxt,
     return 0;
 }
 
-
-static int nr_gpfns(xc_interface *xch, domid_t domid)
-{
-    return xc_domain_maximum_gpfn(xch, domid) + 1;
-}
-
 int
 xc_core_arch_auto_translated_physmap(const xc_dominfo_t *info)
 {
@@ -48,8 +41,11 @@ xc_core_arch_memory_map_get(xc_interface *xch, struct xc_core_arch_context *unus
                             xc_core_memory_map_t **mapp,
                             unsigned int *nr_entries)
 {
-    unsigned long p2m_size = nr_gpfns(xch, info->domid);
+    xen_pfn_t p2m_size = 0;
     xc_core_memory_map_t *map;
+
+    if ( xc_domain_nr_gpfns(xch, info->domid, &p2m_size) < 0 )
+        return -1;
 
     map = malloc(sizeof(*map));
     if ( map == NULL )

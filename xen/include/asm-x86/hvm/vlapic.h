@@ -14,8 +14,7 @@
  * more details.
  *
  * You should have received a copy of the GNU General Public License along with
- * this program; if not, write to the Free Software Foundation, Inc., 59 Temple
- * Place - Suite 330, Boston, MA 02111-1307 USA.
+ * this program; If not, see <http://www.gnu.org/licenses/>.
  */
 
 #ifndef __ASM_X86_HVM_VLAPIC_H__
@@ -127,7 +126,7 @@ uint32_t vlapic_set_ppr(struct vlapic *vlapic);
 void vlapic_adjust_i8259_target(struct domain *d);
 
 void vlapic_EOI_set(struct vlapic *vlapic);
-void vlapic_handle_EOI_induced_exit(struct vlapic *vlapic, int vector);
+void vlapic_handle_EOI(struct vlapic *vlapic, u8 vector);
 
 void vlapic_ipi(struct vlapic *vlapic, uint32_t icr_low, uint32_t icr_high);
 

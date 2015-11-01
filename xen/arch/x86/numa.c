@@ -16,6 +16,7 @@
 #include <xen/pfn.h>
 #include <asm/acpi.h>
 #include <xen/sched.h>
+#include <xen/softirq.h>
 
 static int numa_setup(char *s);
 custom_param("numa", numa_setup);
@@ -35,13 +36,13 @@ static typeof(*memnodemap) _memnodemap[64];
 unsigned long memnodemapsize;
 u8 *memnodemap;
 
-unsigned char cpu_to_node[NR_CPUS] __read_mostly = {
+nodeid_t cpu_to_node[NR_CPUS] __read_mostly = {
     [0 ... NR_CPUS-1] = NUMA_NO_NODE
 };
 /*
  * Keep BIOS's CPU2node information, should not be used for memory allocaion
  */
-unsigned char apicid_to_node[MAX_LOCAL_APIC] __cpuinitdata = {
+nodeid_t apicid_to_node[MAX_LOCAL_APIC] __cpuinitdata = {
     [0 ... MAX_LOCAL_APIC-1] = NUMA_NO_NODE
 };
 cpumask_t node_to_cpumask[MAX_NUMNODES] __read_mostly;
@@ -65,7 +66,7 @@ int srat_disabled(void)
  * -1 if node overlap or lost ram (shift too big)
  */
 static int __init populate_memnodemap(const struct node *nodes,
-                                      int numnodes, int shift, int *nodeids)
+                                      int numnodes, int shift, nodeid_t *nodeids)
 {
     unsigned long spdx, epdx;
     int i, res = -1;
@@ -150,7 +151,7 @@ static int __init extract_lsb_from_nodes(const struct node *nodes,
 }
 
 int __init compute_hash_shift(struct node *nodes, int numnodes,
-                              int *nodeids)
+                              nodeid_t *nodeids)
 {
     int shift;
 
@@ -172,7 +173,7 @@ int __init compute_hash_shift(struct node *nodes, int numnodes,
     return shift;
 }
 /* initialize NODE_DATA given nodeid and start/end */
-void __init setup_node_bootmem(int nodeid, u64 start, u64 end)
+void __init setup_node_bootmem(nodeid_t nodeid, u64 start, u64 end)
 { 
     unsigned long start_pfn, end_pfn;
 
@@ -294,7 +295,7 @@ __cpuinit void numa_add_cpu(int cpu)
     cpumask_set_cpu(cpu, &node_to_cpumask[cpu_to_node(cpu)]);
 } 
 
-void __cpuinit numa_set_node(int cpu, int node)
+void __cpuinit numa_set_node(int cpu, nodeid_t node)
 {
     cpu_to_node[cpu] = node;
 }
@@ -340,7 +341,8 @@ static __init int numa_setup(char *opt)
  */
 void __init init_cpu_to_node(void)
 {
-    int i, node;
+    unsigned int i;
+    nodeid_t node;
 
     for ( i = 0; i < nr_cpu_ids; i++ )
     {
@@ -363,10 +365,12 @@ EXPORT_SYMBOL(node_data);
 static void dump_numa(unsigned char key)
 {
     s_time_t now = NOW();
-    int i;
+    unsigned int i, j;
+    int err;
     struct domain *d;
     struct page_info *page;
     unsigned int page_num_node[MAX_NUMNODES];
+    const struct vnuma_info *vnuma;
 
     printk("'%c' pressed -> dumping numa info (now-0x%X:%08X)\n", key,
            (u32)(now>>32), (u32)now);
@@ -393,6 +397,8 @@ static void dump_numa(unsigned char key)
     printk("Memory location of each domain:\n");
     for_each_domain ( d )
     {
+        process_pending_softirqs();
+
         printk("Domain %u (total: %u):\n", d->domain_id, d->tot_pages);
 
         for_each_online_node ( i )
@@ -408,6 +414,70 @@ static void dump_numa(unsigned char key)
 
         for_each_online_node ( i )
             printk("    Node %u: %u\n", i, page_num_node[i]);
+
+        if ( !read_trylock(&d->vnuma_rwlock) )
+            continue;
+
+        if ( !d->vnuma )
+        {
+            read_unlock(&d->vnuma_rwlock);
+            continue;
+        }
+
+        vnuma = d->vnuma;
+        printk("     %u vnodes, %u vcpus, guest physical layout:\n",
+               vnuma->nr_vnodes, d->max_vcpus);
+        for ( i = 0; i < vnuma->nr_vnodes; i++ )
+        {
+            unsigned int start_cpu = ~0U;
+
+            err = snprintf(keyhandler_scratch, 12, "%3u",
+                    vnuma->vnode_to_pnode[i]);
+            if ( err < 0 || vnuma->vnode_to_pnode[i] == NUMA_NO_NODE )
+                strlcpy(keyhandler_scratch, "???", sizeof(keyhandler_scratch));
+
+            printk("       %3u: pnode %s,", i, keyhandler_scratch);
+
+            printk(" vcpus ");
+
+            for ( j = 0; j < d->max_vcpus; j++ )
+            {
+                if ( !(j & 0x3f) )
+                    process_pending_softirqs();
+
+                if ( vnuma->vcpu_to_vnode[j] == i )
+                {
+                    if ( start_cpu == ~0U )
+                    {
+                        printk("%d", j);
+                        start_cpu = j;
+                    }
+                }
+                else if ( start_cpu != ~0U )
+                {
+                    if ( j - 1 != start_cpu )
+                        printk("-%d ", j - 1);
+                    else
+                        printk(" ");
+                    start_cpu = ~0U;
+                }
+            }
+
+            if ( start_cpu != ~0U  && start_cpu != j - 1 )
+                printk("-%d", j - 1);
+
+            printk("\n");
+
+            for ( j = 0; j < vnuma->nr_vmemranges; j++ )
+            {
+                if ( vnuma->vmemrange[j].nid == i )
+                    printk("           %016"PRIx64" - %016"PRIx64"\n",
+                           vnuma->vmemrange[j].start,
+                           vnuma->vmemrange[j].end);
+            }
+        }
+
+        read_unlock(&d->vnuma_rwlock);
     }
 
     rcu_read_unlock(&domlist_read_lock);

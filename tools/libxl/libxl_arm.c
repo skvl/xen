@@ -1,5 +1,6 @@
 #include "libxl_internal.h"
 #include "libxl_arch.h"
+#include "libxl_libfdt_compat.h"
 
 #include <xc_dom.h>
 #include <stdbool.h>
@@ -35,6 +36,69 @@ static const char *gicv_to_string(uint8_t gic_version)
     }
 }
 
+int libxl__arch_domain_prepare_config(libxl__gc *gc,
+                                      libxl_domain_config *d_config,
+                                      xc_domain_configuration_t *xc_config)
+{
+    uint32_t nr_spis = 0;
+    unsigned int i;
+
+    for (i = 0; i < d_config->b_info.num_irqs; i++) {
+        uint32_t irq = d_config->b_info.irqs[i];
+        uint32_t spi;
+
+        if (irq < 32)
+            continue;
+
+        spi = irq - 32;
+
+        if (nr_spis <= spi)
+            nr_spis = spi + 1;
+    }
+
+    LOG(DEBUG, "Configure the domain");
+
+    xc_config->nr_spis = nr_spis;
+    LOG(DEBUG, " - Allocate %u SPIs", nr_spis);
+
+    switch (d_config->b_info.arch_arm.gic_version) {
+    case LIBXL_GIC_VERSION_DEFAULT:
+        xc_config->gic_version = XEN_DOMCTL_CONFIG_GIC_NATIVE;
+        break;
+    case LIBXL_GIC_VERSION_V2:
+        xc_config->gic_version = XEN_DOMCTL_CONFIG_GIC_V2;
+        break;
+    case LIBXL_GIC_VERSION_V3:
+        xc_config->gic_version = XEN_DOMCTL_CONFIG_GIC_V3;
+        break;
+    default:
+        LOG(ERROR, "Unknown GIC version %d",
+            d_config->b_info.arch_arm.gic_version);
+        return ERROR_FAIL;
+    }
+
+    return 0;
+}
+
+int libxl__arch_domain_save_config(libxl__gc *gc,
+                                   libxl_domain_config *d_config,
+                                   const xc_domain_configuration_t *xc_config)
+{
+    switch (xc_config->gic_version) {
+    case XEN_DOMCTL_CONFIG_GIC_V2:
+        d_config->b_info.arch_arm.gic_version = LIBXL_GIC_VERSION_V2;
+        break;
+    case XEN_DOMCTL_CONFIG_GIC_V3:
+        d_config->b_info.arch_arm.gic_version = LIBXL_GIC_VERSION_V3;
+        break;
+    default:
+        LOG(ERROR, "Unexpected gic version %u", xc_config->gic_version);
+        return ERROR_FAIL;
+    }
+
+    return 0;
+}
+
 int libxl__arch_domain_create(libxl__gc *gc, libxl_domain_config *d_config,
                               uint32_t domid)
 {
@@ -50,10 +114,11 @@ static struct arch_info {
     {"xen-3.0-aarch64", "arm,armv8-timer", "arm,armv8" },
 };
 
-enum {
-    PHANDLE_NONE = 0,
-    PHANDLE_GIC,
-};
+/*
+ * The device tree compiler (DTC) is allocating the phandle from 1 to
+ * onwards. Reserve a high value for the GIC phandle.
+ */
+#define PHANDLE_GIC (65000)
 
 typedef uint32_t be32;
 typedef be32 gic_interrupt[3];
@@ -195,6 +260,7 @@ static int make_root_properties(libxl__gc *gc,
 }
 
 static int make_chosen_node(libxl__gc *gc, void *fdt, bool ramdisk,
+                            libxl__domain_build_state *state,
                             const libxl_domain_build_info *info)
 {
     int res;
@@ -203,8 +269,9 @@ static int make_chosen_node(libxl__gc *gc, void *fdt, bool ramdisk,
     res = fdt_begin_node(fdt, "chosen");
     if (res) return res;
 
-    if (info->cmdline) {
-        res = fdt_property_string(fdt, "bootargs", info->cmdline);
+    if (state->pv_cmdline) {
+        LOG(DEBUG, "/chosen/bootargs = %s", state->pv_cmdline);
+        res = fdt_property_string(fdt, "bootargs", state->pv_cmdline);
         if (res) return res;
     }
 
@@ -227,6 +294,7 @@ static int make_cpus_node(libxl__gc *gc, void *fdt, int nr_cpus,
                           const struct arch_info *ainfo)
 {
     int res, i;
+    uint64_t mpidr_aff;
 
     res = fdt_begin_node(fdt, "cpus");
     if (res) return res;
@@ -238,7 +306,16 @@ static int make_cpus_node(libxl__gc *gc, void *fdt, int nr_cpus,
     if (res) return res;
 
     for (i = 0; i < nr_cpus; i++) {
-        const char *name = GCSPRINTF("cpu@%d", i);
+        const char *name;
+
+        /*
+         * According to ARM CPUs bindings, the reg field should match
+         * the MPIDR's affinity bits. We will use AFF0 and AFF1 when
+         * constructing the reg value of the guest at the moment, for it
+         * is enough for the current max vcpu number.
+         */
+        mpidr_aff = (i & 0x0f) | (((i >> 4) & 0xff) << 8);
+        name = GCSPRINTF("cpu@%"PRIx64, mpidr_aff);
 
         res = fdt_begin_node(fdt, name);
         if (res) return res;
@@ -252,7 +329,7 @@ static int make_cpus_node(libxl__gc *gc, void *fdt, int nr_cpus,
         res = fdt_property_string(fdt, "enable-method", "psci");
         if (res) return res;
 
-        res = fdt_property_regs(gc, fdt, 1, 0, 1, (uint64_t)i);
+        res = fdt_property_regs(gc, fdt, 1, 0, 1, mpidr_aff);
         if (res) return res;
 
         res = fdt_end_node(fdt);
@@ -412,7 +489,9 @@ static int make_gicv3_node(libxl__gc *gc, void *fdt)
     return 0;
 }
 
-static int make_timer_node(libxl__gc *gc, void *fdt, const struct arch_info *ainfo)
+static int make_timer_node(libxl__gc *gc, void *fdt,
+                           const struct arch_info *ainfo,
+                           uint32_t frequency)
 {
     int res;
     gic_interrupt ints[3];
@@ -429,6 +508,9 @@ static int make_timer_node(libxl__gc *gc, void *fdt, const struct arch_info *ain
 
     res = fdt_property_interrupts(gc, fdt, ints, 3);
     if (res) return res;
+
+    if ( frequency )
+        fdt_property_u32(fdt, "clock-frequency", frequency);
 
     res = fdt_end_node(fdt);
     if (res) return res;
@@ -484,7 +566,7 @@ static const struct arch_info *get_arch_info(libxl__gc *gc,
         if (!strcmp(dom->guest_type, info->guest_type))
             return info;
     }
-    LOG(ERROR, "Unable to find arch FDT info for %s\n", dom->guest_type);
+    LOG(ERROR, "Unable to find arch FDT info for %s", dom->guest_type);
     return NULL;
 }
 
@@ -512,19 +594,175 @@ out:
     }
 }
 
+#ifdef ENABLE_PARTIAL_DEVICE_TREE
+
+static int check_partial_fdt(libxl__gc *gc, void *fdt, size_t size)
+{
+    int r;
+
+    if (fdt_magic(fdt) != FDT_MAGIC) {
+        LOG(ERROR, "Partial FDT is not a valid Flat Device Tree");
+        return ERROR_FAIL;
+    }
+
+    r = fdt_check_header(fdt);
+    if (r) {
+        LOG(ERROR, "Failed to check the partial FDT (%d)", r);
+        return ERROR_FAIL;
+    }
+
+    if (fdt_totalsize(fdt) > size) {
+        LOG(ERROR, "Partial FDT totalsize is too big");
+        return ERROR_FAIL;
+    }
+
+    return 0;
+}
+
+static int copy_properties(libxl__gc *gc, void *fdt, void *pfdt,
+                           int nodeoff)
+{
+    int propoff, nameoff, r;
+    const struct fdt_property *prop;
+
+    for (propoff = fdt_first_property_offset(pfdt, nodeoff);
+         propoff >= 0;
+         propoff = fdt_next_property_offset(pfdt, propoff)) {
+
+        if (!(prop = fdt_get_property_by_offset(pfdt, propoff, NULL))) {
+            return -FDT_ERR_INTERNAL;
+        }
+
+        nameoff = fdt32_to_cpu(prop->nameoff);
+        r = fdt_property(fdt, fdt_string(pfdt, nameoff),
+                         prop->data, fdt32_to_cpu(prop->len));
+        if (r) return r;
+    }
+
+    /* FDT_ERR_NOTFOUND => There is no more properties for this node */
+    return (propoff != -FDT_ERR_NOTFOUND)? propoff : 0;
+}
+
+/* Copy a node from the partial device tree to the guest device tree */
+static int copy_node(libxl__gc *gc, void *fdt, void *pfdt,
+                     int nodeoff, int depth)
+{
+    int r;
+
+    r = fdt_begin_node(fdt, fdt_get_name(pfdt, nodeoff, NULL));
+    if (r) return r;
+
+    r = copy_properties(gc, fdt, pfdt, nodeoff);
+    if (r) return r;
+
+    for (nodeoff = fdt_first_subnode(pfdt, nodeoff);
+         nodeoff >= 0;
+         nodeoff = fdt_next_subnode(pfdt, nodeoff)) {
+        r = copy_node(gc, fdt, pfdt, nodeoff, depth + 1);
+        if (r) return r;
+    }
+
+    if (nodeoff != -FDT_ERR_NOTFOUND)
+        return nodeoff;
+
+    r = fdt_end_node(fdt);
+    if (r) return r;
+
+    return 0;
+}
+
+static int copy_node_by_path(libxl__gc *gc, const char *path,
+                             void *fdt, void *pfdt)
+{
+    int nodeoff, r;
+    const char *name = strrchr(path, '/');
+
+    if (!name)
+        return -FDT_ERR_INTERNAL;
+
+    name++;
+
+    /*
+     * The FDT function to look at a node doesn't take into account the
+     * unit (i.e anything after @) when search by name. Check if the
+     * name exactly matches.
+     */
+    nodeoff = fdt_path_offset(pfdt, path);
+    if (nodeoff < 0)
+        return nodeoff;
+
+    if (strcmp(fdt_get_name(pfdt, nodeoff, NULL), name))
+        return -FDT_ERR_NOTFOUND;
+
+    r = copy_node(gc, fdt, pfdt, nodeoff, 0);
+    if (r) return r;
+
+    return 0;
+}
+
+/*
+ * The partial device tree is not copied entirely. Only the relevant bits are
+ * copied to the guest device tree:
+ *  - /passthrough node
+ *  - /aliases node
+ */
+static int copy_partial_fdt(libxl__gc *gc, void *fdt, void *pfdt)
+{
+    int r;
+
+    r = copy_node_by_path(gc, "/passthrough", fdt, pfdt);
+    if (r < 0) {
+        LOG(ERROR, "Can't copy the node \"/passthrough\" from the partial FDT");
+        return r;
+    }
+
+    r = copy_node_by_path(gc, "/aliases", fdt, pfdt);
+    if (r < 0 && r != -FDT_ERR_NOTFOUND) {
+        LOG(ERROR, "Can't copy the node \"/aliases\" from the partial FDT");
+        return r;
+    }
+
+    return 0;
+}
+
+#else
+
+static int check_partial_fdt(libxl__gc *gc, void *fdt, size_t size)
+{
+    LOG(ERROR, "partial device tree not supported");
+
+    return ERROR_FAIL;
+}
+
+static int copy_partial_fdt(libxl__gc *gc, void *fdt, void *pfdt)
+{
+    /*
+     * We should never be here when the partial device tree is not
+     * supported.
+     * */
+    return -FDT_ERR_INTERNAL;
+}
+
+#endif /* ENABLE_PARTIAL_DEVICE_TREE */
+
 #define FDT_MAX_SIZE (1<<20)
 
 int libxl__arch_domain_init_hw_description(libxl__gc *gc,
                                            libxl_domain_build_info *info,
+                                           libxl__domain_build_state *state,
                                            struct xc_dom_image *dom)
 {
-    xc_domain_configuration_t config;
     void *fdt = NULL;
+    void *pfdt = NULL;
     int rc, res;
     size_t fdt_size = 0;
+    int pfdt_size = 0;
 
     const libxl_version_info *vers;
     const struct arch_info *ainfo;
+
+    /* convenience aliases */
+    xc_domain_configuration_t *xc_config = &state->config;
 
     assert(info->type == LIBXL_DOMAIN_TYPE_PV);
 
@@ -534,19 +772,28 @@ int libxl__arch_domain_init_hw_description(libxl__gc *gc,
     ainfo = get_arch_info(gc, dom);
     if (ainfo == NULL) return ERROR_FAIL;
 
-    LOG(DEBUG, "configure the domain");
-    config.gic_version = XEN_DOMCTL_CONFIG_GIC_DEFAULT;
-    if (xc_domain_configure(CTX->xch, dom->guest_domid, &config) != 0) {
-        LOG(ERROR, "couldn't configure the domain");
-        return ERROR_FAIL;
-    }
-
     LOG(DEBUG, "constructing DTB for Xen version %d.%d guest",
         vers->xen_version_major, vers->xen_version_minor);
-    LOG(DEBUG, "  - vGIC version: %s", gicv_to_string(config.gic_version));
+    LOG(DEBUG, " - vGIC version: %s", gicv_to_string(xc_config->gic_version));
+
+    if (info->device_tree) {
+        LOG(DEBUG, " - Partial device tree provided: %s", info->device_tree);
+
+        rc = libxl_read_file_contents(CTX, info->device_tree,
+                                      &pfdt, &pfdt_size);
+        if (rc) {
+            LOGEV(ERROR, rc, "failed to read the partial device file %s",
+                  info->device_tree);
+            return ERROR_FAIL;
+        }
+        libxl__ptr_add(gc, pfdt);
+
+        if (check_partial_fdt(gc, pfdt, pfdt_size))
+            return ERROR_FAIL;
+    }
 
 /*
- * Call "call" handling FDR_ERR_*. Will either:
+ * Call "call" handling FDT_ERR_*. Will either:
  * - loop back to retry_resize
  * - set rc and goto out
  * - fall through successfully
@@ -586,13 +833,13 @@ next_resize:
         FDT( fdt_begin_node(fdt, "") );
 
         FDT( make_root_properties(gc, vers, fdt) );
-        FDT( make_chosen_node(gc, fdt, !!dom->ramdisk_blob, info) );
+        FDT( make_chosen_node(gc, fdt, !!dom->ramdisk_blob, state, info) );
         FDT( make_cpus_node(gc, fdt, info->max_vcpus, ainfo) );
         FDT( make_psci_node(gc, fdt) );
 
         FDT( make_memory_nodes(gc, fdt, dom) );
 
-        switch (config.gic_version) {
+        switch (xc_config->gic_version) {
         case XEN_DOMCTL_CONFIG_GIC_V2:
             FDT( make_gicv2_node(gc, fdt,
                                  GUEST_GICD_BASE, GUEST_GICD_SIZE,
@@ -602,13 +849,17 @@ next_resize:
             FDT( make_gicv3_node(gc, fdt) );
             break;
         default:
-            LOG(ERROR, "Unknown GIC version %d", config.gic_version);
+            LOG(ERROR, "Unknown GIC version %s",
+                gicv_to_string(xc_config->gic_version));
             rc = ERROR_FAIL;
             goto out;
         }
 
-        FDT( make_timer_node(gc, fdt, ainfo) );
+        FDT( make_timer_node(gc, fdt, ainfo, xc_config->clock_frequency) );
         FDT( make_hypervisor_node(gc, fdt, vers) );
+
+        if (pfdt)
+            FDT( copy_partial_fdt(gc, fdt, pfdt) );
 
         FDT( fdt_end_node(fdt) );
 
@@ -706,3 +957,32 @@ int libxl__arch_domain_finalise_hw_description(libxl__gc *gc,
 
     return 0;
 }
+
+int libxl__arch_vnuma_build_vmemrange(libxl__gc *gc,
+                                      uint32_t domid,
+                                      libxl_domain_build_info *info,
+                                      libxl__domain_build_state *state)
+{
+    return libxl__vnuma_build_vmemrange_pv_generic(gc, domid, info, state);
+}
+
+int libxl__arch_domain_map_irq(libxl__gc *gc, uint32_t domid, int irq)
+{
+    return xc_domain_bind_pt_spi_irq(CTX->xch, domid, irq, irq);
+}
+
+int libxl__arch_domain_construct_memmap(libxl__gc *gc,
+                                        libxl_domain_config *d_config,
+                                        uint32_t domid,
+                                        struct xc_hvm_build_args *args)
+{
+    return 0;
+}
+
+/*
+ * Local variables:
+ * mode: C
+ * c-basic-offset: 4
+ * indent-tabs-mode: nil
+ * End:
+ */

@@ -10,8 +10,7 @@
  * Lesser General Public License for more details.
  *
  * You should have received a copy of the GNU Lesser General Public
- * License along with this library; if not, write to the Free Software
- * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301  USA
+ * License along with this library; If not, see <http://www.gnu.org/licenses/>.
  *
  * Copyright (c) 2007 Isaku Yamahata <yamahata at valinux co jp>
  *                    VA Linux Systems Japan K.K.
@@ -35,12 +34,6 @@ xc_core_arch_gpfn_may_present(struct xc_core_arch_context *arch_ctxt,
     return 1;
 }
 
-
-static int nr_gpfns(xc_interface *xch, domid_t domid)
-{
-    return xc_domain_maximum_gpfn(xch, domid) + 1;
-}
-
 int
 xc_core_arch_auto_translated_physmap(const xc_dominfo_t *info)
 {
@@ -53,8 +46,11 @@ xc_core_arch_memory_map_get(xc_interface *xch, struct xc_core_arch_context *unus
                             xc_core_memory_map_t **mapp,
                             unsigned int *nr_entries)
 {
-    unsigned long p2m_size = nr_gpfns(xch, info->domid);
+    xen_pfn_t p2m_size = 0;
     xc_core_memory_map_t *map;
+
+    if ( xc_domain_nr_gpfns(xch, info->domid, &p2m_size) < 0 )
+        return -1;
 
     map = malloc(sizeof(*map));
     if ( map == NULL )
@@ -88,7 +84,12 @@ xc_core_arch_map_p2m_rw(xc_interface *xch, struct domain_info_context *dinfo, xc
     int err;
     int i;
 
-    dinfo->p2m_size = nr_gpfns(xch, info->domid);
+    if ( xc_domain_nr_gpfns(xch, info->domid, &dinfo->p2m_size) < 0 )
+    {
+        ERROR("Could not get maximum GPFN!");
+        goto out;
+    }
+
     if ( dinfo->p2m_size < info->nr_pages  )
     {
         ERROR("p2m_size < nr_pages -1 (%lx < %lx", dinfo->p2m_size, info->nr_pages - 1);
@@ -210,16 +211,7 @@ int
 xc_core_arch_get_scratch_gpfn(xc_interface *xch, domid_t domid,
                               xen_pfn_t *gpfn)
 {
-    int rc;
-
-    rc = xc_domain_maximum_gpfn(xch, domid);
-
-    if ( rc < 0 )
-        return rc;
-
-    *gpfn = (xen_pfn_t)rc + 1;
-
-    return 0;
+    return xc_domain_nr_gpfns(xch, domid, gpfn);
 }
 
 /*

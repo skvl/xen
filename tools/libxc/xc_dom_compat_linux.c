@@ -16,8 +16,7 @@
  * Lesser General Public License for more details.
  *
  * You should have received a copy of the GNU Lesser General Public
- * License along with this library; if not, write to the Free Software
- * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301  USA
+ * License along with this library; If not, see <http://www.gnu.org/licenses/>.
  *
  * written 2006 by Gerd Hoffmann <kraxel@suse.de>.
  *
@@ -91,6 +90,8 @@ int xc_linux_build_mem(xc_interface *xch, uint32_t domid,
 
     xc_dom_loginit(xch);
     dom = xc_dom_allocate(xch, cmdline, features);
+    if (dom == NULL)
+        return -1;
     if ( (rc = xc_dom_kernel_mem(dom, image_buffer, image_size)) != 0 )
         goto out;
     if ( initrd && ((rc = xc_dom_ramdisk_mem(dom, initrd, initrd_len)) != 0) )
@@ -123,6 +124,8 @@ int xc_linux_build(xc_interface *xch, uint32_t domid,
 
     xc_dom_loginit(xch);
     dom = xc_dom_allocate(xch, cmdline, features);
+    if (dom == NULL)
+        return -1;
     if ( (rc = xc_dom_kernel_file(dom, image_name)) != 0 )
         goto out;
     if ( initrd_name && strlen(initrd_name) &&
@@ -146,6 +149,8 @@ int xc_get_bit_size(xc_interface *xch,
     int rc;
     *bit_size = 0;
     dom = xc_dom_allocate(xch, cmdline, features);
+    if (dom == NULL)
+        return -1;
     if ( (rc = xc_dom_kernel_file(dom, image_name)) != 0 )
         goto out;
     if ( (rc = xc_dom_parse_image(dom)) != 0 )

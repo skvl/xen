@@ -18,8 +18,7 @@
  * Lesser General Public License for more details.
  *
  * You should have received a copy of the GNU Lesser General Public
- * License along with this library; if not, write to the Free Software
- * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301  USA
+ * License along with this library; If not, see <http://www.gnu.org/licenses/>.
  *
  * written 2006 by Gerd Hoffmann <kraxel@suse.de>.
  *
@@ -57,9 +56,9 @@ static int setup_hypercall_page(struct xc_dom_image *dom)
     domctl.u.hypercall_init.gmfn = xc_dom_p2m_guest(dom, pfn);
     rc = do_domctl(dom->xch, &domctl);
     if ( rc != 0 )
-        xc_dom_panic(dom->xch,
-                     XC_INTERNAL_ERROR, "%s: HYPERCALL_INIT failed (rc=%d)",
-                     __FUNCTION__, rc);
+        xc_dom_panic(dom->xch, XC_INTERNAL_ERROR,
+                     "%s: HYPERCALL_INIT failed: %d - %s)",
+                     __FUNCTION__, errno, strerror(errno));
     return rc;
 }
 

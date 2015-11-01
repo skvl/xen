@@ -18,6 +18,9 @@
 
 #include <xen/types.h>
 
+/* CAT cpuid level */
+#define PSR_CPUID_LEVEL_CAT   0x10
+
 /* Resource Type Enumeration */
 #define PSR_RESOURCE_TYPE_L3            0x2
 
@@ -46,7 +49,15 @@ static inline bool_t psr_cmt_enabled(void)
 
 int psr_alloc_rmid(struct domain *d);
 void psr_free_rmid(struct domain *d);
-void psr_assoc_rmid(unsigned int rmid);
+void psr_ctxt_switch_to(struct domain *d);
+
+int psr_get_cat_l3_info(unsigned int socket, uint32_t *cbm_len,
+                        uint32_t *cos_max);
+int psr_get_l3_cbm(struct domain *d, unsigned int socket, uint64_t *cbm);
+int psr_set_l3_cbm(struct domain *d, unsigned int socket, uint64_t cbm);
+
+int psr_domain_init(struct domain *d);
+void psr_domain_free(struct domain *d);
 
 #endif /* __ASM_PSR_H__ */
 

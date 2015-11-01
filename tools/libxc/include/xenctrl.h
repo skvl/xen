@@ -19,8 +19,7 @@
  * Lesser General Public License for more details.
  *
  * You should have received a copy of the GNU Lesser General Public
- * License along with this library; if not, write to the Free Software
- * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301  USA
+ * License along with this library; If not, see <http://www.gnu.org/licenses/>.
  */
 
 #ifndef XENCTRL_H
@@ -34,6 +33,7 @@
 #include <stddef.h>
 #include <stdint.h>
 #include <stdio.h>
+#include <stdbool.h>
 #include <xen/xen.h>
 #include <xen/domctl.h>
 #include <xen/physdev.h>
@@ -269,7 +269,7 @@ typedef struct xc_hypercall_buffer xc_hypercall_buffer_t;
  * transparently converted to the hypercall buffer as necessary.
  */
 #define DECLARE_HYPERCALL_BUFFER(_type, _name)                 \
-    _type *_name = NULL;                                       \
+    _type *(_name) = NULL;                                     \
     xc_hypercall_buffer_t XC__HYPERCALL_BUFFER_NAME(_name) = { \
         .hbuf = NULL,                                          \
         .param_shadow = NULL,                                  \
@@ -287,10 +287,11 @@ typedef struct xc_hypercall_buffer xc_hypercall_buffer_t;
  * required.
  */
 #define DECLARE_HYPERCALL_BUFFER_SHADOW(_type, _name, _hbuf)   \
-    _type *_name = _hbuf->hbuf;                                \
+    _type *(_name) = (_hbuf)->hbuf;                            \
+    __attribute__((unused))                                    \
     xc_hypercall_buffer_t XC__HYPERCALL_BUFFER_NAME(_name) = { \
         .hbuf = (void *)-1,                                    \
-        .param_shadow = _hbuf,                                 \
+        .param_shadow = (_hbuf),                               \
         HYPERCALL_BUFFER_INIT_NO_BOUNCE                        \
     }
 
@@ -301,7 +302,7 @@ typedef struct xc_hypercall_buffer xc_hypercall_buffer_t;
 #define DECLARE_HYPERCALL_BUFFER_ARGUMENT(_name)               \
     xc_hypercall_buffer_t XC__HYPERCALL_BUFFER_NAME(_name) = { \
         .hbuf = (void *)-1,                                    \
-        .param_shadow = _name,                                 \
+        .param_shadow = (_name),                               \
         HYPERCALL_BUFFER_INIT_NO_BOUNCE                        \
     }
 
@@ -321,15 +322,23 @@ typedef struct xc_hypercall_buffer xc_hypercall_buffer_t;
  * Set a xen_guest_handle in a type safe manner, ensuring that the
  * data pointer has been correctly allocated.
  */
-#undef set_xen_guest_handle
-#define set_xen_guest_handle(_hnd, _val)                        \
+#define set_xen_guest_handle_impl(_hnd, _val, _byte_off)        \
     do {                                                        \
         xc_hypercall_buffer_t _hcbuf_hnd1;                      \
         typeof(XC__HYPERCALL_BUFFER_NAME(_val)) *_hcbuf_hnd2 =  \
                 HYPERCALL_BUFFER(_val);                         \
         (void) (&_hcbuf_hnd1 == _hcbuf_hnd2);                   \
-        set_xen_guest_handle_raw(_hnd, (_hcbuf_hnd2)->hbuf);    \
+        set_xen_guest_handle_raw(_hnd,                          \
+                (_hcbuf_hnd2)->hbuf + (_byte_off));             \
     } while (0)
+
+#undef set_xen_guest_handle
+#define set_xen_guest_handle(_hnd, _val)                        \
+    set_xen_guest_handle_impl(_hnd, _val, 0)
+
+#define set_xen_guest_handle_offset(_hnd, _val, _off)           \
+    set_xen_guest_handle_impl(_hnd, _val,                       \
+            ((sizeof(*_val)*(_off))))
 
 /* Use with set_xen_guest_handle in place of NULL */
 extern xc_hypercall_buffer_t XC__HYPERCALL_BUFFER_NAME(HYPERCALL_BUFFER_NULL);
@@ -348,7 +357,12 @@ void xc__hypercall_buffer_free(xc_interface *xch, xc_hypercall_buffer_t *b);
 void *xc__hypercall_buffer_alloc_pages(xc_interface *xch, xc_hypercall_buffer_t *b, int nr_pages);
 #define xc_hypercall_buffer_alloc_pages(_xch, _name, _nr) xc__hypercall_buffer_alloc_pages(_xch, HYPERCALL_BUFFER(_name), _nr)
 void xc__hypercall_buffer_free_pages(xc_interface *xch, xc_hypercall_buffer_t *b, int nr_pages);
-#define xc_hypercall_buffer_free_pages(_xch, _name, _nr) xc__hypercall_buffer_free_pages(_xch, HYPERCALL_BUFFER(_name), _nr)
+#define xc_hypercall_buffer_free_pages(_xch, _name, _nr)                    \
+    do {                                                                    \
+        if ( _name )                                                        \
+            xc__hypercall_buffer_free_pages(_xch, HYPERCALL_BUFFER(_name),  \
+                                            _nr);                           \
+    } while (0)
 
 /*
  * Array of hypercall buffers.
@@ -361,7 +375,7 @@ void xc__hypercall_buffer_free_pages(xc_interface *xch, xc_hypercall_buffer_t *b
  * buffer and call xc_hypercall_buffer_array_get().
  *
  * Destroy the array with xc_hypercall_buffer_array_destroy() to free
- * the array and all its alocated hypercall buffers.
+ * the array and all its allocated hypercall buffers.
  */
 struct xc_hypercall_buffer_array;
 typedef struct xc_hypercall_buffer_array xc_hypercall_buffer_array_t;
@@ -393,6 +407,15 @@ int xc_get_cpumap_size(xc_interface *xch);
 
 /* allocate a cpumap */
 xc_cpumap_t xc_cpumap_alloc(xc_interface *xch);
+
+/* clear an CPU from the cpumap. */
+void xc_cpumap_clearcpu(int cpu, xc_cpumap_t map);
+
+/* set an CPU in the cpumap. */
+void xc_cpumap_setcpu(int cpu, xc_cpumap_t map);
+
+/* Test whether the CPU in cpumap is set. */
+int xc_cpumap_testcpu(int cpu, xc_cpumap_t map);
 
 /*
  * NODEMAP handling
@@ -477,18 +500,20 @@ typedef union
 } start_info_any_t;
 #endif
 
+
+typedef struct xen_arch_domainconfig xc_domain_configuration_t;
+int xc_domain_create_config(xc_interface *xch,
+                            uint32_t ssidref,
+                            xen_domain_handle_t handle,
+                            uint32_t flags,
+                            uint32_t *pdomid,
+                            xc_domain_configuration_t *config);
 int xc_domain_create(xc_interface *xch,
                      uint32_t ssidref,
                      xen_domain_handle_t handle,
                      uint32_t flags,
                      uint32_t *pdomid);
 
-#if defined(__arm__) || defined(__aarch64__)
-typedef xen_domctl_arm_configuredomain_t xc_domain_configuration_t;
-
-int xc_domain_configure(xc_interface *xch, uint32_t domid,
-                        xc_domain_configuration_t *config);
-#endif
 
 /* Functions to produce a dump of a given domain
  *  xc_domain_dumpcore - produces a dump to a specified file
@@ -848,18 +873,6 @@ int xc_shadow_control(xc_interface *xch,
                       unsigned long *mb,
                       uint32_t mode,
                       xc_shadow_op_stats_t *stats);
-
-int xc_sedf_domain_set(xc_interface *xch,
-                       uint32_t domid,
-                       uint64_t period, uint64_t slice,
-                       uint64_t latency, uint16_t extratime,
-                       uint16_t weight);
-
-int xc_sedf_domain_get(xc_interface *xch,
-                       uint32_t domid,
-                       uint64_t* period, uint64_t *slice,
-                       uint64_t *latency, uint16_t *extratime,
-                       uint16_t *weight);
 
 int xc_sched_credit_domain_set(xc_interface *xch,
                                uint32_t domid,
@@ -1226,8 +1239,10 @@ int xc_readconsolering(xc_interface *xch,
 int xc_send_debug_keys(xc_interface *xch, char *keys);
 
 typedef xen_sysctl_physinfo_t xc_physinfo_t;
-typedef xen_sysctl_topologyinfo_t xc_topologyinfo_t;
+typedef xen_sysctl_cputopo_t xc_cputopo_t;
 typedef xen_sysctl_numainfo_t xc_numainfo_t;
+typedef xen_sysctl_meminfo_t xc_meminfo_t;
+typedef xen_sysctl_pcitopoinfo_t xc_pcitopoinfo_t;
 
 typedef uint32_t xc_cpu_to_node_t;
 typedef uint32_t xc_cpu_to_socket_t;
@@ -1237,8 +1252,12 @@ typedef uint64_t xc_node_to_memfree_t;
 typedef uint32_t xc_node_to_node_dist_t;
 
 int xc_physinfo(xc_interface *xch, xc_physinfo_t *info);
-int xc_topologyinfo(xc_interface *xch, xc_topologyinfo_t *info);
-int xc_numainfo(xc_interface *xch, xc_numainfo_t *info);
+int xc_cputopoinfo(xc_interface *xch, unsigned *max_cpus,
+                   xc_cputopo_t *cputopo);
+int xc_numainfo(xc_interface *xch, unsigned *max_nodes,
+                xc_meminfo_t *meminfo, uint32_t *distance);
+int xc_pcitopoinfo(xc_interface *xch, unsigned num_devs,
+                   physdev_pci_device_t *devs, uint32_t *nodes);
 
 int xc_sched_id(xc_interface *xch,
                 int *sched_id);
@@ -1253,7 +1272,7 @@ int xc_getcpuinfo(xc_interface *xch, int max_cpus,
 
 int xc_domain_setmaxmem(xc_interface *xch,
                         uint32_t domid,
-                        unsigned int max_memkb);
+                        uint64_t max_memkb);
 
 int xc_domain_set_memmap_limit(xc_interface *xch,
                                uint32_t domid,
@@ -1268,6 +1287,24 @@ int xc_domain_setvnuma(xc_interface *xch,
                         unsigned int *vdistance,
                         unsigned int *vcpu_to_vnode,
                         unsigned int *vnode_to_pnode);
+/*
+ * Retrieve vnuma configuration
+ * domid: IN, target domid
+ * nr_vnodes: IN/OUT, number of vnodes, not NULL
+ * nr_vmemranges: IN/OUT, number of vmemranges, not NULL
+ * nr_vcpus: IN/OUT, number of vcpus, not NULL
+ * vmemranges: OUT, an array which has length of nr_vmemranges
+ * vdistance: OUT, an array which has length of nr_vnodes * nr_vnodes
+ * vcpu_to_vnode: OUT, an array which has length of nr_vcpus
+ */
+int xc_domain_getvnuma(xc_interface *xch,
+                       uint32_t domid,
+                       uint32_t *nr_vnodes,
+                       uint32_t *nr_vmemranges,
+                       uint32_t *nr_vcpus,
+                       xen_vmemrange_t *vmemrange,
+                       unsigned int *vdistance,
+                       unsigned int *vcpu_to_vnode);
 
 #if defined(__i386__) || defined(__x86_64__)
 /*
@@ -1295,6 +1332,14 @@ int xc_get_machine_memory_map(xc_interface *xch,
                               struct e820entry entries[],
                               uint32_t max_entries);
 #endif
+
+int xc_reserved_device_memory_map(xc_interface *xch,
+                                  uint32_t flags,
+                                  uint16_t seg,
+                                  uint8_t bus,
+                                  uint8_t devfn,
+                                  struct xen_reserved_device_memory entries[],
+                                  uint32_t *max_entries);
 int xc_domain_set_time_offset(xc_interface *xch,
                               uint32_t domid,
                               int32_t time_offset_seconds);
@@ -1315,7 +1360,9 @@ int xc_domain_get_tsc_info(xc_interface *xch,
 
 int xc_domain_disable_migrate(xc_interface *xch, uint32_t domid);
 
-int xc_domain_maximum_gpfn(xc_interface *xch, domid_t domid);
+int xc_domain_maximum_gpfn(xc_interface *xch, domid_t domid, xen_pfn_t *gpfns);
+
+int xc_domain_nr_gpfns(xc_interface *xch, domid_t domid, xen_pfn_t *gpfns);
 
 int xc_domain_increase_reservation(xc_interface *xch,
                                    uint32_t domid,
@@ -1509,7 +1556,7 @@ int xc_mmuext_op(xc_interface *xch, struct mmuext_op *op, unsigned int nr_ops,
                  domid_t dom);
 
 /* System wide memory properties */
-long xc_maximum_ram_page(xc_interface *xch);
+int xc_maximum_ram_page(xc_interface *xch, unsigned long *max_mfn);
 
 /* Get current total pages allocated to a domain. */
 long xc_get_tot_pages(xc_interface *xch, uint32_t domid);
@@ -1574,7 +1621,7 @@ int xc_tbuf_set_size(xc_interface *xch, unsigned long size);
  */
 int xc_tbuf_get_size(xc_interface *xch, unsigned long *size);
 
-int xc_tbuf_set_cpu_mask(xc_interface *xch, uint32_t mask);
+int xc_tbuf_set_cpu_mask(xc_interface *xch, xc_cpumap_t mask);
 
 int xc_tbuf_set_evt_mask(xc_interface *xch, uint32_t mask);
 
@@ -1899,7 +1946,8 @@ int xc_get_hvm_param(xc_interface *handle, domid_t dom, int param, unsigned long
  *
  * @parm xch a handle to an open hypervisor interface.
  * @parm domid the domain id to be serviced
- * @parm handle_bufioreq should the IOREQ Server handle buffered requests?
+ * @parm handle_bufioreq how should the IOREQ Server handle buffered requests
+ *                       (HVM_IOREQSRV_BUFIOREQ_*)?
  * @parm id pointer to an ioservid_t to receive the IOREQ Server id.
  * @return 0 on success, -1 on failure.
  */
@@ -2036,22 +2084,33 @@ int xc_hvm_destroy_ioreq_server(xc_interface *xch,
 /* HVM guest pass-through */
 int xc_assign_device(xc_interface *xch,
                      uint32_t domid,
-                     uint32_t machine_bdf);
+                     uint32_t machine_sbdf,
+                     uint32_t flag);
 
 int xc_get_device_group(xc_interface *xch,
                      uint32_t domid,
-                     uint32_t machine_bdf,
+                     uint32_t machine_sbdf,
                      uint32_t max_sdevs,
                      uint32_t *num_sdevs,
                      uint32_t *sdev_array);
 
 int xc_test_assign_device(xc_interface *xch,
                           uint32_t domid,
-                          uint32_t machine_bdf);
+                          uint32_t machine_sbdf);
 
 int xc_deassign_device(xc_interface *xch,
                      uint32_t domid,
-                     uint32_t machine_bdf);
+                     uint32_t machine_sbdf);
+
+int xc_assign_dt_device(xc_interface *xch,
+                        uint32_t domid,
+                        char *path);
+int xc_test_assign_dt_device(xc_interface *xch,
+                             uint32_t domid,
+                             char *path);
+int xc_deassign_dt_device(xc_interface *xch,
+                          uint32_t domid,
+                          char *path);
 
 int xc_domain_memory_mapping(xc_interface *xch,
                              uint32_t domid,
@@ -2109,6 +2168,16 @@ int xc_domain_bind_pt_pci_irq(xc_interface *xch,
 int xc_domain_bind_pt_isa_irq(xc_interface *xch,
                               uint32_t domid,
                               uint8_t machine_irq);
+
+int xc_domain_bind_pt_spi_irq(xc_interface *xch,
+                              uint32_t domid,
+                              uint16_t vspi,
+                              uint16_t spi);
+
+int xc_domain_unbind_pt_spi_irq(xc_interface *xch,
+                                uint32_t domid,
+                                uint16_t vspi,
+                                uint16_t spi);
 
 int xc_domain_set_machine_address_size(xc_interface *xch,
 				       uint32_t domid,
@@ -2244,22 +2313,40 @@ int xc_disable_turbo(xc_interface *xch, int cpuid);
  * tmem operations
  */
 
-struct tmem_oid {
-    uint64_t oid[3];
-};
-
 int xc_tmem_control_oid(xc_interface *xch, int32_t pool_id, uint32_t subop,
                         uint32_t cli_id, uint32_t arg1, uint32_t arg2,
-                        struct tmem_oid oid, void *buf);
+                        struct xen_tmem_oid oid, void *buf);
 int xc_tmem_control(xc_interface *xch,
                     int32_t pool_id, uint32_t subop, uint32_t cli_id,
-                    uint32_t arg1, uint32_t arg2, uint64_t arg3, void *buf);
+                    uint32_t arg1, uint32_t arg2, void *buf);
 int xc_tmem_auth(xc_interface *xch, int cli_id, char *uuid_str, int arg1);
 int xc_tmem_save(xc_interface *xch, int dom, int live, int fd, int field_marker);
 int xc_tmem_save_extra(xc_interface *xch, int dom, int fd, int field_marker);
 void xc_tmem_save_done(xc_interface *xch, int dom);
 int xc_tmem_restore(xc_interface *xch, int dom, int fd);
 int xc_tmem_restore_extra(xc_interface *xch, int dom, int fd);
+
+/**
+ * altp2m operations
+ */
+
+int xc_altp2m_get_domain_state(xc_interface *handle, domid_t dom, bool *state);
+int xc_altp2m_set_domain_state(xc_interface *handle, domid_t dom, bool state);
+int xc_altp2m_set_vcpu_enable_notify(xc_interface *handle, domid_t domid,
+                                     uint32_t vcpuid, xen_pfn_t gfn);
+int xc_altp2m_create_view(xc_interface *handle, domid_t domid,
+                          xenmem_access_t default_access, uint16_t *view_id);
+int xc_altp2m_destroy_view(xc_interface *handle, domid_t domid,
+                           uint16_t view_id);
+/* Switch all vCPUs of the domain to the specified altp2m view */
+int xc_altp2m_switch_to_view(xc_interface *handle, domid_t domid,
+                             uint16_t view_id);
+int xc_altp2m_set_mem_access(xc_interface *handle, domid_t domid,
+                             uint16_t view_id, xen_pfn_t gfn,
+                             xenmem_access_t access);
+int xc_altp2m_change_gfn(xc_interface *handle, domid_t domid,
+                         uint16_t view_id, xen_pfn_t old_gfn,
+                         xen_pfn_t new_gfn);
 
 /** 
  * Mem paging operations.
@@ -2269,28 +2356,18 @@ int xc_tmem_restore_extra(xc_interface *xch, int dom, int fd);
  */
 int xc_mem_paging_enable(xc_interface *xch, domid_t domain_id, uint32_t *port);
 int xc_mem_paging_disable(xc_interface *xch, domid_t domain_id);
+int xc_mem_paging_resume(xc_interface *xch, domid_t domain_id);
 int xc_mem_paging_nominate(xc_interface *xch, domid_t domain_id,
-                           unsigned long gfn);
-int xc_mem_paging_evict(xc_interface *xch, domid_t domain_id, unsigned long gfn);
-int xc_mem_paging_prep(xc_interface *xch, domid_t domain_id, unsigned long gfn);
-int xc_mem_paging_load(xc_interface *xch, domid_t domain_id, 
-                        unsigned long gfn, void *buffer);
+                           uint64_t gfn);
+int xc_mem_paging_evict(xc_interface *xch, domid_t domain_id, uint64_t gfn);
+int xc_mem_paging_prep(xc_interface *xch, domid_t domain_id, uint64_t gfn);
+int xc_mem_paging_load(xc_interface *xch, domid_t domain_id,
+                       uint64_t gfn, void *buffer);
 
 /** 
  * Access tracking operations.
  * Supported only on Intel EPT 64 bit processors.
  */
-
-/*
- * Enables mem_access and returns the mapped ring page.
- * Will return NULL on error.
- * Caller has to unmap this page when done.
- */
-void *xc_mem_access_enable(xc_interface *xch, domid_t domain_id, uint32_t *port);
-void *xc_mem_access_enable_introspection(xc_interface *xch, domid_t domain_id,
-                                         uint32_t *port);
-int xc_mem_access_disable(xc_interface *xch, domid_t domain_id);
-int xc_mem_access_resume(xc_interface *xch, domid_t domain_id);
 
 /*
  * Set a range of memory to a specific access.
@@ -2306,6 +2383,47 @@ int xc_set_mem_access(xc_interface *xch, domid_t domain_id,
  */
 int xc_get_mem_access(xc_interface *xch, domid_t domain_id,
                       uint64_t pfn, xenmem_access_t *access);
+
+/*
+ * Instructions causing a mem_access violation can be emulated by Xen
+ * to progress the execution without having to relax the mem_access
+ * permissions.
+ * This feature has to be first enabled, then in the vm_event
+ * response to a mem_access event it can be indicated if the instruction
+ * should be emulated.
+ */
+int xc_mem_access_enable_emulate(xc_interface *xch, domid_t domain_id);
+int xc_mem_access_disable_emulate(xc_interface *xch, domid_t domain_id);
+
+/***
+ * Monitor control operations.
+ *
+ * Enables the VM event monitor ring and returns the mapped ring page.
+ * This ring is used to deliver mem_access events, as well a set of additional
+ * events that can be enabled with the xc_monitor_* functions.
+ *
+ * Will return NULL on error.
+ * Caller has to unmap this page when done.
+ */
+void *xc_monitor_enable(xc_interface *xch, domid_t domain_id, uint32_t *port);
+int xc_monitor_disable(xc_interface *xch, domid_t domain_id);
+int xc_monitor_resume(xc_interface *xch, domid_t domain_id);
+/*
+ * Get a bitmap of supported monitor events in the form
+ * (1 << XEN_DOMCTL_MONITOR_EVENT_*).
+ */
+int xc_monitor_get_capabilities(xc_interface *xch, domid_t domain_id,
+                                uint32_t *capabilities);
+int xc_monitor_write_ctrlreg(xc_interface *xch, domid_t domain_id,
+                             uint16_t index, bool enable, bool sync,
+                             bool onchangeonly);
+int xc_monitor_mov_to_msr(xc_interface *xch, domid_t domain_id, bool enable,
+                          bool extended_capture);
+int xc_monitor_singlestep(xc_interface *xch, domid_t domain_id, bool enable);
+int xc_monitor_software_breakpoint(xc_interface *xch, domid_t domain_id,
+                                   bool enable);
+int xc_monitor_guest_request(xc_interface *xch, domid_t domain_id,
+                             bool enable, bool sync);
 
 /***
  * Memory sharing operations.
@@ -2688,20 +2806,39 @@ int xc_resource_op(xc_interface *xch, uint32_t nr_ops, xc_resource_op_t *ops);
 #if defined(__i386__) || defined(__x86_64__)
 enum xc_psr_cmt_type {
     XC_PSR_CMT_L3_OCCUPANCY,
+    XC_PSR_CMT_TOTAL_MEM_COUNT,
+    XC_PSR_CMT_LOCAL_MEM_COUNT,
 };
 typedef enum xc_psr_cmt_type xc_psr_cmt_type;
+
+enum xc_psr_cat_type {
+    XC_PSR_CAT_L3_CBM = 1,
+};
+typedef enum xc_psr_cat_type xc_psr_cat_type;
+
 int xc_psr_cmt_attach(xc_interface *xch, uint32_t domid);
 int xc_psr_cmt_detach(xc_interface *xch, uint32_t domid);
 int xc_psr_cmt_get_domain_rmid(xc_interface *xch, uint32_t domid,
-    uint32_t *rmid);
+                               uint32_t *rmid);
 int xc_psr_cmt_get_total_rmid(xc_interface *xch, uint32_t *total_rmid);
 int xc_psr_cmt_get_l3_upscaling_factor(xc_interface *xch,
-    uint32_t *upscaling_factor);
+                                       uint32_t *upscaling_factor);
+int xc_psr_cmt_get_l3_event_mask(xc_interface *xch, uint32_t *event_mask);
 int xc_psr_cmt_get_l3_cache_size(xc_interface *xch, uint32_t cpu,
-    uint32_t *l3_cache_size);
-int xc_psr_cmt_get_data(xc_interface *xch, uint32_t rmid,
-    uint32_t cpu, uint32_t psr_cmt_type, uint64_t *monitor_data);
+                                 uint32_t *l3_cache_size);
+int xc_psr_cmt_get_data(xc_interface *xch, uint32_t rmid, uint32_t cpu,
+                        uint32_t psr_cmt_type, uint64_t *monitor_data,
+                        uint64_t *tsc);
 int xc_psr_cmt_enabled(xc_interface *xch);
+
+int xc_psr_cat_set_domain_data(xc_interface *xch, uint32_t domid,
+                               xc_psr_cat_type type, uint32_t target,
+                               uint64_t data);
+int xc_psr_cat_get_domain_data(xc_interface *xch, uint32_t domid,
+                               xc_psr_cat_type type, uint32_t target,
+                               uint64_t *data);
+int xc_psr_cat_get_l3_info(xc_interface *xch, uint32_t socket,
+                           uint32_t *cos_max, uint32_t *cbm_len);
 #endif
 
 #endif /* XENCTRL_H */

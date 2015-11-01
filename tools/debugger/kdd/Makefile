@@ -16,7 +16,10 @@ kdd: $(OBJS)
 clean:
 	rm -f $(OBJS) $(DEPS) kdd
 
+.PHONY: distclean
+distclean: clean
+
 .PHONY: install
 install: all
-	[ -d $(DESTDIR)$(SBINDIR) ] || $(INSTALL_DIR) $(DESTDIR)$(SBINDIR)
-	$(INSTALL_PROG) kdd $(DESTDIR)$(SBINDIR)/kdd
+	[ -d $(DESTDIR)$(sbindir) ] || $(INSTALL_DIR) $(DESTDIR)$(sbindir)
+	$(INSTALL_PROG) kdd $(DESTDIR)$(sbindir)/kdd

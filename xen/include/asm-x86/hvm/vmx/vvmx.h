@@ -16,8 +16,7 @@
  * more details.
  *
  * You should have received a copy of the GNU General Public License along with
- * this program; if not, write to the Free Software Foundation, Inc., 59 Temple
- * Place - Suite 330, Boston, MA 02111-1307 USA.
+ * this program; If not, see <http://www.gnu.org/licenses/>.
  *
  */
 #ifndef __ASM_X86_HVM_VVMX_H__
@@ -111,12 +110,10 @@ union vmx_inst_info {
 int nvmx_vcpu_initialise(struct vcpu *v);
 void nvmx_vcpu_destroy(struct vcpu *v);
 int nvmx_vcpu_reset(struct vcpu *v);
-uint64_t nvmx_vcpu_guestcr3(struct vcpu *v);
 uint64_t nvmx_vcpu_eptp_base(struct vcpu *v);
-uint32_t nvmx_vcpu_asid(struct vcpu *v);
 enum hvm_intblk nvmx_intr_blocked(struct vcpu *v);
-int nvmx_intercepts_exception(struct vcpu *v, 
-                              unsigned int trap, int error_code);
+bool_t nvmx_intercepts_exception(struct vcpu *v, unsigned int trap,
+                                 int error_code);
 void nvmx_domain_relinquish_resources(struct domain *d);
 
 bool_t nvmx_ept_enabled(struct vcpu *v);

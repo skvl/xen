@@ -22,6 +22,7 @@
 #include <asm/platform.h>
 #include <xen/stdbool.h>
 #include <xen/vmap.h>
+#include <xen/device_tree.h>
 #include <asm/io.h>
 #include <asm/gic.h>
 
@@ -35,147 +36,41 @@ static u64 reset_addr, reset_size;
 static u32 reset_mask;
 static bool reset_vals_valid = false;
 
+#define XGENE_SEC_GICV2_DIST_ADDR    0x78010000
+
+static void __init xgene_check_pirq_eoi(void)
+{
+    const struct dt_device_node *node;
+    int res;
+    paddr_t dbase;
+    const struct dt_device_match xgene_dt_int_ctrl_match[] =
+    {
+        DT_MATCH_COMPATIBLE("arm,cortex-a15-gic"),
+        { /*sentinel*/ },
+    };
+
+    node = dt_find_interrupt_controller(xgene_dt_int_ctrl_match);
+    if ( !node )
+        panic("%s: Can not find interrupt controller node", __func__);
+
+    res = dt_device_get_address(node, 0, &dbase, NULL);
+    if ( !dbase )
+        panic("%s: Cannot find a valid address for the distributor", __func__);
+
+    /*
+     * In old X-Gene Storm firmware and DT, secure mode addresses have
+     * been mentioned in GICv2 node. EOI HW won't work in this case.
+     * We check the GIC Distributor Base Address to deny Xen booting
+     * with older firmware.
+     */
+    if ( dbase == XGENE_SEC_GICV2_DIST_ADDR )
+        panic("OLD X-Gene Firmware is not supported by Xen.\n"
+              "Please upgrade your firmware to the latest version");
+}
+
 static uint32_t xgene_storm_quirks(void)
 {
-    return PLATFORM_QUIRK_GIC_64K_STRIDE|PLATFORM_QUIRK_GUEST_PIRQ_NEED_EOI;
-}
-
-static int map_one_mmio(struct domain *d, const char *what,
-                         unsigned long start, unsigned long end)
-{
-    int ret;
-
-    printk("Additional MMIO %lx-%lx (%s)\n",
-           start, end, what);
-    ret = map_mmio_regions(d, start, end - start, start);
-    if ( ret )
-        printk("Failed to map %s @ %lx to dom%d\n",
-               what, start, d->domain_id);
-    return ret;
-}
-
-static int map_one_spi(struct domain *d, const char *what,
-                       unsigned int spi, unsigned int type)
-{
-    unsigned int irq;
-    int ret;
-
-    irq = spi + 32; /* SPIs start at IRQ 32 */
-
-    ret = irq_set_spi_type(irq, type);
-    if ( ret )
-    {
-        printk("Failed to set the type for IRQ%u\n", irq);
-        return ret;
-    }
-
-    printk("Additional IRQ %u (%s)\n", irq, what);
-
-    ret = route_irq_to_guest(d, irq, what);
-    if ( ret )
-        printk("Failed to route %s to dom%d\n", what, d->domain_id);
-
-    return ret;
-}
-
-/* Creates MMIO mappings base..end as well as 4 SPIs from the given base. */
-static int xgene_storm_pcie_specific_mapping(struct domain *d,
-                                             const struct dt_device_node *node,
-                                             paddr_t base, paddr_t end,
-                                             int base_spi)
-{
-    int ret;
-
-    printk("Mapping additional regions for PCIe device %s\n",
-           dt_node_full_name(node));
-
-    /* Map the PCIe bus resources */
-    ret = map_one_mmio(d, "PCI MEMORY", paddr_to_pfn(base), paddr_to_pfn(end));
-    if ( ret )
-        goto err;
-
-    ret = map_one_spi(d, "PCI#INTA", base_spi+0, DT_IRQ_TYPE_LEVEL_HIGH);
-    if ( ret )
-        goto err;
-
-    ret = map_one_spi(d, "PCI#INTB", base_spi+1, DT_IRQ_TYPE_LEVEL_HIGH);
-    if ( ret )
-        goto err;
-
-    ret = map_one_spi(d, "PCI#INTC", base_spi+2, DT_IRQ_TYPE_LEVEL_HIGH);
-    if ( ret )
-        goto err;
-
-    ret = map_one_spi(d, "PCI#INTD", base_spi+3, DT_IRQ_TYPE_LEVEL_HIGH);
-    if ( ret )
-        goto err;
-
-    ret = 0;
-err:
-    return ret;
-}
-
-/*
- * Xen does not currently support mapping MMIO regions and interrupt
- * for bus child devices (referenced via the "ranges" and
- * "interrupt-map" properties to domain 0). Instead for now map the
- * necessary resources manually.
- */
-static int xgene_storm_specific_mapping(struct domain *d)
-{
-    struct dt_device_node *node = NULL;
-    int ret;
-
-    while ( (node = dt_find_compatible_node(node, "pci", "apm,xgene-pcie")) )
-    {
-        u64 addr;
-
-        /* Identify the bus via it's control register address */
-        ret = dt_device_get_address(node, 0, &addr, NULL);
-        if ( ret < 0 )
-            return ret;
-
-        if ( !dt_device_is_available(node) )
-            continue;
-
-       switch ( addr )
-        {
-        case 0x1f2b0000: /* PCIe0 */
-            ret = xgene_storm_pcie_specific_mapping(d,
-                node,
-                0x0e000000000UL, 0x10000000000UL, 0xc2);
-            break;
-        case 0x1f2c0000: /* PCIe1 */
-            ret = xgene_storm_pcie_specific_mapping(d,
-                node,
-                0x0d000000000UL, 0x0e000000000UL, 0xc8);
-            break;
-        case 0x1f2d0000: /* PCIe2 */
-            ret = xgene_storm_pcie_specific_mapping(d,
-                node,
-                0x09000000000UL, 0x0a000000000UL, 0xce);
-            break;
-        case 0x1f500000: /* PCIe3 */
-            ret = xgene_storm_pcie_specific_mapping(d,
-                node,
-                0x0a000000000UL, 0x0c000000000UL, 0xd4);
-            break;
-        case 0x1f510000: /* PCIe4 */
-            ret = xgene_storm_pcie_specific_mapping(d,
-                node,
-                0x0c000000000UL, 0x0d000000000UL, 0xda);
-            break;
-
-        default:
-            printk("Ignoring unknown PCI bus %s\n", dt_node_full_name(node));
-            continue;
-        }
-
-        if ( ret < 0 )
-            return ret;
-    }
-
-    return 0;
+    return PLATFORM_QUIRK_GIC_64K_STRIDE;
 }
 
 static void xgene_storm_reset(void)
@@ -212,6 +107,8 @@ static int xgene_storm_init(void)
     reset_mask = XGENE_RESET_MASK;
 
     reset_vals_valid = true;
+    xgene_check_pirq_eoi();
+
     return 0;
 }
 
@@ -226,11 +123,6 @@ PLATFORM_START(xgene_storm, "APM X-GENE STORM")
     .init = xgene_storm_init,
     .reset = xgene_storm_reset,
     .quirks = xgene_storm_quirks,
-    .specific_mapping = xgene_storm_specific_mapping,
-
-    .dom0_evtchn_ppi = 24,
-    .dom0_gnttab_start = 0x1f800000,
-    .dom0_gnttab_size = 0x20000,
 PLATFORM_END
 
 /*

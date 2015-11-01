@@ -1,31 +1,31 @@
-From 112bfc0a9d087098616b0121140c983c228a27d0 Mon Sep 17 00:00:00 2001
+From 2797781477ae40b32d561fbd318b0f44e722eedb Mon Sep 17 00:00:00 2001
 From: Bastian Blank <waldi@debian.org>
 Date: Sat, 5 Jul 2014 11:46:49 +0200
 Subject: tools-libxl-abiname.diff
 
 Patch-Name: tools-libxl-abiname.diff
 ---
- tools/libxl/Makefile | 34 ++++++++++------------------------
- 1 file changed, 10 insertions(+), 24 deletions(-)
+ tools/libxl/Makefile | 33 ++++++++++-----------------------
+ 1 file changed, 10 insertions(+), 23 deletions(-)
 
 diff --git a/tools/libxl/Makefile b/tools/libxl/Makefile
-index 6a8575b..6b20c14 100644
+index c5ecec1..08b2b93 100644
 --- a/tools/libxl/Makefile
 +++ b/tools/libxl/Makefile
 @@ -5,12 +5,6 @@
  XEN_ROOT = $(CURDIR)/../..
  include $(XEN_ROOT)/tools/Rules.mk
  
--MAJOR = 4.5
+-MAJOR = 4.6
 -MINOR = 0
 -
--XLUMAJOR = 4.3
+-XLUMAJOR = 4.6
 -XLUMINOR = 0
 -
  CFLAGS += -Werror -Wno-format-zero-length -Wmissing-declarations \
  	-Wno-declaration-after-statement -Wformat-nonliteral
  CFLAGS += -I. -fPIC
-@@ -206,14 +200,11 @@ _libxl_type%.h _libxl_type%_json.h _libxl_type%_private.h _libxl_type%.c: libxl_
+@@ -225,14 +219,11 @@ _libxl_type%.h _libxl_type%_json.h _libxl_type%_private.h _libxl_type%.c: libxl_
  	$(call move-if-changed,__libxl_type$*_json.h,_libxl_type$*_json.h)
  	$(call move-if-changed,__libxl_type$*.c,_libxl_type$*.c)
  
@@ -43,7 +43,7 @@ index 6a8575b..6b20c14 100644
  
  libxenlight_test.so: $(LIBXL_OBJS) $(LIBXL_TEST_OBJS)
  	$(CC) $(LDFLAGS) -Wl,$(SONAME_LDFLAG) -Wl,libxenlight.so.$(MAJOR) $(SHLIB_LDFLAGS) -o $@ $^ $(LIBXL_LIBS) $(APPEND_LDFLAGS)
-@@ -221,14 +212,11 @@ libxenlight_test.so: $(LIBXL_OBJS) $(LIBXL_TEST_OBJS)
+@@ -240,14 +231,11 @@ libxenlight_test.so: $(LIBXL_OBJS) $(LIBXL_TEST_OBJS)
  libxenlight.a: $(LIBXL_OBJS)
  	$(AR) rcs libxenlight.a $^
  
@@ -61,21 +61,20 @@ index 6a8575b..6b20c14 100644
  
  libxlutil.a: $(LIBXLU_OBJS)
  	$(AR) rcs libxlutil.a $^
-@@ -258,13 +246,11 @@ install: all
- 	$(INSTALL_PROG) xl $(DESTDIR)$(SBINDIR)
+@@ -282,12 +270,11 @@ install: all
+ 	$(INSTALL_PROG) xl $(DESTDIR)$(sbindir)
  	$(INSTALL_PROG) xen-init-dom0 $(DESTDIR)$(LIBEXEC_BIN)
  	$(INSTALL_PROG) libxl-save-helper $(DESTDIR)$(LIBEXEC_BIN)
--	$(INSTALL_SHLIB) libxenlight.so.$(MAJOR).$(MINOR) $(DESTDIR)$(LIBDIR)
--	$(SYMLINK_SHLIB) libxenlight.so.$(MAJOR).$(MINOR) $(DESTDIR)$(LIBDIR)/libxenlight.so.$(MAJOR)
--	$(SYMLINK_SHLIB) libxenlight.so.$(MAJOR) $(DESTDIR)$(LIBDIR)/libxenlight.so
-+	$(INSTALL_SHLIB) libxenlight-$(PACKAGE_VERSION).so $(DESTDIR)$(LIBDIR)
-+	$(SYMLINK_SHLIB) libxenlight-$(PACKAGE_VERSION).so $(DESTDIR)$(LIBDIR)/libxenlight.so
- 	$(INSTALL_DATA) libxenlight.a $(DESTDIR)$(LIBDIR)
--	$(INSTALL_SHLIB) libxlutil.so.$(XLUMAJOR).$(XLUMINOR) $(DESTDIR)$(LIBDIR)
--	$(SYMLINK_SHLIB) libxlutil.so.$(XLUMAJOR).$(XLUMINOR) $(DESTDIR)$(LIBDIR)/libxlutil.so.$(XLUMAJOR)
--	$(SYMLINK_SHLIB) libxlutil.so.$(XLUMAJOR) $(DESTDIR)$(LIBDIR)/libxlutil.so
-+	$(INSTALL_SHLIB) libxlutil-$(PACKAGE_VERSION).so $(DESTDIR)$(LIBDIR)
-+	$(SYMLINK_SHLIB) libxlutil-$(PACKAGE_VERSION).so $(DESTDIR)$(LIBDIR)/libxlutil.so
- 	$(INSTALL_DATA) libxlutil.a $(DESTDIR)$(LIBDIR)
- 	$(INSTALL_DATA) libxl.h libxl_event.h libxl_json.h _libxl_types.h _libxl_types_json.h _libxl_list.h libxl_utils.h libxl_uuid.h libxlutil.h $(DESTDIR)$(INCLUDEDIR)
- 	$(INSTALL_DATA) bash-completion $(DESTDIR)$(BASH_COMPLETION_DIR)/xl.sh
+-	$(INSTALL_SHLIB) libxenlight.so.$(MAJOR).$(MINOR) $(DESTDIR)$(libdir)
+-	$(SYMLINK_SHLIB) libxenlight.so.$(MAJOR).$(MINOR) $(DESTDIR)$(libdir)/libxenlight.so.$(MAJOR)
+-	$(SYMLINK_SHLIB) libxenlight.so.$(MAJOR) $(DESTDIR)$(libdir)/libxenlight.so
++	$(INSTALL_SHLIB) libxenlight-$(PACKAGE_VERSION).so $(DESTDIR)$(libdir)
++	$(SYMLINK_SHLIB) libxenlight-$(PACKAGE_VERSION).so $(DESTDIR)$(libdir)/libxenlight.so
+ 	$(INSTALL_DATA) libxenlight.a $(DESTDIR)$(libdir)
+-	$(INSTALL_SHLIB) libxlutil.so.$(XLUMAJOR).$(XLUMINOR) $(DESTDIR)$(libdir)
+-	$(SYMLINK_SHLIB) libxlutil.so.$(XLUMAJOR).$(XLUMINOR) $(DESTDIR)$(libdir)/libxlutil.so.$(XLUMAJOR)
++	$(INSTALL_SHLIB) libxlutil-$(PACKAGE_VERSION).so $(DESTDIR)$(libdir)
++	$(SYMLINK_SHLIB) libxlutil-$(PACKAGE_VERSION).so $(DESTDIR)$(libdir)/libxlutil.so
+ 	$(SYMLINK_SHLIB) libxlutil.so.$(XLUMAJOR) $(DESTDIR)$(libdir)/libxlutil.so
+ 	$(INSTALL_DATA) libxlutil.a $(DESTDIR)$(libdir)
+ 	$(INSTALL_DATA) libxl.h libxl_event.h libxl_json.h _libxl_types.h _libxl_types_json.h _libxl_list.h libxl_utils.h libxl_uuid.h libxlutil.h $(DESTDIR)$(includedir)

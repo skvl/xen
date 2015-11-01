@@ -149,8 +149,8 @@ void domain_get_tmem_stats(xenstat_handle * handle, xenstat_domain * domain)
 {
 	char buffer[4096];
 
-	if (xc_tmem_control(handle->xc_handle,-1,TMEMC_LIST,domain->id,
-                        sizeof(buffer),-1,-1,buffer) < 0)
+	if (xc_tmem_control(handle->xc_handle,-1,XEN_SYSCTL_TMEM_OP_LIST,domain->id,
+                        sizeof(buffer),-1,buffer) < 0)
 		return;
 	domain->tmem_stats.curr_eph_pages = parse(buffer,"Ec");
 	domain->tmem_stats.succ_eph_gets = parse(buffer,"Ge");
@@ -166,6 +166,7 @@ xenstat_node *xenstat_get_node(xenstat_handle * handle, unsigned int flags)
 	xc_domaininfo_t domaininfo[DOMAIN_CHUNK_SIZE];
 	int new_domains;
 	unsigned int i;
+	int rc;
 
 	/* Create the node */
 	node = (xenstat_node *) calloc(1, sizeof(xenstat_node));
@@ -189,9 +190,9 @@ xenstat_node *xenstat_get_node(xenstat_handle * handle, unsigned int flags)
 	node->free_mem = ((unsigned long long)physinfo.free_pages)
 	    * handle->page_size;
 
-	node->freeable_mb = (long)xc_tmem_control(handle->xc_handle, -1,
-				TMEMC_QUERY_FREEABLE_MB, -1, 0, 0, 0, NULL);
-
+	rc = xc_tmem_control(handle->xc_handle, -1,
+                         XEN_SYSCTL_TMEM_OP_QUERY_FREEABLE_MB, -1, 0, 0, NULL);
+	node->freeable_mb = (rc < 0) ? 0 : rc;
 	/* malloc(0) is not portable, so allocate a single domain.  This will
 	 * be resized below. */
 	node->domains = malloc(sizeof(xenstat_domain));
@@ -656,6 +657,27 @@ static void xenstat_uninit_xen_version(xenstat_handle * handle)
 /*
  * VBD functions
  */
+
+/* Save VBD information */
+xenstat_vbd *xenstat_save_vbd(xenstat_domain *domain, xenstat_vbd *vbd)
+{
+        xenstat_vbd *vbds = domain->vbds;
+
+        domain->num_vbds++;
+        domain->vbds = realloc(domain->vbds,
+                               domain->num_vbds *
+                               sizeof(xenstat_vbd));
+
+        if (domain->vbds == NULL) {
+                domain->num_vbds = 0;
+                free(vbds);
+        }
+        else {
+                domain->vbds[domain->num_vbds - 1] = *vbd;
+        }
+
+        return domain->vbds;
+}
 
 /* Free VBD information */
 static void xenstat_free_vbds(xenstat_node * node)

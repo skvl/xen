@@ -67,7 +67,7 @@ struct pending_irq
 #define GIC_IRQ_GUEST_MIGRATING   4
     unsigned long status;
     struct irq_desc *desc; /* only set it the irq corresponds to a physical irq */
-    int irq;
+    unsigned int irq;
 #define GIC_INVALID_LR         ~(uint8_t)0
     uint8_t lr;
     uint8_t priority;
@@ -85,7 +85,7 @@ struct pending_irq
 /* Represents state corresponding to a block of 32 interrupts */
 struct vgic_irq_rank {
     spinlock_t lock; /* Covers access to all other members of this struct */
-    uint32_t ienable, iactive, ipend, pendsgi;
+    uint32_t ienable;
     uint32_t icfg[2];
     uint32_t ipriority[8];
     union {
@@ -97,6 +97,17 @@ struct vgic_irq_rank {
         }v3;
     };
 };
+
+struct sgi_target {
+    uint8_t aff1;
+    uint16_t list;
+};
+
+static inline void sgi_target_init(struct sgi_target *sgi_target)
+{
+    sgi_target->aff1 = 0;
+    sgi_target->list = 0;
+}
 
 struct vgic_ops {
     /* Initialize vGIC */
@@ -110,6 +121,8 @@ struct vgic_ops {
     struct vcpu *(*get_target_vcpu)(struct vcpu *v, unsigned int irq);
     /* vGIC sysreg emulation */
     int (*emulate_sysreg)(struct cpu_user_regs *regs, union hsr hsr);
+    /* Maximum number of vCPU supported */
+    const unsigned int max_vcpus;
 };
 
 /* Number of ranks of interrupt registers for a domain */
@@ -161,10 +174,10 @@ static inline void vgic_byte_write(uint32_t *reg, uint32_t var, int offset)
 {
     int byte = offset & 0x3;
 
-    var &= (0xff << (8*byte));
+    var &= 0xff;
 
     *reg &= ~(0xff << (8*byte));
-    *reg |= var;
+    *reg |= (var << (8*byte));
 }
 
 enum gic_sgi_mode;
@@ -177,14 +190,15 @@ enum gic_sgi_mode;
 
 #define vgic_num_irqs(d)        ((d)->arch.vgic.nr_spis + 32)
 
-extern int domain_vgic_init(struct domain *d);
+extern int domain_vgic_init(struct domain *d, unsigned int nr_spis);
 extern void domain_vgic_free(struct domain *d);
 extern int vcpu_vgic_init(struct vcpu *v);
 extern struct vcpu *vgic_get_target_vcpu(struct vcpu *v, unsigned int irq);
-extern void vgic_vcpu_inject_irq(struct vcpu *v, unsigned int irq);
-extern void vgic_vcpu_inject_spi(struct domain *d, unsigned int irq);
+extern void vgic_vcpu_inject_irq(struct vcpu *v, unsigned int virq);
+extern void vgic_vcpu_inject_spi(struct domain *d, unsigned int virq);
 extern void vgic_clear_pending_irqs(struct vcpu *v);
 extern struct pending_irq *irq_to_pending(struct vcpu *v, unsigned int irq);
+extern struct pending_irq *spi_to_pending(struct domain *d, unsigned int irq);
 extern struct vgic_irq_rank *vgic_rank_offset(struct vcpu *v, int b, int n, int s);
 extern struct vgic_irq_rank *vgic_rank_irq(struct vcpu *v, unsigned int irq);
 extern int vgic_emulate(struct cpu_user_regs *regs, union hsr hsr);
@@ -197,8 +211,41 @@ int vgic_v3_init(struct domain *d);
 extern int vcpu_vgic_free(struct vcpu *v);
 extern int vgic_to_sgi(struct vcpu *v, register_t sgir,
                        enum gic_sgi_mode irqmode, int virq,
-                       unsigned long vcpu_mask);
+                       const struct sgi_target *target);
 extern void vgic_migrate_irq(struct vcpu *old, struct vcpu *new, unsigned int irq);
+
+/* Reserve a specific guest vIRQ */
+extern bool_t vgic_reserve_virq(struct domain *d, unsigned int virq);
+
+/*
+ * Allocate a guest VIRQ
+ *  - spi == 0 => allocate a PPI. It will be the same on every vCPU
+ *  - spi == 1 => allocate an SPI
+ */
+extern int vgic_allocate_virq(struct domain *d, bool_t spi);
+
+static inline int vgic_allocate_ppi(struct domain *d)
+{
+    return vgic_allocate_virq(d, 0 /* ppi */);
+}
+
+static inline int vgic_allocate_spi(struct domain *d)
+{
+    return vgic_allocate_virq(d, 1 /* spi */);
+}
+
+extern void vgic_free_virq(struct domain *d, unsigned int virq);
+
+void vgic_v2_setup_hw(paddr_t dbase, paddr_t cbase, paddr_t vbase);
+
+#ifdef HAS_GICV3
+struct rdist_region;
+void vgic_v3_setup_hw(paddr_t dbase,
+                      unsigned int nr_rdist_regions,
+                      const struct rdist_region *regions,
+                      uint32_t rdist_stride);
+#endif
+
 #endif /* __ASM_ARM_VGIC_H__ */
 
 /*

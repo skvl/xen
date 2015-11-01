@@ -64,14 +64,7 @@ int libxl__get_hotplug_script_info(libxl__gc *gc, libxl__device *dev,
                                    libxl__device_action action,
                                    int num_exec)
 {
-    char *disable_udev = libxl__xs_read(gc, XBT_NULL, DISABLE_UDEV_PATH);
     int rc;
-
-    /* Check if we have to run hotplug scripts */
-    if (!disable_udev || num_exec > 0) {
-        rc = 0;
-        goto out;
-    }
 
     switch (dev->backend_kind) {
     case LIBXL__DEVICE_KIND_VBD:
@@ -94,4 +87,16 @@ out:
 libxl_device_model_version libxl__default_device_model(libxl__gc *gc)
 {
     return LIBXL_DEVICE_MODEL_VERSION_QEMU_XEN_TRADITIONAL;
+}
+
+int libxl__pci_numdevs(libxl__gc *gc)
+{
+    return ERROR_NI;
+}
+
+int libxl__pci_topology_init(libxl__gc *gc,
+                             physdev_pci_device_t *devs,
+                             int num_devs)
+{
+    return ERROR_NI;
 }

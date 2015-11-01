@@ -9,12 +9,11 @@
 #include <asm/e820.h>
 #include <asm/mce.h>
 #include <public/vcpu.h>
+#include <public/hvm/hvm_info_table.h>
 
 #define has_32bit_shinfo(d)    ((d)->arch.has_32bit_shinfo)
 #define is_pv_32bit_domain(d)  ((d)->arch.is_32bit_pv)
 #define is_pv_32bit_vcpu(v)    (is_pv_32bit_domain((v)->domain))
-#define is_pv_32on64_domain(d) (is_pv_32bit_domain(d))
-#define is_pv_32on64_vcpu(v)   (is_pv_32on64_domain((v)->domain))
 
 #define is_hvm_pv_evtchn_domain(d) (has_hvm_container_domain(d) && \
         d->arch.hvm_domain.irq.callback_via_type == HVMIRQ_callback_vector)
@@ -87,6 +86,7 @@ void hypercall_page_initialise(struct domain *d, void *);
 /*          shadow paging extension             */
 /************************************************/
 struct shadow_domain {
+#ifdef CONFIG_SHADOW_PAGING
     unsigned int      opt_flags;    /* runtime tunable optimizations on/off */
     struct page_list_head pinned_shadows;
 
@@ -116,9 +116,11 @@ struct shadow_domain {
 
     /* Has this domain ever used HVMOP_pagetable_dying? */
     bool_t pagetable_dying_op;
+#endif
 };
 
 struct shadow_vcpu {
+#ifdef CONFIG_SHADOW_PAGING
     /* PAE guests: per-vcpu shadow top-level table */
     l3_pgentry_t l3table[4] __attribute__((__aligned__(32)));
     /* PAE guests: per-vcpu cache of the top-level *guest* entries */
@@ -144,6 +146,7 @@ struct shadow_vcpu {
     } oos_fixup[SHADOW_OOS_PAGES];
 
     bool_t pagetable_dying;
+#endif
 };
 
 /************************************************/
@@ -181,6 +184,8 @@ struct paging_domain {
 
     /* flags to control paging operation */
     u32                     mode;
+    /* Has that pool ever run out of memory? */
+    bool_t                  p2m_alloc_failed;
     /* extension for shadow paging support */
     struct shadow_domain    shadow;
     /* extension for hardware-assited paging */
@@ -205,8 +210,6 @@ struct paging_domain {
      * (used by p2m and log-dirty code for their tries) */
     struct page_info * (*alloc_page)(struct domain *d);
     void (*free_page)(struct domain *d, struct page_info *pg);
-    /* Has that pool ever run out of memory? */
-    bool_t p2m_alloc_failed;
 };
 
 struct paging_vcpu {
@@ -230,6 +233,10 @@ struct paging_vcpu {
 typedef xen_domctl_cpuid_t cpuid_input_t;
 
 #define MAX_NESTEDP2M 10
+
+#define MAX_ALTP2M      10 /* arbitrary */
+#define INVALID_ALTP2M  0xffff
+#define MAX_EPTP        (PAGE_SIZE / sizeof(uint64_t))
 struct p2m_domain;
 struct time_scale {
     int shift;
@@ -244,18 +251,36 @@ struct pv_domain
     struct mapcache_domain mapcache;
 };
 
+struct monitor_write_data {
+    struct {
+        unsigned int msr : 1;
+        unsigned int cr0 : 1;
+        unsigned int cr3 : 1;
+        unsigned int cr4 : 1;
+    } do_write;
+
+    uint32_t msr;
+    uint64_t value;
+    uint64_t cr0;
+    uint64_t cr3;
+    uint64_t cr4;
+};
+
 struct arch_domain
 {
     struct page_info *perdomain_l3_pg;
 
     unsigned int hv_compat_vstart;
 
-    bool_t s3_integrity;
+    /* Maximum physical-address bitwidth supported by this guest. */
+    unsigned int physaddr_bitsize;
 
     /* I/O-port admin-specified access capabilities. */
     struct rangeset *ioport_caps;
     uint32_t pci_cf8;
     uint8_t cmos_idx;
+
+    bool_t s3_integrity;
 
     struct list_head pdev_list;
 
@@ -270,23 +295,6 @@ struct arch_domain
      * page_alloc lock */
     int page_alloc_unlock_level;
 
-    /* nestedhvm: translate l2 guest physical to host physical */
-    struct p2m_domain *nested_p2m[MAX_NESTEDP2M];
-    mm_lock_t nested_p2m_lock;
-
-    /* NB. protected by d->event_lock and by irq_desc[irq].lock */
-    struct radix_tree_root irq_pirq;
-
-    /* Maximum physical-address bitwidth supported by this guest. */
-    unsigned int physaddr_bitsize;
-
-    /* Is a 32-bit PV (non-HVM) guest? */
-    bool_t is_32bit_pv;
-    /* Is shared-info page in 32-bit format? */
-    bool_t has_32bit_shinfo;
-    /* Domain cannot handle spurious page faults? */
-    bool_t suppress_spurious_page_faults;
-
     /* Continuable domain_relinquish_resources(). */
     enum {
         RELMEM_not_started,
@@ -298,6 +306,35 @@ struct arch_domain
         RELMEM_done,
     } relmem;
     struct page_list_head relmem_list;
+
+    /* nestedhvm: translate l2 guest physical to host physical */
+    struct p2m_domain *nested_p2m[MAX_NESTEDP2M];
+    mm_lock_t nested_p2m_lock;
+
+    /* altp2m: allow multiple copies of host p2m */
+    bool_t altp2m_active;
+    struct p2m_domain *altp2m_p2m[MAX_ALTP2M];
+    mm_lock_t altp2m_list_lock;
+    uint64_t *altp2m_eptp;
+
+    /* NB. protected by d->event_lock and by irq_desc[irq].lock */
+    struct radix_tree_root irq_pirq;
+
+    /* Is a 32-bit PV (non-HVM) guest? */
+    bool_t is_32bit_pv;
+    /* Is shared-info page in 32-bit format? */
+    bool_t has_32bit_shinfo;
+
+    /* Domain cannot handle spurious page faults? */
+    bool_t suppress_spurious_page_faults;
+
+    /* Is PHYSDEVOP_eoi to automatically unmask the event channel? */
+    bool_t auto_unmask;
+
+    /* Values snooped from updates to cpuids[] (below). */
+    u8 x86;                  /* CPU family */
+    u8 x86_vendor;           /* CPU vendor */
+    u8 x86_model;            /* CPU model */
 
     cpuid_input_t *cpuids;
 
@@ -314,22 +351,42 @@ struct arch_domain
     struct time_scale ns_to_vtsc; /* scaling for certain emulated cases */
     uint32_t incarnation;    /* incremented every restore or live migrate
                                 (possibly other cases in the future */
-    uint64_t vtsc_kerncount; /* for hvm, counts all vtsc */
-    uint64_t vtsc_usercount; /* not used for hvm */
+#if !defined(NDEBUG) || defined(PERF_COUNTERS)
+    uint64_t vtsc_kerncount;
+    uint64_t vtsc_usercount;
+#endif
 
     /* Pseudophysical e820 map (XENMEM_memory_map).  */
     spinlock_t e820_lock;
     struct e820entry *e820;
     unsigned int nr_e820;
 
-    /* set auto_unmask to 1 if you want PHYSDEVOP_eoi to automatically
-     * unmask the event channel */
-    bool_t auto_unmask;
+    /* RMID assigned to the domain for CMT */
+    unsigned int psr_rmid;
+    /* COS assigned to the domain for each socket */
+    unsigned int *psr_cos_ids;
+
     /* Shared page for notifying that explicit PIRQ EOI is required. */
     unsigned long *pirq_eoi_map;
     unsigned long pirq_eoi_map_mfn;
 
-    unsigned int psr_rmid; /* RMID assigned to the domain for CMT */
+    /* Monitor options */
+    struct {
+        unsigned int write_ctrlreg_enabled       : 4;
+        unsigned int write_ctrlreg_sync          : 4;
+        unsigned int write_ctrlreg_onchangeonly  : 4;
+        unsigned int mov_to_msr_enabled          : 1;
+        unsigned int mov_to_msr_extended         : 1;
+        unsigned int singlestep_enabled          : 1;
+        unsigned int software_breakpoint_enabled : 1;
+        unsigned int guest_request_enabled       : 1;
+        unsigned int guest_request_sync          : 1;
+    } monitor;
+
+    /* Mem_access emulation control */
+    bool_t mem_access_emulate_enabled;
+
+    struct monitor_write_data *event_write_data;
 } __cacheline_aligned;
 
 #define has_arch_pdevs(d)    (!list_empty(&(d)->arch.pdev_list))
@@ -363,8 +420,6 @@ struct pv_vcpu
             unsigned int failsafe_callback_cs;
         };
     };
-
-    unsigned long vm_assist;
 
     unsigned long syscall32_callback_eip;
     unsigned long sysenter_callback_eip;
@@ -426,6 +481,8 @@ struct arch_vcpu
     void (*ctxt_switch_from) (struct vcpu *);
     void (*ctxt_switch_to) (struct vcpu *);
 
+    struct vpmu_struct vpmu;
+
     /* Virtual Machine Extensions */
     union {
         struct pv_vcpu pv_vcpu;
@@ -478,15 +535,15 @@ struct arch_vcpu
 
     /*
      * Should we emulate the next matching instruction on VCPU resume
-     * after a mem_event?
+     * after a vm_event?
      */
     struct {
         uint32_t emulate_flags;
         unsigned long gpa;
         unsigned long eip;
-    } mem_event;
-
-} __cacheline_aligned;
+        struct vm_event_emul_read_data *emul_read_data;
+    } vm_event;
+};
 
 smap_check_policy_t smap_policy_change(struct vcpu *v,
                                        smap_check_policy_t new_policy);
@@ -526,6 +583,8 @@ void domain_cpuid(struct domain *d,
                   unsigned int  *ebx,
                   unsigned int  *ecx,
                   unsigned int  *edx);
+
+#define domain_max_vcpus(d) (is_hvm_domain(d) ? HVM_MAX_VCPUS : MAX_VIRT_CPUS)
 
 #endif /* __ASM_DOMAIN_H__ */
 

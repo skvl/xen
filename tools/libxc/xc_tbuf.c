@@ -19,8 +19,7 @@
  * Lesser General Public License for more details.
  *
  * You should have received a copy of the GNU Lesser General Public
- * License along with this library; if not, write to the Free Software
- * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301  USA
+ * License along with this library; If not, see <http://www.gnu.org/licenses/>.
  */
 
 #include "xc_private.h"
@@ -113,15 +112,30 @@ int xc_tbuf_disable(xc_interface *xch)
     return tbuf_enable(xch, 0);
 }
 
-int xc_tbuf_set_cpu_mask(xc_interface *xch, uint32_t mask)
+int xc_tbuf_set_cpu_mask(xc_interface *xch, xc_cpumap_t mask)
 {
     DECLARE_SYSCTL;
-    DECLARE_HYPERCALL_BUFFER(uint8_t, bytemap);
+    DECLARE_HYPERCALL_BOUNCE(mask, 0, XC_HYPERCALL_BUFFER_BOUNCE_IN);
     int ret = -1;
-    uint64_t mask64 = mask;
+    int bits, cpusize;
 
-    bytemap = xc_hypercall_buffer_alloc(xch, bytemap, sizeof(mask64));
-    if ( bytemap == NULL )
+    cpusize = xc_get_cpumap_size(xch);
+    if (cpusize <= 0)
+    {
+        PERROR("Could not get number of cpus");
+        return -1;
+    }
+
+    HYPERCALL_BOUNCE_SET_SIZE(mask, cpusize);
+
+    bits = xc_get_max_cpus(xch);
+    if (bits <= 0)
+    {
+        PERROR("Could not get number of bits");
+        return -1;
+    }
+
+    if ( xc_hypercall_bounce_pre(xch, mask) )
     {
         PERROR("Could not allocate memory for xc_tbuf_set_cpu_mask hypercall");
         goto out;
@@ -131,14 +145,12 @@ int xc_tbuf_set_cpu_mask(xc_interface *xch, uint32_t mask)
     sysctl.interface_version = XEN_SYSCTL_INTERFACE_VERSION;
     sysctl.u.tbuf_op.cmd  = XEN_SYSCTL_TBUFOP_set_cpu_mask;
 
-    bitmap_64_to_byte(bytemap, &mask64, sizeof (mask64) * 8);
-
-    set_xen_guest_handle(sysctl.u.tbuf_op.cpu_mask.bitmap, bytemap);
-    sysctl.u.tbuf_op.cpu_mask.nr_bits = sizeof(bytemap) * 8;
+    set_xen_guest_handle(sysctl.u.tbuf_op.cpu_mask.bitmap, mask);
+    sysctl.u.tbuf_op.cpu_mask.nr_bits = bits;
 
     ret = do_sysctl(xch, &sysctl);
 
-    xc_hypercall_buffer_free(xch, bytemap);
+    xc_hypercall_bounce_post(xch, mask);
 
  out:
     return ret;

@@ -11,9 +11,7 @@
  * General Public License for more details.
  *
  * You should have received a copy of the GNU General Public
- * License along with this program; if not, write to the
- * Free Software Foundation, Inc., 59 Temple Place - Suite 330,
- * Boston, MA 021110-1307, USA.
+ * License along with this program; If not, see <http://www.gnu.org/licenses/>.
  */
 
 #include <xen/config.h>
@@ -40,6 +38,9 @@
 #define DBGP1(...) ((void)0)
 #define DBGP2(...) ((void)0)
 #endif
+
+typedef unsigned long dbgva_t;
+typedef unsigned char dbgbyte_t;
 
 /* Returns: mfn for the given (hvm guest) vaddr */
 static unsigned long 
@@ -105,7 +106,7 @@ dbg_pv_va2mfn(dbgva_t vaddr, struct domain *dp, uint64_t pgd3val)
 
     if ( pgd3val == 0 )
     {
-        l4t = map_domain_page(mfn);
+        l4t = map_domain_page(_mfn(mfn));
         l4e = l4t[l4_table_offset(vaddr)];
         unmap_domain_page(l4t);
         mfn = l4e_get_pfn(l4e);
@@ -117,7 +118,7 @@ dbg_pv_va2mfn(dbgva_t vaddr, struct domain *dp, uint64_t pgd3val)
             return INVALID_MFN;
         }
 
-        l3t = map_domain_page(mfn);
+        l3t = map_domain_page(_mfn(mfn));
         l3e = l3t[l3_table_offset(vaddr)];
         unmap_domain_page(l3t);
         mfn = l3e_get_pfn(l3e);
@@ -131,7 +132,7 @@ dbg_pv_va2mfn(dbgva_t vaddr, struct domain *dp, uint64_t pgd3val)
         }
     }
 
-    l2t = map_domain_page(mfn);
+    l2t = map_domain_page(_mfn(mfn));
     l2e = l2t[l2_table_offset(vaddr)];
     unmap_domain_page(l2t);
     mfn = l2e_get_pfn(l2e);
@@ -143,7 +144,7 @@ dbg_pv_va2mfn(dbgva_t vaddr, struct domain *dp, uint64_t pgd3val)
         DBGP1("l2 PAGE not present. vaddr:%lx cr3:%lx\n", vaddr, cr3);
         return INVALID_MFN;
     }
-    l1t = map_domain_page(mfn);
+    l1t = map_domain_page(_mfn(mfn));
     l1e = l1t[l1_table_offset(vaddr)];
     unmap_domain_page(l1t);
     mfn = l1e_get_pfn(l1e);
@@ -154,13 +155,14 @@ dbg_pv_va2mfn(dbgva_t vaddr, struct domain *dp, uint64_t pgd3val)
 }
 
 /* Returns: number of bytes remaining to be copied */
-static int
-dbg_rw_guest_mem(dbgva_t addr, dbgbyte_t *buf, int len, struct domain *dp, 
-                 int toaddr, uint64_t pgd3)
+unsigned int dbg_rw_guest_mem(struct domain *dp, void * __user gaddr,
+                              void * __user buf, unsigned int len,
+                              bool_t toaddr, uint64_t pgd3)
 {
     while ( len > 0 )
     {
         char *va;
+        unsigned long addr = (unsigned long)gaddr;
         unsigned long mfn, gfn = INVALID_GFN, pagecnt;
 
         pagecnt = min_t(long, PAGE_SIZE - (addr & ~PAGE_MASK), len);
@@ -171,17 +173,17 @@ dbg_rw_guest_mem(dbgva_t addr, dbgbyte_t *buf, int len, struct domain *dp,
         if ( mfn == INVALID_MFN ) 
             break;
 
-        va = map_domain_page(mfn);
+        va = map_domain_page(_mfn(mfn));
         va = va + (addr & (PAGE_SIZE-1));
 
         if ( toaddr )
         {
-            memcpy(va, buf, pagecnt);    /* va = buf */
+            copy_from_user(va, buf, pagecnt);    /* va = buf */
             paging_mark_dirty(dp, mfn);
         }
         else
         {
-            memcpy(buf, va, pagecnt);    /* buf = va */
+            copy_to_user(buf, va, pagecnt);    /* buf = va */
         }
 
         unmap_domain_page(va);
@@ -203,27 +205,30 @@ dbg_rw_guest_mem(dbgva_t addr, dbgbyte_t *buf, int len, struct domain *dp,
  * pgd3: value of init_mm.pgd[3] in guest. see above.
  * Returns: number of bytes remaining to be copied. 
  */
-int
-dbg_rw_mem(dbgva_t addr, dbgbyte_t *buf, int len, domid_t domid, int toaddr,
-           uint64_t pgd3)
+unsigned int dbg_rw_mem(void * __user addr, void * __user buf,
+                        unsigned int len, domid_t domid, bool_t toaddr,
+                        uint64_t pgd3)
 {
-    struct domain *dp = get_domain_by_id(domid);
-    int hyp = (domid == DOMID_IDLE);
+    DBGP2("gmem:addr:%lx buf:%p len:$%u domid:%d toaddr:%x\n",
+          addr, buf, len, domid, toaddr);
 
-    DBGP2("gmem:addr:%lx buf:%p len:$%d domid:%x toaddr:%x dp:%p\n", 
-          addr, buf, len, domid, toaddr, dp);
-    if ( hyp )
+    if ( domid == DOMID_IDLE )
     {
         if ( toaddr )
-            len = __copy_to_user((void *)addr, buf, len);
+            len = __copy_to_user(addr, buf, len);
         else
-            len = __copy_from_user(buf, (void *)addr, len);
+            len = __copy_from_user(buf, addr, len);
     }
-    else if ( dp )
+    else
     {
-        if ( !dp->is_dying )   /* make sure guest is still there */
-            len= dbg_rw_guest_mem(addr, buf, len, dp, toaddr, pgd3);
-        put_domain(dp);
+        struct domain *d = get_domain_by_id(domid);
+
+        if ( d )
+        {
+            if ( !d->is_dying )
+                len = dbg_rw_guest_mem(d, addr, buf, len, toaddr, pgd3);
+            put_domain(d);
+        }
     }
 
     DBGP2("gmem:exit:len:$%d\n", len);

@@ -21,6 +21,14 @@
 #XENSTORED=@XENSTORED@
 
 ## Type: string
+## Default: ""
+#
+# Additional commandline arguments to start xenstored,
+# like "--trace-file /var/log/xen/xenstored-trace.log"
+# See "@sbindir@/xenstored --help" for possible options.
+XENSTORED_ARGS=
+
+## Type: string
 ## Default: Not defined, tracing off
 #
 # Log xenstored messages
@@ -39,4 +47,4 @@
 #XENBACKENDD_DEBUG=[yes|on|1]
 
 # qemu path
-#QEMU_XEN=@LIBEXEC_BIN@/qemu-system-i386
+#QEMU_XEN=@qemu_xen_path@

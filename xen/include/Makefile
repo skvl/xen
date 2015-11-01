@@ -21,12 +21,12 @@ headers-y := \
     compat/vcpu.h \
     compat/version.h \
     compat/xen.h \
-    compat/xencomm.h \
     compat/xenoprof.h
+headers-$(CONFIG_X86)     += compat/arch-x86/pmu.h
 headers-$(CONFIG_X86)     += compat/arch-x86/xen-mca.h
 headers-$(CONFIG_X86)     += compat/arch-x86/xen.h
 headers-$(CONFIG_X86)     += compat/arch-x86/xen-$(compat-arch-y).h
-headers-y                 += compat/arch-$(compat-arch-y).h compat/xlat.h
+headers-y                 += compat/arch-$(compat-arch-y).h compat/pmu.h compat/xlat.h
 headers-$(FLASK_ENABLE)   += compat/xsm/flask_op.h
 
 cppflags-y                := -include public/xen-compat.h
@@ -88,13 +88,33 @@ compat/xlat.h: $(addprefix compat/.xlat/,$(xlat-y)) Makefile
 
 ifeq ($(XEN_TARGET_ARCH),$(XEN_COMPILE_ARCH))
 
-all: headers.chk
+all: headers.chk headers++.chk
 
-headers.chk: $(filter-out public/arch-% public/%ctl.h public/xsm/% public/%hvm/save.h, $(wildcard public/*.h public/*/*.h) $(public-y)) Makefile
-	for i in $(filter %.h,$^); do $(CC) -ansi -include stdint.h -Wall -W -Werror -S -o /dev/null -x c $$i || exit 1; echo $$i; done >$@.new
+PUBLIC_HEADERS := $(filter-out public/arch-% public/dom0_ops.h, $(wildcard public/*.h public/*/*.h) $(public-y))
+
+PUBLIC_ANSI_HEADERS := $(filter-out public/%ctl.h public/xsm/% public/%hvm/save.h, $(PUBLIC_HEADERS))
+
+headers.chk: $(PUBLIC_ANSI_HEADERS) Makefile
+	for i in $(filter %.h,$^); do \
+	    $(CC) -x c -ansi -Wall -Werror -include stdint.h \
+	          -S -o /dev/null $$i || exit 1; \
+	    echo $$i; \
+	done >$@.new
+	mv $@.new $@
+
+headers++.chk: $(PUBLIC_HEADERS) Makefile
+	if $(CXX) -v >/dev/null 2>&1; then \
+	    for i in $(filter %.h,$^); do \
+	        echo '#include "'$$i'"' \
+	        | $(CXX) -x c++ -std=gnu++98 -Wall -Werror -D__XEN_TOOLS__ \
+	          -include stdint.h -include public/xen.h -S -o /dev/null - \
+	        || exit 1; \
+	        echo $$i; \
+	    done ; \
+	fi >$@.new
 	mv $@.new $@
 
 endif
 
 clean::
-	rm -rf compat headers.chk
+	rm -rf compat headers.chk headers++.chk

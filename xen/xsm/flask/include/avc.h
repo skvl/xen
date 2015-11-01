@@ -17,11 +17,7 @@
 #include "av_permissions.h"
 #include "security.h"
 
-#ifdef FLASK_DEVELOP
-extern int flask_enforcing;
-#else
-#define flask_enforcing 1
-#endif
+extern bool_t flask_enforcing;
 
 /*
  * An entry in the AVC.
@@ -43,6 +39,7 @@ struct avc_audit_data {
 #define AVC_AUDIT_DATA_IRQ   2
 #define AVC_AUDIT_DATA_RANGE 3
 #define AVC_AUDIT_DATA_MEMORY 4
+#define AVC_AUDIT_DATA_DTDEV 5
     struct domain *sdom;
     struct domain *tdom;
     union {
@@ -56,6 +53,7 @@ struct avc_audit_data {
             unsigned long pte;
             unsigned long mfn;
         } memory;
+        const char *dtdev;
     };
 };
 

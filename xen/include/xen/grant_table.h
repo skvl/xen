@@ -17,8 +17,7 @@
  * GNU General Public License for more details.
  * 
  * You should have received a copy of the GNU General Public License
- * along with this program; if not, write to the Free Software
- * Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
+ * along with this program; If not, see <http://www.gnu.org/licenses/>.
  */
 
 #ifndef __XEN_GRANT_TABLE_H__
@@ -52,18 +51,13 @@
 /* The maximum size of a grant table. */
 extern unsigned int max_grant_frames;
 
-/*
- * Tracks a mapping of another domain's grant reference. Each domain has a
- * table of these, indexes into which are returned as a 'mapping handle'.
- */
-struct grant_mapping {
-    u32      ref;           /* grant ref */
-    u16      flags;         /* 0-4: GNTMAP_* ; 5-15: unused */
-    domid_t  domid;         /* granting domain */
-};
-
 /* Per-domain grant information. */
 struct grant_table {
+    /*
+     * Lock protecting updates to grant table state (version, active
+     * entry list, etc.)
+     */
+    rwlock_t              lock;
     /* Table size. Number of frames shared with guest */
     unsigned int          nr_grant_frames;
     /* Shared grant table (see include/public/grant_table.h). */
@@ -78,12 +72,11 @@ struct grant_table {
     grant_status_t       **status;
     /* Active grant table. */
     struct active_grant_entry **active;
-    /* Mapping tracking table. */
+    /* Mapping tracking table per vcpu. */
     struct grant_mapping **maptrack;
-    unsigned int          maptrack_head;
     unsigned int          maptrack_limit;
-    /* Lock protecting updates to active and shared grant tables. */
-    spinlock_t            lock;
+    /* Lock protecting the maptrack page list, head, and limit */
+    spinlock_t            maptrack_lock;
     /* The defined versions are 1 and 2.  Set to 0 if we don't know
        what version to use yet. */
     unsigned              gt_version;
@@ -94,6 +87,7 @@ int grant_table_create(
     struct domain *d);
 void grant_table_destroy(
     struct domain *d);
+void grant_table_init_vcpu(struct vcpu *v);
 
 /* Domain death release of granted mappings of other domains' memory. */
 void
@@ -101,7 +95,7 @@ gnttab_release_mappings(
     struct domain *d);
 
 /* Increase the size of a domain's grant table.
- * Caller must hold d's grant table lock.
+ * Caller must hold d's grant table write lock.
  */
 int
 gnttab_grow_table(struct domain *d, unsigned int req_nr_frames);

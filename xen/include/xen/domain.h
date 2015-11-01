@@ -4,6 +4,7 @@
 
 #include <public/xen.h>
 #include <asm/domain.h>
+#include <asm/numa.h>
 
 typedef union {
     struct vcpu_guest_context *nat;
@@ -55,7 +56,8 @@ void vcpu_destroy(struct vcpu *v);
 int map_vcpu_info(struct vcpu *v, unsigned long gfn, unsigned offset);
 void unmap_vcpu_info(struct vcpu *v);
 
-int arch_domain_create(struct domain *d, unsigned int domcr_flags);
+int arch_domain_create(struct domain *d, unsigned int domcr_flags,
+                       struct xen_arch_domainconfig *config);
 
 void arch_domain_destroy(struct domain *d);
 
@@ -99,7 +101,7 @@ struct vnuma_info {
     unsigned int nr_vmemranges;
     unsigned int *vdistance;
     unsigned int *vcpu_to_vnode;
-    unsigned int *vnode_to_pnode;
+    nodeid_t *vnode_to_pnode;
     struct xen_vmemrange *vmemrange;
 };
 

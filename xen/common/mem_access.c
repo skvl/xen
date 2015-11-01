@@ -16,44 +16,17 @@
  * GNU General Public License for more details.
  *
  * You should have received a copy of the GNU General Public License
- * along with this program; if not, write to the Free Software
- * Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
+ * along with this program; If not, see <http://www.gnu.org/licenses/>.
  */
 
 
 #include <xen/sched.h>
 #include <xen/guest_access.h>
 #include <xen/hypercall.h>
-#include <xen/mem_event.h>
+#include <xen/vm_event.h>
 #include <public/memory.h>
 #include <asm/p2m.h>
 #include <xsm/xsm.h>
-
-void mem_access_resume(struct domain *d)
-{
-    mem_event_response_t rsp;
-
-    /* Pull all responses off the ring. */
-    while ( mem_event_get_response(d, &d->mem_event->access, &rsp) )
-    {
-        struct vcpu *v;
-
-        if ( rsp.flags & MEM_EVENT_FLAG_DUMMY )
-            continue;
-
-        /* Validate the vcpu_id in the response. */
-        if ( (rsp.vcpu_id >= d->max_vcpus) || !d->vcpu[rsp.vcpu_id] )
-            continue;
-
-        v = d->vcpu[rsp.vcpu_id];
-
-        p2m_mem_event_emulate_check(v, &rsp);
-
-        /* Unpause domain. */
-        if ( rsp.flags & MEM_EVENT_FLAG_VCPU_PAUSED )
-            mem_event_vcpu_unpause(v);
-    }
-}
 
 int mem_access_memop(unsigned long cmd,
                      XEN_GUEST_HANDLE_PARAM(xen_mem_access_op_t) arg)
@@ -74,25 +47,16 @@ int mem_access_memop(unsigned long cmd,
     if ( !p2m_mem_access_sanity_check(d) )
         goto out;
 
-    rc = xsm_mem_event_op(XSM_DM_PRIV, d, XENMEM_access_op);
+    rc = xsm_mem_access(XSM_DM_PRIV, d);
     if ( rc )
         goto out;
 
     rc = -ENODEV;
-    if ( unlikely(!d->mem_event->access.ring_page) )
+    if ( unlikely(!d->vm_event->monitor.ring_page) )
         goto out;
 
     switch ( mao.op )
     {
-    case XENMEM_access_op_resume:
-        if ( unlikely(start_iter) )
-            rc = -ENOSYS;
-        else
-        {
-            mem_access_resume(d);
-            rc = 0;
-        }
-        break;
 
     case XENMEM_access_op_set_access:
         rc = -EINVAL;
@@ -102,7 +66,7 @@ int mem_access_memop(unsigned long cmd,
               ((mao.pfn + mao.nr - 1) > domain_get_maximum_gpfn(d))) )
             break;
 
-        rc = p2m_set_mem_access(d, mao.pfn, mao.nr, start_iter,
+        rc = p2m_set_mem_access(d, _gfn(mao.pfn), mao.nr, start_iter,
                                 MEMOP_CMD_MASK, mao.access);
         if ( rc > 0 )
         {
@@ -124,7 +88,7 @@ int mem_access_memop(unsigned long cmd,
         if ( (mao.pfn > domain_get_maximum_gpfn(d)) && mao.pfn != ~0ull )
             break;
 
-        rc = p2m_get_mem_access(d, mao.pfn, &access);
+        rc = p2m_get_mem_access(d, _gfn(mao.pfn), &access);
         if ( rc != 0 )
             break;
 
@@ -133,6 +97,14 @@ int mem_access_memop(unsigned long cmd,
 
         break;
     }
+
+    case XENMEM_access_op_enable_emulate:
+        rc = p2m_mem_access_enable_emulate(d);
+        break;
+
+    case XENMEM_access_op_disable_emulate:
+        rc = p2m_mem_access_disable_emulate(d);
+        break;
 
     default:
         rc = -ENOSYS;
@@ -144,13 +116,13 @@ int mem_access_memop(unsigned long cmd,
     return rc;
 }
 
-int mem_access_send_req(struct domain *d, mem_event_request_t *req)
+int mem_access_send_req(struct domain *d, vm_event_request_t *req)
 {
-    int rc = mem_event_claim_slot(d, &d->mem_event->access);
+    int rc = vm_event_claim_slot(d, &d->vm_event->monitor);
     if ( rc < 0 )
         return rc;
 
-    mem_event_put_request(d, &d->mem_event->access, req);
+    vm_event_put_request(d, &d->vm_event->monitor, req);
 
     return 0;
 }

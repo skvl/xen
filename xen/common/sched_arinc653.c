@@ -246,9 +246,8 @@ arinc653_sched_set(
 
     for ( i = 0; i < schedule->num_sched_entries; i++ )
     {
-        /* Check for a valid VCPU ID and run time. */
-        if ( (schedule->sched_entries[i].vcpu_id >= MAX_VIRT_CPUS)
-             || (schedule->sched_entries[i].runtime <= 0) )
+        /* Check for a valid run time. */
+        if ( schedule->sched_entries[i].runtime <= 0 )
             goto fail;
 
         /* Add this entry's run time to total run time. */
@@ -706,6 +705,7 @@ a653sched_adjust_global(const struct scheduler *ops,
         rc = arinc653_sched_set(ops, &local_sched);
         break;
     case XEN_SYSCTL_SCHEDOP_getinfo:
+        memset(&local_sched, -1, sizeof(local_sched));
         rc = arinc653_sched_get(ops, &local_sched);
         if ( rc )
             break;

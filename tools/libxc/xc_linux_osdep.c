@@ -17,8 +17,7 @@
  * Lesser General Public License for more details.
  *
  * You should have received a copy of the GNU Lesser General Public
- * License along with this library; if not, write to the Free Software
- * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301  USA
+ * License along with this library; If not, see <http://www.gnu.org/licenses/>.
  */
 
 #include <errno.h>
@@ -122,10 +121,13 @@ out:
 
 static void linux_privcmd_free_hypercall_buffer(xc_interface *xch, xc_osdep_handle h, void *ptr, int npages)
 {
+    int saved_errno = errno;
     /* Recover the VMA flags. Maybe it's not necessary */
     madvise(ptr, npages * XC_PAGE_SIZE, MADV_DOFORK);
 
     munmap(ptr, npages * XC_PAGE_SIZE);
+    /* We MUST propagate the hypercall errno, not unmap call's. */
+    errno = saved_errno;
 }
 
 static int linux_privcmd_hypercall(xc_interface *xch, xc_osdep_handle h, privcmd_hypercall_t *hypercall)
@@ -316,6 +318,7 @@ static void *linux_privcmd_map_foreign_bulk(xc_interface *xch, xc_osdep_handle h
             if ( pfn == MAP_FAILED )
             {
                 PERROR("xc_map_foreign_bulk: mmap of pfn array failed");
+                (void)munmap(addr, (unsigned long)num << XC_PAGE_SHIFT);
                 return NULL;
             }
         }
@@ -739,7 +742,7 @@ static int linux_gnttab_munmap(xc_gnttab *xcg, xc_osdep_handle h,
     }
 
     /* Next, unmap the memory. */
-    if ( (rc = munmap(start_address, count * getpagesize())) )
+    if ( (rc = munmap(start_address, count * XC_PAGE_SIZE)) )
         return rc;
 
     /* Finally, unmap the driver slots used to store the grant information. */

@@ -79,7 +79,7 @@ struct mpbhdr {
 static DEFINE_SPINLOCK(microcode_update_lock);
 
 /* See comment in start_update() for cases when this routine fails */
-static int collect_cpu_info(int cpu, struct cpu_signature *csig)
+static int collect_cpu_info(unsigned int cpu, struct cpu_signature *csig)
 {
     struct cpuinfo_x86 *c = &cpu_data[cpu];
 
@@ -149,7 +149,8 @@ static bool_t find_equiv_cpu_id(const struct equiv_cpu_entry *equiv_cpu_table,
     return 0;
 }
 
-static bool_t microcode_fits(const struct microcode_amd *mc_amd, int cpu)
+static bool_t microcode_fits(const struct microcode_amd *mc_amd,
+                             unsigned int cpu)
 {
     struct ucode_cpu_info *uci = &per_cpu(ucode_cpu_info, cpu);
     const struct microcode_header_amd *mc_header = mc_amd->mpb;
@@ -186,7 +187,7 @@ static bool_t microcode_fits(const struct microcode_amd *mc_amd, int cpu)
     return 1;
 }
 
-static int apply_microcode(int cpu)
+static int apply_microcode(unsigned int cpu)
 {
     unsigned long flags;
     struct ucode_cpu_info *uci = &per_cpu(ucode_cpu_info, cpu);
@@ -347,7 +348,45 @@ static int container_fast_forward(const void *data, size_t size_left, size_t *of
     return 0;
 }
 
-static int cpu_request_microcode(int cpu, const void *buf, size_t bufsize)
+/*
+ * The 'final_levels' of patch ids have been obtained empirically.
+ * Refer bug https://bugzilla.suse.com/show_bug.cgi?id=913996 
+ * for details of the issue. The short version is that people
+ * using certain Fam10h systems noticed system hang issues when
+ * trying to update microcode levels beyond the patch IDs below.
+ * From internal discussions, we gathered that OS/hypervisor
+ * cannot reliably perform microcode updates beyond these levels
+ * due to hardware issues. Therefore, we need to abort microcode
+ * update process if we hit any of these levels.
+ */
+static const unsigned int final_levels[] = {
+    0x01000098,
+    0x0100009f,
+    0x010000af
+};
+
+static bool_t check_final_patch_levels(unsigned int cpu)
+{
+    /*
+     * Check the current patch levels on the cpu. If they are equal to
+     * any of the 'final_levels', then we should not update the microcode
+     * patch on the cpu as system will hang otherwise.
+     */
+    struct ucode_cpu_info *uci = &per_cpu(ucode_cpu_info, cpu);
+    unsigned int i;
+
+    if ( boot_cpu_data.x86 != 0x10 )
+        return 0;
+
+    for ( i = 0; i < ARRAY_SIZE(final_levels); i++ )
+        if ( uci->cpu_sig.rev == final_levels[i] )
+            return 1;
+
+    return 0;
+}
+
+static int cpu_request_microcode(unsigned int cpu, const void *buf,
+                                 size_t bufsize)
 {
     struct microcode_amd *mc_amd, *mc_old;
     size_t offset = 0;
@@ -366,6 +405,14 @@ static int cpu_request_microcode(int cpu, const void *buf, size_t bufsize)
     {
         printk(KERN_ERR "microcode: Wrong microcode patch file magic\n");
         error = -EINVAL;
+        goto out;
+    }
+
+    if ( check_final_patch_levels(cpu) )
+    {
+        printk(XENLOG_INFO
+               "microcode: Cannot update microcode patch on the cpu as we hit a final level\n");
+        error = -EPERM;
         goto out;
     }
 
@@ -511,7 +558,7 @@ static int cpu_request_microcode(int cpu, const void *buf, size_t bufsize)
     return error;
 }
 
-static int microcode_resume_match(int cpu, const void *mc)
+static int microcode_resume_match(unsigned int cpu, const void *mc)
 {
     struct ucode_cpu_info *uci = &per_cpu(ucode_cpu_info, cpu);
     struct microcode_amd *mc_amd = uci->mc.mc_amd;

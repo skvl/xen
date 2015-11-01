@@ -4,34 +4,33 @@ include $(XEN_ROOT)/tools/Rules.mk
 CFLAGS += -Werror
 
 CFLAGS += $(CFLAGS_libxenctrl)
-LDLIBS += $(LDLIBS_libxenctrl)
+LDLIBS += $(LDLIBS_libxenctrl) $(ARGP_LDFLAGS)
 LDFLAGS += $(call LDFLAGS_RPATH,../lib)
 
-BIN      = xentrace xentrace_setsize
+BIN-$(CONFIG_X86) = xenalyze
+BIN      = $(BIN-y)
+SBIN     = xentrace xentrace_setsize
 LIBBIN   = xenctx
 SCRIPTS  = xentrace_format
-MAN1     = $(wildcard *.1)
-MAN8     = $(wildcard *.8)
 
 .PHONY: all
 all: build
 
 .PHONY: build
-build: $(BIN) $(LIBBIN)
+build: $(BIN) $(SBIN) $(LIBBIN)
 
 .PHONY: install
 install: build
 	$(INSTALL_DIR) $(DESTDIR)$(LIBEXEC_BIN)
-	$(INSTALL_DIR) $(DESTDIR)$(MAN1DIR)
-	$(INSTALL_DIR) $(DESTDIR)$(MAN8DIR)
-	$(INSTALL_PROG) $(BIN) $(LIBBIN) $(DESTDIR)$(LIBEXEC_BIN)
+	$(INSTALL_PROG) $(BIN) $(SBIN) $(LIBBIN) $(DESTDIR)$(LIBEXEC_BIN)
 	$(INSTALL_PYTHON_PROG) $(SCRIPTS) $(DESTDIR)$(LIBEXEC_BIN)
-	$(INSTALL_DATA) $(MAN1) $(DESTDIR)$(MAN1DIR)
-	$(INSTALL_DATA) $(MAN8) $(DESTDIR)$(MAN8DIR)
 
 .PHONY: clean
 clean:
-	$(RM) *.a *.so *.o *.rpm $(BIN) $(LIBBIN) $(DEPS)
+	$(RM) *.a *.so *.o *.rpm $(BIN) $(SBIN) $(LIBBIN) $(DEPS)
+
+.PHONY: distclean
+distclean: clean
 
 xentrace: xentrace.o
 	$(CC) $(LDFLAGS) -o $@ $< $(LDLIBS) $(APPEND_LDFLAGS)
@@ -41,6 +40,9 @@ xenctx: xenctx.o
 
 xentrace_setsize: setsize.o
 	$(CC) $(LDFLAGS) -o $@ $< $(LDLIBS) $(APPEND_LDFLAGS)
+
+xenalyze: xenalyze.o mread.o
+	$(CC) $(LDFLAGS) -o $@ $^ $(LDLIBS) $(APPEND_LDFLAGS)
 
 -include $(DEPS)
 

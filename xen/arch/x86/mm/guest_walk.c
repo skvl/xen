@@ -18,8 +18,7 @@
  * GNU General Public License for more details.
  *
  * You should have received a copy of the GNU General Public License
- * along with this program; if not, write to the Free Software
- * Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
+ * along with this program; If not, see <http://www.gnu.org/licenses/>.
  */
 
 #include <xen/types.h>
@@ -99,7 +98,7 @@ void *map_domain_gfn(struct p2m_domain *p2m, gfn_t gfn, mfn_t *mfn,
                                  q);
     if ( p2m_is_paging(*p2mt) )
     {
-        ASSERT(!p2m_is_nestedp2m(p2m));
+        ASSERT(p2m_is_hostp2m(p2m));
         if ( page )
             put_page(page);
         p2m_mem_paging_populate(p2m->domain, gfn_x(gfn));
@@ -121,7 +120,7 @@ void *map_domain_gfn(struct p2m_domain *p2m, gfn_t gfn, mfn_t *mfn,
     *mfn = _mfn(page_to_mfn(page));
     ASSERT(mfn_valid(mfn_x(*mfn)));
 
-    map = map_domain_page(mfn_x(*mfn));
+    map = map_domain_page(*mfn);
     return map;
 }
 
@@ -159,7 +158,7 @@ guest_walk_tables(struct vcpu *v, struct p2m_domain *p2m,
     mflags = mandatory_flags(v, pfec);
     iflags = (_PAGE_NX_BIT | _PAGE_INVALID_BITS);
 
-    if ( is_hvm_vcpu(v) && !(pfec & PFEC_user_mode) )
+    if ( is_hvm_domain(d) && !(pfec & PFEC_user_mode) )
     {
         struct segment_register seg;
         const struct cpu_user_regs *regs = guest_cpu_user_regs();

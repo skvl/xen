@@ -14,8 +14,7 @@
  * more details.
  *
  * You should have received a copy of the GNU General Public License along with
- * this program; if not, write to the Free Software Foundation, Inc., 59 Temple
- * Place - Suite 330, Boston, MA 02111-1307 USA.
+ * this program; If not, see <http://www.gnu.org/licenses/>.
  */
 
 #include "util.h"
@@ -26,6 +25,17 @@
 #include <xen/xen.h>
 #include <xen/memory.h>
 #include <xen/sched.h>
+
+/*
+ * Check whether there exists overlap in the specified memory range.
+ * Returns true if exists, else returns false.
+ */
+bool check_overlap(uint64_t start, uint64_t size,
+                   uint64_t reserved_start, uint64_t reserved_size)
+{
+    return (start + size > reserved_start) &&
+            (start < reserved_start + reserved_size);
+}
 
 void wrmsr(uint32_t idx, uint64_t v)
 {
@@ -368,6 +378,21 @@ uuid_to_string(char *dest, uint8_t *uuid)
     *p = '\0';
 }
 
+int get_mem_mapping_layout(struct e820entry entries[], uint32_t *max_entries)
+{
+    int rc;
+    struct xen_memory_map memmap = {
+        .nr_entries = *max_entries
+    };
+
+    set_xen_guest_handle(memmap.buffer, entries);
+
+    rc = hypercall_memory_op(XENMEM_memory_map, &memmap);
+    *max_entries = memmap.nr_entries;
+
+    return rc;
+}
+
 void mem_hole_populate_ram(xen_pfn_t mfn, uint32_t nr_mfns)
 {
     static int over_allocated;
@@ -406,6 +431,9 @@ void mem_hole_populate_ram(xen_pfn_t mfn, uint32_t nr_mfns)
         if ( hypercall_memory_op(XENMEM_add_to_physmap, &xatp) != 0 )
             BUG();
     }
+
+    /* Sync memory map[]. */
+    adjust_memory_map();
 }
 
 static uint32_t alloc_up = RESERVED_MEMORY_DYNAMIC_START - 1;

@@ -57,13 +57,15 @@ libvhd.so: $(LIB-PICOBJS)
 	$(CC) $(SHLIB_LDFLAGS) $(LDFLAGS) -o libvhd.so $^ $(LIBS)
 
 install: all
-	$(INSTALL_DIR) -p $(DESTDIR)$(LIBDIR)
-	$(INSTALL_DATA) libvhd.a $(DESTDIR)$(LIBDIR)
-	$(INSTALL_PROG) libvhd.so $(DESTDIR)$(LIBDIR)
+	$(INSTALL_DIR) -p $(DESTDIR)$(libdir)
+	$(INSTALL_DATA) libvhd.a $(DESTDIR)$(libdir)
+	$(INSTALL_PROG) libvhd.so $(DESTDIR)$(libdir)
 
 clean:
 	rm -rf *.a *.so* *.o *.opic *~ $(DEPS) $(LIBVHD)
 
-.PHONY: all build clean install libvhd
+distclean: clean
+
+.PHONY: all build clean distclean install libvhd
 
 -include $(DEPS)

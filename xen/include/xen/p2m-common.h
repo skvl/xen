@@ -1,12 +1,12 @@
 #ifndef _XEN_P2M_COMMON_H
 #define _XEN_P2M_COMMON_H
 
-#include <public/mem_event.h>
+#include <public/vm_event.h>
 
 /*
  * Additional access types, which are used to further restrict
  * the permissions given my the p2m_type_t memory type.  Violations
- * caused by p2m_access_t restrictions are sent to the mem_event
+ * caused by p2m_access_t restrictions are sent to the vm_event
  * interface.
  *
  * The access permissions are soft state: when any ambiguous change of page
@@ -43,5 +43,18 @@ int unmap_mmio_regions(struct domain *d,
                        unsigned long start_gfn,
                        unsigned long nr,
                        unsigned long mfn);
+
+/*
+ * Set access type for a region of gfns.
+ * If gfn == INVALID_GFN, sets the default access type.
+ */
+long p2m_set_mem_access(struct domain *d, gfn_t gfn, uint32_t nr,
+                        uint32_t start, uint32_t mask, xenmem_access_t access);
+
+/*
+ * Get access type for a gfn.
+ * If gfn == INVALID_GFN, gets the default access type.
+ */
+int p2m_get_mem_access(struct domain *d, gfn_t gfn, xenmem_access_t *access);
 
 #endif /* _XEN_P2M_COMMON_H */

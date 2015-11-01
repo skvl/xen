@@ -10,19 +10,16 @@
  * Lesser General Public License for more details.
  *
  * You should have received a copy of the GNU Lesser General Public
- * License along with this library; if not, write to the Free Software
- * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301  USA
+ * License along with this library; If not, see <http://www.gnu.org/licenses/>.
  */
 #ifndef __LIBELF_PRIVATE_H__
 #define __LIBELF_PRIVATE_H__
 
 #ifdef __XEN__
 
-#include <xen/config.h>
-#include <xen/types.h>
-#include <xen/string.h>
 #include <xen/lib.h>
 #include <xen/libelf.h>
+#include <xen/softirq.h>
 #include <asm/byteorder.h>
 #include <public/elfnote.h>
 

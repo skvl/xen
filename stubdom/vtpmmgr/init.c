@@ -51,6 +51,8 @@
 #include "vtpm_disk.h"
 #include "tpm.h"
 #include "marshal.h"
+#include "tpm2_marshal.h"
+#include "tpm2.h"
 
 struct Opts {
    enum {
@@ -508,4 +510,281 @@ void vtpmmgr_shutdown(void)
    close(vtpm_globals.tpm_fd);
 
    vtpmloginfo(VTPM_LOG_VTPM, "VTPM Manager stopped.\n");
+}
+
+/* TPM 2.0 */
+
+static void tpm2_AuthArea_ctor(const char *authValue, UINT32 authLen,
+                               TPM_AuthArea *auth)
+{
+    auth->sessionHandle = TPM_RS_PW;
+    auth->nonce.size = 0;
+    auth->sessionAttributes = 1;
+    auth->auth.size = authLen;
+    memcpy(auth->auth.buffer, authValue, authLen);
+    auth->size = 9 + authLen;
+}
+
+TPM_RC tpm2_take_ownership(void)
+{
+    TPM_RC status = TPM_SUCCESS;
+
+    tpm2_AuthArea_ctor(NULL, 0, &vtpm_globals.pw_auth);
+
+    /* create SRK */
+    TPM2_CreatePrimary_Params_in in = {
+        .inSensitive = {
+            .size = 4,
+            .sensitive = {
+                .userAuth.size = 0,
+                .userAuth.buffer = { 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,\
+                                     0, 0, 0, 0, 0, 0, 0, 0, 0, 0 },
+                .data.size = 0,
+            },
+        },
+        .inPublic = {
+            .size = 60,
+            .publicArea = {
+                .type = TPM2_ALG_RSA,
+                .nameAlg = TPM2_ALG_SHA256,
+#define SRK_OBJ_ATTR (fixedTPM | fixedParent  | userWithAuth | \
+                      sensitiveDataOrigin | restricted | decrypt)
+                .objectAttributes = SRK_OBJ_ATTR,
+                .authPolicy.size = 0,
+                .parameters.rsaDetail = {
+                    .symmetric = {
+                    .algorithm = TPM2_ALG_AES,
+                    .keyBits.aes = AES_KEY_SIZES_BITS,
+                    .mode.aes = TPM2_ALG_CFB,
+                    },
+                .scheme = { TPM2_ALG_NULL },
+                .keyBits = RSA_KEY_SIZES_BITS,
+                .exponent = 0,
+                },
+                .unique.rsa.size = 0,
+            },
+        },
+            .outsideInfo.size = 0,
+            .creationPCR.count = 0,
+    };
+
+    TPMTRYRETURN(TPM2_CreatePrimary(TPM_RH_OWNER,&in,
+                                    &vtpm_globals.srk_handle, NULL));
+    vtpmloginfo(VTPM_LOG_VTPM, "SRK handle: 0x%X\n", vtpm_globals.srk_handle);
+    {
+        const char data[20] = { 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,\
+                                0, 0, 0, 0, 0, 0, 0, 0, 0, 0 };
+        tpm2_AuthArea_ctor(data, 20, &vtpm_globals.srk_auth_area);
+    }
+    /*end create SRK*/
+
+abort_egress:
+    return status;
+}
+
+TPM_RESULT vtpmmgr2_create(void)
+{
+    TPM_RESULT status = TPM_SUCCESS;
+
+    TPMTRYRETURN(tpm2_take_ownership());
+
+   /* create SK */
+    TPM2_Create_Params_out out;
+    TPM2_Create_Params_in in = {
+        .inSensitive = {
+            .size = 4 + 20,
+            .sensitive = {
+                .userAuth.size = 20,
+                .userAuth.buffer = { 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,\
+                                     0, 0, 0, 0, 0, 0, 0, 0, 0, 0 },
+                .data.size = 0,
+            },
+        },
+        .inPublic = {
+            .size = (60),
+            .publicArea = {
+                 .type = TPM2_ALG_RSA,
+                 .nameAlg = TPM2_ALG_SHA256,
+#define SK_OBJ_ATTR (fixedTPM | fixedParent | userWithAuth |\
+                     sensitiveDataOrigin |decrypt)
+                 .objectAttributes = SK_OBJ_ATTR,
+                 .authPolicy.size = 0,
+                 .parameters.rsaDetail = {
+                     .symmetric = {
+                         .algorithm = TPM2_ALG_NULL,
+                     },
+                     .scheme = {
+                         TPM2_ALG_OAEP,
+                         .details.oaep.hashAlg = TPM2_ALG_SHA256,
+                     },
+                     .keyBits = RSA_KEY_SIZES_BITS,
+                     .exponent = 0,
+                  },
+                  .unique.rsa.size = 0,
+            },
+        },
+        .outsideInfo.size = 0,
+        .creationPCR.count = 0,
+    };/*end in */
+
+    TPMTRYRETURN(TPM2_Create(vtpm_globals.srk_handle, &in, &out));
+    TPMTRYRETURN(TPM2_Load(vtpm_globals.srk_handle,
+                           &vtpm_globals.tpm2_storage_key.Private,
+                           &vtpm_globals.tpm2_storage_key.Public,
+                           &vtpm_globals.sk_handle,
+                           &vtpm_globals.sk_name));
+
+    vtpmloginfo(VTPM_LOG_VTPM, "SK HANDLE: 0x%X\n", vtpm_globals.sk_handle);
+
+    /*Create new disk image*/
+    TPMTRYRETURN(vtpm_new_disk());
+
+    goto egress;
+
+abort_egress:
+egress:
+    vtpmloginfo(VTPM_LOG_VTPM, "Finished initialized new VTPM manager\n");
+    return status;
+}
+
+static int tpm2_entropy_source(void* dummy, unsigned char* data,
+                               size_t len, size_t* olen)
+{
+    UINT32 sz = len;
+    TPM_RESULT rc = TPM2_GetRandom(&sz, data);
+    *olen = sz;
+    return rc == TPM_SUCCESS ? 0 : POLARSSL_ERR_ENTROPY_SOURCE_FAILED;
+}
+
+/*TPM 2.0 Objects flush */
+static TPM_RC flush_tpm2(void)
+{
+    int i;
+
+    for (i = TRANSIENT_FIRST; i < TRANSIENT_LAST; i++)
+         TPM2_FlushContext(i);
+
+    return TPM_SUCCESS;
+}
+
+TPM_RESULT vtpmmgr2_init(int argc, char** argv)
+{
+    TPM_RESULT status = TPM_SUCCESS;
+
+    /* Default commandline options */
+    struct Opts opts = {
+        .tpmdriver = TPMDRV_TPM_TIS,
+        .tpmiomem = TPM_BASEADDR,
+        .tpmirq = 0,
+        .tpmlocality = 0,
+        .gen_owner_auth = 0,
+    };
+
+    if (parse_cmdline_opts(argc, argv, &opts) != 0) {
+        vtpmlogerror(VTPM_LOG_VTPM, "Command line parsing failed! exiting..\n");
+        status = TPM_BAD_PARAMETER;
+        goto abort_egress;
+    }
+
+    /*Setup storage system*/
+    if (vtpm_storage_init() != 0) {
+        vtpmlogerror(VTPM_LOG_VTPM, "Unable to initialize storage subsystem!\n");
+        status = TPM_IOERROR;
+        goto abort_egress;
+    }
+
+    /*Setup tpmback device*/
+    init_tpmback(set_opaque, free_opaque);
+
+    /*Setup tpm access*/
+    switch(opts.tpmdriver) {
+        case TPMDRV_TPM_TIS:
+        {
+            struct tpm_chip* tpm;
+            if ((tpm = init_tpm2_tis(opts.tpmiomem, TPM_TIS_LOCL_INT_TO_FLAG(opts.tpmlocality),
+                                     opts.tpmirq)) == NULL) {
+                vtpmlogerror(VTPM_LOG_VTPM, "Unable to initialize tpmfront device\n");
+                status = TPM_IOERROR;
+                goto abort_egress;
+            }
+            printk("init_tpm2_tis()       ...ok\n");
+            vtpm_globals.tpm_fd = tpm_tis_open(tpm);
+            tpm_tis_request_locality(tpm, opts.tpmlocality);
+        }
+        break;
+        case TPMDRV_TPMFRONT:
+        {
+            struct tpmfront_dev* tpmfront_dev;
+            if ((tpmfront_dev = init_tpmfront(NULL)) == NULL) {
+                vtpmlogerror(VTPM_LOG_VTPM, "Unable to initialize tpmfront device\n");
+                status = TPM_IOERROR;
+                goto abort_egress;
+            }
+            vtpm_globals.tpm_fd = tpmfront_open(tpmfront_dev);
+        }
+        break;
+    }
+    printk("TPM 2.0 access ...ok\n");
+    /* Blow away all stale handles left in the tpm*/
+    if (flush_tpm2() != TPM_SUCCESS) {
+        vtpmlogerror(VTPM_LOG_VTPM, "VTPM_FlushResources failed, continuing anyway..\n");
+    }
+
+    /* Initialize the rng */
+    entropy_init(&vtpm_globals.entropy);
+    entropy_add_source(&vtpm_globals.entropy, tpm2_entropy_source, NULL, 0);
+    entropy_gather(&vtpm_globals.entropy);
+    ctr_drbg_init(&vtpm_globals.ctr_drbg, entropy_func, &vtpm_globals.entropy, NULL, 0);
+    ctr_drbg_set_prediction_resistance( &vtpm_globals.ctr_drbg, CTR_DRBG_PR_OFF );
+
+    /* Generate Auth for Owner*/
+    if (opts.gen_owner_auth) {
+        vtpmmgr_rand(vtpm_globals.owner_auth, sizeof(TPM_AUTHDATA));
+    }
+
+    /* Load the Manager data, if it fails create a new manager */
+    if (vtpm_load_disk()) {
+        vtpmloginfo(VTPM_LOG_VTPM, "Assuming first time initialization.\n");
+        TPMTRYRETURN(vtpmmgr2_create());
+    }
+
+    goto egress;
+
+abort_egress:
+    vtpmmgr_shutdown();
+egress:
+    return status;
+}
+
+TPM_RC tpm2_pcr_read(int index, uint8_t *buf)
+{
+    TPM_RESULT status = TPM_SUCCESS;
+    TPML_PCR_SELECTION pcrSelectionIn = {
+        .count = 1,};
+
+    TPMS_PCR_SELECTION tpms_pcr_selection = {
+        .hash = TPM2_ALG_SHA1,
+        .sizeofSelect = PCR_SELECT_MAX,};
+
+    UINT32 pcrUpdateCounter;
+    TPML_PCR_SELECTION pcrSelectionOut;
+    TPML_DIGEST pcrValues;
+    TPM2B_DIGEST tpm2b_digest;
+
+    tpms_pcr_selection.pcrSelect[PCR_SELECT_NUM(index)] = PCR_SELECT_VALUE(index);
+    memcpy(&pcrSelectionIn.pcrSelections[0], &tpms_pcr_selection,
+           sizeof(TPMS_PCR_SELECTION));
+
+    TPMTRYRETURN(TPM2_PCR_Read(pcrSelectionIn, &pcrUpdateCounter,
+                               &pcrSelectionOut, &pcrValues));
+
+    if (pcrValues.count < 1)
+        goto egress;
+
+    unpack_TPM2B_DIGEST((uint8_t *) &pcrValues, &tpm2b_digest);
+    memcpy(buf, tpm2b_digest.buffer, SHA1_DIGEST_SIZE);
+
+abort_egress:
+egress:
+    return status;
 }

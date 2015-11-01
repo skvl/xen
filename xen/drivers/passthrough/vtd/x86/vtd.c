@@ -11,8 +11,7 @@
  * more details.
  *
  * You should have received a copy of the GNU General Public License along with
- * this program; if not, write to the Free Software Foundation, Inc., 59 Temple
- * Place - Suite 330, Boston, MA 02111-1307 USA.
+ * this program; If not, see <http://www.gnu.org/licenses/>.
  *
  * Copyright (C) Allen Kay <allen.m.kay@intel.com>
  * Copyright (C) Weidong Han <weidong.han@intel.com>
@@ -41,7 +40,7 @@ boolean_param("iommu_inclusive_mapping", iommu_inclusive_mapping);
 
 void *map_vtd_domain_page(u64 maddr)
 {
-    return map_domain_page(maddr >> PAGE_SHIFT_4K);
+    return map_domain_page(_mfn(paddr_to_pfn(maddr)));
 }
 
 void unmap_vtd_domain_page(void *va)

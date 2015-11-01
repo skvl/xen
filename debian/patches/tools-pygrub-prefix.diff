@@ -1,4 +1,4 @@
-From bf8e9b6c1469a4c25f4ba1910b269fae50be84a0 Mon Sep 17 00:00:00 2001
+From d31889e05bb4483c52b51a54886fe1d5672fc72e Mon Sep 17 00:00:00 2001
 From: Bastian Blank <waldi@debian.org>
 Date: Sat, 5 Jul 2014 11:47:01 +0200
 Subject: tools-pygrub-prefix.diff
@@ -11,17 +11,17 @@ Patch-Name: tools-pygrub-prefix.diff
  3 files changed, 4 insertions(+), 5 deletions(-)
 
 diff --git a/tools/pygrub/Makefile b/tools/pygrub/Makefile
-index 3dff608..5fe4a80 100644
+index fe8e03b..5d83907 100644
 --- a/tools/pygrub/Makefile
 +++ b/tools/pygrub/Makefile
-@@ -13,11 +13,6 @@ install: all
- 	CC="$(CC)" CFLAGS="$(CFLAGS) $(APPEND_LDFLAGS)" $(PYTHON) setup.py install \
+@@ -15,11 +15,6 @@ install: all
+ 	CC="$(CC)" CFLAGS="$(PY_CFLAGS)" $(PYTHON) setup.py install \
  		$(PYTHON_PREFIX_ARG) --root="$(DESTDIR)" \
  		--install-scripts=$(LIBEXEC_BIN) --force
--	set -e; if [ $(BINDIR) != $(LIBEXEC_BIN) -a \
--	             "`readlink -f $(DESTDIR)/$(BINDIR)`" != \
+-	set -e; if [ $(bindir) != $(LIBEXEC_BIN) -a \
+-	             "`readlink -f $(DESTDIR)/$(bindir)`" != \
 -	             "`readlink -f $(LIBEXEC_BIN)`" ]; then \
--	    ln -sf $(LIBEXEC_BIN)/pygrub $(DESTDIR)/$(BINDIR); \
+-	    ln -sf $(LIBEXEC_BIN)/pygrub $(DESTDIR)/$(bindir); \
 -	fi
  
  .PHONY: clean
@@ -45,10 +45,10 @@ index 52dcf57..8a1be9a 100644
      library_dirs = [ XEN_ROOT + "/tools/libfsimage/common/" ],
      libraries = ["fsimage"],
 diff --git a/tools/pygrub/src/pygrub b/tools/pygrub/src/pygrub
-index 3ec52fd..ed5b5d6 100755
+index e4aedda..a50ed79 100755
 --- a/tools/pygrub/src/pygrub
 +++ b/tools/pygrub/src/pygrub
-@@ -22,6 +22,8 @@ import xen.lowlevel.xc
+@@ -21,6 +21,8 @@ import xen.lowlevel.xc
  import curses, _curses, curses.wrapper, curses.textpad, curses.ascii
  import getopt
  

@@ -8,25 +8,19 @@ AC_CONFIG_SRCDIR([libxl/libxl.c])
 AC_CONFIG_FILES([
 ../config/Tools.mk
 hotplug/FreeBSD/rc.d/xencommons
+hotplug/FreeBSD/rc.d/xendriverdomain
 hotplug/Linux/init.d/sysconfig.xencommons
 hotplug/Linux/init.d/xen-watchdog
 hotplug/Linux/init.d/xencommons
 hotplug/Linux/init.d/xendomains
-hotplug/Linux/systemd/proc-xen.mount
-hotplug/Linux/systemd/var-lib-xenstored.mount
-hotplug/Linux/systemd/xen-init-dom0.service
-hotplug/Linux/systemd/xen-qemu-dom0-disk-backend.service
-hotplug/Linux/systemd/xen-watchdog.service
-hotplug/Linux/systemd/xenconsoled.service
-hotplug/Linux/systemd/xendomains.service
-hotplug/Linux/systemd/xenstored.service
-hotplug/Linux/systemd/xenstored.socket
-hotplug/Linux/systemd/xenstored_ro.socket
+hotplug/Linux/init.d/xendriverdomain
 hotplug/Linux/vif-setup
-hotplug/Linux/xen-backend.rules
 hotplug/Linux/xen-hotplug-common.sh
 hotplug/Linux/xendomains
 hotplug/NetBSD/rc.d/xencommons
+hotplug/NetBSD/rc.d/xendriverdomain
+libxl/xenlight.pc.in
+libxl/xlutil.pc.in
 ])
 AC_CONFIG_HEADERS([config.h])
 AC_CONFIG_AUX_DIR([../])
@@ -66,6 +60,7 @@ m4_include([../m4/checkpolicy.m4])
 m4_include([../m4/set_cflags_ldflags.m4])
 m4_include([../m4/python_version.m4])
 m4_include([../m4/python_devel.m4])
+m4_include([../m4/python_fortify_noopt.m4])
 m4_include([../m4/ocaml.m4])
 m4_include([../m4/uuid.m4])
 m4_include([../m4/pkg.m4])
@@ -88,8 +83,6 @@ AX_ARG_DEFAULT_ENABLE([ocamltools], [Disable Ocaml tools])
 AX_ARG_DEFAULT_ENABLE([xsmpolicy], [Disable XSM policy compilation])
 AX_ARG_DEFAULT_DISABLE([ovmf], [Enable OVMF])
 AX_ARG_DEFAULT_ENABLE([seabios], [Disable SeaBIOS])
-AX_ARG_DEFAULT_ENABLE([debug], [Disable debug build of tools])
-AX_ARG_DEFAULT_DISABLE([blktap1], [Enable blktap1 tools])
 
 AC_ARG_WITH([linux-backend-modules],
     AS_HELP_STRING([--with-linux-backend-modules="mod1 mod2"],
@@ -113,7 +106,6 @@ usbbk
 pciback
 xen-acpi-processor
 blktap2
-blktap
 "
 ;;
 *)
@@ -183,9 +175,14 @@ AC_ARG_WITH([system-qemu],
        [Use system supplied qemu PATH or qemu (taken from $PATH) as qemu-xen
         device model instead of building and installing our own version]),[
     case $withval in
-    yes) qemu_xen=n ; qemu_xen_path=qemu ;;
-    no)  qemu_xen=y ; qemu_xen_path= ;;
-    *)   qemu_xen=n ; qemu_xen_path=$withval ;;
+        yes)
+            qemu_xen=n ; qemu_xen_path="qemu-system-i386"
+            qemu_xen_systemd="/usr/bin/env $qemu_xen_path" ;;
+        no)
+            qemu_xen=y ;;
+        *)
+            qemu_xen=n ; qemu_xen_path="$withval" ;
+            qemu_xen_systemd="$qemu_xen_path" ;;
     esac
 ],[
     case "$host_cpu" in
@@ -196,10 +193,14 @@ AC_ARG_WITH([system-qemu],
         *) qemu_xen=n;;
     esac
 ])
-AS_IF([test "x$qemu_xen" = "xn"], [
-    AC_DEFINE_UNQUOTED([QEMU_XEN_PATH], ["$qemu_xen_path"], [Qemu Xen path])
+AS_IF([test "x$qemu_xen" = "xy"], [
+    qemu_xen_path="$LIBEXEC_BIN/qemu-system-i386"
+    qemu_xen_systemd="$qemu_xen_path"
 ])
+AC_DEFINE_UNQUOTED([QEMU_XEN_PATH], ["$qemu_xen_path"], [Qemu Xen path])
 AC_SUBST(qemu_xen)
+AC_SUBST(qemu_xen_path)
+AC_SUBST(qemu_xen_systemd)
 
 AC_ARG_WITH([system-seabios],
     AS_HELP_STRING([--with-system-seabios@<:@=PATH@:>@],
@@ -256,6 +257,7 @@ AC_ARG_VAR([AS86], [Path to as86 tool])
 AC_ARG_VAR([LD86], [Path to ld86 tool])
 AC_ARG_VAR([BCC], [Path to bcc tool])
 AC_ARG_VAR([IASL], [Path to iasl tool])
+AC_ARG_VAR([AWK], [Path to awk tool])
 
 # Checks for programs.
 AC_PROG_CC
@@ -264,6 +266,7 @@ AC_PROG_INSTALL
 AC_PATH_PROG([BISON], [bison])
 AC_PATH_PROG([FLEX], [flex])
 AX_PATH_PROG_OR_FAIL([PERL], [perl])
+AX_PATH_PROG_OR_FAIL([AWK], [awk])
 
 AC_PROG_OCAML
 AC_PROG_FINDLIB
@@ -305,6 +308,7 @@ AX_CHECK_PYTHON_VERSION([2], [3])
 
 AS_IF([test "$cross_compiling" != yes], [
     AX_CHECK_PYTHON_DEVEL()
+    AX_CHECK_PYTHON_FORTIFY_NOOPT()
 ])
 
 if ! $rump; then
@@ -324,7 +328,16 @@ i[[3456]]86|x86_64)
 esac
  AX_CHECK_UUID
  AX_CHECK_CURSES
+AS_IF([test "$ncurses" = "y"], [
+AC_CHECK_LIB([tinfo], [define_key], [TINFO_LIBS=-ltinfo])
+])
+AC_SUBST(TINFO_LIBS)
+
+dnl The following are only required when upstream QEMU is built
+AS_IF([test "x$qemu_xen" = "xy"], [
 PKG_CHECK_MODULES(glib, [glib-2.0 >= 2.12])
+PKG_CHECK_MODULES(pixman, [pixman-1 >= 0.21.8])
+])
 AX_CHECK_FETCHER
 
 # Checks for libraries.
@@ -338,7 +351,7 @@ AC_CHECK_HEADER([lzo/lzo1x.h], [
 AC_CHECK_LIB([lzo2], [lzo1x_decompress], [zlib="$zlib -DHAVE_LZO1X -llzo2"])
 ])
 AC_SUBST(zlib)
-AS_IF([test "x$enable_blktap1" = "xyes" || test "x$enable_blktap2" = "xyes"], [
+AS_IF([test "x$enable_blktap2" = "xyes"], [
 AC_CHECK_LIB([aio], [io_setup], [], [AC_MSG_ERROR([Could not find libaio])])
 ])
 AC_SUBST(system_aio)
@@ -353,11 +366,37 @@ AC_CHECK_LIB([yajl], [yajl_alloc], [],
 AC_CHECK_LIB([z], [deflateCopy], [], [AC_MSG_ERROR([Could not find zlib])])
 AC_CHECK_LIB([iconv], [libiconv_open], [libiconv="y"], [libiconv="n"])
 AC_SUBST(libiconv)
+AC_CHECK_HEADER([argp.h], [
+AC_CHECK_LIB([argp], [argp_usage], [argp_ldflags="-largp"])
+], [AC_MSG_ERROR([Could not find argp])])
+AC_SUBST(argp_ldflags)
 
 # FDT is needed only on ARM
 case "$host_cpu" in
 arm*|aarch64)
 AC_CHECK_LIB([fdt], [fdt_create], [], [AC_MSG_ERROR([Could not find libfdt])])
+
+# Check for libfdt >= 1.4.0. If present enable passthrough
+# Note that libfdt doesn't provide versionning. So we need to rely on
+# function present in new version.
+# Use fdt_first_property_offset which has been correctly exported since v1.4.0
+AC_CHECK_FUNC(fdt_first_property_offset, [partial_dt="y"], [partial_dt="n"])
+
+AS_IF([test "x$partial_dt" = "xy" ],
+      [AC_DEFINE([ENABLE_PARTIAL_DEVICE_TREE], [1],
+                 [Enabling support partial device tree in libxl])],
+      [AC_MSG_WARN([Disabling support for partial device tree in libxl.
+       Please install libfdt library - version 1.4.0 or higher])])
+
+# The functions fdt_{first,next}_subnode may not be available because:
+#   * It has been introduced in 2013 => Doesn't work on Wheezy
+#   * The prototype exists but the functions are not exposed. Don't ask why...
+AC_CHECK_FUNCS([fdt_first_subnode fdt_next_subnode])
+AC_CHECK_DECLS([fdt_first_subnode, fdt_next_subnode],,,[#include <libfdt.h>])
+
+# The helper fdt_property_u32 is only present in libfdt >= 1.4.0
+# It's an inline function, so only check if the declaration is present
+AC_CHECK_DECLS([fdt_property_u32],,,[#include <libfdt.h>])
 esac
 
 # Checks for header files.
@@ -382,5 +421,21 @@ AC_SUBST(LIBNL3_CFLAGS)
 fi # ! $rump
 
 AX_AVAILABLE_SYSTEMD()
+
+AS_IF([test "x$systemd" = "xy"], [
+    AC_CONFIG_FILES([
+    hotplug/Linux/systemd/proc-xen.mount
+    hotplug/Linux/systemd/var-lib-xenstored.mount
+    hotplug/Linux/systemd/xen-init-dom0.service
+    hotplug/Linux/systemd/xen-qemu-dom0-disk-backend.service
+    hotplug/Linux/systemd/xen-watchdog.service
+    hotplug/Linux/systemd/xenconsoled.service
+    hotplug/Linux/systemd/xendomains.service
+    hotplug/Linux/systemd/xenstored.service
+    hotplug/Linux/systemd/xenstored.socket
+    hotplug/Linux/systemd/xenstored_ro.socket
+    ])
+])
+
 AC_OUTPUT()
 

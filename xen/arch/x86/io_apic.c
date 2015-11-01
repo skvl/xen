@@ -2371,9 +2371,14 @@ int ioapic_guest_write(unsigned long physbase, unsigned int reg, u32 val)
      * pirq and irq mapping. Where the GSI is greater than 256, we assume
      * that dom0 pirq == irq.
      */
-    pirq = (irq >= 256) ? irq : rte.vector;
-    if ( (pirq < 0) || (pirq >= hardware_domain->nr_pirqs) )
-        return -EINVAL;
+    if ( !rte.mask )
+    {
+        pirq = (irq >= 256) ? irq : rte.vector;
+        if ( pirq >= hardware_domain->nr_pirqs )
+            return -EINVAL;
+    }
+    else
+        pirq = -1;
     
     if ( desc->action )
     {
@@ -2408,12 +2413,15 @@ int ioapic_guest_write(unsigned long physbase, unsigned int reg, u32 val)
 
         printk(XENLOG_INFO "allocated vector %02x for irq %d\n", ret, irq);
     }
-    spin_lock(&hardware_domain->event_lock);
-    ret = map_domain_pirq(hardware_domain, pirq, irq,
-            MAP_PIRQ_TYPE_GSI, NULL);
-    spin_unlock(&hardware_domain->event_lock);
-    if ( ret < 0 )
-        return ret;
+    if ( pirq >= 0 )
+    {
+        spin_lock(&hardware_domain->event_lock);
+        ret = map_domain_pirq(hardware_domain, pirq, irq,
+                              MAP_PIRQ_TYPE_GSI, NULL);
+        spin_unlock(&hardware_domain->event_lock);
+        if ( ret < 0 )
+            return ret;
+    }
 
     spin_lock_irqsave(&ioapic_lock, flags);
     /* Set the correct irq-handling type. */
@@ -2546,13 +2554,13 @@ void __init init_ioapic_mappings(void)
             clear_page(__va(ioapic_phys));
         }
         set_fixmap_nocache(idx, ioapic_phys);
-        apic_printk(APIC_VERBOSE, "mapped IOAPIC to %08lx (%08lx)\n",
+        apic_printk(APIC_VERBOSE, "mapped IOAPIC to %08Lx (%08lx)\n",
                     __fix_to_virt(idx), ioapic_phys);
         idx++;
 
         if ( bad_ioapic_register(i) )
         {
-            __set_fixmap(idx, 0, 0);
+            clear_fixmap(idx);
             continue;
         }
 
@@ -2614,6 +2622,10 @@ unsigned int arch_hwdom_irqs(domid_t domid)
     if ( !domid )
         n = min(n, dom0_max_vcpus());
     n = min(nr_irqs_gsi + n * NR_DYNAMIC_VECTORS, nr_irqs);
+
+    /* Bounded by the domain pirq eoi bitmap gfn. */
+    n = min_t(unsigned int, n, PAGE_SIZE * BITS_PER_BYTE);
+
     printk("Dom%d has maximum %u PIRQs\n", domid, n);
 
     return n;

@@ -17,8 +17,7 @@
  * GNU General Public License for more details.
  *
  * You should have received a copy of the GNU General Public License
- * along with this program; if not, write to the Free Software
- * Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
+ * along with this program; If not, see <http://www.gnu.org/licenses/>.
  */
 
 #include <xen/types.h>
@@ -28,7 +27,8 @@
 #include <xen/grant_table.h>
 #include <xen/sched.h>
 #include <xen/rcupdate.h>
-#include <xen/mem_event.h>
+#include <xen/guest_access.h>
+#include <xen/vm_event.h>
 #include <asm/page.h>
 #include <asm/string.h>
 #include <asm/p2m.h>
@@ -559,22 +559,24 @@ int mem_sharing_notify_enomem(struct domain *d, unsigned long gfn,
 {
     struct vcpu *v = current;
     int rc;
-    mem_event_request_t req = { .gfn = gfn };
+    vm_event_request_t req = {
+        .reason = VM_EVENT_REASON_MEM_SHARING,
+        .vcpu_id = v->vcpu_id,
+        .u.mem_sharing.gfn = gfn,
+        .u.mem_sharing.p2mt = p2m_ram_shared
+    };
 
-    if ( (rc = __mem_event_claim_slot(d, 
-                        &d->mem_event->share, allow_sleep)) < 0 )
+    if ( (rc = __vm_event_claim_slot(d, 
+                        &d->vm_event->share, allow_sleep)) < 0 )
         return rc;
 
     if ( v->domain == d )
     {
-        req.flags = MEM_EVENT_FLAG_VCPU_PAUSED;
-        mem_event_vcpu_pause(v);
+        req.flags = VM_EVENT_FLAG_VCPU_PAUSED;
+        vm_event_vcpu_pause(v);
     }
 
-    req.p2mt = p2m_ram_shared;
-    req.vcpu_id = v->vcpu_id;
-
-    mem_event_put_request(d, &d->mem_event->share, &req);
+    vm_event_put_request(d, &d->vm_event->share, &req);
 
     return 0;
 }
@@ -587,32 +589,6 @@ unsigned int mem_sharing_get_nr_saved_mfns(void)
 unsigned int mem_sharing_get_nr_shared_mfns(void)
 {
     return (unsigned int)atomic_read(&nr_shared_mfns);
-}
-
-int mem_sharing_sharing_resume(struct domain *d)
-{
-    mem_event_response_t rsp;
-
-    /* Get all requests off the ring */
-    while ( mem_event_get_response(d, &d->mem_event->share, &rsp) )
-    {
-        struct vcpu *v;
-
-        if ( rsp.flags & MEM_EVENT_FLAG_DUMMY )
-            continue;
-
-        /* Validate the vcpu_id in the response. */
-        if ( (rsp.vcpu_id >= d->max_vcpus) || !d->vcpu[rsp.vcpu_id] )
-            continue;
-
-        v = d->vcpu[rsp.vcpu_id];
-
-        /* Unpause domain/vcpu */
-        if ( rsp.flags & MEM_EVENT_FLAG_VCPU_PAUSED )
-            mem_event_vcpu_unpause(v);
-    }
-
-    return 0;
 }
 
 /* Functions that change a page's type and ownership */
@@ -1136,7 +1112,7 @@ err_out:
 
 /* A note on the rationale for unshare error handling:
  *  1. Unshare can only fail with ENOMEM. Any other error conditions BUG_ON()'s
- *  2. We notify a potential dom0 helper through a mem_event ring. But we
+ *  2. We notify a potential dom0 helper through a vm_event ring. But we
  *     allow the notification to not go to sleep. If the event ring is full 
  *     of ENOMEM warnings, then it's on the ball.
  *  3. We cannot go to sleep until the unshare is resolved, because we might
@@ -1233,8 +1209,8 @@ int __mem_sharing_unshare_page(struct domain *d,
         return -ENOMEM;
     }
 
-    s = map_domain_page(__page_to_mfn(old_page));
-    t = map_domain_page(__page_to_mfn(page));
+    s = map_domain_page(_mfn(__page_to_mfn(old_page)));
+    t = map_domain_page(_mfn(__page_to_mfn(page)));
     memcpy(t, s, PAGE_SIZE);
     unmap_domain_page(s);
     unmap_domain_page(t);
@@ -1283,7 +1259,7 @@ int relinquish_shared_pages(struct domain *d)
 
         if ( atomic_read(&d->shr_pages) == 0 )
             break;
-        mfn = p2m->get_entry(p2m, gfn, &t, &a, 0, NULL);
+        mfn = p2m->get_entry(p2m, gfn, &t, &a, 0, NULL, NULL);
         if ( mfn_valid(mfn) && (t == p2m_ram_shared) )
         {
             /* Does not fail with ENOMEM given the DESTROY flag */
@@ -1293,7 +1269,7 @@ int relinquish_shared_pages(struct domain *d)
              * unshare.  Must succeed: we just read the old entry and
              * we hold the p2m lock. */
             set_rc = p2m->set_entry(p2m, gfn, _mfn(0), PAGE_ORDER_4K,
-                                    p2m_invalid, p2m_access_rwx);
+                                    p2m_invalid, p2m_access_rwx, -1);
             ASSERT(set_rc == 0);
             count += 0x10;
         }
@@ -1317,39 +1293,62 @@ int relinquish_shared_pages(struct domain *d)
     return rc;
 }
 
-int mem_sharing_memop(struct domain *d, xen_mem_sharing_op_t *mec)
+int mem_sharing_memop(XEN_GUEST_HANDLE_PARAM(xen_mem_sharing_op_t) arg)
 {
-    int rc = 0;
+    int rc;
+    xen_mem_sharing_op_t mso;
+    struct domain *d;
+
+    rc = -EFAULT;
+    if ( copy_from_guest(&mso, arg, 1) )
+        return rc;
+
+    if ( mso.op == XENMEM_sharing_op_audit )
+        return mem_sharing_audit();
+
+    rc = rcu_lock_live_remote_domain_by_id(mso.domain, &d);
+    if ( rc )
+        return rc;
+
+    rc = xsm_mem_sharing(XSM_DM_PRIV, d);
+    if ( rc )
+        goto out;
 
     /* Only HAP is supported */
+    rc = -ENODEV;
     if ( !hap_enabled(d) || !d->arch.hvm_domain.mem_sharing_enabled )
-         return -ENODEV;
+        goto out;
 
-    switch(mec->op)
+    switch ( mso.op )
     {
         case XENMEM_sharing_op_nominate_gfn:
         {
-            unsigned long gfn = mec->u.nominate.u.gfn;
+            unsigned long gfn = mso.u.nominate.u.gfn;
             shr_handle_t handle;
+
+            rc = -EINVAL;
             if ( !mem_sharing_enabled(d) )
-                return -EINVAL;
+                goto out;
+
             rc = mem_sharing_nominate_page(d, gfn, 0, &handle);
-            mec->u.nominate.handle = handle;
+            mso.u.nominate.handle = handle;
         }
         break;
 
         case XENMEM_sharing_op_nominate_gref:
         {
-            grant_ref_t gref = mec->u.nominate.u.grant_ref;
+            grant_ref_t gref = mso.u.nominate.u.grant_ref;
             unsigned long gfn;
             shr_handle_t handle;
 
+            rc = -EINVAL;
             if ( !mem_sharing_enabled(d) )
-                return -EINVAL;
+                goto out;
             if ( mem_sharing_gref_to_gfn(d, gref, &gfn) < 0 )
-                return -EINVAL;
+                goto out;
+
             rc = mem_sharing_nominate_page(d, gfn, 3, &handle);
-            mec->u.nominate.handle = handle;
+            mso.u.nominate.handle = handle;
         }
         break;
 
@@ -1359,57 +1358,61 @@ int mem_sharing_memop(struct domain *d, xen_mem_sharing_op_t *mec)
             struct domain *cd;
             shr_handle_t sh, ch;
 
+            rc = -EINVAL;
             if ( !mem_sharing_enabled(d) )
-                return -EINVAL;
+                goto out;
 
-            rc = rcu_lock_live_remote_domain_by_id(mec->u.share.client_domain,
+            rc = rcu_lock_live_remote_domain_by_id(mso.u.share.client_domain,
                                                    &cd);
             if ( rc )
-                return rc;
+                goto out;
 
-            rc = xsm_mem_sharing_op(XSM_DM_PRIV, d, cd, mec->op);
+            rc = xsm_mem_sharing_op(XSM_DM_PRIV, d, cd, mso.op);
             if ( rc )
             {
                 rcu_unlock_domain(cd);
-                return rc;
+                goto out;
             }
 
             if ( !mem_sharing_enabled(cd) )
             {
                 rcu_unlock_domain(cd);
-                return -EINVAL;
+                rc = -EINVAL;
+                goto out;
             }
 
-            if ( XENMEM_SHARING_OP_FIELD_IS_GREF(mec->u.share.source_gfn) )
+            if ( XENMEM_SHARING_OP_FIELD_IS_GREF(mso.u.share.source_gfn) )
             {
                 grant_ref_t gref = (grant_ref_t) 
                                     (XENMEM_SHARING_OP_FIELD_GET_GREF(
-                                        mec->u.share.source_gfn));
+                                        mso.u.share.source_gfn));
                 if ( mem_sharing_gref_to_gfn(d, gref, &sgfn) < 0 )
                 {
                     rcu_unlock_domain(cd);
-                    return -EINVAL;
+                    rc = -EINVAL;
+                    goto out;
                 }
             } else {
-                sgfn  = mec->u.share.source_gfn;
+                sgfn  = mso.u.share.source_gfn;
             }
 
-            if ( XENMEM_SHARING_OP_FIELD_IS_GREF(mec->u.share.client_gfn) )
+            if ( XENMEM_SHARING_OP_FIELD_IS_GREF(mso.u.share.client_gfn) )
             {
                 grant_ref_t gref = (grant_ref_t) 
                                     (XENMEM_SHARING_OP_FIELD_GET_GREF(
-                                        mec->u.share.client_gfn));
+                                        mso.u.share.client_gfn));
                 if ( mem_sharing_gref_to_gfn(cd, gref, &cgfn) < 0 )
                 {
                     rcu_unlock_domain(cd);
-                    return -EINVAL;
+                    rc = -EINVAL;
+                    goto out;
                 }
             } else {
-                cgfn  = mec->u.share.client_gfn;
+                cgfn  = mso.u.share.client_gfn;
             }
 
-            sh = mec->u.share.source_handle;
-            ch = mec->u.share.client_handle;
+            sh = mso.u.share.source_handle;
+            ch = mso.u.share.client_handle;
 
             rc = mem_sharing_share_pages(d, sgfn, sh, cd, cgfn, ch); 
 
@@ -1423,37 +1426,40 @@ int mem_sharing_memop(struct domain *d, xen_mem_sharing_op_t *mec)
             struct domain *cd;
             shr_handle_t sh;
 
+            rc = -EINVAL;
             if ( !mem_sharing_enabled(d) )
-                return -EINVAL;
+                goto out;
 
-            rc = rcu_lock_live_remote_domain_by_id(mec->u.share.client_domain,
+            rc = rcu_lock_live_remote_domain_by_id(mso.u.share.client_domain,
                                                    &cd);
             if ( rc )
-                return rc;
+                goto out;
 
-            rc = xsm_mem_sharing_op(XSM_DM_PRIV, d, cd, mec->op);
+            rc = xsm_mem_sharing_op(XSM_DM_PRIV, d, cd, mso.op);
             if ( rc )
             {
                 rcu_unlock_domain(cd);
-                return rc;
+                goto out;
             }
 
             if ( !mem_sharing_enabled(cd) )
             {
                 rcu_unlock_domain(cd);
-                return -EINVAL;
+                rc = -EINVAL;
+                goto out;
             }
 
-            if ( XENMEM_SHARING_OP_FIELD_IS_GREF(mec->u.share.source_gfn) )
+            if ( XENMEM_SHARING_OP_FIELD_IS_GREF(mso.u.share.source_gfn) )
             {
                 /* Cannot add a gref to the physmap */
                 rcu_unlock_domain(cd);
-                return -EINVAL;
+                rc = -EINVAL;
+                goto out;
             }
 
-            sgfn    = mec->u.share.source_gfn;
-            sh      = mec->u.share.source_handle;
-            cgfn    = mec->u.share.client_gfn;
+            sgfn    = mso.u.share.source_gfn;
+            sh      = mso.u.share.source_handle;
+            cgfn    = mso.u.share.client_gfn;
 
             rc = mem_sharing_add_to_physmap(d, sgfn, sh, cd, cgfn); 
 
@@ -1461,24 +1467,16 @@ int mem_sharing_memop(struct domain *d, xen_mem_sharing_op_t *mec)
         }
         break;
 
-        case XENMEM_sharing_op_resume:
-        {
-            if ( !mem_sharing_enabled(d) )
-                return -EINVAL;
-            rc = mem_sharing_sharing_resume(d);
-        }
-        break;
-
         case XENMEM_sharing_op_debug_gfn:
         {
-            unsigned long gfn = mec->u.debug.u.gfn;
+            unsigned long gfn = mso.u.debug.u.gfn;
             rc = mem_sharing_debug_gfn(d, gfn);
         }
         break;
 
         case XENMEM_sharing_op_debug_gref:
         {
-            grant_ref_t gref = mec->u.debug.u.gref;
+            grant_ref_t gref = mso.u.debug.u.gref;
             rc = mem_sharing_debug_gref(d, gref);
         }
         break;
@@ -1488,6 +1486,11 @@ int mem_sharing_memop(struct domain *d, xen_mem_sharing_op_t *mec)
             break;
     }
 
+    if ( !rc && __copy_to_guest(arg, &mso, 1) )
+        rc = -EFAULT;
+
+out:
+    rcu_unlock_domain(d);
     return rc;
 }
 

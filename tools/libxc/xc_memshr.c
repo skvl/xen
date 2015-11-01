@@ -17,8 +17,7 @@
  * Lesser General Public License for more details.
  *
  * You should have received a copy of the GNU Lesser General Public
- * License along with this library; if not, write to the Free Software
- * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301  USA
+ * License along with this library; If not, see <http://www.gnu.org/licenses/>.
  */
 
 #include "xc_private.h"
@@ -51,20 +50,20 @@ int xc_memshr_ring_enable(xc_interface *xch,
         errno = EINVAL;
         return -1;
     }
-        
-    return xc_mem_event_control(xch, domid,
-                                XEN_DOMCTL_MEM_EVENT_OP_SHARING_ENABLE,
-                                XEN_DOMCTL_MEM_EVENT_OP_SHARING,
-                                port);
+
+    return xc_vm_event_control(xch, domid,
+                               XEN_VM_EVENT_ENABLE,
+                               XEN_DOMCTL_VM_EVENT_OP_SHARING,
+                               port);
 }
 
 int xc_memshr_ring_disable(xc_interface *xch, 
                            domid_t domid)
 {
-    return xc_mem_event_control(xch, domid,
-                                XEN_DOMCTL_MEM_EVENT_OP_SHARING_DISABLE,
-                                XEN_DOMCTL_MEM_EVENT_OP_SHARING,
-                                NULL);
+    return xc_vm_event_control(xch, domid,
+                               XEN_VM_EVENT_DISABLE,
+                               XEN_DOMCTL_VM_EVENT_OP_SHARING,
+                               NULL);
 }
 
 static int xc_memshr_memop(xc_interface *xch, domid_t domid, 
@@ -185,13 +184,10 @@ int xc_memshr_add_to_physmap(xc_interface *xch,
 int xc_memshr_domain_resume(xc_interface *xch,
                             domid_t domid)
 {
-    xen_mem_sharing_op_t mso;
-
-    memset(&mso, 0, sizeof(mso));
-
-    mso.op = XENMEM_sharing_op_resume;
-
-    return xc_memshr_memop(xch, domid, &mso);
+    return xc_vm_event_control(xch, domid,
+                               XEN_VM_EVENT_RESUME,
+                               XEN_DOMCTL_VM_EVENT_OP_SHARING,
+                               NULL);
 }
 
 int xc_memshr_debug_gfn(xc_interface *xch,

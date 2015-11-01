@@ -12,8 +12,7 @@
  * Lesser General Public License for more details.
  *
  * You should have received a copy of the GNU Lesser General Public
- * License along with this library; if not, write to the Free Software
- * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301  USA
+ * License along with this library; If not, see <http://www.gnu.org/licenses/>.
  */
 
 #include "libelf-private.h"
@@ -235,6 +234,10 @@ static unsigned elf_xen_parse_notes(struct elf_binary *elf,
           ELF_HANDLE_PTRVAL(note) < parms->elf_note_end;
           note = elf_note_next(elf, note) )
     {
+#ifdef __XEN__
+        process_pending_softirqs();
+#endif
+
         if ( *total_note_count >= ELF_MAX_TOTAL_NOTE_COUNT )
         {
             elf_mark_broken(elf, "too many ELF notes");
@@ -438,7 +441,7 @@ static elf_errorstatus elf_xen_addr_calc_check(struct elf_binary *elf,
 
     if ( parms->bsd_symtab )
     {
-        elf_parse_bsdsyms(elf, parms->virt_kend);
+        elf_parse_bsdsyms(elf, elf->pend);
         if ( elf->bsd_symtab_pend )
             parms->virt_kend = elf->bsd_symtab_pend + parms->virt_offset;
     }

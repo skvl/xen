@@ -77,7 +77,7 @@ static struct page_info *kimage_alloc_zeroed_page(unsigned memflags)
     if ( !page )
         return NULL;
 
-    clear_domain_page(page_to_mfn(page));
+    clear_domain_page(_mfn(page_to_mfn(page)));
 
     return page;
 }
@@ -409,7 +409,7 @@ static struct page_info *kimage_alloc_crash_control_page(struct kexec_image *ima
     if ( page )
     {
         image->next_crash_page = hole_end;
-        clear_domain_page(page_to_mfn(page));
+        clear_domain_page(_mfn(page_to_mfn(page)));
     }
 
     return page;
@@ -495,10 +495,10 @@ static void kimage_terminate(struct kexec_image *image)
  * Call unmap_domain_page(ptr) after the loop exits.
  */
 #define for_each_kimage_entry(image, ptr, entry)                        \
-    for ( ptr = map_domain_page(image->head >> PAGE_SHIFT);             \
+    for ( ptr = map_domain_page(_mfn(paddr_to_pfn(image->head)));       \
           (entry = *ptr) && !(entry & IND_DONE);                        \
           ptr = (entry & IND_INDIRECTION) ?                             \
-              (unmap_domain_page(ptr), map_domain_page(entry >> PAGE_SHIFT)) \
+              (unmap_domain_page(ptr), map_domain_page(_mfn(paddr_to_pfn(entry)))) \
               : ptr + 1 )
 
 static void kimage_free_entry(kimage_entry_t entry)
@@ -637,15 +637,15 @@ static struct page_info *kimage_alloc_page(struct kexec_image *image,
         if ( old )
         {
             /* If so move it. */
-            unsigned long old_mfn = *old >> PAGE_SHIFT;
-            unsigned long mfn = addr >> PAGE_SHIFT;
+            mfn_t old_mfn = _mfn(*old >> PAGE_SHIFT);
+            mfn_t mfn = _mfn(addr >> PAGE_SHIFT);
 
             copy_domain_page(mfn, old_mfn);
             clear_domain_page(old_mfn);
             *old = (addr & ~PAGE_MASK) | IND_SOURCE;
             unmap_domain_page(old);
 
-            page = mfn_to_page(old_mfn);
+            page = mfn_to_page(mfn_x(old_mfn));
             break;
         }
         else
@@ -748,7 +748,7 @@ static int kimage_load_crash_segment(struct kexec_image *image,
         dchunk = PAGE_SIZE;
         schunk = min(dchunk, sbytes);
 
-        dest_va = map_domain_page(dest_mfn);
+        dest_va = map_domain_page(_mfn(dest_mfn));
         if ( !dest_va )
             return -EINVAL;
 
@@ -866,7 +866,7 @@ int kimage_build_ind(struct kexec_image *image, unsigned long ind_mfn,
     int ret = 0;
     paddr_t dest = KIMAGE_NO_DEST;
 
-    page = map_domain_page(ind_mfn);
+    page = map_domain_page(_mfn(ind_mfn));
     if ( !page )
         return -ENOMEM;
 
@@ -892,7 +892,7 @@ int kimage_build_ind(struct kexec_image *image, unsigned long ind_mfn,
             break;
         case IND_INDIRECTION:
             unmap_domain_page(page);
-            page = map_domain_page(mfn);
+            page = map_domain_page(_mfn(mfn));
             entry = page;
             continue;
         case IND_DONE:
@@ -917,12 +917,17 @@ int kimage_build_ind(struct kexec_image *image, unsigned long ind_mfn,
                 goto done;
             }
 
-            copy_domain_page(page_to_mfn(xen_page), mfn);
+            copy_domain_page(_mfn(page_to_mfn(xen_page)), _mfn(mfn));
             put_page(guest_page);
 
             ret = kimage_add_page(image, page_to_maddr(xen_page));
             if ( ret < 0 )
                 goto done;
+
+            ret = machine_kexec_add_page(image, dest, dest);
+            if ( ret < 0 )
+                goto done;
+
             dest += PAGE_SIZE;
             break;
         }

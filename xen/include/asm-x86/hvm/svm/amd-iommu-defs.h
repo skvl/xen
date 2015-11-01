@@ -14,8 +14,7 @@
  * GNU General Public License for more details.
  *
  * You should have received a copy of the GNU General Public License
- * along with this program; if not, write to the Free Software
- * Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307 USA
+ * along with this program; If not, see <http://www.gnu.org/licenses/>.
  */
 
 #ifndef _ASM_X86_64_AMD_IOMMU_DEFS_H
@@ -463,8 +462,6 @@
 /* Flags */
 #define IOMMU_CONTROL_DISABLED	0
 #define IOMMU_CONTROL_ENABLED	1
-
-#define DEFAULT_DOMAIN_ADDRESS_WIDTH    48
 
 /* interrupt remapping table */
 #define INT_REMAP_ENTRY_REMAPEN_MASK    0x00000001

@@ -13,6 +13,7 @@
 #include <xen/config.h>
 #include <xen/types.h>
 #include <xen/init.h>
+#include <xen/guest_access.h>
 #include <xen/device_tree.h>
 #include <xen/kernel.h>
 #include <xen/lib.h>
@@ -23,6 +24,7 @@
 #include <xen/cpumask.h>
 #include <xen/ctype.h>
 #include <asm/setup.h>
+#include <xen/err.h>
 
 const void *device_tree_flattened;
 dt_irq_xlate_func dt_irq_xlate;
@@ -277,6 +279,22 @@ struct dt_device_node *dt_find_node_by_path(const char *path)
     return np;
 }
 
+int dt_find_node_by_gpath(XEN_GUEST_HANDLE(char) u_path, uint32_t u_plen,
+                          struct dt_device_node **node)
+{
+    char *path;
+
+    path = safe_copy_string_from_guest(u_path, u_plen, PAGE_SIZE);
+    if ( IS_ERR(path) )
+        return PTR_ERR(path);
+
+    *node = dt_find_node_by_path(path);
+
+    xfree(path);
+
+    return (*node == NULL) ? -ESRCH : 0;
+}
+
 struct dt_device_node *dt_find_node_by_alias(const char *alias)
 {
     const struct dt_alias_prop *app;
@@ -290,11 +308,12 @@ struct dt_device_node *dt_find_node_by_alias(const char *alias)
     return NULL;
 }
 
-bool_t dt_match_node(const struct dt_device_match *matches,
-                     const struct dt_device_node *node)
+const struct dt_device_match *
+dt_match_node(const struct dt_device_match *matches,
+              const struct dt_device_node *node)
 {
     if ( !matches )
-        return 0;
+        return NULL;
 
     while ( matches->path || matches->type ||
             matches->compatible || matches->not_available )
@@ -314,12 +333,11 @@ bool_t dt_match_node(const struct dt_device_match *matches,
             match &= !dt_device_is_available(node);
 
         if ( match )
-            return match;
-
+            return matches;
         matches++;
     }
 
-    return 0;
+    return NULL;
 }
 
 const struct dt_device_node *dt_get_parent(const struct dt_device_node *node)
@@ -399,6 +417,26 @@ int dt_n_size_cells(const struct dt_device_node *np)
 }
 
 /*
+ * These are defined in Linux where much of this code comes from, but
+ * are currently unused outside this file in the context of Xen.
+ */
+#define IORESOURCE_BITS         0x000000ff      /* Bus-specific bits */
+
+#define IORESOURCE_TYPE_BITS    0x00001f00      /* Resource type */
+#define IORESOURCE_IO           0x00000100      /* PCI/ISA I/O ports */
+#define IORESOURCE_MEM          0x00000200
+#define IORESOURCE_REG          0x00000300      /* Register offsets */
+#define IORESOURCE_IRQ          0x00000400
+#define IORESOURCE_DMA          0x00000800
+#define IORESOURCE_BUS          0x00001000
+
+#define IORESOURCE_PREFETCH     0x00002000      /* No side effects */
+#define IORESOURCE_READONLY     0x00004000
+#define IORESOURCE_CACHEABLE    0x00008000
+#define IORESOURCE_RANGELENGTH  0x00010000
+#define IORESOURCE_SHADOWABLE   0x00020000
+
+/*
  * Default translator (generic bus)
  */
 static bool_t dt_bus_default_match(const struct dt_device_node *node)
@@ -462,9 +500,81 @@ static int dt_bus_default_translate(__be32 *addr, u64 offset, int na)
 }
 static unsigned int dt_bus_default_get_flags(const __be32 *addr)
 {
-    /* TODO: Return the type of memory (device, ...) for caching
-     * attribute during mapping */
-    return 0;
+    return IORESOURCE_MEM;
+}
+
+/*
+ * PCI bus specific translator
+ */
+
+static bool_t dt_bus_pci_match(const struct dt_device_node *np)
+{
+    /*
+     * "pciex" is PCI Express "vci" is for the /chaos bridge on 1st-gen PCI
+     * powermacs "ht" is hypertransport
+     */
+    return !strcmp(np->type, "pci") || !strcmp(np->type, "pciex") ||
+        !strcmp(np->type, "vci") || !strcmp(np->type, "ht");
+}
+
+static void dt_bus_pci_count_cells(const struct dt_device_node *np,
+				   int *addrc, int *sizec)
+{
+    if (addrc)
+        *addrc = 3;
+    if (sizec)
+        *sizec = 2;
+}
+
+static unsigned int dt_bus_pci_get_flags(const __be32 *addr)
+{
+    unsigned int flags = 0;
+    u32 w = be32_to_cpup(addr);
+
+    switch((w >> 24) & 0x03) {
+    case 0x01:
+        flags |= IORESOURCE_IO;
+        break;
+    case 0x02: /* 32 bits */
+    case 0x03: /* 64 bits */
+        flags |= IORESOURCE_MEM;
+        break;
+    }
+    if (w & 0x40000000)
+        flags |= IORESOURCE_PREFETCH;
+    return flags;
+}
+
+static u64 dt_bus_pci_map(__be32 *addr, const __be32 *range, int na, int ns,
+		int pna)
+{
+    u64 cp, s, da;
+    unsigned int af, rf;
+
+    af = dt_bus_pci_get_flags(addr);
+    rf = dt_bus_pci_get_flags(range);
+
+    /* Check address type match */
+    if ((af ^ rf) & (IORESOURCE_MEM | IORESOURCE_IO))
+        return DT_BAD_ADDR;
+
+    /* Read address values, skipping high cell */
+    cp = dt_read_number(range + 1, na - 1);
+    s  = dt_read_number(range + na + pna, ns);
+    da = dt_read_number(addr + 1, na - 1);
+
+    dt_dprintk("DT: PCI map, cp=%llx, s=%llx, da=%llx\n",
+               (unsigned long long)cp, (unsigned long long)s,
+               (unsigned long long)da);
+
+    if (da < cp || da >= (cp + s))
+        return DT_BAD_ADDR;
+    return da - cp;
+}
+
+static int dt_bus_pci_translate(__be32 *addr, u64 offset, int na)
+{
+    return dt_bus_default_translate(addr + 1, offset, na - 1);
 }
 
 /*
@@ -472,6 +582,16 @@ static unsigned int dt_bus_default_get_flags(const __be32 *addr)
  */
 static const struct dt_bus dt_busses[] =
 {
+    /* PCI */
+    {
+        .name = "pci",
+        .addresses = "assigned-addresses",
+        .match = dt_bus_pci_match,
+        .count_cells = dt_bus_pci_count_cells,
+        .map = dt_bus_pci_map,
+        .translate = dt_bus_pci_translate,
+        .get_flags = dt_bus_pci_get_flags,
+    },
     /* Default */
     {
         .name = "default",
@@ -496,7 +616,7 @@ static const struct dt_bus *dt_match_bus(const struct dt_device_node *np)
 }
 
 static const __be32 *dt_get_address(const struct dt_device_node *dev,
-                                    int index, u64 *size,
+                                    unsigned int index, u64 *size,
                                     unsigned int *flags)
 {
     const __be32 *prop;
@@ -683,7 +803,7 @@ bail:
 }
 
 /* dt_device_address - Translate device tree address and return it */
-int dt_device_get_address(const struct dt_device_node *dev, int index,
+int dt_device_get_address(const struct dt_device_node *dev, unsigned int index,
                           u64 *addr, u64 *size)
 {
     const __be32 *addrp;
@@ -700,6 +820,91 @@ int dt_device_get_address(const struct dt_device_node *dev, int index,
 
     if ( *addr == DT_BAD_ADDR )
         return -EINVAL;
+
+    return 0;
+}
+
+
+int dt_for_each_range(const struct dt_device_node *dev,
+                      int (*cb)(const struct dt_device_node *,
+                                u64 addr, u64 length,
+                                void *),
+                      void *data)
+{
+    const struct dt_device_node *parent = NULL;
+    const struct dt_bus *bus, *pbus;
+    const __be32 *ranges;
+    __be32 addr[DT_MAX_ADDR_CELLS];
+    unsigned int rlen;
+    int na, ns, pna, pns, rone;
+
+    bus = dt_match_bus(dev);
+    if ( !bus )
+        return 0; /* device is not a bus */
+
+    parent = dt_get_parent(dev);
+    if ( parent == NULL )
+        return -EINVAL;
+
+    ranges = dt_get_property(dev, "ranges", &rlen);
+    if ( ranges == NULL )
+    {
+        printk(XENLOG_ERR "DT: no ranges; cannot enumerate\n");
+        return -EINVAL;
+    }
+    if ( rlen == 0 ) /* Nothing to do */
+        return 0;
+
+    bus->count_cells(dev, &na, &ns);
+    if ( !DT_CHECK_COUNTS(na, ns) )
+    {
+        printk(XENLOG_ERR "dt_parse: Bad cell count for device %s\n",
+                  dev->full_name);
+        return -EINVAL;
+    }
+
+    pbus = dt_match_bus(parent);
+    if ( pbus == NULL )
+    {
+        printk("DT: %s is not a valid bus\n", parent->full_name);
+        return -EINVAL;
+    }
+
+    pbus->count_cells(dev, &pna, &pns);
+    if ( !DT_CHECK_COUNTS(pna, pns) )
+    {
+        printk(XENLOG_ERR "dt_parse: Bad cell count for parent %s\n",
+               dev->full_name);
+        return -EINVAL;
+    }
+
+    /* Now walk through the ranges */
+    rlen /= 4;
+    rone = na + pna + ns;
+
+    dt_dprintk("%s: dev=%s, bus=%s, parent=%s, rlen=%d, rone=%d\n",
+               __func__,
+               dt_node_name(dev), bus->name,
+               dt_node_name(parent), rlen, rone);
+
+    for ( ; rlen >= rone; rlen -= rone, ranges += rone )
+    {
+        u64 a, s;
+        int ret;
+
+        memcpy(addr, ranges + na, 4 * pna);
+
+        a = __dt_translate_address(dev, addr, "ranges");
+        s = dt_read_number(ranges + na + pna, ns);
+
+        ret = cb(dev, a, s, data);
+        if ( ret )
+        {
+            dt_dprintk(" -> callback failed=%d\n", ret);
+            return ret;
+        }
+
+    }
 
     return 0;
 }
@@ -809,6 +1014,160 @@ unsigned int dt_number_of_address(const struct dt_device_node *dev)
     onesize = na + ns;
 
     return (psize / onesize);
+}
+
+int dt_for_each_irq_map(const struct dt_device_node *dev,
+                        int (*cb)(const struct dt_device_node *,
+                                  const struct dt_irq *,
+                                  void *),
+                        void *data)
+{
+    const struct dt_device_node *ipar, *tnode, *old = NULL;
+    const __be32 *tmp, *imap;
+    u32 intsize = 1, addrsize, pintsize = 0, paddrsize = 0;
+    u32 imaplen;
+    int i, ret;
+
+    struct dt_raw_irq dt_raw_irq;
+    struct dt_irq dt_irq;
+
+    dt_dprintk("%s: par=%s cb=%p data=%p\n", __func__,
+               dev->full_name, cb, data);
+
+    ipar = dev;
+
+    /* First get the #interrupt-cells property of the current cursor
+     * that tells us how to interpret the passed-in intspec. If there
+     * is none, we are nice and just walk up the tree
+     */
+    do {
+        tmp = dt_get_property(ipar, "#interrupt-cells", NULL);
+        if ( tmp != NULL )
+        {
+            intsize = be32_to_cpu(*tmp);
+            break;
+        }
+        tnode = ipar;
+        ipar = dt_irq_find_parent(ipar);
+    } while ( ipar );
+    if ( ipar == NULL )
+    {
+        dt_dprintk(" -> no parent found !\n");
+        goto fail;
+    }
+
+    dt_dprintk("%s: ipar=%s, size=%d\n", __func__, ipar->full_name, intsize);
+
+    if ( intsize > DT_MAX_IRQ_SPEC )
+    {
+        dt_dprintk(" -> too many irq specifier cells\n");
+        goto fail;
+    }
+
+    /* Look for this #address-cells. We have to implement the old linux
+     * trick of looking for the parent here as some device-trees rely on it
+     */
+    old = ipar;
+    do {
+        tmp = dt_get_property(old, "#address-cells", NULL);
+        tnode = dt_get_parent(old);
+        old = tnode;
+    } while ( old && tmp == NULL );
+
+    old = NULL;
+    addrsize = (tmp == NULL) ? 2 : be32_to_cpu(*tmp);
+
+    dt_dprintk(" -> addrsize=%d\n", addrsize);
+
+    /* Now look for an interrupt-map */
+    imap = dt_get_property(dev, "interrupt-map", &imaplen);
+    /* No interrupt-map found. Ignore */
+    if ( imap == NULL )
+    {
+        dt_dprintk(" -> no map, ignoring\n");
+        return 0;
+    }
+    imaplen /= sizeof(u32);
+
+    /* Parse interrupt-map */
+    while ( imaplen > (addrsize + intsize + 1) )
+    {
+        /* skip child unit address and child interrupt specifier */
+        imap += addrsize + intsize;
+        imaplen -= addrsize + intsize;
+
+        /* Get the interrupt parent */
+        ipar = dt_find_node_by_phandle(be32_to_cpup(imap));
+        imap++;
+        --imaplen;
+
+        /* Check if not found */
+        if ( ipar == NULL )
+        {
+            dt_dprintk(" -> imap parent not found !\n");
+            goto fail;
+        }
+
+        dt_dprintk(" -> ipar %s\n", dt_node_name(ipar));
+
+        /* Get #interrupt-cells and #address-cells of new
+         * parent
+         */
+        tmp = dt_get_property(ipar, "#interrupt-cells", NULL);
+        if ( tmp == NULL )
+        {
+            dt_dprintk(" -> parent lacks #interrupt-cells!\n");
+            goto fail;
+        }
+        pintsize = be32_to_cpu(*tmp);
+        tmp = dt_get_property(ipar, "#address-cells", NULL);
+        paddrsize = (tmp == NULL) ? 0 : be32_to_cpu(*tmp);
+
+        dt_dprintk(" -> pintsize=%d, paddrsize=%d\n",
+                   pintsize, paddrsize);
+
+        if ( pintsize > DT_MAX_IRQ_SPEC )
+        {
+            dt_dprintk(" -> too many irq specifier cells in parent\n");
+            goto fail;
+        }
+
+        /* Check for malformed properties */
+        if ( imaplen < (paddrsize + pintsize) )
+            goto fail;
+
+        imap += paddrsize;
+        imaplen -= paddrsize;
+
+        dt_raw_irq.controller = ipar;
+        dt_raw_irq.size = pintsize;
+        for ( i = 0; i < pintsize; i++ )
+            dt_raw_irq.specifier[i] = dt_read_number(imap + i, 1);
+
+        ret = dt_irq_translate(&dt_raw_irq, &dt_irq);
+        if ( ret )
+        {
+            dt_dprintk(" -> failed to translate IRQ: %d\n", ret);
+            return ret;
+        }
+
+        ret = cb(dev, &dt_irq, data);
+        if ( ret )
+        {
+            dt_dprintk(" -> callback failed=%d\n", ret);
+            return ret;
+        }
+
+        imap += pintsize;
+        imaplen -= pintsize;
+
+        dt_dprintk(" -> imaplen=%d\n", imaplen);
+    }
+
+    return 0;
+
+fail:
+    return -EINVAL;
 }
 
 /**
@@ -1006,7 +1365,8 @@ fail:
     return -EINVAL;
 }
 
-int dt_device_get_raw_irq(const struct dt_device_node *device, int index,
+int dt_device_get_raw_irq(const struct dt_device_node *device,
+                          unsigned int index,
                           struct dt_raw_irq *out_irq)
 {
     const struct dt_device_node *p;
@@ -1014,7 +1374,7 @@ int dt_device_get_raw_irq(const struct dt_device_node *device, int index,
     u32 intsize, intlen;
     int res = -EINVAL;
 
-    dt_dprintk("dt_device_get_raw_irq: dev=%s, index=%d\n",
+    dt_dprintk("dt_device_get_raw_irq: dev=%s, index=%u\n",
                device->full_name, index);
 
     /* Get the interrupts property */
@@ -1058,14 +1418,20 @@ int dt_irq_translate(const struct dt_raw_irq *raw,
                      struct dt_irq *out_irq)
 {
     ASSERT(dt_irq_xlate != NULL);
+    ASSERT(dt_interrupt_controller != NULL);
 
-    /* TODO: Retrieve the right irq_xlate. This is only work for the gic */
+    /*
+     * TODO: Retrieve the right irq_xlate. This is only works for the primary
+     * interrupt controller.
+     */
+    if ( raw->controller != dt_interrupt_controller )
+        return -EINVAL;
 
     return dt_irq_xlate(raw->specifier, raw->size,
                         &out_irq->irq, &out_irq->type);
 }
 
-int dt_device_get_irq(const struct dt_device_node *device, int index,
+int dt_device_get_irq(const struct dt_device_node *device, unsigned int index,
                       struct dt_irq *out_irq)
 {
     struct dt_raw_irq raw;
@@ -1095,6 +1461,12 @@ bool_t dt_device_is_available(const struct dt_device_node *device)
     }
 
     return 0;
+}
+
+bool_t dt_device_for_passthrough(const struct dt_device_node *device)
+{
+    return (dt_find_property(device, "xen,passthrough", NULL) != NULL);
+
 }
 
 static int __dt_parse_phandle_with_args(const struct dt_device_node *np,
@@ -1454,6 +1826,9 @@ static unsigned long __init unflatten_dt_node(const void *fdt,
             ((char *)pp->value)[sz - 1] = 0;
             dt_dprintk("fixed up name for %s -> %s\n", pathp,
                        (char *)pp->value);
+            /* Generic device initialization */
+            np->dev.type = DEV_DT;
+            np->dev.of_node = np;
         }
     }
     if ( allnextpp )

@@ -22,6 +22,4 @@ tools-xentrace-prefix.diff
 tools-pygrub-remove-static-solaris-support
 tools-include-install.diff
 tools-xenmon-install.diff
-tools-hotplug-udevrules.diff
 tools-xenstore-compatibility.diff
-xl-coredumps-to-var-lib-xen-dump.diff

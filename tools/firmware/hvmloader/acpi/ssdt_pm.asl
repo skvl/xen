@@ -15,8 +15,7 @@
  * GNU General Public License for more details.
  *
  * You should have received a copy of the GNU General Public License
- * along with this program; if not, write to the Free Software
- * Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
+ * along with this program; If not, see <http://www.gnu.org/licenses/>.
  */
 
 /*
@@ -276,14 +275,13 @@ DefinitionBlock ("SSDT_PM.aml", "SSDT", 2, "Xen", "HVM", 0)
                 HLP8 (Arg0, Local0)
                 Increment (Local0)
             }
+            Return (Arg0)
         }
 
         Method (HLPA, 0, NotSerialized)
         {
             Store (HLP6 (), Local0)
-            Name (TMP, Buffer (Local0) {})
-            HLP9 (TMP, Local0)
-            Return (TMP)
+            Return (HLP9 (Buffer (Local0) {}, Local0))
         }
 
         Method (REL, 0, NotSerialized)
@@ -372,14 +370,14 @@ DefinitionBlock ("SSDT_PM.aml", "SSDT", 2, "Xen", "HVM", 0)
                 INIT (0x02)
                 INIT (0x01)
                 HLP5 ()
-                Name (BST0, Package (0x04) {})
-                Store (HLP7 (), Index (BST0, 0x00))
-                Store (HLP7 (), Index (BST0, 0x01))
-                Store (HLP7 (), Index (BST0, 0x02))
-                Store (HLP7 (), Index (BST0, 0x03))
+                Store (Package (0x04) {}, Local0)
+                Store (HLP7 (), Index (Local0, 0x00))
+                Store (HLP7 (), Index (Local0, 0x01))
+                Store (HLP7 (), Index (Local0, 0x02))
+                Store (HLP7 (), Index (Local0, 0x03))
                 REL ()
                 Store (2, \_SB.DBG1)
-                Return (BST0)
+                Return (Local0)
             }
         }
 
@@ -409,13 +407,13 @@ DefinitionBlock ("SSDT_PM.aml", "SSDT", 2, "Xen", "HVM", 0)
                 INIT (0x02)
                 INIT (0x02)
                 HLP5 ()
-                Name (BST1, Package (0x04) {})
-                Store (HLP7 (), Index (BST1, 0x00))
-                Store (HLP7 (), Index (BST1, 0x01))
-                Store (HLP7 (), Index (BST1, 0x02))
-                Store (HLP7 (), Index (BST1, 0x03))
+                Store (Package (0x04) {}, Local0)
+                Store (HLP7 (), Index (Local0, 0x00))
+                Store (HLP7 (), Index (Local0, 0x01))
+                Store (HLP7 (), Index (Local0, 0x02))
+                Store (HLP7 (), Index (Local0, 0x03))
                 REL ()
-                Return (BST1)
+                Return (Local0)
             }
         }
     }

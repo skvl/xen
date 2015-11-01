@@ -17,8 +17,7 @@
  * Lesser General Public License for more details.
  *
  * You should have received a copy of the GNU Lesser General Public
- * License along with this library; if not, write to the Free Software
- * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301  USA
+ * License along with this library; If not, see <http://www.gnu.org/licenses/>.
  */
 
 #include "xentoollog.h"
@@ -66,13 +65,14 @@ void xtl_log(struct xentoollog_logger *logger,
 void xtl_progress(struct xentoollog_logger *logger,
                   const char *context, const char *doing_what,
                   unsigned long done, unsigned long total) {
-    int percent;
+    int percent = 0;
 
     if (!logger->progress) return;
 
-    percent = (total < LONG_MAX/100)
-        ? (done * 100) / total
-        : done / ((total + 99) / 100);
+    if ( total )
+        percent = (total < LONG_MAX/100)
+            ? (done * 100) / total
+            : done / ((total + 99) / 100);
 
     logger->progress(logger, context, doing_what, percent, done, total);
 }

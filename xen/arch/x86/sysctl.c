@@ -75,7 +75,8 @@ long cpu_down_helper(void *data)
 
 void arch_do_physinfo(xen_sysctl_physinfo_t *pi)
 {
-    memcpy(pi->hw_cap, boot_cpu_data.x86_capability, NCAPINTS*4);
+    memcpy(pi->hw_cap, boot_cpu_data.x86_capability,
+           min(sizeof(pi->hw_cap), sizeof(boot_cpu_data.x86_capability)));
     if ( hvm_enabled )
         pi->capabilities |= XEN_SYSCTL_PHYSCAP_hvm;
     if ( iommu_enabled )
@@ -157,6 +158,9 @@ long arch_do_sysctl(
             sysctl->u.psr_cmt_op.u.data = (ret ? 0 : info.size);
             break;
         }
+        case XEN_SYSCTL_PSR_CMT_get_l3_event_mask:
+            sysctl->u.psr_cmt_op.u.data = psr_cmt->l3.features;
+            break;
         default:
             sysctl->u.psr_cmt_op.u.data = 0;
             ret = -ENOSYS;
@@ -166,6 +170,24 @@ long arch_do_sysctl(
         if ( __copy_to_guest(u_sysctl, sysctl, 1) )
             ret = -EFAULT;
 
+        break;
+
+    case XEN_SYSCTL_psr_cat_op:
+        switch ( sysctl->u.psr_cat_op.cmd )
+        {
+        case XEN_SYSCTL_PSR_CAT_get_l3_info:
+            ret = psr_get_cat_l3_info(sysctl->u.psr_cat_op.target,
+                                      &sysctl->u.psr_cat_op.u.l3_info.cbm_len,
+                                      &sysctl->u.psr_cat_op.u.l3_info.cos_max);
+
+            if ( !ret && __copy_field_to_guest(u_sysctl, sysctl, u.psr_cat_op) )
+                ret = -EFAULT;
+
+            break;
+        default:
+            ret = -EOPNOTSUPP;
+            break;
+        }
         break;
 
     default:

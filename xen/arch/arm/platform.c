@@ -44,17 +44,6 @@ static bool_t __init platform_is_compatible(const struct platform_desc *plat)
     return 0;
 }
 
-/* List of possible platform */
-static void dump_platform_table(void)
-{
-    const struct platform_desc *p;
-
-    printk("Available platform support:\n");
-
-    for ( p = _splatform; p != _eplatform; p++ )
-        printk("    - %s\n", p->name);
-}
-
 void __init platform_init(void)
 {
     int res = 0;
@@ -72,9 +61,7 @@ void __init platform_init(void)
     if ( platform == _eplatform )
     {
         /* TODO: dump DT machine compatible node */
-        printk(XENLOG_WARNING "WARNING: Unrecognized/unsupported device tree "
-              "compatible list\n");
-        dump_platform_table();
+        printk(XENLOG_INFO "Platform: Generic System\n");
         platform = NULL;
     }
     else
@@ -157,28 +144,7 @@ bool_t platform_device_is_blacklisted(const struct dt_device_node *node)
     if ( platform && platform->blacklist_dev )
         blacklist = platform->blacklist_dev;
 
-    return dt_match_node(blacklist, node);
-}
-
-unsigned int platform_dom0_evtchn_ppi(void)
-{
-    if ( platform && platform->dom0_evtchn_ppi )
-        return platform->dom0_evtchn_ppi;
-    return GUEST_EVTCHN_PPI;
-}
-
-void platform_dom0_gnttab(paddr_t *start, paddr_t *size)
-{
-    if ( platform && platform->dom0_gnttab_size )
-    {
-        *start = platform->dom0_gnttab_start;
-        *size = platform->dom0_gnttab_size;
-    }
-    else
-    {
-        *start = 0xb0000000;
-        *size = 0x20000;
-    }
+    return (dt_match_node(blacklist, node) != NULL);
 }
 
 /*

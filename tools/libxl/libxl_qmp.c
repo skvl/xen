@@ -357,22 +357,32 @@ static libxl__qmp_handler *qmp_init_handler(libxl__gc *gc, uint32_t domid)
 static int qmp_open(libxl__qmp_handler *qmp, const char *qmp_socket_path,
                     int timeout)
 {
-    int ret;
+    int ret = -1;
     int i = 0;
 
     qmp->qmp_fd = socket(AF_UNIX, SOCK_STREAM, 0);
     if (qmp->qmp_fd < 0) {
-        return -1;
+        goto out;
     }
     ret = libxl_fd_set_nonblock(qmp->ctx, qmp->qmp_fd, 1);
-    if (ret) return -1;
+    if (ret) {
+        ret = -1;
+        goto out;
+    }
     ret = libxl_fd_set_cloexec(qmp->ctx, qmp->qmp_fd, 1);
-    if (ret) return -1;
+    if (ret) {
+        ret = -1;
+        goto out;
+    }
 
+    if (sizeof (qmp->addr.sun_path) <= strlen(qmp_socket_path)) {
+        ret = -1;
+        goto out;
+    }
     memset(&qmp->addr, 0, sizeof (qmp->addr));
     qmp->addr.sun_family = AF_UNIX;
     strncpy(qmp->addr.sun_path, qmp_socket_path,
-            sizeof (qmp->addr.sun_path));
+            sizeof (qmp->addr.sun_path)-1);
 
     do {
         ret = connect(qmp->qmp_fd, (struct sockaddr *) &qmp->addr,
@@ -384,8 +394,12 @@ static int qmp_open(libxl__qmp_handler *qmp, const char *qmp_socket_path,
              * ECONNREFUSED : Leftover socket hasn't been removed yet */
             continue;
         }
-        return -1;
+        ret = -1;
+        goto out;
     } while ((++i / 5 <= timeout) && (usleep(200 * 1000) <= 0));
+
+out:
+    if (ret == -1 && qmp->qmp_fd > -1) close(qmp->qmp_fd);
 
     return ret;
 }
@@ -475,7 +489,7 @@ static int qmp_next(libxl__gc *gc, libxl__qmp_handler *qmp)
                 if (o) {
                     rc = qmp_handle_response(gc, qmp, o);
                 } else {
-                    LOG(ERROR, "Parse error of : %s\n", s);
+                    LOG(ERROR, "Parse error of : %s", s);
                     return -1;
                 }
 
@@ -680,6 +694,7 @@ libxl__qmp_handler *libxl__qmp_initialize(libxl__gc *gc, uint32_t domid)
     char *qmp_socket;
 
     qmp = qmp_init_handler(gc, domid);
+    if (!qmp) return NULL;
 
     qmp_socket = GCSPRINTF("%s/qmp-libxl-%d", libxl__run_dir_path(), domid);
     if ((ret = qmp_open(qmp, qmp_socket, QMP_SOCKET_CONNECT_TIMEOUT)) < 0) {
@@ -718,6 +733,13 @@ void libxl__qmp_cleanup(libxl__gc *gc, uint32_t domid)
     char *qmp_socket;
 
     qmp_socket = GCSPRINTF("%s/qmp-libxl-%d", libxl__run_dir_path(), domid);
+    if (unlink(qmp_socket) == -1) {
+        if (errno != ENOENT) {
+            LOGE(ERROR, "Failed to remove QMP socket file %s", qmp_socket);
+        }
+    }
+
+    qmp_socket = GCSPRINTF("%s/qmp-libxenstat-%d", libxl__run_dir_path(), domid);
     if (unlink(qmp_socket) == -1) {
         if (errno != ENOENT) {
             LOGE(ERROR, "Failed to remove QMP socket file %s", qmp_socket);
@@ -828,6 +850,18 @@ int libxl__qmp_pci_add(libxl__gc *gc, int domid, libxl_device_pci *pcidev)
         QMP_PARAMETERS_SPRINTF(&args, "addr", "%x.%x",
                                PCI_SLOT(pcidev->vdevfn), PCI_FUNC(pcidev->vdevfn));
     }
+    /*
+     * Version of QEMU prior to the XSA-131 fix did not support this
+     * property and were effectively always in permissive mode. The
+     * fix for XSA-131 switched the default to be restricted by
+     * default and added the permissive property.
+     *
+     * Therefore in order to support both old and new QEMU we only set
+     * the permissive flag if it is true. Users of older QEMU have no
+     * reason to set the flag so this is ok.
+     */
+    if (pcidev->permissive)
+        qmp_parameters_add_bool(gc, &args, "permissive", true);
 
     rc = qmp_synchronous_send(qmp, "device_add", args,
                               NULL, NULL, qmp->timeout);

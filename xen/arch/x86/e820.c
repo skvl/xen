@@ -74,20 +74,18 @@ static void __init add_memory_region(unsigned long long start,
 {
     int x;
 
-    /*if (!efi_enabled)*/ {
-        x = e820.nr_map;
+    x = e820.nr_map;
 
-        if (x == E820MAX) {
-            printk(KERN_ERR "Ooops! Too many entries in the memory map!\n");
-            return;
-        }
-
-        e820.map[x].addr = start;
-        e820.map[x].size = size;
-        e820.map[x].type = type;
-        e820.nr_map++;
+    if (x == E820MAX) {
+        printk(KERN_ERR "Ooops! Too many entries in the memory map!\n");
+        return;
     }
-} /* add_memory_region */
+
+    e820.map[x].addr = start;
+    e820.map[x].size = size;
+    e820.map[x].type = type;
+    e820.nr_map++;
+}
 
 static void __init print_e820_memory_map(struct e820entry *map, unsigned int entries)
 {
@@ -349,13 +347,6 @@ static unsigned long __init find_max_pfn(void)
     int i;
     unsigned long max_pfn = 0;
 
-#if 0
-    if (efi_enabled) {
-        efi_memmap_walk(efi_find_max_pfn, &max_pfn);
-        return;
-    }
-#endif
-
     for (i = 0; i < e820.nr_map; i++) {
         unsigned long start, end;
         /* RAM? */
@@ -504,11 +495,19 @@ static uint64_t __init mtrr_top_of_ram(void)
 
 static void __init reserve_dmi_region(void)
 {
-    u32 base, len;
-    if ( (dmi_get_table(&base, &len) == 0) && ((base + len) > base) &&
-         reserve_e820_ram(&e820, base, base + len) )
-        printk("WARNING: DMI table located in E820 RAM %08x-%08x. Fixed.\n",
-               base, base+len);
+    for ( ; ; )
+    {
+        paddr_t base;
+        u32 len;
+        const char *what = dmi_get_table(&base, &len);
+
+        if ( !what )
+            break;
+        if ( ((base + len) > base) &&
+             reserve_e820_ram(&e820, base, base + len) )
+            printk("WARNING: %s table located in E820 RAM %"PRIpaddr"-%"PRIpaddr". Fixed.\n",
+                   what, base, base + len);
+    }
 }
 
 static void __init machine_specific_memory_setup(

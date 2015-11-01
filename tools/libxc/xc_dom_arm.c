@@ -12,8 +12,7 @@
  * Lesser General Public License for more details.
  *
  * You should have received a copy of the GNU Lesser General Public
- * License along with this library; if not, write to the Free Software
- * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301  USA
+ * License along with this library; If not, see <http://www.gnu.org/licenses/>.
  *
  * Copyright (c) 2011, Citrix Systems
  */
@@ -26,9 +25,10 @@
 #include "xg_private.h"
 #include "xc_dom.h"
 
-#define NR_MAGIC_PAGES 2
+#define NR_MAGIC_PAGES 3
 #define CONSOLE_PFN_OFFSET 0
 #define XENSTORE_PFN_OFFSET 1
+#define MEMACCESS_PFN_OFFSET 2
 
 #define LPAE_SHIFT 9
 
@@ -87,10 +87,13 @@ static int alloc_magic_pages(struct xc_dom_image *dom)
 
     xc_clear_domain_page(dom->xch, dom->guest_domid, dom->console_pfn);
     xc_clear_domain_page(dom->xch, dom->guest_domid, dom->xenstore_pfn);
+    xc_clear_domain_page(dom->xch, dom->guest_domid, base + MEMACCESS_PFN_OFFSET);
     xc_hvm_param_set(dom->xch, dom->guest_domid, HVM_PARAM_CONSOLE_PFN,
             dom->console_pfn);
     xc_hvm_param_set(dom->xch, dom->guest_domid, HVM_PARAM_STORE_PFN,
             dom->xenstore_pfn);
+    xc_hvm_param_set(dom->xch, dom->guest_domid, HVM_PARAM_MONITOR_RING_PFN,
+            base + MEMACCESS_PFN_OFFSET);
     /* allocated by toolstack */
     xc_hvm_param_set(dom->xch, dom->guest_domid, HVM_PARAM_CONSOLE_EVTCHN,
             dom->console_evtchn);
@@ -449,14 +452,15 @@ int arch_setup_meminit(struct xc_dom_image *dom)
     assert(dom->rambank_size[0] != 0);
     assert(ramsize == 0); /* Too much RAM is rejected above */
 
+    dom->p2m_size = p2m_size;
     dom->p2m_host = xc_dom_malloc(dom, sizeof(xen_pfn_t) * p2m_size);
     if ( dom->p2m_host == NULL )
         return -EINVAL;
     for ( pfn = 0; pfn < p2m_size; pfn++ )
-        dom->p2m_host[pfn] = INVALID_MFN;
+        dom->p2m_host[pfn] = INVALID_P2M_ENTRY;
 
     /* setup initial p2m and allocate guest memory */
-    for ( i = 0; dom->rambank_size[i] && i < GUEST_RAM_BANKS; i++ )
+    for ( i = 0; i < GUEST_RAM_BANKS && dom->rambank_size[i]; i++ )
     {
         if ((rc = populate_guest_memory(dom,
                                         bankbase[i] >> XC_PAGE_SHIFT,

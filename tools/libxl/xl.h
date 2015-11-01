@@ -66,7 +66,6 @@ int main_memmax(int argc, char **argv);
 int main_memset(int argc, char **argv);
 int main_sched_credit(int argc, char **argv);
 int main_sched_credit2(int argc, char **argv);
-int main_sched_sedf(int argc, char **argv);
 int main_sched_rtds(int argc, char **argv);
 int main_domid(int argc, char **argv);
 int main_domname(int argc, char **argv);
@@ -113,9 +112,14 @@ int main_remus(int argc, char **argv);
 #endif
 int main_devd(int argc, char **argv);
 #ifdef LIBXL_HAVE_PSR_CMT
+int main_psr_hwinfo(int argc, char **argv);
 int main_psr_cmt_attach(int argc, char **argv);
 int main_psr_cmt_detach(int argc, char **argv);
 int main_psr_cmt_show(int argc, char **argv);
+#endif
+#ifdef LIBXL_HAVE_PSR_CAT
+int main_psr_cat_cbm_set(int argc, char **argv);
+int main_psr_cat_show(int argc, char **argv);
 #endif
 
 void help(const char *command);

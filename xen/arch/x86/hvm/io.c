@@ -15,8 +15,7 @@
  * more details.
  *
  * You should have received a copy of the GNU General Public License along with
- * this program; if not, write to the Free Software Foundation, Inc., 59 Temple
- * Place - Suite 330, Boston, MA 02111-1307 USA.
+ * this program; If not, see <http://www.gnu.org/licenses/>.
  */
 
 #include <xen/config.h>
@@ -60,8 +59,8 @@ void send_timeoffset_req(unsigned long timeoff)
     if ( timeoff == 0 )
         return;
 
-    if ( !hvm_buffered_io_send(&p) )
-        printk("Unsuccessful timeoffset update\n");
+    if ( hvm_broadcast_ioreq(&p, 1) != 0 )
+        gprintk(XENLOG_ERR, "Unsuccessful timeoffset update\n");
 }
 
 /* Ask ioemu mapcache to invalidate mappings. */
@@ -74,7 +73,8 @@ void send_invalidate_req(void)
         .data = ~0UL, /* flush all */
     };
 
-    hvm_broadcast_assist_req(&p);
+    if ( hvm_broadcast_ioreq(&p, 0) != 0 )
+        gprintk(XENLOG_ERR, "Unsuccessful map-cache invalidate\n");
 }
 
 int handle_mmio(void)
@@ -90,10 +90,8 @@ int handle_mmio(void)
 
     rc = hvm_emulate_one(&ctxt);
 
-    if ( rc != X86EMUL_RETRY )
-        vio->io_state = HVMIO_none;
-    if ( vio->io_state == HVMIO_awaiting_completion )
-        vio->io_state = HVMIO_handle_mmio_awaiting_completion;
+    if ( hvm_vcpu_io_need_completion(vio) || vio->mmio_retry )
+        vio->io_completion = HVMIO_mmio_completion;
     else
         vio->mmio_access = (struct npfec){};
 
@@ -132,7 +130,7 @@ int handle_pio(uint16_t port, unsigned int size, int dir)
 {
     struct vcpu *curr = current;
     struct hvm_vcpu_io *vio = &curr->arch.hvm_vcpu.hvm_io;
-    unsigned long data, reps = 1;
+    unsigned long data;
     int rc;
 
     ASSERT((size - 1) < 4 && size != 3);
@@ -140,7 +138,10 @@ int handle_pio(uint16_t port, unsigned int size, int dir)
     if ( dir == IOREQ_WRITE )
         data = guest_cpu_user_regs()->eax;
 
-    rc = hvmemul_do_pio(port, &reps, size, 0, dir, 0, &data);
+    rc = hvmemul_do_pio_buffer(port, size, dir, &data);
+
+    if ( hvm_vcpu_io_need_completion(vio) )
+        vio->io_completion = HVMIO_pio_completion;
 
     switch ( rc )
     {
@@ -154,11 +155,10 @@ int handle_pio(uint16_t port, unsigned int size, int dir)
         }
         break;
     case X86EMUL_RETRY:
-        if ( vio->io_state != HVMIO_awaiting_completion )
+        /* We should not advance RIP/EIP if the domain is shutting down */
+        if ( curr->domain->is_shutting_down )
             return 0;
-        /* Completion in hvm_io_assist() with no re-emulation required. */
-        ASSERT(dir == IOREQ_READ);
-        vio->io_state = HVMIO_handle_pio_awaiting_completion;
+
         break;
     default:
         gdprintk(XENLOG_ERR, "Weird HVM ioemulation status %d.\n", rc);
@@ -169,224 +169,98 @@ int handle_pio(uint16_t port, unsigned int size, int dir)
     return 1;
 }
 
-void hvm_io_assist(ioreq_t *p)
+static bool_t dpci_portio_accept(const struct hvm_io_handler *handler,
+                                 const ioreq_t *p)
 {
     struct vcpu *curr = current;
+    struct hvm_iommu *hd = domain_hvm_iommu(curr->domain);
     struct hvm_vcpu_io *vio = &curr->arch.hvm_vcpu.hvm_io;
-    enum hvm_io_state io_state;
-
-    p->state = STATE_IOREQ_NONE;
-
-    io_state = vio->io_state;
-    vio->io_state = HVMIO_none;
-
-    switch ( io_state )
-    {
-    case HVMIO_awaiting_completion:
-        vio->io_state = HVMIO_completed;
-        vio->io_data = p->data;
-        break;
-    case HVMIO_handle_mmio_awaiting_completion:
-        vio->io_state = HVMIO_completed;
-        vio->io_data = p->data;
-        (void)handle_mmio();
-        break;
-    case HVMIO_handle_pio_awaiting_completion:
-        if ( vio->io_size == 4 ) /* Needs zero extension. */
-            guest_cpu_user_regs()->rax = (uint32_t)p->data;
-        else
-            memcpy(&guest_cpu_user_regs()->rax, &p->data, vio->io_size);
-        break;
-    default:
-        break;
-    }
-
-    if ( p->state == STATE_IOREQ_NONE )
-    {
-        msix_write_completion(curr);
-        vcpu_end_shutdown_deferral(curr);
-    }
-}
-
-static int dpci_ioport_read(uint32_t mport, ioreq_t *p)
-{
-    struct hvm_vcpu_io *vio = &current->arch.hvm_vcpu.hvm_io;
-    int rc = X86EMUL_OKAY, i, step = p->df ? -p->size : p->size;
-    uint32_t data = 0;
-
-    for ( i = 0; i < p->count; i++ )
-    {
-        if ( vio->mmio_retrying )
-        {
-            if ( vio->mmio_large_read_bytes != p->size )
-                return X86EMUL_UNHANDLEABLE;
-            memcpy(&data, vio->mmio_large_read, p->size);
-            vio->mmio_large_read_bytes = 0;
-            vio->mmio_retrying = 0;
-        }
-        else switch ( p->size )
-        {
-        case 1:
-            data = inb(mport);
-            break;
-        case 2:
-            data = inw(mport);
-            break;
-        case 4:
-            data = inl(mport);
-            break;
-        default:
-            BUG();
-        }
-
-        if ( p->data_is_ptr )
-        {
-            switch ( hvm_copy_to_guest_phys(p->data + step * i,
-                                            &data, p->size) )
-            {
-            case HVMCOPY_okay:
-                break;
-            case HVMCOPY_gfn_paged_out:
-            case HVMCOPY_gfn_shared:
-                rc = X86EMUL_RETRY;
-                break;
-            case HVMCOPY_bad_gfn_to_mfn:
-                /* Drop the write as real hardware would. */
-                continue;
-            case HVMCOPY_bad_gva_to_gfn:
-                ASSERT(0);
-                /* fall through */
-            default:
-                rc = X86EMUL_UNHANDLEABLE;
-                break;
-            }
-            if ( rc != X86EMUL_OKAY)
-                break;
-        }
-        else
-            p->data = data;
-    }
-
-    if ( rc == X86EMUL_RETRY )
-    {
-        vio->mmio_retry = 1;
-        vio->mmio_large_read_bytes = p->size;
-        memcpy(vio->mmio_large_read, &data, p->size);
-    }
-
-    if ( i != 0 )
-    {
-        p->count = i;
-        rc = X86EMUL_OKAY;
-    }
-
-    return rc;
-}
-
-static int dpci_ioport_write(uint32_t mport, ioreq_t *p)
-{
-    int rc = X86EMUL_OKAY, i, step = p->df ? -p->size : p->size;
-    uint32_t data;
-
-    for ( i = 0; i < p->count; i++ )
-    {
-        data = p->data;
-        if ( p->data_is_ptr )
-        {
-            switch ( hvm_copy_from_guest_phys(&data, p->data + step * i,
-                                              p->size) )
-            {
-            case HVMCOPY_okay:
-                break;
-            case HVMCOPY_gfn_paged_out:
-            case HVMCOPY_gfn_shared:
-                rc = X86EMUL_RETRY;
-                break;
-            case HVMCOPY_bad_gfn_to_mfn:
-                data = ~0;
-                break;
-            case HVMCOPY_bad_gva_to_gfn:
-                ASSERT(0);
-                /* fall through */
-            default:
-                rc = X86EMUL_UNHANDLEABLE;
-                break;
-            }
-            if ( rc != X86EMUL_OKAY)
-                break;
-        }
-
-        switch ( p->size )
-        {
-        case 1:
-            outb(data, mport);
-            break;
-        case 2:
-            outw(data, mport);
-            break;
-        case 4:
-            outl(data, mport);
-            break;
-        default:
-            BUG();
-        }
-    }
-
-    if ( rc == X86EMUL_RETRY )
-        current->arch.hvm_vcpu.hvm_io.mmio_retry = 1;
-
-    if ( i != 0 )
-    {
-        p->count = i;
-        rc = X86EMUL_OKAY;
-    }
-
-    return rc;
-}
-
-int dpci_ioport_intercept(ioreq_t *p)
-{
-    struct domain *d = current->domain;
-    struct hvm_iommu *hd = domain_hvm_iommu(d);
     struct g2m_ioport *g2m_ioport;
-    unsigned int mport, gport = p->addr;
-    unsigned int s = 0, e = 0;
-    int rc;
+    unsigned int start, end;
 
     list_for_each_entry( g2m_ioport, &hd->arch.g2m_ioport_list, list )
     {
-        s = g2m_ioport->gport;
-        e = s + g2m_ioport->np;
-        if ( (gport >= s) && (gport < e) )
-            goto found;
+        start = g2m_ioport->gport;
+        end = start + g2m_ioport->np;
+        if ( (p->addr >= start) && (p->addr + p->size <= end) )
+        {
+            vio->g2m_ioport = g2m_ioport;
+            return 1;
+        }
     }
 
-    return X86EMUL_UNHANDLEABLE;
+    return 0;
+}
 
- found:
-    mport = (gport - s) + g2m_ioport->mport;
+static int dpci_portio_read(const struct hvm_io_handler *handler,
+                            uint64_t addr,
+                            uint32_t size,
+                            uint64_t *data)
+{
+    struct hvm_vcpu_io *vio = &current->arch.hvm_vcpu.hvm_io;
+    const struct g2m_ioport *g2m_ioport = vio->g2m_ioport;
+    unsigned int mport = (addr - g2m_ioport->gport) + g2m_ioport->mport;
 
-    if ( !ioports_access_permitted(d, mport, mport + p->size - 1) ) 
+    switch ( size )
     {
-        gdprintk(XENLOG_ERR, "Error: access to gport=%#x denied!\n",
-                 (uint32_t)p->addr);
-        return X86EMUL_UNHANDLEABLE;
-    }
-
-    switch ( p->dir )
-    {
-    case IOREQ_READ:
-        rc = dpci_ioport_read(mport, p);
+    case 1:
+        *data = inb(mport);
         break;
-    case IOREQ_WRITE:
-        rc = dpci_ioport_write(mport, p);
+    case 2:
+        *data = inw(mport);
+        break;
+    case 4:
+        *data = inl(mport);
         break;
     default:
-        gdprintk(XENLOG_ERR, "Error: couldn't handle p->dir = %d", p->dir);
-        rc = X86EMUL_UNHANDLEABLE;
+        BUG();
     }
 
-    return rc;
+    return X86EMUL_OKAY;
+}
+
+static int dpci_portio_write(const struct hvm_io_handler *handler,
+                             uint64_t addr,
+                             uint32_t size,
+                             uint64_t data)
+{
+    struct hvm_vcpu_io *vio = &current->arch.hvm_vcpu.hvm_io;
+    const struct g2m_ioport *g2m_ioport = vio->g2m_ioport;
+    unsigned int mport = (addr - g2m_ioport->gport) + g2m_ioport->mport;
+
+    switch ( size )
+    {
+    case 1:
+        outb(data, mport);
+        break;
+    case 2:
+        outw(data, mport);
+        break;
+    case 4:
+        outl(data, mport);
+        break;
+    default:
+        BUG();
+    }
+
+    return X86EMUL_OKAY;
+}
+
+static const struct hvm_io_ops dpci_portio_ops = {
+    .accept = dpci_portio_accept,
+    .read = dpci_portio_read,
+    .write = dpci_portio_write
+};
+
+void register_dpci_portio_handler(struct domain *d)
+{
+    struct hvm_io_handler *handler = hvm_next_io_handler(d);
+
+    if ( handler == NULL )
+        return;
+
+    handler->type = IOREQ_TYPE_PIO;
+    handler->ops = &dpci_portio_ops;
 }
 
 /*

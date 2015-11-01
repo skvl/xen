@@ -1,35 +1,26 @@
-From 7794958e0bb87edd677037dee751257d1baba6c2 Mon Sep 17 00:00:00 2001
+From 0d261587a649543c5fc05013817e09bfd96a16df Mon Sep 17 00:00:00 2001
 From: Bastian Blank <waldi@debian.org>
 Date: Sat, 5 Jul 2014 11:46:59 +0200
 Subject: tools-misc-prefix.diff
 
 Patch-Name: tools-misc-prefix.diff
 ---
- tools/misc/Makefile | 8 +++-----
- 1 file changed, 3 insertions(+), 5 deletions(-)
+ tools/misc/Makefile | 6 +-----
+ 1 file changed, 1 insertion(+), 5 deletions(-)
 
 diff --git a/tools/misc/Makefile b/tools/misc/Makefile
-index 7a2bfd2..98627f9 100644
+index c4490f3..650a150 100644
 --- a/tools/misc/Makefile
 +++ b/tools/misc/Makefile
-@@ -32,6 +32,8 @@ INSTALL_PRIVBIN := $(INSTALL_PRIVBIN-y)
- # Include configure output (config.h) to headers search path
- CFLAGS += -I$(XEN_ROOT)/tools
- 
-+APPEND_LDFLAGS += $(call LDFLAGS_RPATH,../lib)
-+
- .PHONY: all
- all: build
- 
-@@ -40,12 +42,8 @@ build: $(TARGETS)
+@@ -53,12 +53,8 @@ all build: $(TARGETS_BUILD)
  
  .PHONY: install
  install: build
--	$(INSTALL_DIR) $(DESTDIR)$(BINDIR)
--	$(INSTALL_DIR) $(DESTDIR)$(SBINDIR)
+-	$(INSTALL_DIR) $(DESTDIR)$(bindir)
+-	$(INSTALL_DIR) $(DESTDIR)$(sbindir)
  	$(INSTALL_DIR) $(DESTDIR)$(LIBEXEC_BIN)
--	$(INSTALL_PYTHON_PROG) $(INSTALL_BIN) $(DESTDIR)$(BINDIR)
--	$(INSTALL_PYTHON_PROG) $(INSTALL_SBIN) $(DESTDIR)$(SBINDIR)
+-	$(INSTALL_PYTHON_PROG) $(INSTALL_BIN) $(DESTDIR)$(bindir)
+-	$(INSTALL_PYTHON_PROG) $(INSTALL_SBIN) $(DESTDIR)$(sbindir)
 -	$(INSTALL_PYTHON_PROG) $(INSTALL_PRIVBIN) $(DESTDIR)$(LIBEXEC_BIN)
 +	$(INSTALL_PYTHON_PROG) $(INSTALL_BIN) $(INSTALL_SBIN) $(INSTALL_PRIVBIN) $(DESTDIR)$(LIBEXEC_BIN)
  

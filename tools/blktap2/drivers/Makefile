@@ -7,7 +7,7 @@ LIBVHDDIR  = $(BLKTAP_ROOT)/vhd/lib
 IBIN       = tapdisk2 td-util tapdisk-client tapdisk-stream tapdisk-diff
 QCOW_UTIL  = img2qcow qcow-create qcow2raw
 LOCK_UTIL  = lock-util
-INST_DIR   = $(SBINDIR)
+INST_DIR   = $(sbindir)
 
 CFLAGS    += -Werror
 CFLAGS    += -Wno-unused
@@ -108,4 +108,6 @@ install: all
 clean:
 	rm -rf .*.d *.o *~ xen TAGS $(IBIN) $(LIB) $(LOCK_UTIL) $(QCOW_UTIL)
 
-.PHONY: clean install
+distclean: clean
+
+.PHONY: clean install distclean

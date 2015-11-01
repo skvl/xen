@@ -332,6 +332,8 @@ int libxl__device_physdisk_major_minor(const char *physpath, int *major, int *mi
     struct stat buf;
     if (stat(physpath, &buf) < 0)
         return -1;
+    if (!S_ISBLK(buf.st_mode))
+        return -1;
     *major = major(buf.st_rdev);
     *minor = minor(buf.st_rdev);
     return 0;
@@ -448,7 +450,7 @@ void libxl__prepare_ao_device(libxl__ao *ao, libxl__ao_device *aodev)
      * Initialize xs_watch, because it's not used on all possible
      * execution paths, but it's unconditionally destroyed when finished.
      */
-    libxl__ev_xswatch_init(&aodev->xs_watch);
+    libxl__xswait_init(&aodev->xswait);
     aodev->active = 1;
     /* We init this here because we might call device_hotplug_done
      * without actually calling any hotplug script */
@@ -589,15 +591,15 @@ int libxl__device_destroy(libxl__gc *gc, libxl__device *dev)
 
         if (domid == LIBXL_TOOLSTACK_DOMID) {
             /*
-             * The toolstack domain is in charge for removing both the
-             * frontend and the backend path
+             * The toolstack domain is in charge of removing the
+             * frontend path.
              */
             libxl__xs_path_cleanup(gc, t, fe_path);
-            libxl__xs_path_cleanup(gc, t, be_path);
-        } else if (dev->backend_domid == domid) {
+        }
+        if (dev->backend_domid == domid) {
             /*
-             * The driver domain is in charge for removing what it can
-             * from the backend path
+             * The driver domain is in charge of removing what it can
+             * from the backend path.
              */
             libxl__xs_path_cleanup(gc, t, be_path);
         }
@@ -715,7 +717,7 @@ out:
 
 /* This callback is part of the Qemu devices Badge */
 static void device_qemu_timeout(libxl__egc *egc, libxl__ev_time *ev,
-                                const struct timeval *requested_abs);
+                                const struct timeval *requested_abs, int rc);
 
 static void device_backend_callback(libxl__egc *egc, libxl__ev_devstate *ds,
                                    int rc);
@@ -727,15 +729,11 @@ static void device_hotplug(libxl__egc *egc, libxl__ao_device *aodev);
 
 static void device_hotplug_child_death_cb(libxl__egc *egc,
                                           libxl__async_exec_state *aes,
-                                          int status);
-
-static void device_destroy_be_timeout_cb(libxl__egc *egc, libxl__ev_time *ev,
-                                         const struct timeval *requested_abs);
+                                          int rc, int status);
 
 static void device_destroy_be_watch_cb(libxl__egc *egc,
-                                       libxl__ev_xswatch *watch,
-                                       const char *watch_path,
-                                       const char *event_path);
+                                       libxl__xswait_state *xswait,
+                                       int rc, const char *data);
 
 static void device_hotplug_done(libxl__egc *egc, libxl__ao_device *aodev);
 
@@ -760,7 +758,7 @@ void libxl__wait_device_connection(libxl__egc *egc, libxl__ao_device *aodev)
         return;
     }
 
-    rc = libxl__ev_devstate_wait(gc, &aodev->backend_ds,
+    rc = libxl__ev_devstate_wait(ao, &aodev->backend_ds,
                                  device_backend_callback,
                                  state_path, XenbusStateInitWait,
                                  LIBXL_INIT_TIMEOUT * 1000);
@@ -810,7 +808,7 @@ void libxl__initiate_device_remove(libxl__egc *egc,
              * TODO: 4.2 Bodge due to QEMU, see comment on top of
              * libxl__initiate_device_remove in libxl_internal.h
              */
-            rc = libxl__ev_time_register_rel(gc, &aodev->timeout,
+            rc = libxl__ev_time_register_rel(ao, &aodev->timeout,
                                              device_qemu_timeout,
                                              LIBXL_QEMU_BODGE_TIMEOUT * 1000);
             if (rc) {
@@ -818,7 +816,7 @@ void libxl__initiate_device_remove(libxl__egc *egc,
                            be_path);
                 goto out;
             }
-            return;
+            goto out_success;
         }
     }
 
@@ -839,17 +837,16 @@ void libxl__initiate_device_remove(libxl__egc *egc,
             goto out;
         }
 
+        rc = libxl__xs_write_checked(gc, t, online_path, "0");
+        if (rc)
+            goto out;
+
         /*
          * Check if device is already in "closed" state, in which case
          * it should not be changed.
          */
          if (state && atoi(state) != XenbusStateClosed) {
-            rc = libxl__xs_write_checked(gc, t, online_path, "0");
-            if (rc) {
-                LOG(ERROR, "unable to write to xenstore path %s", online_path);
-                goto out;
-            }
-            rc = libxl__xs_write_checked(gc, t, state_path, "5");
+            rc = libxl__xs_write_checked(gc, t, state_path, GCSPRINTF("%d", XenbusStateClosing));
             if (rc) {
                 LOG(ERROR, "unable to write to xenstore path %s", state_path);
                 goto out;
@@ -861,7 +858,7 @@ void libxl__initiate_device_remove(libxl__egc *egc,
         if (rc < 0) goto out;
     }
 
-    rc = libxl__ev_devstate_wait(gc, &aodev->backend_ds,
+    rc = libxl__ev_devstate_wait(ao, &aodev->backend_ds,
                                  device_backend_callback,
                                  state_path, XenbusStateClosed,
                                  LIBXL_DESTROY_TIMEOUT * 1000);
@@ -870,6 +867,7 @@ void libxl__initiate_device_remove(libxl__egc *egc,
         goto out;
     }
 
+out_success:
     libxl_dominfo_dispose(&info);
     return;
 
@@ -882,7 +880,7 @@ out:
 }
 
 static void device_qemu_timeout(libxl__egc *egc, libxl__ev_time *ev,
-                                const struct timeval *requested_abs)
+                                const struct timeval *requested_abs, int rc)
 {
     libxl__ao_device *aodev = CONTAINER_OF(ev, *aodev, timeout);
     STATE_AO_GC(aodev->ao);
@@ -890,7 +888,9 @@ static void device_qemu_timeout(libxl__egc *egc, libxl__ev_time *ev,
     char *state_path = GCSPRINTF("%s/state", be_path);
     const char *xs_state;
     xs_transaction_t t = 0;
-    int rc = 0;
+
+    if (rc != ERROR_TIMEDOUT)
+        goto out;
 
     libxl__ev_time_deregister(gc, &aodev->timeout);
 
@@ -911,7 +911,7 @@ static void device_qemu_timeout(libxl__egc *egc, libxl__ev_time *ev,
         if (rc) goto out;
 
         if (xs_state && atoi(xs_state) != XenbusStateClosed) {
-            rc = libxl__xs_write_checked(gc, XBT_NULL, state_path, "6");
+            rc = libxl__xs_write_checked(gc, XBT_NULL, state_path, GCSPRINTF("%d", XenbusStateClosed));
             if (rc) goto out;
         }
 
@@ -934,11 +934,13 @@ static void device_backend_callback(libxl__egc *egc, libxl__ev_devstate *ds,
     libxl__ao_device *aodev = CONTAINER_OF(ds, *aodev, backend_ds);
     STATE_AO_GC(aodev->ao);
 
+    LOG(DEBUG, "calling device_backend_cleanup");
     device_backend_cleanup(gc, aodev);
 
     if (rc == ERROR_TIMEDOUT &&
         aodev->action == LIBXL__DEVICE_ACTION_REMOVE &&
         !aodev->force) {
+        LOG(DEBUG, "Timeout reached, initiating forced remove");
         aodev->force = 1;
         libxl__initiate_device_remove(egc, aodev);
         return;
@@ -981,27 +983,30 @@ static void device_hotplug(libxl__egc *egc, libxl__ao_device *aodev)
      * hotplug scripts
      */
     rc = libxl__get_domid(gc, &domid);
-    if (rc) goto out;
+    if (rc) {
+        LOG(ERROR, "Failed to get domid");
+        goto out;
+    }
     if (aodev->dev->backend_domid != domid) {
-        if (aodev->action != LIBXL__DEVICE_ACTION_REMOVE)
-            goto out;
+        LOG(DEBUG, "Backend domid %d, domid %d, assuming driver domains",
+            aodev->dev->backend_domid, domid);
 
-        rc = libxl__ev_time_register_rel(gc, &aodev->timeout,
-                                         device_destroy_be_timeout_cb,
-                                         LIBXL_DESTROY_TIMEOUT * 1000);
-        if (rc) {
-            LOG(ERROR, "setup of xs watch timeout failed");
+        if (aodev->action != LIBXL__DEVICE_ACTION_REMOVE) {
+            LOG(DEBUG, "Not a remove, not executing hotplug scripts");
             goto out;
         }
 
-        rc = libxl__ev_xswatch_register(gc, &aodev->xs_watch,
-                                        device_destroy_be_watch_cb,
-                                        be_path);
+        aodev->xswait.ao = ao;
+        aodev->xswait.what = "removal of backend path";
+        aodev->xswait.path = be_path;
+        aodev->xswait.timeout_ms = LIBXL_DESTROY_TIMEOUT * 1000;
+        aodev->xswait.callback = device_destroy_be_watch_cb;
+        rc = libxl__xswait_start(gc, &aodev->xswait);
         if (rc) {
-            LOG(ERROR, "setup of xs watch for %s failed", be_path);
-            libxl__ev_time_deregister(gc, &aodev->timeout);
+            LOG(ERROR, "Setup of backend removal watch failed (path %s)", be_path);
             goto out;
         }
+
         return;
     }
 
@@ -1013,6 +1018,7 @@ static void device_hotplug(libxl__egc *egc, libxl__ao_device *aodev)
     switch (hotplug) {
     case 0:
         /* no hotplug script to execute */
+        LOG(DEBUG, "No hotplug script to execute");
         goto out;
     case 1:
         /* execute hotplug script */
@@ -1044,7 +1050,7 @@ static void device_hotplug(libxl__egc *egc, libxl__ao_device *aodev)
     aes->stdfds[1] = 2;
     aes->stdfds[2] = -1;
 
-    rc = libxl__async_exec_start(gc, aes);
+    rc = libxl__async_exec_start(aes);
     if (rc)
         goto out;
 
@@ -1062,7 +1068,7 @@ out:
 
 static void device_hotplug_child_death_cb(libxl__egc *egc,
                                           libxl__async_exec_state *aes,
-                                          int status)
+                                          int rc, int status)
 {
     libxl__ao_device *aodev = CONTAINER_OF(aes, *aodev, aes);
     STATE_AO_GC(aodev->ao);
@@ -1071,12 +1077,17 @@ static void device_hotplug_child_death_cb(libxl__egc *egc,
 
     device_hotplug_clean(gc, aodev);
 
-    if (status) {
+    if (status && !rc) {
         hotplug_error = libxl__xs_read(gc, XBT_NULL,
                                        GCSPRINTF("%s/hotplug-error", be_path));
         if (hotplug_error)
             LOG(ERROR, "script: %s", hotplug_error);
-        aodev->rc = ERROR_FAIL;
+        rc = ERROR_FAIL;
+    }
+
+    if (rc) {
+        if (!aodev->rc)
+            aodev->rc = rc;
         if (aodev->action == LIBXL__DEVICE_ACTION_ADD)
             /*
              * Only fail on device connection, on disconnection
@@ -1099,37 +1110,21 @@ error:
     device_hotplug_done(egc, aodev);
 }
 
-static void device_destroy_be_timeout_cb(libxl__egc *egc, libxl__ev_time *ev,
-                                         const struct timeval *requested_abs)
-{
-    libxl__ao_device *aodev = CONTAINER_OF(ev, *aodev, timeout);
-    STATE_AO_GC(aodev->ao);
-
-    LOG(ERROR, "timed out while waiting for %s to be removed",
-               libxl__device_backend_path(gc, aodev->dev));
-
-    aodev->rc = ERROR_TIMEDOUT;
-
-    device_hotplug_done(egc, aodev);
-    return;
-}
-
 static void device_destroy_be_watch_cb(libxl__egc *egc,
-                                       libxl__ev_xswatch *watch,
-                                       const char *watch_path,
-                                       const char *event_path)
+                                       libxl__xswait_state *xswait,
+                                       int rc, const char *dir)
 {
-    libxl__ao_device *aodev = CONTAINER_OF(watch, *aodev, xs_watch);
+    libxl__ao_device *aodev = CONTAINER_OF(xswait, *aodev, xswait);
     STATE_AO_GC(aodev->ao);
-    const char *dir;
-    int rc;
 
-    rc = libxl__xs_read_checked(gc, XBT_NULL, watch_path, &dir);
     if (rc) {
-        LOG(ERROR, "unable to read backend path: %s", watch_path);
+        if (rc == ERROR_TIMEDOUT)
+            LOG(ERROR, "timed out while waiting for %s to be removed",
+                xswait->path);
         aodev->rc = rc;
         goto out;
     }
+
     if (dir) {
         /* backend path still exists, wait a little longer... */
         return;
@@ -1162,7 +1157,7 @@ static void device_hotplug_clean(libxl__gc *gc, libxl__ao_device *aodev)
 {
     /* Clean events and check reentrancy */
     libxl__ev_time_deregister(gc, &aodev->timeout);
-    libxl__ev_xswatch_deregister(gc, &aodev->xs_watch);
+    libxl__xswait_stop(gc, &aodev->xswait);
     assert(!libxl__async_exec_inuse(&aodev->aes));
 }
 
@@ -1186,7 +1181,9 @@ int libxl__wait_for_device_model_deprecated(libxl__gc *gc,
                                  void *check_callback_userdata)
 {
     char *path;
-    path = GCSPRINTF("/local/domain/0/device-model/%d/state", domid);
+    uint32_t dm_domid = libxl_get_stubdom_id(CTX, domid);
+
+    path = libxl__device_model_xs_path(gc, dm_domid, domid, "/state");
     return libxl__xenstore_child_wait_deprecated(gc, domid,
                                      LIBXL_DEVICE_MODEL_START_TIMEOUT,
                                      "Device Model", path, state, spawning,

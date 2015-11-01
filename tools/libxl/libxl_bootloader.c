@@ -30,10 +30,11 @@
 
 static void bootloader_gotptys(libxl__egc *egc, libxl__openpty_state *op);
 static void bootloader_keystrokes_copyfail(libxl__egc *egc,
-       libxl__datacopier_state *dc, int onwrite, int errnoval);
+       libxl__datacopier_state *dc, int rc, int onwrite, int errnoval);
 static void bootloader_display_copyfail(libxl__egc *egc,
-       libxl__datacopier_state *dc, int onwrite, int errnoval);
-static void bootloader_domaindeath(libxl__egc*, libxl__domaindeathcheck *dc);
+       libxl__datacopier_state *dc, int rc, int onwrite, int errnoval);
+static void bootloader_domaindeath(libxl__egc*, libxl__domaindeathcheck *dc,
+                                   int rc);
 static void bootloader_finished(libxl__egc *egc, libxl__ev_child *child,
                                 pid_t pid, int status);
 
@@ -496,7 +497,7 @@ static void bootloader_gotptys(libxl__egc *egc, libxl__openpty_state *op)
     bl->deathcheck.what = "stopping bootloader";
     bl->deathcheck.domid = bl->domid;
     bl->deathcheck.callback = bootloader_domaindeath;
-    rc = libxl__domaindeathcheck_start(gc, &bl->deathcheck);
+    rc = libxl__domaindeathcheck_start(ao, &bl->deathcheck);
     if (rc) goto out;
 
     if (bl->console_available)
@@ -516,6 +517,7 @@ static void bootloader_gotptys(libxl__egc *egc, libxl__openpty_state *op)
 
     bl->keystrokes.ao = ao;
     bl->keystrokes.maxsz = BOOTLOADER_BUF_OUT;
+    bl->keystrokes.bytes_to_read = -1;
     bl->keystrokes.copywhat =
         GCSPRINTF("bootloader input for domain %"PRIu32, bl->domid);
     bl->keystrokes.callback =         bootloader_keystrokes_copyfail;
@@ -527,6 +529,7 @@ static void bootloader_gotptys(libxl__egc *egc, libxl__openpty_state *op)
 
     bl->display.ao = ao;
     bl->display.maxsz = BOOTLOADER_BUF_IN;
+    bl->display.bytes_to_read = -1;
     bl->display.copywhat =
         GCSPRINTF("bootloader output for domain %"PRIu32, bl->domid);
     bl->display.callback =         bootloader_display_copyfail;
@@ -576,10 +579,10 @@ static void bootloader_gotptys(libxl__egc *egc, libxl__openpty_state *op)
 
 /* perhaps one of these will be called, but perhaps not */
 static void bootloader_copyfail(libxl__egc *egc, const char *which,
-        libxl__bootloader_state *bl, int ondisplay, int onwrite, int errnoval)
+        libxl__bootloader_state *bl, int ondisplay,
+        int rc, int onwrite, int errnoval)
 {
     STATE_AO_GC(bl->ao);
-    int rc = ERROR_FAIL;
 
     if (errnoval==-1) {
         /* POLLHUP */
@@ -590,28 +593,32 @@ static void bootloader_copyfail(libxl__egc *egc, const char *which,
             LOG(ERROR, "unexpected POLLHUP on %s", which);
         }
     }
-    if (!onwrite && !errnoval)
+    if (!rc) {
         LOG(ERROR, "unexpected eof copying %s", which);
+        rc = ERROR_FAIL;
+    }
 
     bootloader_stop(egc, bl, rc);
 }
 static void bootloader_keystrokes_copyfail(libxl__egc *egc,
-       libxl__datacopier_state *dc, int onwrite, int errnoval)
+       libxl__datacopier_state *dc, int rc, int onwrite, int errnoval)
 {
     libxl__bootloader_state *bl = CONTAINER_OF(dc, *bl, keystrokes);
-    bootloader_copyfail(egc, "bootloader input", bl, 0, onwrite, errnoval);
+    bootloader_copyfail(egc, "bootloader input", bl, 0, rc,onwrite,errnoval);
 }
 static void bootloader_display_copyfail(libxl__egc *egc,
-       libxl__datacopier_state *dc, int onwrite, int errnoval)
+       libxl__datacopier_state *dc, int rc, int onwrite, int errnoval)
 {
     libxl__bootloader_state *bl = CONTAINER_OF(dc, *bl, display);
-    bootloader_copyfail(egc, "bootloader output", bl, 1, onwrite, errnoval);
+    bootloader_copyfail(egc, "bootloader output", bl, 1, rc,onwrite,errnoval);
 }
 
-static void bootloader_domaindeath(libxl__egc *egc, libxl__domaindeathcheck *dc)
+static void bootloader_domaindeath(libxl__egc *egc,
+                                   libxl__domaindeathcheck *dc,
+                                   int rc)
 {
     libxl__bootloader_state *bl = CONTAINER_OF(dc, *bl, deathcheck);
-    bootloader_stop(egc, bl, ERROR_FAIL);
+    bootloader_stop(egc, bl, rc);
 }
 
 static void bootloader_finished(libxl__egc *egc, libxl__ev_child *child,

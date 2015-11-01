@@ -17,44 +17,11 @@
  * Lesser General Public License for more details.
  *
  * You should have received a copy of the GNU Lesser General Public
- * License along with this library; if not, write to the Free Software
- * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301  USA
+ * License along with this library; If not, see <http://www.gnu.org/licenses/>.
  */
 
 #include "xc_private.h"
 #include <xen/memory.h>
-
-void *xc_mem_access_enable(xc_interface *xch, domid_t domain_id, uint32_t *port)
-{
-    return xc_mem_event_enable(xch, domain_id, HVM_PARAM_ACCESS_RING_PFN,
-                               port, 0);
-}
-
-void *xc_mem_access_enable_introspection(xc_interface *xch, domid_t domain_id,
-                                         uint32_t *port)
-{
-    return xc_mem_event_enable(xch, domain_id, HVM_PARAM_ACCESS_RING_PFN,
-                               port, 1);
-}
-
-int xc_mem_access_disable(xc_interface *xch, domid_t domain_id)
-{
-    return xc_mem_event_control(xch, domain_id,
-                                XEN_DOMCTL_MEM_EVENT_OP_ACCESS_DISABLE,
-                                XEN_DOMCTL_MEM_EVENT_OP_ACCESS,
-                                NULL);
-}
-
-int xc_mem_access_resume(xc_interface *xch, domid_t domain_id)
-{
-    xen_mem_access_op_t mao =
-    {
-        .op    = XENMEM_access_op_resume,
-        .domid = domain_id
-    };
-
-    return do_memory_op(xch, XENMEM_access_op, &mao, sizeof(mao));
-}
 
 int xc_set_mem_access(xc_interface *xch,
                       domid_t domain_id,
@@ -93,6 +60,30 @@ int xc_get_mem_access(xc_interface *xch,
         *access = mao.access;
 
     return rc;
+}
+
+int xc_mem_access_enable_emulate(xc_interface *xch,
+                                 domid_t domain_id)
+{
+    xen_mem_access_op_t mao =
+    {
+        .op     = XENMEM_access_op_enable_emulate,
+        .domid  = domain_id,
+    };
+
+    return do_memory_op(xch, XENMEM_access_op, &mao, sizeof(mao));
+}
+
+int xc_mem_access_disable_emulate(xc_interface *xch,
+                                  domid_t domain_id)
+{
+    xen_mem_access_op_t mao =
+    {
+        .op     = XENMEM_access_op_disable_emulate,
+        .domid  = domain_id,
+    };
+
+    return do_memory_op(xch, XENMEM_access_op, &mao, sizeof(mao));
 }
 
 /*

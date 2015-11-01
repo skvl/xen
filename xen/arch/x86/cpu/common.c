@@ -12,6 +12,7 @@
 #include <asm/apic.h>
 #include <mach_apic.h>
 #include <asm/setup.h>
+#include <public/sysctl.h> /* for XEN_INVALID_{SOCKET,CORE}_ID */
 
 #include "cpu.h"
 
@@ -34,7 +35,7 @@ integer_param("cpuid_mask_ext_ecx", opt_cpuid_mask_ext_ecx);
 unsigned int __devinitdata opt_cpuid_mask_ext_edx = ~0u;
 integer_param("cpuid_mask_ext_edx", opt_cpuid_mask_ext_edx);
 
-struct cpu_dev * cpu_devs[X86_VENDOR_NUM] = {};
+const struct cpu_dev *__read_mostly cpu_devs[X86_VENDOR_NUM] = {};
 
 unsigned int paddr_bits __read_mostly = 36;
 
@@ -60,11 +61,11 @@ static void default_init(struct cpuinfo_x86 * c)
 	__clear_bit(X86_FEATURE_SEP, c->x86_capability);
 }
 
-static struct cpu_dev default_cpu = {
+static const struct cpu_dev default_cpu = {
 	.c_init	= default_init,
 	.c_vendor = "Unknown",
 };
-static struct cpu_dev * this_cpu = &default_cpu;
+static const struct cpu_dev *this_cpu = &default_cpu;
 
 bool_t opt_cpu_info;
 boolean_param("cpuinfo", opt_cpu_info);
@@ -125,9 +126,8 @@ void __cpuinit display_cacheinfo(struct cpuinfo_x86 *c)
 		       l2size, ecx & 0xFF);
 }
 
-static void __cpuinit get_cpu_vendor(struct cpuinfo_x86 *c, int early)
+int get_cpu_vendor(const char v[], enum get_cpu_vendor mode)
 {
-	char *v = c->x86_vendor_id;
 	int i;
 	static int printed;
 
@@ -136,20 +136,22 @@ static void __cpuinit get_cpu_vendor(struct cpuinfo_x86 *c, int early)
 			if (!strcmp(v,cpu_devs[i]->c_ident[0]) ||
 			    (cpu_devs[i]->c_ident[1] && 
 			     !strcmp(v,cpu_devs[i]->c_ident[1]))) {
-				c->x86_vendor = i;
-				if (!early)
+				if (mode == gcv_host_late)
 					this_cpu = cpu_devs[i];
-				return;
+				return i;
 			}
 		}
 	}
+	if (mode == gcv_guest)
+		return X86_VENDOR_UNKNOWN;
 	if (!printed) {
 		printed++;
 		printk(KERN_ERR "CPU: Vendor unknown, using generic init.\n");
 		printk(KERN_ERR "CPU: Your system may be unstable.\n");
 	}
-	c->x86_vendor = X86_VENDOR_UNKNOWN;
 	this_cpu = &default_cpu;
+
+	return X86_VENDOR_UNKNOWN;
 }
 
 static inline u32 _phys_pkg_id(u32 cpuid_apic, int index_msb)
@@ -188,7 +190,7 @@ static void __init early_cpu_detect(void)
 	      (int *)&c->x86_vendor_id[8],
 	      (int *)&c->x86_vendor_id[4]);
 
-	get_cpu_vendor(c, 1);
+	c->x86_vendor = get_cpu_vendor(c->x86_vendor_id, gcv_host_early);
 
 	cpuid(0x00000001, &tfms, &misc, &cap4, &cap0);
 	c->x86 = (tfms >> 8) & 15;
@@ -217,7 +219,7 @@ static void __cpuinit generic_identify(struct cpuinfo_x86 *c)
 	      (int *)&c->x86_vendor_id[8],
 	      (int *)&c->x86_vendor_id[4]);
 		
-	get_cpu_vendor(c, 0);
+	c->x86_vendor = get_cpu_vendor(c->x86_vendor_id, gcv_host_late);
 	/* Initialize the standard set of capabilities */
 	/* Note that the vendor-specific code below might override */
 	
@@ -277,9 +279,9 @@ void __cpuinit identify_cpu(struct cpuinfo_x86 *c)
 	c->x86_max_cores = 1;
 	c->x86_num_siblings = 1;
 	c->x86_clflush_size = 0;
-	c->phys_proc_id = BAD_APICID;
-	c->cpu_core_id = BAD_APICID;
-	c->compute_unit_id = BAD_APICID;
+	c->phys_proc_id = XEN_INVALID_SOCKET_ID;
+	c->cpu_core_id = XEN_INVALID_CORE_ID;
+	c->compute_unit_id = INVALID_CUID;
 	memset(&c->x86_capability, 0, sizeof c->x86_capability);
 
 	generic_identify(c);
@@ -635,4 +637,42 @@ void __cpuinit cpu_init(void)
 void cpu_uninit(unsigned int cpu)
 {
 	cpumask_clear_cpu(cpu, &cpu_initialized);
+}
+
+/*
+ * x86_match_cpu - match the current CPU against an array of
+ * x86_cpu_ids
+ * @match: Pointer to array of x86_cpu_ids. Last entry terminated with
+ *         {}.
+ * Return the entry if the current CPU matches the entries in the
+ * passed x86_cpu_id match table. Otherwise NULL.  The match table
+ * contains vendor (X86_VENDOR_*), family, model and feature bits or
+ * respective wildcard entries.
+ *
+ * A typical table entry would be to match a specific CPU
+ * { X86_VENDOR_INTEL, 6, 0x12 }
+ * or to match a specific CPU feature
+ * { X86_FEATURE_MATCH(X86_FEATURE_FOOBAR) }
+ *
+ * This always matches against the boot cpu, assuming models and
+features are
+ * consistent over all CPUs.
+ */
+const struct x86_cpu_id *x86_match_cpu(const struct x86_cpu_id table[])
+{
+	const struct x86_cpu_id *m;
+	const struct cpuinfo_x86 *c = &boot_cpu_data;
+
+	for (m = table; m->vendor | m->family | m->model | m->feature; m++) {
+		if (c->x86_vendor != m->vendor)
+			continue;
+		if (c->x86 != m->family)
+			continue;
+		if (c->x86_model != m->model)
+			continue;
+		if (!cpu_has(c, m->feature))
+			continue;
+		return m;
+	}
+	return NULL;
 }

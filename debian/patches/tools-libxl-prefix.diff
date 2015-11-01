@@ -1,4 +1,4 @@
-From 052023923523f1120329278313cc41210e9676ec Mon Sep 17 00:00:00 2001
+From ca4a2ee9008f68c00fa2726a11e4c8c8bdff43b2 Mon Sep 17 00:00:00 2001
 From: Bastian Blank <waldi@debian.org>
 Date: Sat, 5 Jul 2014 11:46:57 +0200
 Subject: tools-libxl-prefix.diff
@@ -9,7 +9,7 @@ Patch-Name: tools-libxl-prefix.diff
  1 file changed, 5 insertions(+), 4 deletions(-)
 
 diff --git a/tools/libxl/Makefile b/tools/libxl/Makefile
-index 6b20c14..0c0cb3b 100644
+index 08b2b93..e756946 100644
 --- a/tools/libxl/Makefile
 +++ b/tools/libxl/Makefile
 @@ -12,6 +12,8 @@ CFLAGS += -I. -fPIC
@@ -21,7 +21,7 @@ index 6b20c14..0c0cb3b 100644
  
  LIBXL_LIBS =
  LIBXL_LIBS = $(LDLIBS_libxenctrl) $(LDLIBS_libxenguest) $(LDLIBS_libxenstore) $(LDLIBS_libblktapctl) $(PTYFUNCS_LIBS) $(LIBUUID_LIBS)
-@@ -204,7 +206,7 @@ libxenlight.so: libxenlight-$(PACKAGE_VERSION).so
+@@ -223,7 +225,7 @@ libxenlight.so: libxenlight-$(PACKAGE_VERSION).so
  	$(SYMLINK_SHLIB) $< $@
  
  libxenlight-$(PACKAGE_VERSION).so: $(LIBXL_OBJS)
@@ -30,7 +30,7 @@ index 6b20c14..0c0cb3b 100644
  
  libxenlight_test.so: $(LIBXL_OBJS) $(LIBXL_TEST_OBJS)
  	$(CC) $(LDFLAGS) -Wl,$(SONAME_LDFLAG) -Wl,libxenlight.so.$(MAJOR) $(SHLIB_LDFLAGS) -o $@ $^ $(LIBXL_LIBS) $(APPEND_LDFLAGS)
-@@ -222,7 +224,7 @@ libxlutil.a: $(LIBXLU_OBJS)
+@@ -241,7 +243,7 @@ libxlutil.a: $(LIBXLU_OBJS)
  	$(AR) rcs libxlutil.a $^
  
  xl: $(XL_OBJS) libxlutil.so libxenlight.so
@@ -39,17 +39,18 @@ index 6b20c14..0c0cb3b 100644
  
  xen-init-dom0: $(XEN_INIT_DOM0_OBJS) libxenlight.so
  	$(CC) $(LDFLAGS) -o $@ $(XEN_INIT_DOM0_OBJS) $(LDLIBS_libxenstore) $(LDLIBS_libxenlight) $(LDLIBS_libxenctrl) $(APPEND_LDFLAGS)
-@@ -238,12 +240,11 @@ testidl: testidl.o libxlutil.so libxenlight.so
+@@ -261,13 +263,12 @@ $(PKG_CONFIG): % : %.in Makefile
  
  .PHONY: install
  install: all
--	$(INSTALL_DIR) $(DESTDIR)$(SBINDIR)
- 	$(INSTALL_DIR) $(DESTDIR)$(LIBDIR)
- 	$(INSTALL_DIR) $(DESTDIR)$(INCLUDEDIR)
+-	$(INSTALL_DIR) $(DESTDIR)$(sbindir)
+ 	$(INSTALL_DIR) $(DESTDIR)$(libdir)
+ 	$(INSTALL_DIR) $(DESTDIR)$(includedir)
  	$(INSTALL_DIR) $(DESTDIR)$(BASH_COMPLETION_DIR)
  	$(INSTALL_DIR) $(DESTDIR)$(LIBEXEC_BIN)
--	$(INSTALL_PROG) xl $(DESTDIR)$(SBINDIR)
+ 	$(INSTALL_DIR) $(DESTDIR)$(SHAREDIR)/pkgconfig
+-	$(INSTALL_PROG) xl $(DESTDIR)$(sbindir)
 +	$(INSTALL_PROG) xl $(DESTDIR)$(LIBEXEC_BIN)
  	$(INSTALL_PROG) xen-init-dom0 $(DESTDIR)$(LIBEXEC_BIN)
  	$(INSTALL_PROG) libxl-save-helper $(DESTDIR)$(LIBEXEC_BIN)
- 	$(INSTALL_SHLIB) libxenlight-$(PACKAGE_VERSION).so $(DESTDIR)$(LIBDIR)
+ 	$(INSTALL_SHLIB) libxenlight-$(PACKAGE_VERSION).so $(DESTDIR)$(libdir)

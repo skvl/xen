@@ -12,8 +12,7 @@
  * Lesser General Public License for more details.
  *
  * You should have received a copy of the GNU Lesser General Public
- * License along with this library; if not, write to the Free Software
- * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301  USA
+ * License along with this library; If not, see <http://www.gnu.org/licenses/>.
  */
 
 #include <stdlib.h>
@@ -33,16 +32,22 @@ pthread_mutex_t hypercall_buffer_cache_mutex = PTHREAD_MUTEX_INITIALIZER;
 
 static void hypercall_buffer_cache_lock(xc_interface *xch)
 {
+    int saved_errno = errno;
     if ( xch->flags & XC_OPENFLAG_NON_REENTRANT )
         return;
     pthread_mutex_lock(&hypercall_buffer_cache_mutex);
+    /* Ignore pthread errors. */
+    errno = saved_errno;
 }
 
 static void hypercall_buffer_cache_unlock(xc_interface *xch)
 {
+    int saved_errno = errno;
     if ( xch->flags & XC_OPENFLAG_NON_REENTRANT )
         return;
     pthread_mutex_unlock(&hypercall_buffer_cache_mutex);
+    /* Ignore pthread errors. */
+    errno = saved_errno;
 }
 
 static void *hypercall_buffer_cache_alloc(xc_interface *xch, int nr_pages)

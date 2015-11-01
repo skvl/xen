@@ -13,6 +13,8 @@
 #include <xen/irq.h>
 #include <xen/pci_regs.h>
 #include <xen/pfn.h>
+#include <asm/device.h>
+#include <asm/numa.h>
 #include <asm/pci.h>
 
 /*
@@ -24,6 +26,7 @@
  *  7:3 = slot
  *  2:0 = function
  */
+#define PCI_SEG(sbdf) (((sbdf) >> 16) & 0xffff)
 #define PCI_BUS(bdf)    (((bdf) >> 8) & 0xff)
 #define PCI_SLOT(bdf)   (((bdf) >> 3) & 0x1f)
 #define PCI_FUNC(bdf)   ((bdf) & 0x07)
@@ -31,6 +34,9 @@
 #define PCI_DEVFN2(bdf) ((bdf) & 0xff)
 #define PCI_BDF(b,d,f)  ((((b) & 0xff) << 8) | PCI_DEVFN(d,f))
 #define PCI_BDF2(b,df)  ((((b) & 0xff) << 8) | ((df) & 0xff))
+#define PCI_SBDF(s,b,d,f) ((((s) & 0xffff) << 16) | PCI_BDF(b,d,f))
+#define PCI_SBDF2(s,bdf) ((((s) & 0xffff) << 16) | ((bdf) & 0xffff))
+#define PCI_SBDF3(s,b,df) ((((s) & 0xffff) << 16) | PCI_BDF2(b, df))
 
 struct pci_dev_info {
     bool_t is_extfn;
@@ -55,6 +61,8 @@ struct pci_dev {
     const u8 devfn;
 
     u8 phantom_stride;
+
+    nodeid_t node; /* NUMA node */
 
     enum pdev_type {
         DEV_TYPE_PCI_UNKNOWN,
@@ -89,7 +97,7 @@ struct pci_dev {
 extern spinlock_t pcidevs_lock;
 
 bool_t pci_known_segment(u16 seg);
-int pci_device_detect(u16 seg, u8 bus, u8 dev, u8 func);
+bool_t pci_device_detect(u16 seg, u8 bus, u8 dev, u8 func);
 int scan_pci_devices(void);
 enum pdev_type pdev_type(u16 seg, u8 bus, u8 devfn);
 int find_upstream_bridge(u16 seg, u8 *bus, u8 *devfn, u8 *secbus);
@@ -99,13 +107,13 @@ struct pci_dev *pci_lock_domain_pdev(
 
 void setup_hwdom_pci_devices(struct domain *,
                             int (*)(u8 devfn, struct pci_dev *));
-void pci_release_devices(struct domain *d);
+int pci_release_devices(struct domain *d);
 int pci_add_segment(u16 seg);
 const unsigned long *pci_get_ro_map(u16 seg);
-int pci_add_device(u16 seg, u8 bus, u8 devfn, const struct pci_dev_info *);
+int pci_add_device(u16 seg, u8 bus, u8 devfn,
+                   const struct pci_dev_info *, nodeid_t node);
 int pci_remove_device(u16 seg, u8 bus, u8 devfn);
 int pci_ro_device(int seg, int bus, int devfn);
-void arch_pci_ro_device(int seg, int bdf);
 int pci_hide_device(int bus, int devfn);
 struct pci_dev *pci_get_pdev(int seg, int bus, int devfn);
 struct pci_dev *pci_get_real_pdev(int seg, int bus, int devfn);

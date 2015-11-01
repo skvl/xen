@@ -14,8 +14,7 @@
     Library General Public License for more details.
 
     You should have received a copy of the GNU Library General Public
-    License along with this library; if not, write to the Free
-    Software Foundation, Inc., 675 Mass Ave, Cambridge, MA 02139, USA.
+    License along with this library; If not, see <http://www.gnu.org/licenses/>.
 
     Richard Gooch may be reached by email at  rgooch@atnf.csiro.au
     The postal address is:
@@ -36,6 +35,7 @@
 #include <xen/lib.h>
 #include <xen/smp.h>
 #include <xen/spinlock.h>
+#include <asm/atomic.h>
 #include <asm/mtrr.h>
 #include <asm/uaccess.h>
 #include <asm/processor.h>

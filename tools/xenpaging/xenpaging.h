@@ -16,8 +16,7 @@
  * GNU General Public License for more details.
  *
  * You should have received a copy of the GNU General Public License
- * along with this program; if not, write to the Free Software
- * Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
+ * along with this program; If not, see <http://www.gnu.org/licenses/>.
  */
 
 
@@ -27,15 +26,15 @@
 
 #include <xc_private.h>
 #include <xen/event_channel.h>
-#include <xen/mem_event.h>
+#include <xen/vm_event.h>
 
 #define XENPAGING_PAGEIN_QUEUE_SIZE 64
 
-struct mem_event {
+struct vm_event {
     domid_t domain_id;
     xc_evtchn *xce_handle;
     int port;
-    mem_event_back_ring_t back_ring;
+    vm_event_back_ring_t back_ring;
     uint32_t evtchn_port;
     void *ring_page;
 };
@@ -51,7 +50,7 @@ struct xenpaging {
 
     void *paging_buffer;
 
-    struct mem_event mem_event;
+    struct vm_event vm_event;
     int fd;
     /* number of pages for which data structures were allocated */
     int max_pages;
