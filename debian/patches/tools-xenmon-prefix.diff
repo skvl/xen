@@ -1,0 +1,37 @@
+From 68f545c1e9227d64d47407a9f05d918a819f3733 Mon Sep 17 00:00:00 2001
+From: Bastian Blank <waldi@debian.org>
+Date: Sat, 5 Jul 2014 11:47:06 +0200
+Subject: tools-xenmon-prefix.diff
+
+Patch-Name: tools-xenmon-prefix.diff
+---
+ tools/xenmon/Makefile | 9 +++++----
+ 1 file changed, 5 insertions(+), 4 deletions(-)
+
+diff --git a/tools/xenmon/Makefile b/tools/xenmon/Makefile
+index 20ea100..cb6d7f8 100644
+--- a/tools/xenmon/Makefile
++++ b/tools/xenmon/Makefile
+@@ -16,6 +16,7 @@ include $(XEN_ROOT)/tools/Rules.mk
+ CFLAGS  += -Werror
+ CFLAGS  += $(CFLAGS_libxenctrl)
+ LDLIBS  += $(LDLIBS_libxenctrl)
++LDFLAGS += $(call LDFLAGS_RPATH,../lib)
+ 
+ SCRIPTS = xenmon.py
+ 
+@@ -27,10 +28,10 @@ build: xentrace_setmask xenbaked
+ 
+ .PHONY: install
+ install: build
+-	$(INSTALL_DIR) $(DESTDIR)$(sbindir)
+-	$(INSTALL_PROG) xenbaked $(DESTDIR)$(sbindir)/xenbaked
+-	$(INSTALL_PROG) xentrace_setmask  $(DESTDIR)$(sbindir)/xentrace_setmask
+-	$(INSTALL_PROG) xenmon.py  $(DESTDIR)$(sbindir)/xenmon.py
++	$(INSTALL_DIR) $(DESTDIR)$(LIBEXEC_BIN)
++	$(INSTALL_PROG) xenbaked $(DESTDIR)$(LIBEXEC_BIN)/xenbaked
++	$(INSTALL_PROG) xentrace_setmask  $(DESTDIR)$(LIBEXEC_BIN)/xentrace_setmask
++	$(INSTALL_PROG) xenmon.py  $(DESTDIR)$(LIBEXEC_BIN)/xenmon.py
+ 
+ .PHONY: clean
+ clean:

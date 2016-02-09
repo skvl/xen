@@ -1,0 +1,53 @@
+From ae26990012e9cbbf3c49b4dd3c2a6df3b81d6019 Mon Sep 17 00:00:00 2001
+From: Bastian Blank <waldi@debian.org>
+Date: Sat, 5 Jul 2014 11:47:12 +0200
+Subject: tools-xenstore-prefix.diff
+
+Patch-Name: tools-xenstore-prefix.diff
+---
+ tools/xenstore/Makefile | 12 +++++++-----
+ 1 file changed, 7 insertions(+), 5 deletions(-)
+
+diff --git a/tools/xenstore/Makefile b/tools/xenstore/Makefile
+index 1b4a494..f837c6e 100644
+--- a/tools/xenstore/Makefile
++++ b/tools/xenstore/Makefile
+@@ -18,6 +18,8 @@ LDFLAGS-$(CONFIG_SYSTEMD) += $(SYSTEMD_LIBS)
+ CFLAGS  += $(CFLAGS-y)
+ LDFLAGS += $(LDFLAGS-y)
+ 
++LDFLAGS_libxenctrl += $(call LDFLAGS_RPATH,../lib)
++
+ CLIENTS := xenstore-exists xenstore-list xenstore-read xenstore-rm xenstore-chmod
+ CLIENTS += xenstore-write xenstore-ls xenstore-watch
+ 
+@@ -75,10 +77,10 @@ endif
+ init-xenstore-domain.o: CFLAGS += $(CFLAGS_libxenguest)
+ 
+ init-xenstore-domain: init-xenstore-domain.o $(LIBXENSTORE)
+-	$(CC) $^ $(LDFLAGS) $(LDLIBS_libxenctrl) $(LDLIBS_libxenguest) $(LDLIBS_libxenstore) -o $@ $(APPEND_LDFLAGS)
++	$(CC) $^ $(LDFLAGS) $(LDLIBS_libxenctrl) $(LDLIBS_libxenguest) $(LDLIBS_libxenstore) $(call LDFLAGS_RPATH,../lib) -o $@ $(APPEND_LDFLAGS)
+ 
+ xenstored: $(XENSTORED_OBJS)
+-	$(CC) $^ $(LDFLAGS) $(LDLIBS_libxenctrl) $(SOCKET_LIBS) -o $@ $(APPEND_LDFLAGS)
++	$(CC) $^ $(LDFLAGS) $(LDLIBS_libxenctrl) $(SOCKET_LIBS) $(call LDFLAGS_RPATH,../lib) -o $@ $(APPEND_LDFLAGS)
+ 
+ xenstored.a: $(XENSTORED_OBJS)
+ 	$(AR) cr $@ $^
+@@ -131,13 +133,13 @@ tarball: clean
+ install: all
+ 	$(INSTALL_DIR) $(DESTDIR)$(bindir)
+ 	$(INSTALL_DIR) $(DESTDIR)$(includedir)
++	$(INSTALL_DIR) $(DESTDIR)$(LIBEXEC_BIN)
+ 	$(INSTALL_DIR) $(DESTDIR)$(includedir)/xenstore-compat
+ ifeq ($(XENSTORE_XENSTORED),y)
+-	$(INSTALL_DIR) $(DESTDIR)$(sbindir)
+ 	$(INSTALL_DIR) $(DESTDIR)$(XEN_LIB_STORED)
+-	$(INSTALL_PROG) xenstored $(DESTDIR)$(sbindir)
++	$(INSTALL_PROG) xenstored $(DESTDIR)$(LIBEXEC_BIN)
+ endif
+-	$(INSTALL_PROG) xenstore-control $(DESTDIR)$(bindir)
++	$(INSTALL_PROG) xenstore-control $(DESTDIR)$(LIBEXEC_BIN)
+ 	$(INSTALL_PROG) xenstore $(DESTDIR)$(bindir)
+ 	set -e ; for c in $(CLIENTS) ; do \
+ 		ln -f $(DESTDIR)$(bindir)/xenstore $(DESTDIR)$(bindir)/$${c} ; \
