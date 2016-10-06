@@ -34,22 +34,22 @@ headers.chk: $(wildcard include/*.h)
 libxentoollog.a: $(LIB_OBJS)
 	$(AR) rc $@ $^
 
-libxentoollog.so: libxentoollog.so.$(MAJOR)
+libxentoollog.so: libxentoollog-$(PACKAGE_VERSION).so.$(MAJOR)
 	$(SYMLINK_SHLIB) $< $@
-libxentoollog.so.$(MAJOR): libxentoollog.so.$(MAJOR).$(MINOR)
+libxentoollog-$(PACKAGE_VERSION).so.$(MAJOR): libxentoollog-$(PACKAGE_VERSION).so.$(MAJOR).$(MINOR)
 	$(SYMLINK_SHLIB) $< $@
 
-libxentoollog.so.$(MAJOR).$(MINOR): $(PIC_OBJS) libxentoollog.map
-	$(CC) $(LDFLAGS) -Wl,$(SONAME_LDFLAG) -Wl,libxentoollog.so.$(MAJOR) $(SHLIB_LDFLAGS) -o $@ $(PIC_OBJS) $(APPEND_LDFLAGS)
+libxentoollog-$(PACKAGE_VERSION).so.$(MAJOR).$(MINOR): $(PIC_OBJS) libxentoollog.map
+	$(CC) $(LDFLAGS) -Wl,$(SONAME_LDFLAG) -Wl,libxentoollog-$(PACKAGE_VERSION).so.$(MAJOR) $(SHLIB_LDFLAGS) -o $@ $(PIC_OBJS) $(APPEND_LDFLAGS)
 
 .PHONY: install
 install: build
 	$(INSTALL_DIR) $(DESTDIR)$(libdir)
 	$(INSTALL_DIR) $(DESTDIR)$(includedir)
-	$(INSTALL_SHLIB) libxentoollog.so.$(MAJOR).$(MINOR) $(DESTDIR)$(libdir)
+	$(INSTALL_SHLIB) libxentoollog-$(PACKAGE_VERSION).so.$(MAJOR).$(MINOR) $(DESTDIR)$(libdir)
 	$(INSTALL_DATA) libxentoollog.a $(DESTDIR)$(libdir)
-	$(SYMLINK_SHLIB) libxentoollog.so.$(MAJOR).$(MINOR) $(DESTDIR)$(libdir)/libxentoollog.so.$(MAJOR)
-	$(SYMLINK_SHLIB) libxentoollog.so.$(MAJOR) $(DESTDIR)$(libdir)/libxentoollog.so
+	$(SYMLINK_SHLIB) libxentoollog-$(PACKAGE_VERSION).so.$(MAJOR).$(MINOR) $(DESTDIR)$(libdir)/libxentoollog-$(PACKAGE_VERSION).so.$(MAJOR)
+	$(SYMLINK_SHLIB) libxentoollog-$(PACKAGE_VERSION).so.$(MAJOR) $(DESTDIR)$(libdir)/libxentoollog.so
 	$(INSTALL_DATA) include/xentoollog.h $(DESTDIR)$(includedir)
 
 .PHONY: TAGS
@@ -59,7 +59,7 @@ TAGS:
 .PHONY: clean
 clean:
 	rm -rf *.rpm $(LIB) *~ $(DEPS) $(LIB_OBJS) $(PIC_OBJS)
-	rm -f libxentoollog.so.$(MAJOR).$(MINOR) libxentoollog.so.$(MAJOR)
+	rm -f libxentoollog-$(PACKAGE_VERSION).so.$(MAJOR).$(MINOR) libxentoollog-$(PACKAGE_VERSION).so.$(MAJOR)
 	rm -f headers.chk
 
 .PHONY: distclean
