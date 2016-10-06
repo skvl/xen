@@ -58,22 +58,22 @@ headers.chk: $(wildcard include/*.h)
 libxengnttab.a: $(LIB_OBJS)
 	$(AR) rc $@ $^
 
-libxengnttab.so: libxengnttab.so.$(MAJOR)
+libxengnttab.so: libxengnttab-$(PACKAGE_VERSION).so.$(MAJOR)
 	$(SYMLINK_SHLIB) $< $@
-libxengnttab.so.$(MAJOR): libxengnttab.so.$(MAJOR).$(MINOR)
+libxengnttab-$(PACKAGE_VERSION).so.$(MAJOR): libxengnttab-$(PACKAGE_VERSION).so.$(MAJOR).$(MINOR)
 	$(SYMLINK_SHLIB) $< $@
 
-libxengnttab.so.$(MAJOR).$(MINOR): $(PIC_OBJS) libxengnttab.map
-	$(CC) $(LDFLAGS) -Wl,$(SONAME_LDFLAG) -Wl,libxengnttab.so.$(MAJOR) $(SHLIB_LDFLAGS) -o $@ $(PIC_OBJS) $(LDLIBS_libxentoollog) $(LDLIBS_libxentoolcore) $(APPEND_LDFLAGS)
+libxengnttab-$(PACKAGE_VERSION).so.$(MAJOR).$(MINOR): $(PIC_OBJS) libxengnttab.map
+	$(CC) $(LDFLAGS) -Wl,$(SONAME_LDFLAG) -Wl,libxengnttab-$(PACKAGE_VERSION).so.$(MAJOR) $(SHLIB_LDFLAGS) -o $@ $(PIC_OBJS) $(LDLIBS_libxentoollog) $(LDLIBS_libxentoolcore) $(APPEND_LDFLAGS)
 
 .PHONY: install
 install: build
 	$(INSTALL_DIR) $(DESTDIR)$(libdir)
 	$(INSTALL_DIR) $(DESTDIR)$(includedir)
-	$(INSTALL_SHLIB) libxengnttab.so.$(MAJOR).$(MINOR) $(DESTDIR)$(libdir)
+	$(INSTALL_SHLIB) libxengnttab-$(PACKAGE_VERSION).so.$(MAJOR).$(MINOR) $(DESTDIR)$(libdir)
 	$(INSTALL_DATA) libxengnttab.a $(DESTDIR)$(libdir)
-	$(SYMLINK_SHLIB) libxengnttab.so.$(MAJOR).$(MINOR) $(DESTDIR)$(libdir)/libxengnttab.so.$(MAJOR)
-	$(SYMLINK_SHLIB) libxengnttab.so.$(MAJOR) $(DESTDIR)$(libdir)/libxengnttab.so
+	$(SYMLINK_SHLIB) libxengnttab-$(PACKAGE_VERSION).so.$(MAJOR).$(MINOR) $(DESTDIR)$(libdir)/libxengnttab-$(PACKAGE_VERSION).so.$(MAJOR)
+	$(SYMLINK_SHLIB) libxengnttab-$(PACKAGE_VERSION).so.$(MAJOR) $(DESTDIR)$(libdir)/libxengnttab.so
 	$(INSTALL_DATA) include/xengnttab.h $(DESTDIR)$(includedir)
 	$(INSTALL_DATA) xengnttab.pc $(DESTDIR)$(PKG_INSTALLDIR)
 
@@ -82,8 +82,8 @@ uninstall:
 	rm -f $(DESTDIR)$(PKG_INSTALLDIR)/xengnttab.pc
 	rm -f $(DESTDIR)$(includedir)/xengnttab.h
 	rm -f $(DESTDIR)$(libdir)/libxengnttab.so
-	rm -f $(DESTDIR)$(libdir)/libxengnttab.so.$(MAJOR)
-	rm -f $(DESTDIR)$(libdir)/libxengnttab.so.$(MAJOR).$(MINOR)
+	rm -f $(DESTDIR)$(libdir)/libxengnttab.so-$(PACKAGE_VERSION).$(MAJOR)
+	rm -f $(DESTDIR)$(libdir)/libxengnttab.so-$(PACKAGE_VERSION).$(MAJOR).$(MINOR)
 	rm -f $(DESTDIR)$(libdir)/libxengnttab.a
 
 .PHONY: TAGS
@@ -93,7 +93,7 @@ TAGS:
 .PHONY: clean
 clean:
 	rm -rf *.rpm $(LIB) *~ $(DEPS_RM) $(LIB_OBJS) $(PIC_OBJS)
-	rm -f libxengnttab.so.$(MAJOR).$(MINOR) libxengnttab.so.$(MAJOR)
+	rm -f libxengnttab-$(PACKAGE_VERSION).so.$(MAJOR).$(MINOR) libxengnttab-$(PACKAGE_VERSION).so.$(MAJOR)
 	rm -f headers.chk
 	rm -f xengnttab.pc
 
