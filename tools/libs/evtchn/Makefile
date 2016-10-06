@@ -39,22 +39,22 @@ headers.chk: $(wildcard include/*.h)
 libxenevtchn.a: $(LIB_OBJS)
 	$(AR) rc $@ $^
 
-libxenevtchn.so: libxenevtchn.so.$(MAJOR)
+libxenevtchn.so: libxenevtchn-$(PACKAGE_VERSION).so.$(MAJOR)
 	$(SYMLINK_SHLIB) $< $@
-libxenevtchn.so.$(MAJOR): libxenevtchn.so.$(MAJOR).$(MINOR)
+libxenevtchn-$(PACKAGE_VERSION).so.$(MAJOR): libxenevtchn-$(PACKAGE_VERSION).so.$(MAJOR).$(MINOR)
 	$(SYMLINK_SHLIB) $< $@
 
-libxenevtchn.so.$(MAJOR).$(MINOR): $(PIC_OBJS) libxenevtchn.map
-	$(CC) $(LDFLAGS) -Wl,$(SONAME_LDFLAG) -Wl,libxenevtchn.so.$(MAJOR) $(SHLIB_LDFLAGS) -o $@ $(PIC_OBJS) $(LDLIBS_libxentoollog) $(APPEND_LDFLAGS)
+libxenevtchn-$(PACKAGE_VERSION).so.$(MAJOR).$(MINOR): $(PIC_OBJS) libxenevtchn.map
+	$(CC) $(LDFLAGS) -Wl,$(SONAME_LDFLAG) -Wl,libxenevtchn-$(PACKAGE_VERSION).so.$(MAJOR) $(SHLIB_LDFLAGS) -o $@ $(PIC_OBJS) $(LDLIBS_libxentoollog) $(APPEND_LDFLAGS)
 
 .PHONY: install
 install: build
 	$(INSTALL_DIR) $(DESTDIR)$(libdir)
 	$(INSTALL_DIR) $(DESTDIR)$(includedir)
-	$(INSTALL_SHLIB) libxenevtchn.so.$(MAJOR).$(MINOR) $(DESTDIR)$(libdir)
+	$(INSTALL_SHLIB) libxenevtchn-$(PACKAGE_VERSION).so.$(MAJOR).$(MINOR) $(DESTDIR)$(libdir)
 	$(INSTALL_DATA) libxenevtchn.a $(DESTDIR)$(libdir)
-	$(SYMLINK_SHLIB) libxenevtchn.so.$(MAJOR).$(MINOR) $(DESTDIR)$(libdir)/libxenevtchn.so.$(MAJOR)
-	$(SYMLINK_SHLIB) libxenevtchn.so.$(MAJOR) $(DESTDIR)$(libdir)/libxenevtchn.so
+	$(SYMLINK_SHLIB) libxenevtchn-$(PACKAGE_VERSION).so.$(MAJOR).$(MINOR) $(DESTDIR)$(libdir)/libxenevtchn-$(PACKAGE_VERSION).so.$(MAJOR)
+	$(SYMLINK_SHLIB) libxenevtchn-$(PACKAGE_VERSION).so.$(MAJOR) $(DESTDIR)$(libdir)/libxenevtchn.so
 	$(INSTALL_DATA) include/xenevtchn.h $(DESTDIR)$(includedir)
 
 .PHONY: TAGS
@@ -64,7 +64,7 @@ TAGS:
 .PHONY: clean
 clean:
 	rm -rf *.rpm $(LIB) *~ $(DEPS) $(LIB_OBJS) $(PIC_OBJS)
-	rm -f libxenevtchn.so.$(MAJOR).$(MINOR) libxenevtchn.so.$(MAJOR)
+	rm -f libxenevtchn-$(PACKAGE_VERSION).so.$(MAJOR).$(MINOR) libxenevtchn-$(PACKAGE_VERSION).so.$(MAJOR)
 	rm -f headers.chk
 
 .PHONY: distclean
