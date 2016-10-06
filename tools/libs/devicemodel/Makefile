@@ -58,22 +58,22 @@ headers.chk: $(wildcard include/*.h)
 libxendevicemodel.a: $(LIB_OBJS)
 	$(AR) rc $@ $^
 
-libxendevicemodel.so: libxendevicemodel.so.$(MAJOR)
+libxendevicemodel.so: libxendevicemodel-$(PACKAGE_VERSION).so.$(MAJOR)
 	$(SYMLINK_SHLIB) $< $@
-libxendevicemodel.so.$(MAJOR): libxendevicemodel.so.$(MAJOR).$(MINOR)
+libxendevicemodel-$(PACKAGE_VERSION).so.$(MAJOR): libxendevicemodel-$(PACKAGE_VERSION).so.$(MAJOR).$(MINOR)
 	$(SYMLINK_SHLIB) $< $@
 
-libxendevicemodel.so.$(MAJOR).$(MINOR): $(PIC_OBJS) libxendevicemodel.map
-	$(CC) $(LDFLAGS) $(PTHREAD_LDFLAGS) -Wl,$(SONAME_LDFLAG) -Wl,libxendevicemodel.so.$(MAJOR) $(SHLIB_LDFLAGS) -o $@ $(PIC_OBJS) $(LDLIBS_libxentoollog) $(LDLIBS_libxencall) $(LDLIBS_libxentoolcore) $(APPEND_LDFLAGS)
+libxendevicemodel-$(PACKAGE_VERSION).so.$(MAJOR).$(MINOR): $(PIC_OBJS) libxendevicemodel.map
+	$(CC) $(LDFLAGS) $(PTHREAD_LDFLAGS) -Wl,$(SONAME_LDFLAG) -Wl,libxendevicemodel-$(PACKAGE_VERSION).so.$(MAJOR) $(SHLIB_LDFLAGS) -o $@ $(PIC_OBJS) $(LDLIBS_libxentoollog) $(LDLIBS_libxencall) $(APPEND_LDFLAGS)
 
 .PHONY: install
 install: build
 	$(INSTALL_DIR) $(DESTDIR)$(libdir)
 	$(INSTALL_DIR) $(DESTDIR)$(includedir)
-	$(INSTALL_SHLIB) libxendevicemodel.so.$(MAJOR).$(MINOR) $(DESTDIR)$(libdir)
+	$(INSTALL_SHLIB) libxendevicemodel-$(PACKAGE_VERSION).so.$(MAJOR).$(MINOR) $(DESTDIR)$(libdir)
 	$(INSTALL_DATA) libxendevicemodel.a $(DESTDIR)$(libdir)
-	$(SYMLINK_SHLIB) libxendevicemodel.so.$(MAJOR).$(MINOR) $(DESTDIR)$(libdir)/libxendevicemodel.so.$(MAJOR)
-	$(SYMLINK_SHLIB) libxendevicemodel.so.$(MAJOR) $(DESTDIR)$(libdir)/libxendevicemodel.so
+	$(SYMLINK_SHLIB) libxendevicemodel-$(PACKAGE_VERSION).so.$(MAJOR).$(MINOR) $(DESTDIR)$(libdir)/libxendevicemodel-$(PACKAGE_VERSION).so.$(MAJOR)
+	$(SYMLINK_SHLIB) libxendevicemodel-$(PACKAGE_VERSION).so.$(MAJOR) $(DESTDIR)$(libdir)/libxendevicemodel.so
 	$(INSTALL_DATA) include/xendevicemodel.h $(DESTDIR)$(includedir)
 	$(INSTALL_DATA) xendevicemodel.pc $(DESTDIR)$(PKG_INSTALLDIR)
 
@@ -82,8 +82,8 @@ uninstall:
 	rm -f $(DESTDIR)$(PKG_INSTALLDIR)/xendevicemodel.pc
 	rm -f $(DESTDIR)$(includedir)/xendevicemodel.h
 	rm -f $(DESTDIR)$(libdir)/libxendevicemodel.so
-	rm -f $(DESTDIR)$(libdir)/libxendevicemodel.so.$(MAJOR)
-	rm -f $(DESTDIR)$(libdir)/libxendevicemodel.so.$(MAJOR).$(MINOR)
+	rm -f $(DESTDIR)$(libdir)/libxendevicemodel-$(PACKAGE_VERSION).so.$(MAJOR)
+	rm -f $(DESTDIR)$(libdir)/libxendevicemodel-$(PACKAGE_VERSION).so.$(MAJOR).$(MINOR)
 	rm -f $(DESTDIR)$(libdir)/libxendevicemodel.a
 
 .PHONY: TAGS
@@ -93,7 +93,7 @@ TAGS:
 .PHONY: clean
 clean:
 	rm -rf *.rpm $(LIB) *~ $(DEPS_RM) $(LIB_OBJS) $(PIC_OBJS)
-	rm -f libxendevicemodel.so.$(MAJOR).$(MINOR) libxendevicemodel.so.$(MAJOR)
+	rm -f libxendevicemodel-$(PACKAGE_VERSION).so.$(MAJOR).$(MINOR) libxendevicemodel-$(PACKAGE_VERSION).so.$(MAJOR)
 	rm -f headers.chk
 	rm -f xendevicemodel.pc
 
