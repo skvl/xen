@@ -39,22 +39,22 @@ headers.chk: $(wildcard include/*.h)
 libxencall.a: $(LIB_OBJS)
 	$(AR) rc $@ $^
 
-libxencall.so: libxencall.so.$(MAJOR)
+libxencall.so: libxencall-$(PACKAGE_VERSION).so.$(MAJOR)
 	$(SYMLINK_SHLIB) $< $@
-libxencall.so.$(MAJOR): libxencall.so.$(MAJOR).$(MINOR)
+libxencall-$(PACKAGE_VERSION).so.$(MAJOR): libxencall-$(PACKAGE_VERSION).so.$(MAJOR).$(MINOR)
 	$(SYMLINK_SHLIB) $< $@
 
-libxencall.so.$(MAJOR).$(MINOR): $(PIC_OBJS) libxencall.map
-	$(CC) $(LDFLAGS) $(PTHREAD_LDFLAGS) -Wl,$(SONAME_LDFLAG) -Wl,libxencall.so.$(MAJOR) $(SHLIB_LDFLAGS) -o $@ $(PIC_OBJS) $(LDLIBS_libxentoollog) $(APPEND_LDFLAGS)
+libxencall-$(PACKAGE_VERSION).so.$(MAJOR).$(MINOR): $(PIC_OBJS) libxencall.map
+	$(CC) $(LDFLAGS) $(PTHREAD_LDFLAGS) -Wl,$(SONAME_LDFLAG) -Wl,libxencall-$(PACKAGE_VERSION).so.$(MAJOR) $(SHLIB_LDFLAGS) -o $@ $(PIC_OBJS) $(LDLIBS_libxentoollog) $(APPEND_LDFLAGS)
 
 .PHONY: install
 install: build
 	$(INSTALL_DIR) $(DESTDIR)$(libdir)
 	$(INSTALL_DIR) $(DESTDIR)$(includedir)
-	$(INSTALL_SHLIB) libxencall.so.$(MAJOR).$(MINOR) $(DESTDIR)$(libdir)
+	$(INSTALL_SHLIB) libxencall-$(PACKAGE_VERSION).so.$(MAJOR).$(MINOR) $(DESTDIR)$(libdir)
 	$(INSTALL_DATA) libxencall.a $(DESTDIR)$(libdir)
-	$(SYMLINK_SHLIB) libxencall.so.$(MAJOR).$(MINOR) $(DESTDIR)$(libdir)/libxencall.so.$(MAJOR)
-	$(SYMLINK_SHLIB) libxencall.so.$(MAJOR) $(DESTDIR)$(libdir)/libxencall.so
+	$(SYMLINK_SHLIB) libxencall-$(PACKAGE_VERSION).so.$(MAJOR).$(MINOR) $(DESTDIR)$(libdir)/libxencall-$(PACKAGE_VERSION).so.$(MAJOR)
+	$(SYMLINK_SHLIB) libxencall-$(PACKAGE_VERSION).so.$(MAJOR) $(DESTDIR)$(libdir)/libxencall.so
 	$(INSTALL_DATA) include/xencall.h $(DESTDIR)$(includedir)
 
 .PHONY: TAGS
@@ -64,7 +64,7 @@ TAGS:
 .PHONY: clean
 clean:
 	rm -rf *.rpm $(LIB) *~ $(DEPS) $(LIB_OBJS) $(PIC_OBJS)
-	rm -f libxencall.so.$(MAJOR).$(MINOR) libxencall.so.$(MAJOR)
+	rm -f libxencall-$(PACKAGE_VERSION).so.$(MAJOR).$(MINOR) libxencall-$(PACKAGE_VERSION).so.$(MAJOR)
 	rm -f headers.chk
 
 .PHONY: distclean

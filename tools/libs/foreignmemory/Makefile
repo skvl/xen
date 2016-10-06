@@ -39,22 +39,22 @@ headers.chk: $(wildcard include/*.h)
 libxenforeignmemory.a: $(LIB_OBJS)
 	$(AR) rc $@ $^
 
-libxenforeignmemory.so: libxenforeignmemory.so.$(MAJOR)
+libxenforeignmemory.so: libxenforeignmemory-$(PACKAGE_VERSION).so.$(MAJOR)
 	$(SYMLINK_SHLIB) $< $@
-libxenforeignmemory.so.$(MAJOR): libxenforeignmemory.so.$(MAJOR).$(MINOR)
+libxenforeignmemory-$(PACKAGE_VERSION).so.$(MAJOR): libxenforeignmemory-$(PACKAGE_VERSION).so.$(MAJOR).$(MINOR)
 	$(SYMLINK_SHLIB) $< $@
 
-libxenforeignmemory.so.$(MAJOR).$(MINOR): $(PIC_OBJS) libxenforeignmemory.map
-	$(CC) $(LDFLAGS) $(PTHREAD_LDFLAGS) -Wl,$(SONAME_LDFLAG) -Wl,libxenforeignmemory.so.$(MAJOR) $(SHLIB_LDFLAGS) -o $@ $(PIC_OBJS) $(LDLIBS_libxentoollog) $(APPEND_LDFLAGS)
+libxenforeignmemory-$(PACKAGE_VERSION).so.$(MAJOR).$(MINOR): $(PIC_OBJS) libxenforeignmemory.map
+	$(CC) $(LDFLAGS) $(PTHREAD_LDFLAGS) -Wl,$(SONAME_LDFLAG) -Wl,libxenforeignmemory-$(PACKAGE_VERSION).so.$(MAJOR) $(SHLIB_LDFLAGS) -o $@ $(PIC_OBJS) $(LDLIBS_libxentoollog) $(APPEND_LDFLAGS)
 
 .PHONY: install
 install: build
 	$(INSTALL_DIR) $(DESTDIR)$(libdir)
 	$(INSTALL_DIR) $(DESTDIR)$(includedir)
-	$(INSTALL_SHLIB) libxenforeignmemory.so.$(MAJOR).$(MINOR) $(DESTDIR)$(libdir)
+	$(INSTALL_SHLIB) libxenforeignmemory-$(PACKAGE_VERSION).so.$(MAJOR).$(MINOR) $(DESTDIR)$(libdir)
 	$(INSTALL_DATA) libxenforeignmemory.a $(DESTDIR)$(libdir)
-	$(SYMLINK_SHLIB) libxenforeignmemory.so.$(MAJOR).$(MINOR) $(DESTDIR)$(libdir)/libxenforeignmemory.so.$(MAJOR)
-	$(SYMLINK_SHLIB) libxenforeignmemory.so.$(MAJOR) $(DESTDIR)$(libdir)/libxenforeignmemory.so
+	$(SYMLINK_SHLIB) libxenforeignmemory-$(PACKAGE_VERSION).so.$(MAJOR).$(MINOR) $(DESTDIR)$(libdir)/libxenforeignmemory-$(PACKAGE_VERSION).so.$(MAJOR)
+	$(SYMLINK_SHLIB) libxenforeignmemory-$(PACKAGE_VERSION).so.$(MAJOR) $(DESTDIR)$(libdir)/libxenforeignmemory.so
 	$(INSTALL_DATA) include/xenforeignmemory.h $(DESTDIR)$(includedir)
 
 .PHONY: TAGS
@@ -64,7 +64,7 @@ TAGS:
 .PHONY: clean
 clean:
 	rm -rf *.rpm $(LIB) *~ $(DEPS) $(LIB_OBJS) $(PIC_OBJS)
-	rm -f libxenforeignmemory.so.$(MAJOR).$(MINOR) libxenforeignmemory.so.$(MAJOR)
+	rm -f libxenforeignmemory-$(PACKAGE_VERSION).so.$(MAJOR).$(MINOR) libxenforeignmemory-$(PACKAGE_VERSION).so.$(MAJOR)
 	rm -f headers.chk
 
 .PHONY: distclean
