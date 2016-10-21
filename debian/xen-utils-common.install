@@ -1,0 +1,5 @@
+etc/xen/scripts
+etc/xen/xl*
+usr/lib/xen-common
+usr/sbin
+../../tree/xen-utils-common/* /

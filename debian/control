@@ -1,0 +1,155 @@
+Source: xen
+Section: kernel
+Priority: optional
+Maintainer: Debian Xen Team <pkg-xen-devel@lists.alioth.debian.org>
+Uploaders: Guido Trotter <ultrotter@debian.org>, Bastian Blank <waldi@debian.org>, Ian Jackson <ijackson@chiark.greenend.org.uk>
+Standards-Version: 3.9.4
+Build-Depends: autotools-dev, debhelper (>> 9), dpkg-dev (>= 1.16.0~), lsb-release, python-dev, bcc [i386 amd64], gcc-multilib [i386 amd64], e2fslibs-dev, iasl, seabios (>= 1.7.4-2~) [i386 amd64], libaio-dev, libfdt-dev [armhf arm64], libglib2.0-dev, liblzma-dev, libncurses5-dev, libpixman-1-dev, libyajl-dev, libssl-dev, pkg-config, uuid-dev, zlib1g-dev
+XS-Python-Version: current
+
+Package: libxen-4.8
+Architecture: amd64 arm64 armhf i386
+Section: libs
+Depends: ${shlibs:Depends}, ${misc:Depends}
+Description: Public libs for Xen
+ This package contains the shared toolstack libraries for Xen.
+Multi-Arch: same
+
+Package: libxenstore3.0
+Architecture: amd64 arm64 armhf i386
+Section: libs
+Depends: ${shlibs:Depends}, ${misc:Depends}
+Description: Xenstore communications library for Xen
+ This package contains the client library interface to XenStore.  .
+Multi-Arch: same
+
+Package: libxen-dev
+Architecture: amd64 arm64 armhf i386
+Section: libdevel
+Depends: libxen-4.8 (= ${binary:Version}), libxenstore3.0 (= ${binary:Version}), ${misc:Depends}
+Description: Public headers and libs for Xen
+ This package contains the public headers and static libraries for Xen.
+ .
+ The libxenlight library is intended as a common base for all Xen toolstack
+ developers.  The libxlutil library contains additional helpers which may
+ be useful to toolstack developers.
+ .
+ The libxenstore library allows userspace processes to interact with the
+ XenStore database.  XenStore is a shared database used for interdomain
+ communication of configuration and status information.  It is accessible
+ to all domains running on the same Xen host.  See
+ http://wiki.xen.org/wiki/XenStore for more information.
+ .
+ The libxenctrl and libxenguest libraries are internal libraries intended
+ for use by the Xen toolstack and are not intended to be used directly.
+ Toolstack authors should use libxenlight.
+Multi-Arch: same
+
+Package: xenstore-utils
+Architecture: amd64 arm64 armhf i386
+Section: admin
+Depends: ${shlibs:Depends}, ${misc:Depends}
+Replaces: xen-utils-common (<= 3.1.0-1)
+Conflicts: xen-utils-common (<= 3.1.0-1)
+Description: Xenstore command line utilities for Xen
+ This package contains command line utilities for interacting with
+ XenStore.
+ .
+ XenStore is a shared database used for interdomain communication of
+ configuration and status information.  It is accessible to all domains
+ running on the same Xen host.  See http://wiki.xen.org/wiki/XenStore for
+ more information.
+ .
+ In the common case these tools are used by the Xen toolstack running in
+ domain0 (or a driver domain) however they may also be used in a guest
+ domain to support local scripting which wants to communicate via XenStore.
+
+Package: xen-utils-common
+Architecture: all
+Depends: lsb-base, python, udev, xenstore-utils, ${misc:Depends}
+Description: Xen administrative tools - common files
+ The userspace tools to manage a system virtualized through the Xen virtual
+ machine monitor.
+ .
+ This package is only required on the host system (Domain 0) and not on the
+ virtual guest systems (Domain U).
+
+Package: xen-utils-4.8
+Architecture: amd64 arm64 armhf i386
+Provides: xen-utils
+Depends: ${shlibs:Depends}, ${misc:Depends}, ${python:Depends}, xen-utils-common (>= ${source:Version})
+Recommends: bridge-utils, libc6-xen [i386], xen-hypervisor-4.8, qemu-system-x86, grub-xen-host [i386 amd64]
+Suggests: qemu-utils [i386 amd64], seabios [i386 amd64]
+Description: XEN administrative tools
+ The userspace tools to manage a system virtualized through the XEN virtual
+ machine monitor.
+ .
+ qemu-utils and seabios are neded for "Xen HVM" (amd64 and i386)
+Built-Using: ${misc:Built-Using}
+
+Package: xen-hypervisor-4.8-amd64
+Architecture: amd64 i386
+Provides: xen-hypervisor, xen-hypervisor-4.8, xen-hypervisor-amd64
+Depends: ${misc:Depends}
+Recommends: xen-utils-4.8
+Description: Xen Hypervisor on AMD64
+ The hypervisor is the "core" for XEN itself.  It gets booted by the boot
+ loader and controls cpu and memory, sharing them between your
+ administrative domain (Domain 0) and the virtual guest systems.
+ .
+ In order to boot a XEN system along with this package you also need a
+ kernel specifically crafted to work as the Domain 0, mediating hardware
+ access for XEN itself.
+
+Package: xen-system-amd64
+Architecture: amd64 i386
+Provides: xen-system
+Depends: xen-hypervisor-4.8-amd64, xen-utils-4.8, ${misc:Depends}
+Description: Xen System on AMD64 (meta-package)
+ This package depends on the latest Xen hypervisor for use on AMD64 and the
+ Xen utils.
+
+Package: xen-hypervisor-4.8-arm64
+Architecture: arm64
+Provides: xen-hypervisor, xen-hypervisor-4.8, xen-hypervisor-arm64
+Depends: ${misc:Depends}
+Recommends: xen-utils-4.8
+Description: Xen Hypervisor on ARM64
+ The hypervisor is the "core" for XEN itself.  It gets booted by the boot
+ loader and controls cpu and memory, sharing them between your
+ administrative domain (Domain 0) and the virtual guest systems.
+ .
+ In order to boot a XEN system along with this package you also need a
+ kernel specifically crafted to work as the Domain 0, mediating hardware
+ access for XEN itself.
+
+Package: xen-system-arm64
+Architecture: arm64
+Provides: xen-system
+Depends: xen-hypervisor-4.8-arm64, xen-utils-4.8, ${misc:Depends}
+Description: Xen System on ARM64 (meta-package)
+ This package depends on the latest Xen hypervisor for use on ARM64 and the
+ Xen utils.
+
+Package: xen-hypervisor-4.8-armhf
+Architecture: armhf
+Provides: xen-hypervisor, xen-hypervisor-4.8, xen-hypervisor-armhf
+Depends: ${misc:Depends}
+Recommends: xen-utils-4.8
+Description: Xen Hypervisor on ARMHF
+ The hypervisor is the "core" for XEN itself.  It gets booted by the boot
+ loader and controls cpu and memory, sharing them between your
+ administrative domain (Domain 0) and the virtual guest systems.
+ .
+ In order to boot a XEN system along with this package you also need a
+ kernel specifically crafted to work as the Domain 0, mediating hardware
+ access for XEN itself.
+
+Package: xen-system-armhf
+Architecture: armhf
+Provides: xen-system
+Depends: xen-hypervisor-4.8-armhf, xen-utils-4.8, ${misc:Depends}
+Description: Xen System on ARMHF (meta-package)
+ This package depends on the latest Xen hypervisor for use on ARMHF and the
+ Xen utils.
+
