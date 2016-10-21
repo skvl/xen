@@ -4,7 +4,7 @@ set -e
 
 case "$1" in
     configure)
-        update-alternatives --remove xen-default /usr/lib/xen-4.6
+        update-alternatives --remove xen-default /usr/lib/xen-4.8
         if [ -x "/etc/init.d/xen" ]; then
 	    invoke-rc.d xen start || exit $?
         fi

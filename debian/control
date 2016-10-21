@@ -7,7 +7,7 @@ Standards-Version: 3.9.4
 Build-Depends: autotools-dev, debhelper (>> 9), dpkg-dev (>= 1.16.0~), lsb-release, python-dev, bcc [i386 amd64], gcc-multilib [i386 amd64], e2fslibs-dev, iasl [i386 amd64], seabios (>= 1.7.4-2~) [i386 amd64], libaio-dev, libfdt-dev [armhf arm64], libglib2.0-dev, liblzma-dev, libncurses5-dev, libpixman-1-dev, libyajl-dev, libssl-dev, pkg-config, uuid-dev, zlib1g-dev
 XS-Python-Version: current
 
-Package: libxen-4.6
+Package: libxen-4.8
 Architecture: amd64 arm64 armhf i386
 Section: libs
 Depends: ${shlibs:Depends}, ${misc:Depends}
@@ -26,7 +26,7 @@ Multi-Arch: same
 Package: libxen-dev
 Architecture: amd64 arm64 armhf i386
 Section: libdevel
-Depends: libxen-4.6 (= ${binary:Version}), libxenstore3.0 (= ${binary:Version}), ${misc:Depends}
+Depends: libxen-4.8 (= ${binary:Version}), libxenstore3.0 (= ${binary:Version}), ${misc:Depends}
 Description: Public headers and libs for Xen
  This package contains the public headers and static libraries for Xen.
  .
@@ -73,21 +73,21 @@ Description: Xen administrative tools - common files
  This package is only required on the host system (Domain 0) and not on the
  virtual guest systems (Domain U).
 
-Package: xen-utils-4.6
+Package: xen-utils-4.8
 Architecture: amd64 arm64 armhf i386
 Provides: xen-utils
 Depends: ${shlibs:Depends}, ${misc:Depends}, ${python:Depends}, xen-utils-common (>= ${source:Version})
-Recommends: bridge-utils, libc6-xen [i386], xen-hypervisor-4.6, qemu-system-x86, grub-xen-host [i386 amd64]
+Recommends: bridge-utils, libc6-xen [i386], xen-hypervisor-4.8, qemu-system-x86, grub-xen-host [i386 amd64]
 Description: XEN administrative tools
  The userspace tools to manage a system virtualized through the XEN virtual
  machine monitor.
 Built-Using: ${misc:Built-Using}
 
-Package: xen-hypervisor-4.6-amd64
+Package: xen-hypervisor-4.8-amd64
 Architecture: amd64 i386
-Provides: xen-hypervisor, xen-hypervisor-4.6, xen-hypervisor-amd64
+Provides: xen-hypervisor, xen-hypervisor-4.8, xen-hypervisor-amd64
 Depends: ${misc:Depends}
-Recommends: xen-utils-4.6
+Recommends: xen-utils-4.8
 Description: Xen Hypervisor on AMD64
  The hypervisor is the "core" for XEN itself.  It gets booted by the boot
  loader and controls cpu and memory, sharing them between your
@@ -100,16 +100,16 @@ Description: Xen Hypervisor on AMD64
 Package: xen-system-amd64
 Architecture: amd64 i386
 Provides: xen-system
-Depends: xen-hypervisor-4.6-amd64, xen-utils-4.6, ${misc:Depends}
+Depends: xen-hypervisor-4.8-amd64, xen-utils-4.6, ${misc:Depends}
 Description: Xen System on AMD64 (meta-package)
  This package depends on the latest Xen hypervisor for use on AMD64 and the
  Xen utils.
 
-Package: xen-hypervisor-4.6-arm64
+Package: xen-hypervisor-4.8-arm64
 Architecture: arm64
-Provides: xen-hypervisor, xen-hypervisor-4.6, xen-hypervisor-arm64
+Provides: xen-hypervisor, xen-hypervisor-4.8, xen-hypervisor-arm64
 Depends: ${misc:Depends}
-Recommends: xen-utils-4.6
+Recommends: xen-utils-4.8
 Description: Xen Hypervisor on ARM64
  The hypervisor is the "core" for XEN itself.  It gets booted by the boot
  loader and controls cpu and memory, sharing them between your
@@ -122,16 +122,16 @@ Description: Xen Hypervisor on ARM64
 Package: xen-system-arm64
 Architecture: arm64
 Provides: xen-system
-Depends: xen-hypervisor-4.6-arm64, xen-utils-4.6, ${misc:Depends}
+Depends: xen-hypervisor-4.8-arm64, xen-utils-4.6, ${misc:Depends}
 Description: Xen System on ARM64 (meta-package)
  This package depends on the latest Xen hypervisor for use on ARM64 and the
  Xen utils.
 
-Package: xen-hypervisor-4.6-armhf
+Package: xen-hypervisor-4.8-armhf
 Architecture: armhf
-Provides: xen-hypervisor, xen-hypervisor-4.6, xen-hypervisor-armhf
+Provides: xen-hypervisor, xen-hypervisor-4.8, xen-hypervisor-armhf
 Depends: ${misc:Depends}
-Recommends: xen-utils-4.6
+Recommends: xen-utils-4.8
 Description: Xen Hypervisor on ARMHF
  The hypervisor is the "core" for XEN itself.  It gets booted by the boot
  loader and controls cpu and memory, sharing them between your
@@ -144,7 +144,7 @@ Description: Xen Hypervisor on ARMHF
 Package: xen-system-armhf
 Architecture: armhf
 Provides: xen-system
-Depends: xen-hypervisor-4.6-armhf, xen-utils-4.6, ${misc:Depends}
+Depends: xen-hypervisor-4.8-armhf, xen-utils-4.6, ${misc:Depends}
 Description: Xen System on ARMHF (meta-package)
  This package depends on the latest Xen hypervisor for use on ARMHF and the
  Xen utils.
