@@ -1,3 +1,9 @@
+xen (4.8.0~rc3-0~exp) UNRELEASED; urgency=medium
+
+  * New upstream version, Xen 4.8.0 RC3.
+
+ --
+
 xen (4.6.0-1+nmu2) unstable; urgency=medium
 
   * Ensure debian/control.md5sum is correctly updated. Fixes FTBFS of
