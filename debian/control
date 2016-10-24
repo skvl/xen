@@ -100,7 +100,7 @@ Description: Xen Hypervisor on AMD64
 Package: xen-system-amd64
 Architecture: amd64 i386
 Provides: xen-system
-Depends: xen-hypervisor-4.8-amd64, xen-utils-4.6, ${misc:Depends}
+Depends: xen-hypervisor-4.8-amd64, xen-utils-4.8, ${misc:Depends}
 Description: Xen System on AMD64 (meta-package)
  This package depends on the latest Xen hypervisor for use on AMD64 and the
  Xen utils.
@@ -122,7 +122,7 @@ Description: Xen Hypervisor on ARM64
 Package: xen-system-arm64
 Architecture: arm64
 Provides: xen-system
-Depends: xen-hypervisor-4.8-arm64, xen-utils-4.6, ${misc:Depends}
+Depends: xen-hypervisor-4.8-arm64, xen-utils-4.8, ${misc:Depends}
 Description: Xen System on ARM64 (meta-package)
  This package depends on the latest Xen hypervisor for use on ARM64 and the
  Xen utils.
@@ -144,7 +144,7 @@ Description: Xen Hypervisor on ARMHF
 Package: xen-system-armhf
 Architecture: armhf
 Provides: xen-system
-Depends: xen-hypervisor-4.8-armhf, xen-utils-4.6, ${misc:Depends}
+Depends: xen-hypervisor-4.8-armhf, xen-utils-4.8, ${misc:Depends}
 Description: Xen System on ARMHF (meta-package)
  This package depends on the latest Xen hypervisor for use on ARMHF and the
  Xen utils.
