@@ -26,6 +26,7 @@ Multi-Arch: same
 Package: libxen-dev
 Architecture: amd64 arm64 armhf i386
 Section: libdevel
+Multi-Arch: same
 Depends: libxen-4.8 (= ${binary:Version}), libxenstore3.0 (= ${binary:Version}), ${misc:Depends}
 Description: Public headers and libs for Xen
  This package contains the public headers and static libraries for Xen.

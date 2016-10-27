@@ -8,6 +8,16 @@ usr/lib/*/libxenstore.a
 usr/lib/*/libxenstore.so
 usr/lib/*/libxlutil.a
 usr/lib/*/libxlutil.so
+usr/lib/*/libxencall.a
+usr/lib/*/libxencall.so
+usr/lib/*/libxenevtchn.a
+usr/lib/*/libxenevtchn.so
+usr/lib/*/libxenforeignmemory.a
+usr/lib/*/libxenforeignmemory.so
+usr/lib/*/libxengnttab.a
+usr/lib/*/libxengnttab.so
+usr/lib/*/libxentoollog.a
+usr/lib/*/libxentoollog.so
 usr/include/_libxl*.h
 usr/include/libxl*.h
 usr/include/xenctrl.h
@@ -15,5 +25,16 @@ usr/include/xenguest.h
 usr/include/xenstore*.h
 usr/include/xenstore-compat/xs* usr/include
 usr/include/xentoollog.h
-usr/include/xenctrlosdep.h
 usr/include/xen
+usr/lib/*/pkgconfig/*.pc
+# New headers in xen-4.8
+#usr/include/fsimage_grub.h
+#usr/include/fsimage.h
+#usr/include/fsimage_plugin.h
+#usr/include/libxenvchan.h
+usr/include/xencall.h
+usr/include/xenctrl_compat.h
+usr/include/xenevtchn.h
+usr/include/xenforeignmemory.h
+usr/include/xengnttab.h
+usr/include/xenstat.h

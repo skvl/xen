@@ -81,11 +81,16 @@ $(STAMPS_DIR)/build-docs: $(STAMPS_DIR)/setup-docs
 	+$(MAKE_CLEAN) -C $(DIR)/docs
 	touch $@
 
+# Adding LANG=C.UTF-8 to the build environment to work around a bug in grep
+# which causes it to switch into binary mode in the middle of a file.
+# (see http://bugs.launchpad.net/bugs/1547466)
+
 $(STAMPS_DIR)/build-hypervisor_$(ARCH)_$(FLAVOUR): DIR=$(BUILD_DIR)/build-hypervisor_$(ARCH)_$(FLAVOUR)
 $(STAMPS_DIR)/build-hypervisor_$(ARCH)_$(FLAVOUR): $(STAMPS_DIR)/setup-hypervisor_$(ARCH)_$(FLAVOUR)
 	+$(MAKE_CLEAN) -C $(DIR)/xen \
 		XEN_COMPILE_ARCH=$(XEN_ARCH) \
-		XEN_TARGET_ARCH=$(XEN_ARCH)
+		XEN_TARGET_ARCH=$(XEN_ARCH) \
+		LANG=C.UTF-8
 	touch $@
 
 $(STAMPS_DIR)/build-utils_$(ARCH) \
@@ -97,7 +102,8 @@ $(STAMPS_DIR)/install-utils_$(ARCH): CONFIG = \
 		APPEND_CPPFLAGS="$(CPPFLAGS)" \
 		APPEND_LDFLAGS="$(LDFLAGS)" \
 		OCAMLDESTDIR=$(CURDIR)/$(BUILD_DIR)/install-utils_$(ARCH)/$(OCAML_STDLIB_DIR) \
-		PYTHON=$(shell pyversions -r)
+		PYTHON=$(shell pyversions -r) \
+		LANG=C.UTF-8
 
 $(STAMPS_DIR)/build-utils_$(ARCH): DIR=$(BUILD_DIR)/build-utils_$(ARCH)
 $(STAMPS_DIR)/build-utils_$(ARCH): $(STAMPS_DIR)/setup-utils_$(ARCH)
@@ -153,6 +159,10 @@ install-hypervisor_$(ARCH)_$(FLAVOUR): $(STAMPS_DIR)/build-hypervisor_$(ARCH)_$(
 	dh_testroot
 	dh_prep
 	dh_installdirs boot
+	# FIXME: Think of better solution (grub used for other arches?)
+	dh_installdirs etc/default/grub.d
+	install -D -m644 debian/xen-hypervisor-$(VERSION).xen.cfg \
+		debian/$(PACKAGE_NAME)/etc/default/grub.d/xen.cfg
 	cp $(DIR)/xen/xen$(IMAGE_SUFFIX) debian/$(PACKAGE_NAME)/boot/xen-$(VERSION)-$(FLAVOUR)$(IMAGE_SUFFIX)
 ifeq ($(ARCH),amd64)
 	cp $(DIR)/xen/xen.efi debian/$(PACKAGE_NAME)/boot/xen-$(VERSION)-$(FLAVOUR).efi
@@ -165,7 +175,7 @@ install-libxen_$(ARCH): $(STAMPS_DIR)/install-utils_$(ARCH) install-libxenstore_
 	dh_testdir
 	dh_testroot
 	dh_prep
-	dh_install --sourcedir=$(DIR) usr/lib/*/lib*-$(VERSION).so
+	dh_install --sourcedir=$(DIR) usr/lib/*/lib*-$(VERSION).so*
 	dh_strip
 	dh_makeshlibs -V
 	dh_shlibdeps
@@ -178,6 +188,8 @@ install-libxen-dev_$(ARCH): $(STAMPS_DIR)/install-utils_$(ARCH)
 	dh_testdir
 	dh_testroot
 	dh_prep
+	# Move pkgconfig into a multiarch compliant place
+	mv $(DIR)/usr/share/pkgconfig $(DIR)/usr/lib/$(DEB_HOST_MULTIARCH)/
 	dh_install --sourcedir=$(DIR)
 	dh_strip
 	dh_shlibdeps

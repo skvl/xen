@@ -1,6 +1,15 @@
 xen (4.8.0~rc3-0~exp) UNRELEASED; urgency=medium
 
   * New upstream version, Xen 4.8.0 RC3.
+  * Incorporated many changes from 4.8.0-0ubuntu2
+    - libxen-dev is M-A: same
+    - Work around grep bug http://bugs.launchpad.net/bugs/1547466
+    - debian/xen-hypervisor-4.6.xen.cfg:
+      Additional config file to simplify grub configuration.
+    - Use new library/abiname scheme.
+    - Document what xl and xm are in default.xen
+    - Add libvirtd dependency to xendomains init script
+    (Thanks to Stefan Bader and others.)
 
  -- Ian Jackson <ijackson@chiark.greenend.org.uk>  Mon, 24 Oct 2016 17:31:27 +0100
 

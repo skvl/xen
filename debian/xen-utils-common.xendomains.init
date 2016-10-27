@@ -5,8 +5,8 @@
 # Required-Stop:     $syslog $remote_fs xen
 # Should-Start:      drbd iscsi openvswitch-switch
 # Should-Stop:       drbd iscsi openvswitch-switch
-# X-Start-Before:    corosync heartbeat
-# X-Stop-After:      corosync heartbeat
+# X-Start-Before:    corosync heartbeat libvirtd
+# X-Stop-After:      corosync heartbeat libvirtd
 # Default-Start:     2 3 4 5
 # Default-Stop:      0 1 6
 # Short-Description: Start/stop secondary xen domains
