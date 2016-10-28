@@ -1,4 +1,4 @@
-xen (4.8.0~rc3-0~exp) UNRELEASED; urgency=medium
+xen (4.8.0~rc3-0.~exp) UNRELEASED; urgency=medium
 
   * New upstream version, Xen 4.8.0 RC3.
   * Incorporated many changes from 4.8.0-0ubuntu2
