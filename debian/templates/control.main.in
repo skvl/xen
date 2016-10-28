@@ -15,6 +15,7 @@ Description: Xenstore communications library for Xen
 
 Package: libxen-dev
 Section: libdevel
+Multi-Arch: same
 Depends: libxen-@version@ (= ${binary:Version}), libxenstore3.0 (= ${binary:Version}), ${misc:Depends}
 Description: Public headers and libs for Xen
  This package contains the public headers and static libraries for Xen.
