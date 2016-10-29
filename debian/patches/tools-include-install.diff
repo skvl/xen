@@ -1,0 +1,27 @@
+From: Bastian Blank <waldi@debian.org>
+Date: Sat, 5 Jul 2014 11:47:30 +0200
+X-Dgit-Generated: 4.8.0~rc3-0exp1 0a55a6d7ad6bcc22c5e591aa38df57e0cec9d1ee
+Subject: tools-include-install.diff
+
+Patch-Name: tools-include-install.diff
+
+---
+
+--- xen-4.8.0~rc3.orig/tools/include/Makefile
++++ xen-4.8.0~rc3/tools/include/Makefile
+@@ -14,7 +14,6 @@ xen-foreign:
+ xen/.dir:
+ 	@rm -rf xen
+ 	mkdir -p xen/libelf
+-	ln -sf $(XEN_ROOT)/xen/include/public/COPYING xen
+ 	ln -sf $(wildcard $(XEN_ROOT)/xen/include/public/*.h) xen
+ 	ln -sf $(addprefix $(XEN_ROOT)/xen/include/public/,arch-x86 arch-arm hvm io xsm) xen
+ 	ln -sf ../xen-sys/$(XEN_OS) xen/sys
+@@ -43,7 +42,6 @@ install: all
+ 	$(INSTALL_DIR) $(DESTDIR)$(includedir)/xen/io
+ 	$(INSTALL_DIR) $(DESTDIR)$(includedir)/xen/sys
+ 	$(INSTALL_DIR) $(DESTDIR)$(includedir)/xen/xsm
+-	$(INSTALL_DATA) xen/COPYING $(DESTDIR)$(includedir)/xen
+ 	$(INSTALL_DATA) xen/*.h $(DESTDIR)$(includedir)/xen
+ 	$(INSTALL_DATA) xen/arch-x86/*.h $(DESTDIR)$(includedir)/xen/arch-x86
+ 	$(INSTALL_DATA) xen/arch-x86/hvm/*.h $(DESTDIR)$(includedir)/xen/arch-x86/hvm
