@@ -45,6 +45,10 @@ x86_emulate/x86_emulate.c x86_emulate/x86_emulate.h:
 
 HOSTCFLAGS += $(CFLAGS_xeninclude)
 
+ifeq ($(XEN_TARGET_ARCH),x86_32)
+HOSTCFLAGS += -no-pie -fno-pic
+endif
+
 x86_emulate.o: x86_emulate.c x86_emulate/x86_emulate.c x86_emulate/x86_emulate.h
 	$(HOSTCC) $(HOSTCFLAGS) -c -g -o $@ $<
 
