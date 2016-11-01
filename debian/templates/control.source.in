@@ -11,7 +11,7 @@ Build-Depends:
  bcc [i386 amd64],
  gcc-multilib [i386 amd64],
  e2fslibs-dev,
- iasl [i386 amd64],
+ iasl,
  seabios (>= 1.7.4-2~) [i386 amd64],
  libaio-dev,
  libfdt-dev [armhf arm64],

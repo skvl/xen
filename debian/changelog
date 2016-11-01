@@ -1,6 +1,7 @@
 xen (4.8.0~rc3-0exp2~) experimental; urgency=medium
 
-  * 
+  * Build-Depend on iasl on all architectures.  ARM has ACPI now.
+    Fixes FTBFS on arm64 (at least).
 
  --
 
