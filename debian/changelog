@@ -2,8 +2,9 @@ xen (4.8.0~rc3-0exp2~) experimental; urgency=medium
 
   * Build-Depend on iasl on all architectures.  ARM has ACPI now.
     Fixes FTBFS on arm64 (at least).
+  * Add qemu-utils and seabios to Suggests.
 
- -- Ian Jackson <ijackson@chiark.greenend.org.uk>  Tue, 01 Nov 2016 15:14:48 +0000
+ -- Ian Jackson <ijackson@chiark.greenend.org.uk>  Tue, 01 Nov 2016 16:02:58 +0000
 
 xen (4.8.0~rc3-0exp1) experimental; urgency=high
 

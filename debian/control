@@ -79,9 +79,12 @@ Architecture: amd64 arm64 armhf i386
 Provides: xen-utils
 Depends: ${shlibs:Depends}, ${misc:Depends}, ${python:Depends}, xen-utils-common (>= ${source:Version})
 Recommends: bridge-utils, libc6-xen [i386], xen-hypervisor-4.8, qemu-system-x86, grub-xen-host [i386 amd64]
+Suggests: qemu-utils [i386 amd64], seabios [i386 amd64]
 Description: XEN administrative tools
  The userspace tools to manage a system virtualized through the XEN virtual
  machine monitor.
+ .
+ qemu-utils and seabios are neded for "Xen HVM" (amd64 and i386)
 Built-Using: ${misc:Built-Using}
 
 Package: xen-hypervisor-4.8-amd64
