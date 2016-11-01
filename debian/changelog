@@ -1,4 +1,4 @@
-xen (4.8.0~rc3-0exp2~) experimental; urgency=medium
+xen (4.8.0~rc3-0exp2) experimental; urgency=medium
 
   * Build-Depend on iasl on all architectures.  ARM has ACPI now.
     Fixes FTBFS on arm64 (at least).
@@ -7,7 +7,7 @@ xen (4.8.0~rc3-0exp2~) experimental; urgency=medium
     also submitted upstream.)  Fixes FTBFS on i386 with GCC6.
   * Add myself to Uploaders.
 
- -- Ian Jackson <ijackson@chiark.greenend.org.uk>  Tue, 01 Nov 2016 16:24:45 +0000
+ -- Ian Jackson <ijackson@chiark.greenend.org.uk>  Tue, 01 Nov 2016 18:00:25 +0000
 
 xen (4.8.0~rc3-0exp1) experimental; urgency=high
 
