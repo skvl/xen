@@ -1,7 +1,7 @@
 Section: kernel
 Priority: optional
 Maintainer: Debian Xen Team <pkg-xen-devel@lists.alioth.debian.org>
-Uploaders: Guido Trotter <ultrotter@debian.org>, Bastian Blank <waldi@debian.org>
+Uploaders: Guido Trotter <ultrotter@debian.org>, Bastian Blank <waldi@debian.org>, Ian Jackson <ijackson@chiark.greenend.org.uk>
 Build-Depends:
  autotools-dev,
  debhelper (>> 9),
