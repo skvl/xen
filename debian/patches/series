@@ -25,3 +25,4 @@ tools-include-install.diff
 tools-xenmon-install.diff
 tools-xenstore-compatibility.diff
 ubuntu-tools-libs-abiname.diff
+toolstestsx86_emulator-pass--no-pie--fno
