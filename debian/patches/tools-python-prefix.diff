@@ -1,0 +1,33 @@
+From: Bastian Blank <waldi@debian.org>
+Date: Sat, 5 Jul 2014 11:47:02 +0200
+X-Dgit-Generated: 4.8.0~rc5-1 8dcdc0b97a998801173f1f4aae5d64114a0829f8
+Subject: tools-python-prefix.diff
+
+Patch-Name: tools-python-prefix.diff
+
+---
+
+--- xen-4.8.0~rc5.orig/tools/python/setup.py
++++ xen-4.8.0~rc5/tools/python/setup.py
+@@ -5,6 +5,7 @@ import os, sys
+ XEN_ROOT = "../.."
+ 
+ extra_compile_args  = [ "-fno-strict-aliasing", "-Werror" ]
++extra_link_args = [ "-Wl,-rpath,${ORIGIN}/../../.." ]
+ 
+ PATH_XEN      = XEN_ROOT + "/tools/include"
+ PATH_LIBXENTOOLLOG = XEN_ROOT + "/tools/libs/toollog"
+@@ -23,11 +24,12 @@ xc = Extension("xc",
+                library_dirs       = [ PATH_LIBXC ],
+                libraries          = [ "xenctrl", "xenguest" ],
+                depends            = [ PATH_LIBXC + "/libxenctrl.so", PATH_LIBXC + "/libxenguest.so" ],
+-               extra_link_args    = [ "-Wl,-rpath-link="+PATH_LIBXENTOOLLOG ],
++               extra_link_args    = extra_link_args + [ "-Wl,-rpath-link="+PATH_LIBXENTOOLLOG ],
+                sources            = [ "xen/lowlevel/xc/xc.c" ])
+ 
+ xs = Extension("xs",
+                extra_compile_args = extra_compile_args,
++               extra_link_args    = extra_link_args,
+                include_dirs       = [ PATH_XEN, PATH_XENSTORE + "/include", "xen/lowlevel/xs" ],
+                library_dirs       = [ PATH_XENSTORE ],
+                libraries          = [ "xenstore" ],

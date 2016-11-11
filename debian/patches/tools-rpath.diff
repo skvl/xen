@@ -1,0 +1,20 @@
+From: Bastian Blank <waldi@debian.org>
+Date: Sat, 5 Jul 2014 11:46:51 +0200
+X-Dgit-Generated: 4.8.0~rc5-1 237eceade2f1f43923502eb41a95ac0b4407a459
+Subject: tools-rpath.diff
+
+Patch-Name: tools-rpath.diff
+
+---
+
+--- xen-4.8.0~rc5.orig/tools/Rules.mk
++++ xen-4.8.0~rc5/tools/Rules.mk
+@@ -9,6 +9,8 @@ include $(XEN_ROOT)/Config.mk
+ export _INSTALL := $(INSTALL)
+ INSTALL = $(XEN_ROOT)/tools/cross-install
+ 
++LDFLAGS_RPATH = -Wl,-rpath,'$${ORIGIN}$(if $(1),/$(1))'
++
+ XEN_INCLUDE        = $(XEN_ROOT)/tools/include
+ XEN_LIBXENTOOLLOG  = $(XEN_ROOT)/tools/libs/toollog
+ XEN_LIBXENEVTCHN   = $(XEN_ROOT)/tools/libs/evtchn
