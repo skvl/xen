@@ -1,0 +1,11 @@
+[base]
+flavours:
+ arm64
+xen-arch: arm64
+image-suffix:
+with-ocaml: no
+
+[arm64_description]
+hardware: ARM64
+hardware-long: all 64bit ARMv8
+
