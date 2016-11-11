@@ -1,3 +1,9 @@
+xen (4.8.0~rc5-1) unstable; urgency=medium
+
+  * New upstream version, Xen 4.8.0 RC5.
+
+ -- Ian Jackson <ijackson@chiark.greenend.org.uk>  Fri, 11 Nov 2016 15:26:58 +0000
+
 xen (4.8.0~rc3-1) unstable; urgency=medium
 
   * Upload 4.8.0~rc3 to unstable.  (RC5 is out upstream, but let's not
