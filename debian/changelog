@@ -1,6 +1,7 @@
 xen (4.8.0~rc5-2~) unstable; urgency=medium
 
-  * 
+  * Drop -lcrypto search from upstream configure, and from our
+    Build-Depends.  Closes:#844419.
 
  --
 
