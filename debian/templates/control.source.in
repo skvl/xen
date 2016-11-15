@@ -20,7 +20,6 @@ Build-Depends:
  libncurses5-dev,
  libpixman-1-dev,
  libyajl-dev,
- libssl-dev,
  pkg-config,
  uuid-dev,
  zlib1g-dev,
