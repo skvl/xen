@@ -39,7 +39,7 @@ class Data(object):
 class DataJSON(Data):
     def __init__(self, p):
         s = json.loads(p)
-        self.name = s['config']['c_info']['name']
+        self.name = s['c_info']['name']
 
 
 class DataSXP(Data):

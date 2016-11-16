@@ -8,6 +8,10 @@ xen (4.8.0~rc5-2~) unstable; urgency=medium
     attaches. (Closes: #770456)
   * Remove correct pidfile when stopping xenconsoled.
 
+  [ Lubomir Host ]
+  * Fix xen-init-name to not fail looking for a nonexistent 'config'
+    entry in xl's JSON output.  Closes:#818129.
+
  --
 
 xen (4.8.0~rc5-1) unstable; urgency=medium
