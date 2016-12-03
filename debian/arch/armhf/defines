@@ -1,0 +1,10 @@
+[base]
+flavours:
+ armhf
+xen-arch: arm32
+image-suffix:
+
+[armhf_description]
+hardware: ARMHF
+hardware-long: all 32bit ARMv7 with virtualisation extensions
+

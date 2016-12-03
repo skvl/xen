@@ -1,0 +1,47 @@
+From 65f95b5c8bb858165c90155a95788fd66f447e1c Mon Sep 17 00:00:00 2001
+From: Andrew Cooper <andrew.cooper3@citrix.com>
+Date: Tue, 23 Sep 2014 14:40:12 +0200
+Subject: x86/emulate: check cpl for all privileged instructions
+
+Without this, it is possible for userspace to load its own IDT or GDT.
+
+This is XSA-105.
+
+Reported-by: Andrei LUTAS <vlutas@bitdefender.com>
+Signed-off-by: Andrew Cooper <andrew.cooper3@citrix.com>
+Tested-by: Andrei LUTAS <vlutas@bitdefender.com>
+Reviewed-by: Jan Beulich <jbeulich@suse.com>
+master commit: 0e442727ceccfa32a7276cccd205b4722e68fdc1
+master date: 2014-09-23 14:33:06 +0200
+---
+ xen/arch/x86/x86_emulate/x86_emulate.c | 3 +++
+ 1 file changed, 3 insertions(+)
+
+diff --git a/xen/arch/x86/x86_emulate/x86_emulate.c b/xen/arch/x86/x86_emulate/x86_emulate.c
+index 50d8965..4810e68 100644
+--- a/xen/arch/x86/x86_emulate/x86_emulate.c
++++ b/xen/arch/x86/x86_emulate/x86_emulate.c
+@@ -3314,6 +3314,7 @@ x86_emulate(
+         goto swint;
+ 
+     case 0xf4: /* hlt */
++        generate_exception_if(!mode_ring0(), EXC_GP, 0);
+         ctxt->retire.flags.hlt = 1;
+         break;
+ 
+@@ -3710,6 +3711,7 @@ x86_emulate(
+             break;
+         case 2: /* lgdt */
+         case 3: /* lidt */
++            generate_exception_if(!mode_ring0(), EXC_GP, 0);
+             generate_exception_if(ea.type != OP_MEM, EXC_UD, -1);
+             fail_if(ops->write_segment == NULL);
+             memset(&reg, 0, sizeof(reg));
+@@ -3738,6 +3740,7 @@ x86_emulate(
+         case 6: /* lmsw */
+             fail_if(ops->read_cr == NULL);
+             fail_if(ops->write_cr == NULL);
++            generate_exception_if(!mode_ring0(), EXC_GP, 0);
+             if ( (rc = ops->read_cr(0, &cr0, ctxt)) )
+                 goto done;
+             if ( ea.type == OP_REG )

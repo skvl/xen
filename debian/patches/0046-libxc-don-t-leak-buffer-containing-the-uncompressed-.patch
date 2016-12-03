@@ -1,0 +1,242 @@
+From d4e6c7a7187f6a32e7f99099860e958c79547fda Mon Sep 17 00:00:00 2001
+From: Ian Campbell <ian.campbell@citrix.com>
+Date: Thu, 20 Nov 2014 15:48:47 +0000
+Subject: libxc: don't leak buffer containing the uncompressed PV kernel
+
+The libxc xc_dom_* infrastructure uses a very simple malloc memory pool which
+is freed by xc_dom_release. However the various xc_try_*_decode routines (other
+than the gzip one) just use plain malloc/realloc and therefore the buffer ends
+up leaked.
+
+The memory pool currently supports mmap'd buffers as well as a directly
+allocated buffers, however the try decode routines make use of realloc and do
+not fit well into this model. Introduce a concept of an external memory block
+to the memory pool and provide an interface to register such memory.
+
+The mmap_ptr and mmap_len fields of the memblock tracking struct lose their
+mmap_ prefix since they are now also used for external memory blocks.
+
+We are only seeing this now because the gzip decoder doesn't leak and it's only
+relatively recently that kernels in the wild have switched to better
+compression.
+
+This is https://bugs.debian.org/767295
+
+Reported by: Gedalya <gedalya@gedalya.net>
+Signed-off-by: Ian Campbell <ian.campbell@citrix.com>
+Reviewed-by: Wei Liu <wei.liu2@citrix.com>
+
+(cherry picked from commit 8f4023dd7d77de7b2c1af77e86637202a33f948a)
+---
+ tools/libxc/xc_dom.h                | 10 ++++--
+ tools/libxc/xc_dom_bzimageloader.c  | 20 ++++++++++++
+ tools/libxc/xc_dom_core.c           | 61 ++++++++++++++++++++++++++++---------
+ tools/libxc/xc_dom_decompress_lz4.c |  5 +++
+ 4 files changed, 80 insertions(+), 16 deletions(-)
+
+diff --git a/tools/libxc/xc_dom.h b/tools/libxc/xc_dom.h
+index c9af0ce..d94101f 100644
+--- a/tools/libxc/xc_dom.h
++++ b/tools/libxc/xc_dom.h
+@@ -33,8 +33,13 @@ struct xc_dom_seg {
+ 
+ struct xc_dom_mem {
+     struct xc_dom_mem *next;
+-    void *mmap_ptr;
+-    size_t mmap_len;
++    void *ptr;
++    enum {
++        XC_DOM_MEM_TYPE_MALLOC_INTERNAL,
++        XC_DOM_MEM_TYPE_MALLOC_EXTERNAL,
++        XC_DOM_MEM_TYPE_MMAP,
++    } type;
++    size_t len;
+     unsigned char memory[0];
+ };
+ 
+@@ -290,6 +295,7 @@ void xc_dom_log_memory_footprint(struct xc_dom_image *dom);
+ /* --- simple memory pool ------------------------------------------ */
+ 
+ void *xc_dom_malloc(struct xc_dom_image *dom, size_t size);
++int xc_dom_register_external(struct xc_dom_image *dom, void *ptr, size_t size);
+ void *xc_dom_malloc_page_aligned(struct xc_dom_image *dom, size_t size);
+ void *xc_dom_malloc_filemap(struct xc_dom_image *dom,
+                             const char *filename, size_t * size,
+diff --git a/tools/libxc/xc_dom_bzimageloader.c b/tools/libxc/xc_dom_bzimageloader.c
+index 2225699..964ebdc 100644
+--- a/tools/libxc/xc_dom_bzimageloader.c
++++ b/tools/libxc/xc_dom_bzimageloader.c
+@@ -161,6 +161,13 @@ static int xc_try_bzip2_decode(
+ 
+     total = (((uint64_t)stream.total_out_hi32) << 32) | stream.total_out_lo32;
+ 
++    if ( xc_dom_register_external(dom, out_buf, total) )
++    {
++        DOMPRINTF("BZIP2: Error registering stream output");
++        free(out_buf);
++        goto bzip2_cleanup;
++    }
++
+     DOMPRINTF("%s: BZIP2 decompress OK, 0x%zx -> 0x%lx",
+               __FUNCTION__, *size, (long unsigned int) total);
+ 
+@@ -305,6 +312,13 @@ static int _xc_try_lzma_decode(
+         }
+     }
+ 
++    if ( xc_dom_register_external(dom, out_buf, stream->total_out) )
++    {
++        DOMPRINTF("%s: Error registering stream output", what);
++        free(out_buf);
++        goto lzma_cleanup;
++    }
++
+     DOMPRINTF("%s: %s decompress OK, 0x%zx -> 0x%zx",
+               __FUNCTION__, what, *size, (size_t)stream->total_out);
+ 
+@@ -464,7 +478,13 @@ static int xc_try_lzo1x_decode(
+ 
+         dst_len = lzo_read_32(cur);
+         if ( !dst_len )
++        {
++            msg = "Error registering stream output";
++            if ( xc_dom_register_external(dom, out_buf, out_len) )
++                break;
++
+             return 0;
++        }
+ 
+         if ( dst_len > LZOP_MAX_BLOCK_SIZE )
+         {
+diff --git a/tools/libxc/xc_dom_core.c b/tools/libxc/xc_dom_core.c
+index baa62a1..ecbf981 100644
+--- a/tools/libxc/xc_dom_core.c
++++ b/tools/libxc/xc_dom_core.c
+@@ -132,6 +132,7 @@ void *xc_dom_malloc(struct xc_dom_image *dom, size_t size)
+         return NULL;
+     }
+     memset(block, 0, sizeof(*block) + size);
++    block->type = XC_DOM_MEM_TYPE_MALLOC_INTERNAL;
+     block->next = dom->memblocks;
+     dom->memblocks = block;
+     dom->alloc_malloc += sizeof(*block) + size;
+@@ -151,23 +152,45 @@ void *xc_dom_malloc_page_aligned(struct xc_dom_image *dom, size_t size)
+         return NULL;
+     }
+     memset(block, 0, sizeof(*block));
+-    block->mmap_len = size;
+-    block->mmap_ptr = mmap(NULL, block->mmap_len,
+-                           PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANON,
+-                           -1, 0);
+-    if ( block->mmap_ptr == MAP_FAILED )
++    block->len = size;
++    block->ptr = mmap(NULL, block->len,
++                      PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANON,
++                      -1, 0);
++    if ( block->ptr == MAP_FAILED )
+     {
+         DOMPRINTF("%s: mmap failed", __FUNCTION__);
+         free(block);
+         return NULL;
+     }
++    block->type = XC_DOM_MEM_TYPE_MMAP;
+     block->next = dom->memblocks;
+     dom->memblocks = block;
+     dom->alloc_malloc += sizeof(*block);
+-    dom->alloc_mem_map += block->mmap_len;
++    dom->alloc_mem_map += block->len;
+     if ( size > (100 * 1024) )
+         print_mem(dom, __FUNCTION__, size);
+-    return block->mmap_ptr;
++    return block->ptr;
++}
++
++int xc_dom_register_external(struct xc_dom_image *dom, void *ptr, size_t size)
++{
++    struct xc_dom_mem *block;
++
++    block = malloc(sizeof(*block));
++    if ( block == NULL )
++    {
++        DOMPRINTF("%s: allocation failed", __FUNCTION__);
++        return -1;
++    }
++    memset(block, 0, sizeof(*block));
++    block->ptr = ptr;
++    block->len = size;
++    block->type = XC_DOM_MEM_TYPE_MALLOC_EXTERNAL;
++    block->next = dom->memblocks;
++    dom->memblocks = block;
++    dom->alloc_malloc += sizeof(*block);
++    dom->alloc_mem_map += block->len;
++    return 0;
+ }
+ 
+ void *xc_dom_malloc_filemap(struct xc_dom_image *dom,
+@@ -212,24 +235,25 @@ void *xc_dom_malloc_filemap(struct xc_dom_image *dom,
+     }
+ 
+     memset(block, 0, sizeof(*block));
+-    block->mmap_len = *size;
+-    block->mmap_ptr = mmap(NULL, block->mmap_len, PROT_READ,
++    block->len = *size;
++    block->ptr = mmap(NULL, block->len, PROT_READ,
+                            MAP_SHARED, fd, 0);
+-    if ( block->mmap_ptr == MAP_FAILED ) {
++    if ( block->ptr == MAP_FAILED ) {
+         xc_dom_panic(dom->xch, XC_INTERNAL_ERROR,
+                      "failed to mmap file: %s",
+                      strerror(errno));
+         goto err;
+     }
+ 
++    block->type = XC_DOM_MEM_TYPE_MMAP;
+     block->next = dom->memblocks;
+     dom->memblocks = block;
+     dom->alloc_malloc += sizeof(*block);
+-    dom->alloc_file_map += block->mmap_len;
++    dom->alloc_file_map += block->len;
+     close(fd);
+     if ( *size > (100 * 1024) )
+         print_mem(dom, __FUNCTION__, *size);
+-    return block->mmap_ptr;
++    return block->ptr;
+ 
+  err:
+     if ( fd != -1 )
+@@ -246,8 +270,17 @@ static void xc_dom_free_all(struct xc_dom_image *dom)
+     while ( (block = dom->memblocks) != NULL )
+     {
+         dom->memblocks = block->next;
+-        if ( block->mmap_ptr )
+-            munmap(block->mmap_ptr, block->mmap_len);
++        switch ( block->type )
++        {
++        case XC_DOM_MEM_TYPE_MALLOC_INTERNAL:
++            break;
++        case XC_DOM_MEM_TYPE_MALLOC_EXTERNAL:
++            free(block->ptr);
++            break;
++        case XC_DOM_MEM_TYPE_MMAP:
++            munmap(block->ptr, block->len);
++            break;
++        }
+         free(block);
+     }
+ }
+diff --git a/tools/libxc/xc_dom_decompress_lz4.c b/tools/libxc/xc_dom_decompress_lz4.c
+index 08272fe..bb8409f 100644
+--- a/tools/libxc/xc_dom_decompress_lz4.c
++++ b/tools/libxc/xc_dom_decompress_lz4.c
+@@ -104,6 +104,11 @@ int xc_try_lz4_decode(
+ 
+ 		if (size == 0)
+ 		{
++			if ( xc_dom_register_external(dom, output, out_len) )
++			{
++				msg = "Error registering stream output";
++				goto exit_2;
++			}
+ 			*blob = output;
+ 			*psize = out_len;
+ 			return 0;

@@ -1,0 +1,79 @@
+From 2dec9f02a44a006887469c80a7649c31bb518899 Mon Sep 17 00:00:00 2001
+From: Ian Campbell <ijc@hellion.org.uk>
+Date: Sun, 31 Aug 2014 01:42:03 +0100
+Subject: send xl coredumps /var/lib/xen/dump/NAME
+
+---
+ docs/man/xl.cfg.pod.5                   | 4 ++--
+ tools/Makefile                          | 2 +-
+ tools/libxl/xl_cmdimpl.c                | 2 +-
+ tools/python/xen/xend/XendDomainInfo.py | 4 ++--
+ 4 files changed, 6 insertions(+), 6 deletions(-)
+
+diff --git a/docs/man/xl.cfg.pod.5 b/docs/man/xl.cfg.pod.5
+index e15a49f..d26ea0b 100644
+--- a/docs/man/xl.cfg.pod.5
++++ b/docs/man/xl.cfg.pod.5
+@@ -268,12 +268,12 @@ destroy`.
+ 
+ =item B<coredump-destroy>
+ 
+-write a "coredump" of the domain to F</var/xen/dump/NAME> and then
++write a "coredump" of the domain to F</var/lib/xen/dump/NAME> and then
+ destroy the domain.
+ 
+ =item B<coredump-restart>
+ 
+-write a "coredump" of the domain to F</var/xen/dump/NAME> and then
++write a "coredump" of the domain to F</var/lib/xen/dump/NAME> and then
+ restart the domain.
+ 
+ =back
+diff --git a/tools/Makefile b/tools/Makefile
+index 2fca717..7c2dcaf 100644
+--- a/tools/Makefile
++++ b/tools/Makefile
+@@ -58,7 +58,7 @@ all: subdirs-all
+ 
+ .PHONY: install
+ install: subdirs-install
+-	$(INSTALL_DIR) $(DESTDIR)/var/xen/dump
++	$(INSTALL_DIR) $(DESTDIR)/var/lib/xen/dump/
+ 	$(INSTALL_DIR) $(DESTDIR)/var/log/xen
+ 	$(INSTALL_DIR) $(DESTDIR)/var/lib/xen
+ 	$(INSTALL_DIR) $(DESTDIR)/var/lock/subsys
+diff --git a/tools/libxl/xl_cmdimpl.c b/tools/libxl/xl_cmdimpl.c
+index 4fc46eb..4e9dacb 100644
+--- a/tools/libxl/xl_cmdimpl.c
++++ b/tools/libxl/xl_cmdimpl.c
+@@ -1815,7 +1815,7 @@ static int handle_domain_death(uint32_t *r_domid,
+         char *corefile;
+         int rc;
+ 
+-        if (asprintf(&corefile, "/var/xen/dump/%s", d_config->c_info.name) < 0) {
++        if (asprintf(&corefile, "/var/lib/xen/dump/%s", d_config->c_info.name) < 0) {
+             LOG("failed to construct core dump path");
+         } else {
+             LOG("dumping core to %s", corefile);
+diff --git a/tools/python/xen/xend/XendDomainInfo.py b/tools/python/xen/xend/XendDomainInfo.py
+index cb2d36d..793f3b2 100644
+--- a/tools/python/xen/xend/XendDomainInfo.py
++++ b/tools/python/xen/xend/XendDomainInfo.py
+@@ -2288,7 +2288,7 @@ class XendDomainInfo:
+             # To prohibit directory traversal
+             based_name = os.path.basename(self.info['name_label'])
+             
+-            coredir = "/var/xen/dump/%s" % (based_name)
++            coredir = "/var/lib/xen/dump/%s" % (based_name)
+             if not os.path.exists(coredir):
+                 try:
+                     mkdir.parents(coredir, stat.S_IRWXU)
+@@ -2297,7 +2297,7 @@ class XendDomainInfo:
+ 
+             if not os.path.isdir(coredir):
+                 # Use former directory to dump core
+-                coredir = '/var/xen/dump'
++                coredir = '/var/lib/xen/dump/'
+ 
+             this_time = time.strftime("%Y-%m%d-%H%M.%S", time.localtime())
+             corefile = "%s/%s-%s.%s.core" % (coredir, this_time,

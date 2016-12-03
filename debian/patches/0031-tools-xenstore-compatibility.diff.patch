@@ -1,0 +1,61 @@
+From 030188d29ffe4e8e8260566d0963fa12f750a7e7 Mon Sep 17 00:00:00 2001
+From: Bastian Blank <waldi@debian.org>
+Date: Sat, 5 Jul 2014 11:47:36 +0200
+Subject: tools-xenstore-compatibility.diff
+
+---
+ tools/xenstore/xenstore.h        | 1 +
+ tools/xenstore/xenstore_client.c | 2 +-
+ tools/xenstore/xs.c              | 4 +++-
+ 3 files changed, 5 insertions(+), 2 deletions(-)
+
+diff --git a/tools/xenstore/xenstore.h b/tools/xenstore/xenstore.h
+index fdf5e76..b45224b 100644
+--- a/tools/xenstore/xenstore.h
++++ b/tools/xenstore/xenstore.h
+@@ -26,6 +26,7 @@
+ 
+ #define XS_OPEN_READONLY	1UL<<0
+ #define XS_OPEN_SOCKETONLY      1UL<<1
++#define XS_OPEN_DOMAINONLY      1UL<<2
+ 
+ /*
+  * Setting XS_UNWATCH_FILTER arranges that after xs_unwatch, no
+diff --git a/tools/xenstore/xenstore_client.c b/tools/xenstore/xenstore_client.c
+index 0ec103f..be70ab4 100644
+--- a/tools/xenstore/xenstore_client.c
++++ b/tools/xenstore/xenstore_client.c
+@@ -632,7 +632,7 @@ main(int argc, char **argv)
+ 	    max_width = ws.ws_col - 2;
+     }
+ 
+-    xsh = xs_open(socket ? XS_OPEN_SOCKETONLY : 0);
++    xsh = xs_open(socket ? XS_OPEN_SOCKETONLY : XS_OPEN_DOMAINONLY);
+     if (xsh == NULL) err(1, "xs_open");
+ 
+ again:
+diff --git a/tools/xenstore/xs.c b/tools/xenstore/xs.c
+index dd03a85..15e65b8 100644
+--- a/tools/xenstore/xs.c
++++ b/tools/xenstore/xs.c
+@@ -282,17 +282,19 @@ struct xs_handle *xs_daemon_open_readonly(void)
+ 
+ struct xs_handle *xs_domain_open(void)
+ {
+-	return xs_open(0);
++	return xs_open(XS_OPEN_DOMAINONLY);
+ }
+ 
+ struct xs_handle *xs_open(unsigned long flags)
+ {
+ 	struct xs_handle *xsh = NULL;
+ 
++	if (!(flags & XS_OPEN_DOMAINONLY)) {
+ 	if (flags & XS_OPEN_READONLY)
+ 		xsh = get_handle(xs_daemon_socket_ro());
+ 	else
+ 		xsh = get_handle(xs_daemon_socket());
++	}
+ 
+ 	if (!xsh && !(flags & XS_OPEN_SOCKETONLY))
+ 		xsh = get_handle(xs_domain_dev());

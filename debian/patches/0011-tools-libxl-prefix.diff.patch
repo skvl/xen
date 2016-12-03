@@ -1,0 +1,69 @@
+From 27d21e69f7e9766c61ea44c8662907dbadd8f86d Mon Sep 17 00:00:00 2001
+From: Bastian Blank <waldi@debian.org>
+Date: Sat, 5 Jul 2014 11:46:57 +0200
+Subject: tools-libxl-prefix.diff
+
+---
+ tools/libxl/Makefile              | 9 +++++----
+ tools/xenstat/libxenstat/Makefile | 2 +-
+ 2 files changed, 6 insertions(+), 5 deletions(-)
+
+diff --git a/tools/libxl/Makefile b/tools/libxl/Makefile
+index b002c54..39e20ad 100644
+--- a/tools/libxl/Makefile
++++ b/tools/libxl/Makefile
+@@ -12,6 +12,8 @@ CFLAGS += -I. -fPIC
+ ifeq ($(CONFIG_Linux),y)
+ LIBUUID_LIBS += -luuid
+ endif
++LDFLAGS_XL = $(call LDFLAGS_RPATH,../lib)
++LDFLAGS_LIBXL = $(call LDFLAGS_RPATH)
+ 
+ LIBXL_LIBS =
+ LIBXL_LIBS = $(LDLIBS_libxenctrl) $(LDLIBS_libxenguest) $(LDLIBS_libxenstore) $(LDLIBS_libblktapctl) $(PTYFUNCS_LIBS) $(LIBUUID_LIBS)
+@@ -183,7 +185,7 @@ libxenlight.so: libxenlight-$(XEN_VERSION).so
+ 	ln -sf $< $@
+ 
+ libxenlight-$(XEN_VERSION).so: $(LIBXL_OBJS)
+-	$(CC) $(LDFLAGS) -Wl,$(SONAME_LDFLAG),$@ $(SHLIB_LDFLAGS) -o $@ $^ $(LIBXL_LIBS) $(APPEND_LDFLAGS)
++	$(CC) $(LDFLAGS) -Wl,$(SONAME_LDFLAG),$@ $(LDFLAGS_LIBXL) $(SHLIB_LDFLAGS) -o $@ $^ $(LIBXL_LIBS) $(APPEND_LDFLAGS)
+ 
+ libxenlight_test.so: $(LIBXL_OBJS) $(LIBXL_TEST_OBJS)
+ 	$(CC) $(LDFLAGS) -Wl,$(SONAME_LDFLAG) -Wl,libxenlight.so.$(MAJOR) $(SHLIB_LDFLAGS) -o $@ $^ $(LIBXL_LIBS) $(APPEND_LDFLAGS)
+@@ -201,7 +203,7 @@ libxlutil.a: $(LIBXLU_OBJS)
+ 	$(AR) rcs libxlutil.a $^
+ 
+ xl: $(XL_OBJS) libxlutil.so libxenlight.so
+-	$(CC) $(LDFLAGS) -o $@ $(XL_OBJS) libxlutil.so $(LDLIBS_libxenlight) $(LDLIBS_libxenctrl) -lyajl $(APPEND_LDFLAGS)
++	$(CC) $(LDFLAGS) $(LDFLAGS_XL) -o $@ $(XL_OBJS) libxlutil.so $(LDLIBS_libxenlight) $(LDLIBS_libxenctrl) -lyajl $(APPEND_LDFLAGS)
+ 
+ test_%: test_%.o test_common.o libxlutil.so libxenlight_test.so
+ 	$(CC) $(LDFLAGS) -o $@ $^ $(filter-out %libxenlight.so, $(LDLIBS_libxenlight)) $(LDLIBS_libxenctrl) -lyajl $(APPEND_LDFLAGS)
+@@ -214,13 +216,12 @@ testidl: testidl.o libxlutil.so libxenlight.so
+ 
+ .PHONY: install
+ install: all
+-	$(INSTALL_DIR) $(DESTDIR)$(SBINDIR)
+ 	$(INSTALL_DIR) $(DESTDIR)$(LIBDIR)
+ 	$(INSTALL_DIR) $(DESTDIR)$(INCLUDEDIR)
+ 	$(INSTALL_DIR) $(DESTDIR)$(BASH_COMPLETION_DIR)
+ 	$(INSTALL_DIR) $(DESTDIR)$(XEN_RUN_DIR)
+ 	$(INSTALL_DIR) $(DESTDIR)$(PRIVATE_BINDIR)
+-	$(INSTALL_PROG) xl $(DESTDIR)$(SBINDIR)
++	$(INSTALL_PROG) xl $(DESTDIR)$(PRIVATE_BINDIR)
+ 	$(INSTALL_PROG) libxl-save-helper $(DESTDIR)$(PRIVATE_BINDIR)
+ 	$(INSTALL_PROG) libxenlight-$(XEN_VERSION).so $(DESTDIR)$(LIBDIR)
+ 	ln -sf libxenlight-$(XEN_VERSION).so $(DESTDIR)$(LIBDIR)/libxenlight.so
+diff --git a/tools/xenstat/libxenstat/Makefile b/tools/xenstat/libxenstat/Makefile
+index 669bb1f..6089755 100644
+--- a/tools/xenstat/libxenstat/Makefile
++++ b/tools/xenstat/libxenstat/Makefile
+@@ -53,7 +53,7 @@ $(SHLIB): $(OBJECTS-y)
+ install: all
+ 	$(INSTALL_DATA) src/xenstat.h $(DESTDIR)$(INCLUDEDIR)
+ 	$(INSTALL_DATA) $(LIB) $(DESTDIR)$(LIBDIR)/libxenstat.a
+-	$(INSTALL_PROG) src/libxenstat.so $(DESTDIR)$(LIBDIR)
++	$(INSTALL_PROG) src/libxenstat.so $(DESTDIR)$(PRIVATE_LIBDIR)
+ 
+ PYLIB=bindings/swig/python/_xenstat.so
+ PYMOD=bindings/swig/python/xenstat.py

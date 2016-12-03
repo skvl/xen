@@ -1,0 +1,29 @@
+From cb3723cc9efd29f3dc96b21d0448a2ba1b7a7898 Mon Sep 17 00:00:00 2001
+From: Bastian Blank <waldi@debian.org>
+Date: Sat, 5 Jul 2014 11:47:25 +0200
+Subject: tools-examples-xend-disable-relocation.diff
+
+---
+ tools/examples/xend-config.sxp | 2 --
+ 1 file changed, 2 deletions(-)
+
+diff --git a/tools/examples/xend-config.sxp b/tools/examples/xend-config.sxp
+index f0cc520..93a24fd 100644
+--- a/tools/examples/xend-config.sxp
++++ b/tools/examples/xend-config.sxp
+@@ -62,7 +62,6 @@
+ #(xend-tcp-xmlrpc-server no)
+ #(xend-unix-xmlrpc-server yes)
+ #(xend-relocation-server no)
+-(xend-relocation-server yes)
+ #(xend-relocation-ssl-server no)
+ #(xend-udev-event-server no)
+ 
+@@ -126,7 +125,6 @@
+ #  (xend-relocation-hosts-allow '^localhost$ ^.*\\.example\\.org$')
+ #
+ #(xend-relocation-hosts-allow '')
+-(xend-relocation-hosts-allow '^localhost$ ^localhost\\.localdomain$')
+ 
+ # The limit (in kilobytes) on the size of the console buffer
+ #(console-limit 1024)

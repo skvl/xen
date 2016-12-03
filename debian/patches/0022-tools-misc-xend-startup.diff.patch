@@ -1,0 +1,46 @@
+From 1e805409ebe5a177993adb4b4693a2e11c0c1c43 Mon Sep 17 00:00:00 2001
+From: Bastian Blank <waldi@debian.org>
+Date: Sat, 5 Jul 2014 11:47:20 +0200
+Subject: tools-misc-xend-startup.diff
+
+---
+ tools/python/xen/xend/xend | 11 -----------
+ 1 file changed, 11 deletions(-)
+
+diff --git a/tools/python/xen/xend/xend b/tools/python/xen/xend/xend
+index 3446c8e..5495189 100644
+--- a/tools/python/xen/xend/xend
++++ b/tools/python/xen/xend/xend
+@@ -71,13 +71,6 @@ def check_user():
+         hline()
+         raise CheckError("invalid user")
+ 
+-def start_daemon(daemon, *args):
+-    if os.fork() == 0:
+-        os.execvp(daemon, (daemon,) + args)
+-
+-def start_blktapctrl():
+-    start_daemon("blktapctrl", "")
+-
+ def main():
+     try:
+         check_logging()
+@@ -89,18 +82,14 @@ def main():
+     if not sys.argv[1:]:
+         print 'usage: %s {start|stop|reload|restart}' % sys.argv[0]
+     elif sys.argv[1] == 'start':
+-        if os.uname()[0] != "SunOS":
+-            start_blktapctrl()
+         return daemon.start()
+     elif sys.argv[1] == 'trace_start':
+-        start_blktapctrl()
+         return daemon.start(trace=1)
+     elif sys.argv[1] == 'stop':
+         return daemon.stop()
+     elif sys.argv[1] == 'reload':
+         return daemon.reloadConfig()
+     elif sys.argv[1] == 'restart':
+-        start_blktapctrl()
+         return daemon.stop() or daemon.start()
+     elif sys.argv[1] == 'status':
+         return daemon.status()
