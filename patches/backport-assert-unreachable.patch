@@ -1,0 +1,14 @@
+--- xen-4.4.1.orig/xen/include/xen/lib.h	2014-09-02 08:20:19.000000000 +0200
++++ xen-4.4.1/xen/include/xen/lib.h	2016-01-21 13:38:50.000000000 +0100
+@@ -41,9 +41,11 @@
+ #ifndef NDEBUG
+ #define ASSERT(p) \
+     do { if ( unlikely(!(p)) ) assert_failed(#p); } while (0)
++#define ASSERT_UNREACHABLE() assert_failed("unreachable")
+ #define debug_build() 1
+ #else
+ #define ASSERT(p) do { if ( 0 && (p) ); } while (0)
++#define ASSERT_UNREACHABLE() do { } while (0)
+ #define debug_build() 0
+ #endif
+ 

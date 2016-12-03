@@ -1,0 +1,120 @@
+.NOTPARALLEL:
+binary-arch: binary-arch_amd64 binary-arch_arm64 binary-arch_armhf binary-arch_i386
+binary-arch_amd64: binary-arch_amd64_none binary-arch_amd64_real
+binary-arch_amd64_none: binary-arch_amd64_none_amd64 binary-arch_amd64_none_real
+binary-arch_amd64_none_amd64:: binary-arch_amd64_none_amd64_real
+binary-arch_amd64_none_amd64::
+	$(MAKE) -f debian/rules.real binary-arch-flavour ARCH='amd64' FEATURESET='none' FLAVOUR='amd64' IMAGE_SUFFIX='.gz' VERSION='4.4' XEN_ARCH='x86_64'
+	$(MAKE) -f debian/rules.real install-dummy DH_OPTIONS='-pxen-system-amd64' ARCH='amd64' FEATURESET='none' FLAVOUR='amd64' IMAGE_SUFFIX='.gz' VERSION='4.4' XEN_ARCH='x86_64'
+binary-arch_amd64_none_amd64_real:
+binary-arch_amd64_none_real:
+binary-arch_amd64_real::
+	$(MAKE) -f debian/rules.real binary-arch-arch ARCH='amd64' VERSION='4.4' XEN_ARCH='x86_64'
+binary-arch_arm64: binary-arch_arm64_none binary-arch_arm64_real
+binary-arch_arm64_none: binary-arch_arm64_none_arm64 binary-arch_arm64_none_real
+binary-arch_arm64_none_arm64:: binary-arch_arm64_none_arm64_real
+binary-arch_arm64_none_arm64::
+	$(MAKE) -f debian/rules.real binary-arch-flavour ARCH='arm64' FEATURESET='none' FLAVOUR='arm64' IMAGE_SUFFIX='' VERSION='4.4' XEN_ARCH='arm64'
+	$(MAKE) -f debian/rules.real install-dummy DH_OPTIONS='-pxen-system-arm64' ARCH='arm64' FEATURESET='none' FLAVOUR='arm64' IMAGE_SUFFIX='' VERSION='4.4' XEN_ARCH='arm64'
+binary-arch_arm64_none_arm64_real:
+binary-arch_arm64_none_real:
+binary-arch_arm64_real::
+	$(MAKE) -f debian/rules.real binary-arch-arch ARCH='arm64' VERSION='4.4' XEN_ARCH='arm64'
+binary-arch_armhf: binary-arch_armhf_none binary-arch_armhf_real
+binary-arch_armhf_none: binary-arch_armhf_none_armhf binary-arch_armhf_none_real
+binary-arch_armhf_none_armhf:: binary-arch_armhf_none_armhf_real
+binary-arch_armhf_none_armhf::
+	$(MAKE) -f debian/rules.real binary-arch-flavour ARCH='armhf' FEATURESET='none' FLAVOUR='armhf' IMAGE_SUFFIX='' VERSION='4.4' XEN_ARCH='arm32'
+	$(MAKE) -f debian/rules.real install-dummy DH_OPTIONS='-pxen-system-armhf' ARCH='armhf' FEATURESET='none' FLAVOUR='armhf' IMAGE_SUFFIX='' VERSION='4.4' XEN_ARCH='arm32'
+binary-arch_armhf_none_armhf_real:
+binary-arch_armhf_none_real:
+binary-arch_armhf_real::
+	$(MAKE) -f debian/rules.real binary-arch-arch ARCH='armhf' VERSION='4.4' XEN_ARCH='arm32'
+binary-arch_i386: binary-arch_i386_none binary-arch_i386_real
+binary-arch_i386_none: binary-arch_i386_none_amd64 binary-arch_i386_none_real
+binary-arch_i386_none_amd64:: binary-arch_i386_none_amd64_real
+binary-arch_i386_none_amd64::
+	$(MAKE) -f debian/rules.real binary-arch-flavour ARCH='i386' FEATURESET='none' FLAVOUR='amd64' VERSION='4.4' XEN_ARCH='x86_64'
+	$(MAKE) -f debian/rules.real install-dummy DH_OPTIONS='-pxen-system-amd64' ARCH='i386' FEATURESET='none' FLAVOUR='amd64' VERSION='4.4' XEN_ARCH='x86_64'
+binary-arch_i386_none_amd64_real:
+binary-arch_i386_none_real:
+binary-arch_i386_real::
+	$(MAKE) -f debian/rules.real binary-arch-arch ARCH='i386' VERSION='4.4' XEN_ARCH='x86_32'
+binary-indep::
+	$(MAKE) -f debian/rules.real binary-indep VERSION='4.4'
+build-arch: build-arch_amd64 build-arch_arm64 build-arch_armhf build-arch_i386
+build-arch_amd64: build-arch_amd64_none build-arch_amd64_real
+build-arch_amd64_none: build-arch_amd64_none_amd64 build-arch_amd64_none_real
+build-arch_amd64_none_amd64:: build-arch_amd64_none_amd64_real
+build-arch_amd64_none_amd64::
+	$(MAKE) -f debian/rules.real build-arch-flavour ARCH='amd64' FEATURESET='none' FLAVOUR='amd64' IMAGE_SUFFIX='.gz' VERSION='4.4' XEN_ARCH='x86_64'
+build-arch_amd64_none_amd64_real:
+build-arch_amd64_none_real:
+build-arch_amd64_real::
+	$(MAKE) -f debian/rules.real build-arch-arch ARCH='amd64' VERSION='4.4' XEN_ARCH='x86_64'
+build-arch_arm64: build-arch_arm64_none build-arch_arm64_real
+build-arch_arm64_none: build-arch_arm64_none_arm64 build-arch_arm64_none_real
+build-arch_arm64_none_arm64:: build-arch_arm64_none_arm64_real
+build-arch_arm64_none_arm64::
+	$(MAKE) -f debian/rules.real build-arch-flavour ARCH='arm64' FEATURESET='none' FLAVOUR='arm64' IMAGE_SUFFIX='' VERSION='4.4' XEN_ARCH='arm64'
+build-arch_arm64_none_arm64_real:
+build-arch_arm64_none_real:
+build-arch_arm64_real::
+	$(MAKE) -f debian/rules.real build-arch-arch ARCH='arm64' VERSION='4.4' XEN_ARCH='arm64'
+build-arch_armhf: build-arch_armhf_none build-arch_armhf_real
+build-arch_armhf_none: build-arch_armhf_none_armhf build-arch_armhf_none_real
+build-arch_armhf_none_armhf:: build-arch_armhf_none_armhf_real
+build-arch_armhf_none_armhf::
+	$(MAKE) -f debian/rules.real build-arch-flavour ARCH='armhf' FEATURESET='none' FLAVOUR='armhf' IMAGE_SUFFIX='' VERSION='4.4' XEN_ARCH='arm32'
+build-arch_armhf_none_armhf_real:
+build-arch_armhf_none_real:
+build-arch_armhf_real::
+	$(MAKE) -f debian/rules.real build-arch-arch ARCH='armhf' VERSION='4.4' XEN_ARCH='arm32'
+build-arch_i386: build-arch_i386_none build-arch_i386_real
+build-arch_i386_none: build-arch_i386_none_amd64 build-arch_i386_none_real
+build-arch_i386_none_amd64:: build-arch_i386_none_amd64_real
+build-arch_i386_none_amd64::
+	$(MAKE) -f debian/rules.real build-arch-flavour ARCH='i386' FEATURESET='none' FLAVOUR='amd64' VERSION='4.4' XEN_ARCH='x86_64'
+build-arch_i386_none_amd64_real:
+build-arch_i386_none_real:
+build-arch_i386_real::
+	$(MAKE) -f debian/rules.real build-arch-arch ARCH='i386' VERSION='4.4' XEN_ARCH='x86_32'
+build-indep::
+	$(MAKE) -f debian/rules.real build-indep VERSION='4.4'
+setup: setup_amd64 setup_arm64 setup_armhf setup_i386
+setup_amd64: setup_amd64_none setup_amd64_real
+setup_amd64_none: setup_amd64_none_amd64 setup_amd64_none_real
+setup_amd64_none_amd64:: setup_amd64_none_amd64_real
+setup_amd64_none_amd64::
+	$(MAKE) -f debian/rules.real setup-flavour ARCH='amd64' FEATURESET='none' FLAVOUR='amd64' IMAGE_SUFFIX='.gz' VERSION='4.4' XEN_ARCH='x86_64'
+setup_amd64_none_amd64_real:
+setup_amd64_none_real:
+setup_amd64_real::
+	$(MAKE) -f debian/rules.real setup-arch ARCH='amd64' VERSION='4.4' XEN_ARCH='x86_64'
+setup_arm64: setup_arm64_none setup_arm64_real
+setup_arm64_none: setup_arm64_none_arm64 setup_arm64_none_real
+setup_arm64_none_arm64:: setup_arm64_none_arm64_real
+setup_arm64_none_arm64::
+	$(MAKE) -f debian/rules.real setup-flavour ARCH='arm64' FEATURESET='none' FLAVOUR='arm64' IMAGE_SUFFIX='' VERSION='4.4' XEN_ARCH='arm64'
+setup_arm64_none_arm64_real:
+setup_arm64_none_real:
+setup_arm64_real::
+	$(MAKE) -f debian/rules.real setup-arch ARCH='arm64' VERSION='4.4' XEN_ARCH='arm64'
+setup_armhf: setup_armhf_none setup_armhf_real
+setup_armhf_none: setup_armhf_none_armhf setup_armhf_none_real
+setup_armhf_none_armhf:: setup_armhf_none_armhf_real
+setup_armhf_none_armhf::
+	$(MAKE) -f debian/rules.real setup-flavour ARCH='armhf' FEATURESET='none' FLAVOUR='armhf' IMAGE_SUFFIX='' VERSION='4.4' XEN_ARCH='arm32'
+setup_armhf_none_armhf_real:
+setup_armhf_none_real:
+setup_armhf_real::
+	$(MAKE) -f debian/rules.real setup-arch ARCH='armhf' VERSION='4.4' XEN_ARCH='arm32'
+setup_i386: setup_i386_none setup_i386_real
+setup_i386_none: setup_i386_none_amd64 setup_i386_none_real
+setup_i386_none_amd64:: setup_i386_none_amd64_real
+setup_i386_none_amd64::
+	$(MAKE) -f debian/rules.real setup-flavour ARCH='i386' FEATURESET='none' FLAVOUR='amd64' VERSION='4.4' XEN_ARCH='x86_64'
+setup_i386_none_amd64_real:
+setup_i386_none_real:
+setup_i386_real::
+	$(MAKE) -f debian/rules.real setup-arch ARCH='i386' VERSION='4.4' XEN_ARCH='x86_32'

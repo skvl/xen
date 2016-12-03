@@ -1,0 +1,147 @@
+From 98e7698ea7ca4bcde5d9160e9b03cb3ffaea0fdb Mon Sep 17 00:00:00 2001
+From: Bastian Blank <waldi@debian.org>
+Date: Sat, 5 Jul 2014 11:47:02 +0200
+Subject: tools-python-prefix.diff
+
+---
+ tools/python/setup.py           | 10 ++++++++++
+ tools/python/xen/util/auxbin.py | 36 +++++++++++++++++++-----------------
+ 2 files changed, 29 insertions(+), 17 deletions(-)
+
+diff --git a/tools/python/setup.py b/tools/python/setup.py
+index 8127b21..702a383 100644
+--- a/tools/python/setup.py
++++ b/tools/python/setup.py
+@@ -5,6 +5,7 @@ import os, sys
+ XEN_ROOT = "../.."
+ 
+ extra_compile_args  = [ "-fno-strict-aliasing", "-Werror" ]
++extra_link_args = [ "-Wl,-rpath,${ORIGIN}/../../.." ]
+ 
+ PATH_XEN      = XEN_ROOT + "/tools/include"
+ PATH_LIBXC    = XEN_ROOT + "/tools/libxc"
+@@ -13,6 +14,7 @@ PATH_XENSTORE = XEN_ROOT + "/tools/xenstore"
+ 
+ xc = Extension("xc",
+                extra_compile_args = extra_compile_args,
++               extra_link_args    = extra_link_args,
+                include_dirs       = [ PATH_XEN, PATH_LIBXC, "xen/lowlevel/xc" ],
+                library_dirs       = [ PATH_LIBXC ],
+                libraries          = [ "xenctrl", "xenguest" ],
+@@ -21,6 +23,7 @@ xc = Extension("xc",
+ 
+ xs = Extension("xs",
+                extra_compile_args = extra_compile_args,
++               extra_link_args    = extra_link_args,
+                include_dirs       = [ PATH_XEN, PATH_XENSTORE, "xen/lowlevel/xs" ],
+                library_dirs       = [ PATH_XENSTORE ],
+                libraries          = [ "xenstore" ],
+@@ -29,6 +32,7 @@ xs = Extension("xs",
+ 
+ scf = Extension("scf",
+                extra_compile_args = extra_compile_args,
++               extra_link_args    = extra_link_args,
+                include_dirs       = [ "xen/lowlevel/scf" ],
+                library_dirs       = [ ],
+                libraries          = [ ],
+@@ -37,6 +41,7 @@ scf = Extension("scf",
+ 
+ process = Extension("process",
+                extra_compile_args = extra_compile_args,
++               extra_link_args    = extra_link_args,
+                include_dirs       = [ "xen/lowlevel/process" ],
+                library_dirs       = [ ],
+                libraries          = [ "contract" ],
+@@ -45,6 +50,7 @@ process = Extension("process",
+ 
+ flask = Extension("flask",
+                extra_compile_args = extra_compile_args,
++               extra_link_args    = extra_link_args,
+                include_dirs       = [ PATH_XEN, PATH_LIBXC, "xen/lowlevel/flask" ],
+                library_dirs       = [ PATH_LIBXC ],
+                libraries          = [ "xenctrl" ],
+@@ -53,6 +59,7 @@ flask = Extension("flask",
+ 
+ ptsname = Extension("ptsname",
+                extra_compile_args = extra_compile_args,
++               extra_link_args    = extra_link_args,
+                include_dirs       = [ "ptsname" ],
+                library_dirs       = [ ],
+                libraries          = [ ],
+@@ -61,6 +68,7 @@ ptsname = Extension("ptsname",
+ 
+ checkpoint = Extension("checkpoint",
+                extra_compile_args = extra_compile_args,
++               extra_link_args    = extra_link_args,
+                include_dirs       = [ PATH_XEN, PATH_LIBXC, PATH_XENSTORE ],
+                library_dirs       = [ PATH_LIBXC, PATH_XENSTORE ],
+                libraries          = [ "xenctrl", "xenguest", "xenstore", "rt" ],
+@@ -72,6 +80,7 @@ checkpoint = Extension("checkpoint",
+ 
+ netlink = Extension("netlink",
+                extra_compile_args = extra_compile_args,
++               extra_link_args    = extra_link_args,
+                include_dirs       = [ ],
+                library_dirs       = [ ],
+                libraries          = [ ],
+@@ -81,6 +90,7 @@ netlink = Extension("netlink",
+ 
+ xl = Extension("xl",
+                extra_compile_args = extra_compile_args,
++               extra_link_args    = extra_link_args,
+                include_dirs       = [ PATH_XEN, PATH_LIBXL, PATH_LIBXC, "xen/lowlevel/xl" ],
+                library_dirs       = [ PATH_LIBXL ],
+                libraries          = [ "xenlight" ],
+diff --git a/tools/python/xen/util/auxbin.py b/tools/python/xen/util/auxbin.py
+index a690ad9..b1bd191 100644
+--- a/tools/python/xen/util/auxbin.py
++++ b/tools/python/xen/util/auxbin.py
+@@ -19,29 +19,31 @@
+ import os
+ import os.path
+ import sys
+-from xen.util.path import *
++import xen.util.path
++
++
++class _Path(object):
++    def __init__(self, path=[]):
++        self._path = path
++    def __call__(self, name):
++        for dir in self._path:
++            real = os.path.join(dir, name)
++            if os.path.exists(real):
++                return real
++
++
++path_bin = _Path([xen.util.path.PRIVATE_BINDIR, '/usr/lib/xen/bin', '/usr/sbin', '/sbin', '/usr/bin', '/bin'])
++path_boot = _Path([xen.util.path.XENFIRMWAREDIR, '/usr/lib/xen/boot', '/boot'])
+ 
+ def execute(exe, args = None):
+-    exepath = pathTo(exe)
++    exepath = path_bin(exe)
+     a = [ exepath ]
+     if args:
+         a.extend(args)
+-    try:
+-        os.execv(exepath, a)
+-    except (OSError, TypeError), exn:
+-        print exepath, ": ", exn
+-        sys.exit(1)
+-
+-SEARCHDIRS = [ BINDIR, SBINDIR, LIBEXEC, PRIVATE_BINDIR, XENFIRMWAREDIR ]
+-def pathTo(exebin):
+-    for dir in SEARCHDIRS:
+-        exe = os.path.join(dir, exebin)
+-        if os.path.exists(exe):
+-            return exe
+-    return None
++    os.execv(exepath, a)
+ 
+ def xen_configdir():
+-    return XEN_CONFIG_DIR
++    return xen.util.path.XEN_CONFIG_DIR
+ 
+ def scripts_dir():
+-    return XEN_SCRIPT_DIR
++    return xen.util.path.XEN_SCRIPT_DIR

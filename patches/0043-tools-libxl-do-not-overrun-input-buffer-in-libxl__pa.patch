@@ -1,0 +1,48 @@
+From e26f098530560cc7cbefd6dbbafff323efc826a2 Mon Sep 17 00:00:00 2001
+From: Ian Campbell <ian.campbell@citrix.com>
+Date: Thu, 6 Nov 2014 13:59:43 +0000
+Subject: tools: libxl: do not overrun input buffer in libxl__parse_mac
+
+Valgrind reports:
+==7971== Invalid read of size 1
+==7971==    at 0x40877BE: libxl__parse_mac (libxl_internal.c:288)
+==7971==    by 0x405C5F8: libxl__device_nic_from_xs_be (libxl.c:3405)
+==7971==    by 0x4065542: libxl__append_nic_list_of_type (libxl.c:3484)
+==7971==    by 0x4065542: libxl_device_nic_list (libxl.c:3504)
+==7971==    by 0x406F561: libxl_retrieve_domain_configuration (libxl.c:6661)
+==7971==    by 0x805671C: reload_domain_config (xl_cmdimpl.c:2037)
+==7971==    by 0x8057F30: handle_domain_death (xl_cmdimpl.c:2116)
+==7971==    by 0x8057F30: create_domain (xl_cmdimpl.c:2580)
+==7971==    by 0x805B4B2: main_create (xl_cmdimpl.c:4652)
+==7971==    by 0x804EAB2: main (xl.c:378)
+
+This is because on the final iteration the tok += 3 skips over the terminating
+NUL to the next byte, and then *tok reads it. Fix this by using endptr as the
+iterator.
+
+Signed-off-by: Ian Campbell <ian.campbell@citrix.com>
+Reviewed-by: Don Slutz <dslutz@verizon.com>
+Acked-by: Wei Liu <wei.liu2@citrix.com>
+(cherry picked from commit 5a430eca0b27354456d1245ed3f637d5f2e17883)
+---
+ tools/libxl/libxl_internal.c | 4 +++-
+ 1 file changed, 3 insertions(+), 1 deletion(-)
+
+diff --git a/tools/libxl/libxl_internal.c b/tools/libxl/libxl_internal.c
+index cf17658..c0ccbd1 100644
+--- a/tools/libxl/libxl_internal.c
++++ b/tools/libxl/libxl_internal.c
+@@ -275,10 +275,12 @@ _hidden int libxl__parse_mac(const char *s, libxl_mac mac)
+     char *endptr;
+     int i;
+ 
+-    for (i = 0, tok = s; *tok && (i < 6); ++i, tok += 3) {
++    for (i = 0, tok = s; *tok && (i < 6); ++i, tok = endptr) {
+         mac[i] = strtol(tok, &endptr, 16);
+         if (endptr != (tok + 2) || (*endptr != '\0' && *endptr != ':') )
+             return ERROR_INVAL;
++        if (*endptr == ':')
++            endptr++;
+     }
+     if ( i != 6 )
+         return ERROR_INVAL;

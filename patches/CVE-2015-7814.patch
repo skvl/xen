@@ -1,0 +1,38 @@
+xen: arm: handle races between relinquish_memory and free_domheap_pages
+
+Primarily this means XENMEM_decrease_reservation from a toolstack
+domain.
+
+Unlike x86 we have no requirement right now to queue such pages onto
+a separate list, if we hit this race then the other code has already
+fully accepted responsibility for freeing this page and therefore
+there is no more for relinquish_memory to do.
+
+This is XSA-147.
+
+Signed-off-by: Ian Campbell <ian.campbell@citrix.com>
+Reviewed-by: Julien Grall <julien.grall@citrix.com>
+Reviewed-by: Jan Beulich <jbeulich@suse.com>
+
+diff --git a/xen/arch/arm/domain.c b/xen/arch/arm/domain.c
+index 575745c..aac64cb 100644
+--- a/xen/arch/arm/domain.c
++++ b/xen/arch/arm/domain.c
+@@ -764,8 +764,15 @@ static int relinquish_memory(struct domain *d, struct page_list_head *list)
+     {
+         /* Grab a reference to the page so it won't disappear from under us. */
+         if ( unlikely(!get_page(page, d)) )
+-            /* Couldn't get a reference -- someone is freeing this page. */
+-            BUG();
++            /*
++             * Couldn't get a reference -- someone is freeing this page and
++             * has already committed to doing so, so no more to do here.
++             *
++             * Note that the page must be left on the list, a list_del
++             * here will clash with the list_del done by the other
++             * party in the race and corrupt the list head.
++             */
++            continue;
+ 
+         if ( test_and_clear_bit(_PGC_allocated, &page->count_info) )
+             put_page(page);

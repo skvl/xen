@@ -1,0 +1,39 @@
+memory: fix XSA-158 fix
+
+For one the uses of domu_max_order and ptdom_max_order were swapped.
+
+And then gcc warns about an unused result of a __must_check function
+in the control part of a conditional expression when both other
+expressions can be determined by the compiler to produce the same value
+(see https://gcc.gnu.org/bugzilla/show_bug.cgi?id=68039), which happens
+when HAS_PASSTHROUGH is undefined (i.e. for ARM on 4.4 and older).
+
+Signed-off-by: Jan Beulich <jbeulich@suse.com>
+Acked-by: Ian Campbell <ian.campbell@citrix.com>
+
+--- a/xen/common/memory.c
++++ b/xen/common/memory.c
+@@ -55,8 +55,6 @@ static unsigned int __read_mostly ctldom_max_order = CONFIG_CTLDOM_MAX_ORDER;
+ static unsigned int __read_mostly hwdom_max_order = CONFIG_HWDOM_MAX_ORDER;
+ #ifdef HAS_PASSTHROUGH
+ static unsigned int __read_mostly ptdom_max_order = CONFIG_PTDOM_MAX_ORDER;
+-#else
+-# define ptdom_max_order domu_max_order
+ #endif
+ static void __init parse_max_order(const char *s)
+ {
+@@ -75,8 +73,12 @@ custom_param("memop-max-order", parse_max_order);
+ 
+ static unsigned int max_order(const struct domain *d)
+ {
+-    unsigned int order = cache_flush_permitted(d) ? domu_max_order
+-                                                  : ptdom_max_order;
++    unsigned int order = domu_max_order;
++
++#ifdef HAS_PASSTHROUGH
++    if ( cache_flush_permitted(d) && order < ptdom_max_order )
++        order = ptdom_max_order;
++#endif
+ 
+     if ( is_control_domain(d) && order < ctldom_max_order )
+         order = ctldom_max_order;

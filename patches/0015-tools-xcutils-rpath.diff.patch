@@ -1,0 +1,22 @@
+From 58f609cdbadd9eabc4da18fd71d4d0affee24bbc Mon Sep 17 00:00:00 2001
+From: Bastian Blank <waldi@debian.org>
+Date: Sat, 5 Jul 2014 11:47:05 +0200
+Subject: tools-xcutils-rpath.diff
+
+---
+ tools/xcutils/Makefile | 2 ++
+ 1 file changed, 2 insertions(+)
+
+diff --git a/tools/xcutils/Makefile b/tools/xcutils/Makefile
+index 6c502f1..d0d20d6 100644
+--- a/tools/xcutils/Makefile
++++ b/tools/xcutils/Makefile
+@@ -20,6 +20,8 @@ CFLAGS_xc_save.o    := $(CFLAGS_libxenctrl) $(CFLAGS_libxenguest) $(CFLAGS_libxe
+ CFLAGS_readnotes.o  := $(CFLAGS_libxenctrl) $(CFLAGS_libxenguest)
+ CFLAGS_lsevtchn.o   := $(CFLAGS_libxenctrl)
+ 
++APPEND_LDFLAGS += $(call LDFLAGS_RPATH,../lib)
++
+ .PHONY: all
+ all: build
+ 

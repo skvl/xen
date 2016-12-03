@@ -1,0 +1,47 @@
+From bf25355bf2aed4c667220f2d889981578c0a7329 Mon Sep 17 00:00:00 2001
+From: Bastian Blank <waldi@debian.org>
+Date: Sat, 5 Jul 2014 11:47:09 +0200
+Subject: tools-xenstat-prefix.diff
+
+---
+ tools/xenstat/libxenstat/Makefile | 1 +
+ tools/xenstat/xentop/Makefile     | 6 ++++--
+ 2 files changed, 5 insertions(+), 2 deletions(-)
+
+diff --git a/tools/xenstat/libxenstat/Makefile b/tools/xenstat/libxenstat/Makefile
+index 6089755..eaf40b4 100644
+--- a/tools/xenstat/libxenstat/Makefile
++++ b/tools/xenstat/libxenstat/Makefile
+@@ -51,6 +51,7 @@ $(SHLIB): $(OBJECTS-y)
+ 
+ .PHONY: install
+ install: all
++	$(INSTALL_DIR) $(DESTDIR)$(LIBDIR) $(DESTDIR)$(PRIVATE_LIBDIR)
+ 	$(INSTALL_DATA) src/xenstat.h $(DESTDIR)$(INCLUDEDIR)
+ 	$(INSTALL_DATA) $(LIB) $(DESTDIR)$(LIBDIR)/libxenstat.a
+ 	$(INSTALL_PROG) src/libxenstat.so $(DESTDIR)$(PRIVATE_LIBDIR)
+diff --git a/tools/xenstat/xentop/Makefile b/tools/xenstat/xentop/Makefile
+index afed0d1..61f1c7d 100644
+--- a/tools/xenstat/xentop/Makefile
++++ b/tools/xenstat/xentop/Makefile
+@@ -19,7 +19,9 @@ all install xentop:
+ else
+ 
+ CFLAGS += -DGCC_PRINTF -Wall -Werror $(CFLAGS_libxenstat)
++LDFLAGS += $(call LDFLAGS_RPATH,../lib)
+ LDLIBS += $(LDLIBS_libxenstat) $(CURSES_LIBS) $(SOCKET_LIBS)
++LDLIBS += $(LDLIBS_libxenctrl) $(LDLIBS_libxenstore)
+ CFLAGS += -DHOST_$(XEN_OS)
+ 
+ # Include configure output (config.h) to headers search path
+@@ -30,8 +32,8 @@ all: xentop
+ 
+ .PHONY: install
+ install: xentop xentop.1
+-	$(INSTALL_DIR) $(DESTDIR)$(SBINDIR)
+-	$(INSTALL_PROG) xentop $(DESTDIR)$(SBINDIR)/xentop
++	$(INSTALL_DIR) $(DESTDIR)$(PRIVATE_BINDIR)
++	$(INSTALL_PROG) xentop $(DESTDIR)$(PRIVATE_BINDIR)/xentop
+ 	$(INSTALL_DIR) $(DESTDIR)$(MAN1DIR)
+ 	$(INSTALL_DATA) xentop.1 $(DESTDIR)$(MAN1DIR)/xentop.1
+ 
