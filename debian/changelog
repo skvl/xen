@@ -1,5 +1,16 @@
 xen (4.8.0-1~) unstable; urgency=high
 
+  * Update to upstream Xen 4.8.0.
+    Includes the following security fixes:
+        XSA-201
+        XSA-198   CVE-2016-9379 CVE-2016-9380
+        XSA-196   CVE-2016-9378 CVE-2016-9377   Closes:#845669
+        XSA-195   CVE-2016-9383
+        XSA-194   CVE-2016-9384                 Closes:#845667
+        XSA-193   CVE-2016-9385
+        XSA-192   CVE-2016-9382
+        XSA-191   CVE-2016-9386
+
   * Drop -lcrypto search from upstream configure, and from our
     Build-Depends.  Closes:#844419.
 
