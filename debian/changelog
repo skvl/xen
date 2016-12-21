@@ -11,6 +11,16 @@ xen (4.8.0-1~) unstable; urgency=high
         XSA-192   CVE-2016-9382
         XSA-191   CVE-2016-9386
 
+  * Apply security fixes from upstream:
+        XSA-204   CVE-2016-10013                 Closes:#848713
+        XSA-203   CVE-2016-10025
+        XSA-202   CVE-2016-10024
+
+  * For completeness, the following XSAs do not apply here:
+        XSA-197                      Bug is in qemu
+        XSA-199                      Bug is in qemu
+        XSA-200   CVE-2016-9932      Xen 4.8 is not affected
+
   * Drop -lcrypto search from upstream configure, and from our
     Build-Depends.  Closes:#844419.
 
