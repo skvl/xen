@@ -26,6 +26,9 @@ xen (4.8.0-1~) unstable; urgency=high
   * Drop -lcrypto search from upstream configure, and from our
     Build-Depends.  Closes:#844419.
 
+  * Change my own email address to my work (Citrix) address.  When
+    uploading, I will swap hats to effectively sponsor my own upload.
+
   [ Ian Campbell ]
   * Start a qemu process in dom0 to service the toolstacks loopback disk
     attaches. (Closes: #770456)
