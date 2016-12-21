@@ -2,7 +2,7 @@ xen (4.8.0-1~) unstable; urgency=high
 
   * Update to upstream Xen 4.8.0.
     Includes the following security fixes:
-        XSA-201
+        XSA-201   CVE-2016-9815 CVE-2016-9816 CVE-2016-9817 CVE-2016-9818
         XSA-198   CVE-2016-9379 CVE-2016-9380
         XSA-196   CVE-2016-9378 CVE-2016-9377   Closes:#845669
         XSA-195   CVE-2016-9383
@@ -10,6 +10,8 @@ xen (4.8.0-1~) unstable; urgency=high
         XSA-193   CVE-2016-9385
         XSA-192   CVE-2016-9382
         XSA-191   CVE-2016-9386
+    Includes other bugfixes too:
+        Closes:#812166, Closes:#818525.
 
   * Apply security fixes from upstream:
         XSA-204   CVE-2016-10013                 Closes:#848713
@@ -17,8 +19,8 @@ xen (4.8.0-1~) unstable; urgency=high
         XSA-202   CVE-2016-10024
 
   * For completeness, the following XSAs do not apply here:
-        XSA-197                      Bug is in qemu
-        XSA-199                      Bug is in qemu
+        XSA-197   CVE-2016-9381      Bug is in qemu
+        XSA-199   CVE-2016-9637      Bug is in qemu
         XSA-200   CVE-2016-9932      Xen 4.8 is not affected
 
   * Drop -lcrypto search from upstream configure, and from our
