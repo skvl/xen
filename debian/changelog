@@ -1,4 +1,4 @@
-xen (4.8.0-1~) unstable; urgency=high
+xen (4.8.0-1) unstable; urgency=high
 
   * Update to upstream Xen 4.8.0.
     Includes the following security fixes:
@@ -13,24 +13,23 @@ xen (4.8.0-1~) unstable; urgency=high
     Includes other bugfixes too:
         Closes:#812166, Closes:#818525.
 
-  * Apply security fixes from upstream:
+  Cherry picks from upstream:
+  * Security fixes:
         XSA-204   CVE-2016-10013                 Closes:#848713
         XSA-203   CVE-2016-10025
         XSA-202   CVE-2016-10024
-
-  * For completeness, the following XSAs do not apply here:
+    For completeness, the following XSAs do not apply here:
         XSA-197   CVE-2016-9381      Bug is in qemu
         XSA-199   CVE-2016-9637      Bug is in qemu
         XSA-200   CVE-2016-9932      Xen 4.8 is not affected
-
-  * Drop -lcrypto search from upstream configure, and from our
-    Build-Depends.  Closes:#844419.
-
-  * Change my own email address to my work (Citrix) address.  When
-    uploading, I will swap hats to effectively sponsor my own upload.
-
   * Cherry pick a build failure fix:
       "x86/emul: add likely()/unlikely() to test harness"
+
+  [ Ian Jackson ]
+  * Drop -lcrypto search from upstream configure, and from our
+    Build-Depends.  Closes:#844419.
+  * Change my own email address to my work (Citrix) address.  When
+    uploading, I will swap hats to effectively sponsor my own upload.
 
   [ Ian Campbell ]
   * Start a qemu process in dom0 to service the toolstacks loopback disk
