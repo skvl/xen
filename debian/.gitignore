@@ -1,0 +1,17 @@
+.debhelper
+build
+files
+*.debhelper.log
+*.substvars
+*.postinst.debhelper
+*.postrm.debhelper
+*.prerm.debhelper
+stamps
+libxen-*.*
+xen-utils-*.*
+xen-utils-common
+xenstore-utils
+libxen-dev
+libxenstore3.0
+xen-hypervisor-*.*-*
+xen-system-*
