@@ -1,0 +1,9 @@
+diff --git b/.gitarchive-info a/.gitarchive-info
+index b901957..83e5b86 100644
+--- b/.gitarchive-info
++++ a/.gitarchive-info
+@@ -1,2 +1,2 @@
+-Changeset: b03cee73197f4a37bf2941b9367105187355e638
+-Commit date: Mon, 5 Dec 2016 12:03:27 +0000
++Changeset: $Format:%H$
++Commit date: $Format:%cD$
