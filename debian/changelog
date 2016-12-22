@@ -29,6 +29,9 @@ xen (4.8.0-1~) unstable; urgency=high
   * Change my own email address to my work (Citrix) address.  When
     uploading, I will swap hats to effectively sponsor my own upload.
 
+  * Cherry pick a build failure fix:
+      "x86/emul: add likely()/unlikely() to test harness"
+
   [ Ian Campbell ]
   * Start a qemu process in dom0 to service the toolstacks loopback disk
     attaches. (Closes: #770456)
