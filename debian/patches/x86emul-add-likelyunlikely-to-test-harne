@@ -1,0 +1,29 @@
+From: Andrew Cooper <andrew.cooper3@citrix.com>
+Date: Thu, 22 Dec 2016 16:23:37 +0100
+X-Dgit-Generated: 4.8.0-1 c4dd85d79539fefa6e372804b8e0a1bc26562d3f
+Subject: x86/emul: add likely()/unlikely() to test harness
+
+Fix a build problem introduced in c/s 122dd9575c7 "x86emul:
+in_longmode() should not ignore ->read_msr() errors" by providing an
+implementation of likely()/unlikely().
+
+Signed-off-by: Andrew Cooper <andrew.cooper3@citrix.com>
+Reviewed-by: Jan Beulich <jbeulich@suse.com>
+
+Cherrypicked out of:
+
+master commit: 3e84c8da7d2c5442a12789dae7163dca6c0e154f
+master date: 2016-12-02 17:23:01 +0000
+
+---
+
+--- xen-4.8.0.orig/tools/tests/x86_emulator/x86_emulate.c
++++ xen-4.8.0/tools/tests/x86_emulator/x86_emulate.c
+@@ -50,4 +50,7 @@ typedef bool bool_t;
+ #define __init
+ #define __maybe_unused __attribute__((__unused__))
+ 
++#define likely(x)     __builtin_expect(!!(x), true)
++#define unlikely(x)   __builtin_expect(!!(x), false)
++
+ #include "x86_emulate/x86_emulate.c"

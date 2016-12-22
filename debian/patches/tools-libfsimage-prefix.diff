@@ -1,0 +1,47 @@
+From: Bastian Blank <waldi@debian.org>
+Date: Sat, 5 Jul 2014 11:46:55 +0200
+X-Dgit-Generated: 4.8.0-1 090d51b2db5c61998cf4484e95953bce59d07b0f
+Subject: tools-libfsimage-prefix.diff
+
+Patch-Name: tools-libfsimage-prefix.diff
+
+---
+
+--- xen-4.8.0.orig/tools/libfsimage/Rules.mk
++++ xen-4.8.0/tools/libfsimage/Rules.mk
+@@ -3,10 +3,11 @@ include $(XEN_ROOT)/tools/Rules.mk
+ CFLAGS += -Wno-unknown-pragmas -I$(XEN_ROOT)/tools/libfsimage/common/ -DFSIMAGE_FSDIR=\"$(FSDIR)\"
+ CFLAGS += -Werror -D_GNU_SOURCE
+ LDFLAGS += -L../common/
++LDFLAGS += $(call LDFLAGS_RPATH,../..)
+ 
+ PIC_OBJS := $(patsubst %.c,%.opic,$(LIB_SRCS-y))
+ 
+-FSDIR = $(libdir)/fs
++FSDIR = $(LIBEXEC_LIB)/fs
+ 
+ FSLIB = fsimage.so
+ 
+--- xen-4.8.0.orig/tools/libfsimage/common/Makefile
++++ xen-4.8.0/tools/libfsimage/common/Makefile
+@@ -1,6 +1,8 @@
+ XEN_ROOT = $(CURDIR)/../../..
+ include $(XEN_ROOT)/tools/libfsimage/Rules.mk
+ 
++CFLAGS += -DFSDIR="\"$(LIBEXEC_LIB)/fs\""
++
+ LDFLAGS-$(CONFIG_SunOS) = -Wl,-M -Wl,mapfile-SunOS
+ LDFLAGS-$(CONFIG_Linux) = -Wl,mapfile-GNU
+ LDFLAGS = $(LDFLAGS-y)
+@@ -19,9 +21,9 @@ all: $(LIB)
+ 
+ .PHONY: install
+ install: all
+-	$(INSTALL_DIR) $(DESTDIR)$(libdir)
++	$(INSTALL_DIR) $(DESTDIR)$(LIBEXEC_LIB)
+ 	$(INSTALL_DIR) $(DESTDIR)$(includedir)
+-	$(INSTALL_PROG) libfsimage.so $(DESTDIR)$(libdir)
++	$(INSTALL_PROG) libfsimage.so $(DESTDIR)$(LIBEXEC_LIB)
+ 	$(INSTALL_DATA) fsimage.h $(DESTDIR)$(includedir)
+ 	$(INSTALL_DATA) fsimage_plugin.h $(DESTDIR)$(includedir)
+ 	$(INSTALL_DATA) fsimage_grub.h $(DESTDIR)$(includedir)

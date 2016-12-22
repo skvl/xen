@@ -1,0 +1,50 @@
+From: Bastian Blank <waldi@debian.org>
+Date: Sat, 5 Jul 2014 11:47:01 +0200
+X-Dgit-Generated: 4.8.0-1 b97429ed3ffcc955cddefb2434cdefe10a63bea0
+Subject: tools-pygrub-prefix.diff
+
+Patch-Name: tools-pygrub-prefix.diff
+
+---
+
+--- xen-4.8.0.orig/tools/pygrub/Makefile
++++ xen-4.8.0/tools/pygrub/Makefile
+@@ -16,11 +16,6 @@ install: all
+ 	CC="$(CC)" CFLAGS="$(PY_CFLAGS)" LDFLAGS="$(PY_LDFLAGS)" $(PYTHON) \
+ 		setup.py install $(PYTHON_PREFIX_ARG) --root="$(DESTDIR)"  \
+ 		--install-scripts=$(LIBEXEC_BIN) --force
+-	set -e; if [ $(bindir) != $(LIBEXEC_BIN) -a \
+-	             "`readlink -f $(DESTDIR)/$(bindir)`" != \
+-	             "`readlink -f $(LIBEXEC_BIN)`" ]; then \
+-	    ln -sf $(LIBEXEC_BIN)/pygrub $(DESTDIR)/$(bindir); \
+-	fi
+ 
+ .PHONY: clean
+ clean:
+--- xen-4.8.0.orig/tools/pygrub/setup.py
++++ xen-4.8.0/tools/pygrub/setup.py
+@@ -4,11 +4,13 @@ import os
+ import sys
+ 
+ extra_compile_args  = [ "-fno-strict-aliasing", "-Werror" ]
++extra_link_args = [ "-Wl,-rpath,${ORIGIN}/.." ]
+ 
+ XEN_ROOT = "../.."
+ 
+ fsimage = Extension("fsimage",
+     extra_compile_args = extra_compile_args,
++    extra_link_args = extra_link_args,
+     include_dirs = [ XEN_ROOT + "/tools/libfsimage/common/" ],
+     library_dirs = [ XEN_ROOT + "/tools/libfsimage/common/" ],
+     libraries = ["fsimage"],
+--- xen-4.8.0.orig/tools/pygrub/src/pygrub
++++ xen-4.8.0/tools/pygrub/src/pygrub
+@@ -21,6 +21,8 @@ import xen.lowlevel.xc
+ import curses, _curses, curses.wrapper, curses.textpad, curses.ascii
+ import getopt
+ 
++sys.path.insert(1, sys.path[0] + '/../lib/python')
++
+ import fsimage
+ import grub.GrubConf
+ import grub.LiloConf

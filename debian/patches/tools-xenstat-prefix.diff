@@ -1,0 +1,56 @@
+From: Bastian Blank <waldi@debian.org>
+Date: Sat, 5 Jul 2014 11:47:09 +0200
+X-Dgit-Generated: 4.8.0-1 e66eb91ce36d0fc6f1e77edc3a7c38b0b5ac8224
+Subject: tools-xenstat-prefix.diff
+
+Patch-Name: tools-xenstat-prefix.diff
+
+---
+
+--- xen-4.8.0.orig/tools/xenstat/libxenstat/Makefile
++++ xen-4.8.0/tools/xenstat/libxenstat/Makefile
+@@ -20,7 +20,7 @@ MAKE_LINK=ln -sf
+ 
+ LIB=src/libxenstat.a
+ SHLIB=src/libxenstat.so
+-OBJECTS-y=src/xenstat.o
++OBJECTS-y=src/xenstat.o src/xenstat_qmp.o
+ OBJECTS-$(CONFIG_Linux) += src/xenstat_linux.o
+ OBJECTS-$(CONFIG_SunOS) += src/xenstat_solaris.o
+ OBJECTS-$(CONFIG_NetBSD) += src/xenstat_netbsd.o
+@@ -48,9 +48,11 @@ $(SHLIB): $(OBJECTS-y)
+ 
+ .PHONY: install
+ install: all
++	$(INSTALL_DIR) $(DESTDIR)$(includedir)
++	$(INSTALL_DIR) $(DESTDIR)$(LIBEXEC_LIB)
+ 	$(INSTALL_DATA) src/xenstat.h $(DESTDIR)$(includedir)
+ 	$(INSTALL_DATA) $(LIB) $(DESTDIR)$(libdir)/libxenstat.a
+-	$(INSTALL_PROG) src/libxenstat.so $(DESTDIR)$(libdir)
++	$(INSTALL_PROG) src/libxenstat.so $(DESTDIR)$(LIBEXEC_LIB)
+ 
+ PYLIB=bindings/swig/python/_xenstat.so
+ PYMOD=bindings/swig/python/xenstat.py
+--- xen-4.8.0.orig/tools/xenstat/xentop/Makefile
++++ xen-4.8.0/tools/xenstat/xentop/Makefile
+@@ -19,7 +19,9 @@ all install xentop:
+ else
+ 
+ CFLAGS += -DGCC_PRINTF -Werror $(CFLAGS_libxenstat)
++LDFLAGS += $(call LDFLAGS_RPATH,../lib)
+ LDLIBS += $(LDLIBS_libxenstat) $(CURSES_LIBS) $(TINFO_LIBS) $(SOCKET_LIBS) -lm -lyajl
++LDLIBS += $(LDLIBS_libxenctrl) $(LDLIBS_libxenstore)
+ CFLAGS += -DHOST_$(XEN_OS)
+ 
+ # Include configure output (config.h)
+@@ -31,8 +33,8 @@ all: xentop
+ 
+ .PHONY: install
+ install: xentop
+-	$(INSTALL_DIR) $(DESTDIR)$(sbindir)
+-	$(INSTALL_PROG) xentop $(DESTDIR)$(sbindir)/xentop
++	$(INSTALL_DIR) $(DESTDIR)$(LIBEXEC_BIN)
++	$(INSTALL_PROG) xentop $(DESTDIR)$(LIBEXEC_BIN)/xentop
+ 
+ endif
+ 
