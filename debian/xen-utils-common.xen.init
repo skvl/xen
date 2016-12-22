@@ -257,7 +257,7 @@ xenstored_start()
 	# Wait for xenstored to actually come up, timing out after 30 seconds
 	local time=0
 	local timeout=30
-	while [ $time -lt $timeout ] && ! `/usr/sbin/xenstore-read -s / >/dev/null 2>&1` ; do
+	while [ $time -lt $timeout ] && ! `xenstore-read -s / >/dev/null 2>&1` ; do
 	    time=$(( $time+1 ))
 	    sleep 1
 	done
