@@ -16,6 +16,9 @@ class VersionXen(Version):
     (?:
         \+hg-\d+.[a-z0-9]+
     )?
+    (?:
+        ~pre\.\d{4,}\.\d{2}\.\d{2}(?:\b[-+0-9a-z])?
+    )?
     |
     ~hg-\d+.[a-z0-9]+
 )
