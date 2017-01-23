@@ -1,3 +1,11 @@
+xen (4.8.1~pre.2017.01.23-1) unstable; urgency=medium
+
+  * Update to current upstream stable-4.8 git branch (Xen 4.8.1-pre).
+    Contains bugfixes.
+  * debian/control-real etc.: debian.py: Allow version numbers like this.
+
+ -- Ian Jackson <ian.jackson@eu.citrix.com>  Mon, 23 Jan 2017 16:03:31 +0000
+
 xen (4.8.0-1) unstable; urgency=high
 
   * Update to upstream Xen 4.8.0.
