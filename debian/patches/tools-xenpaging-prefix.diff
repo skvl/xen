@@ -1,0 +1,20 @@
+From: Bastian Blank <waldi@debian.org>
+Date: Sat, 5 Jul 2014 11:47:08 +0200
+X-Dgit-Generated: 4.8.1~pre.2017.01.23-1 6566733aebb9e3bfd448434762fe15e6de6ec927
+Subject: tools-xenpaging-prefix.diff
+
+Patch-Name: tools-xenpaging-prefix.diff
+
+---
+
+--- xen-4.8.1~pre.2017.01.23.orig/tools/xenpaging/Makefile
++++ xen-4.8.1~pre.2017.01.23/tools/xenpaging/Makefile
+@@ -4,7 +4,7 @@ include $(XEN_ROOT)/tools/Rules.mk
+ # xenpaging.c and file_ops.c incorrectly use libxc internals
+ CFLAGS += $(CFLAGS_libxentoollog) $(CFLAGS_libxenevtchn) $(CFLAGS_libxenctrl) $(CFLAGS_libxenstore) $(PTHREAD_CFLAGS) -I$(XEN_ROOT)/tools/libxc $(CFLAGS_libxencall)
+ LDLIBS += $(LDLIBS_libxentoollog) $(LDLIBS_libxenevtchn) $(LDLIBS_libxenctrl) $(LDLIBS_libxenstore) $(PTHREAD_LIBS)
+-LDFLAGS += $(PTHREAD_LDFLAGS)
++LDFLAGS += $(PTHREAD_LDFLAGS) $(call LDFLAGS_RPATH,../lib)
+ 
+ POLICY    = default
+ 

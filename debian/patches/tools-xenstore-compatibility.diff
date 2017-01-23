@@ -1,0 +1,53 @@
+From: Bastian Blank <waldi@debian.org>
+Date: Sat, 5 Jul 2014 11:47:36 +0200
+X-Dgit-Generated: 4.8.1~pre.2017.01.23-1 cd76fd2a0e5f54534a02691aaf30ff4ed585224b
+Subject: tools-xenstore-compatibility.diff
+
+Patch-Name: tools-xenstore-compatibility.diff
+
+---
+
+--- xen-4.8.1~pre.2017.01.23.orig/tools/xenstore/include/xenstore.h
++++ xen-4.8.1~pre.2017.01.23/tools/xenstore/include/xenstore.h
+@@ -25,6 +25,7 @@
+ 
+ #define XS_OPEN_READONLY	1UL<<0
+ #define XS_OPEN_SOCKETONLY      1UL<<1
++#define XS_OPEN_DOMAINONLY      1UL<<2
+ 
+ /*
+  * Setting XS_UNWATCH_FILTER arranges that after xs_unwatch, no
+--- xen-4.8.1~pre.2017.01.23.orig/tools/xenstore/xenstore_client.c
++++ xen-4.8.1~pre.2017.01.23/tools/xenstore/xenstore_client.c
+@@ -636,7 +636,7 @@ main(int argc, char **argv)
+ 	    max_width = ws.ws_col - 2;
+     }
+ 
+-    xsh = xs_open(socket ? XS_OPEN_SOCKETONLY : 0);
++    xsh = xs_open(socket ? XS_OPEN_SOCKETONLY : XS_OPEN_DOMAINONLY);
+     if (xsh == NULL) err(1, "xs_open");
+ 
+ again:
+--- xen-4.8.1~pre.2017.01.23.orig/tools/xenstore/xs.c
++++ xen-4.8.1~pre.2017.01.23/tools/xenstore/xs.c
+@@ -281,17 +281,19 @@ struct xs_handle *xs_daemon_open_readonl
+ 
+ struct xs_handle *xs_domain_open(void)
+ {
+-	return xs_open(0);
++	return xs_open(XS_OPEN_DOMAINONLY);
+ }
+ 
+ struct xs_handle *xs_open(unsigned long flags)
+ {
+ 	struct xs_handle *xsh = NULL;
+ 
++	if (!(flags & XS_OPEN_DOMAINONLY)) {
+ 	if (flags & XS_OPEN_READONLY)
+ 		xsh = get_handle(xs_daemon_socket_ro());
+ 	else
+ 		xsh = get_handle(xs_daemon_socket());
++	}
+ 
+ 	if (!xsh && !(flags & XS_OPEN_SOCKETONLY))
+ 		xsh = get_handle(xs_domain_dev());
