@@ -1,4 +1,4 @@
-xen (4.8.1-1~UNRELEASED) unstable; urgency=high
+xen (4.8.1-1) unstable; urgency=high
 
   * Update to upstream 4.8.1 release.
     Changes include numerous bugfixes, including security fixes for:
@@ -6,7 +6,7 @@ xen (4.8.1-1~UNRELEASED) unstable; urgency=high
       XSA-207 / no cve yet      Closes:#856229
       XSA-206 / no cve yet      no Debian bug
 
- -- Ian Jackson <ian.jackson@eu.citrix.com>  Tue, 18 Apr 2017 17:41:39 +0100
+ -- Ian Jackson <ian.jackson@eu.citrix.com>  Tue, 18 Apr 2017 18:05:00 +0100
 
 xen (4.8.1~pre.2017.01.23-1) unstable; urgency=medium
 
