@@ -135,13 +135,12 @@ void p2m_restore_state(struct vcpu *n)
 {
     register_t hcr;
     struct p2m_domain *p2m = &n->domain->arch.p2m;
+    uint8_t *last_vcpu_ran;
 
     if ( is_idle_vcpu(n) )
         return;
 
     hcr = READ_SYSREG(HCR_EL2);
-    WRITE_SYSREG(hcr & ~HCR_VM, HCR_EL2);
-    isb();
 
     WRITE_SYSREG64(p2m->vttbr, VTTBR_EL2);
     isb();
@@ -156,6 +155,17 @@ void p2m_restore_state(struct vcpu *n)
 
     WRITE_SYSREG(hcr, HCR_EL2);
     isb();
+
+    last_vcpu_ran = &p2m->last_vcpu_ran[smp_processor_id()];
+
+    /*
+     * Flush local TLB for the domain to prevent wrong TLB translation
+     * when running multiple vCPU of the same domain on a single pCPU.
+     */
+    if ( *last_vcpu_ran != INVALID_VCPU_ID && *last_vcpu_ran != n->vcpu_id )
+        flush_tlb_local();
+
+    *last_vcpu_ran = n->vcpu_id;
 }
 
 static void p2m_flush_tlb(struct p2m_domain *p2m)
@@ -734,6 +744,7 @@ static void p2m_free_entry(struct p2m_domain *p2m,
     unsigned int i;
     lpae_t *table;
     mfn_t mfn;
+    struct page_info *pg;
 
     /* Nothing to do if the entry is invalid. */
     if ( !p2m_valid(entry) )
@@ -771,7 +782,10 @@ static void p2m_free_entry(struct p2m_domain *p2m,
     mfn = _mfn(entry.p2m.base);
     ASSERT(mfn_valid(mfn_x(mfn)));
 
-    free_domheap_page(mfn_to_page(mfn_x(mfn)));
+    pg = mfn_to_page(mfn_x(mfn));
+
+    page_list_del(pg, &p2m->pages);
+    free_domheap_page(pg);
 }
 
 static bool p2m_split_superpage(struct p2m_domain *p2m, lpae_t *entry,
@@ -982,9 +996,10 @@ static int __p2m_set_entry(struct p2m_domain *p2m,
 
     /*
      * The radix-tree can only work on 4KB. This is only used when
-     * memaccess is enabled.
+     * memaccess is enabled and during shutdown.
      */
-    ASSERT(!p2m->mem_access_enabled || page_order == 0);
+    ASSERT(!p2m->mem_access_enabled || page_order == 0 ||
+           p2m->domain->is_dying);
     /*
      * The access type should always be p2m_access_rwx when the mapping
      * is removed.
@@ -1176,7 +1191,7 @@ int map_dev_mmio_region(struct domain *d,
     if ( !(nr && iomem_access_permitted(d, mfn_x(mfn), mfn_x(mfn) + nr - 1)) )
         return 0;
 
-    res = map_mmio_regions(d, gfn, nr, mfn);
+    res = p2m_insert_mapping(d, gfn, nr, mfn, p2m_mmio_direct_c);
     if ( res < 0 )
     {
         printk(XENLOG_G_ERR "Unable to map MFNs [%#"PRI_mfn" - %#"PRI_mfn" in Dom%d\n",
@@ -1308,6 +1323,7 @@ int p2m_init(struct domain *d)
 {
     struct p2m_domain *p2m = &d->arch.p2m;
     int rc = 0;
+    unsigned int cpu;
 
     rwlock_init(&p2m->lock);
     INIT_PAGE_LIST_HEAD(&p2m->pages);
@@ -1335,6 +1351,17 @@ int p2m_init(struct domain *d)
         !iommu_has_feature(d, IOMMU_FEAT_COHERENT_WALK);
 
     rc = p2m_alloc_table(d);
+
+    /*
+     * Make sure that the type chosen to is able to store the an vCPU ID
+     * between 0 and the maximum of virtual CPUS supported as long as
+     * the INVALID_VCPU_ID.
+     */
+    BUILD_BUG_ON((1 << (sizeof(p2m->last_vcpu_ran[0]) * 8)) < MAX_VIRT_CPUS);
+    BUILD_BUG_ON((1 << (sizeof(p2m->last_vcpu_ran[0])* 8)) < INVALID_VCPU_ID);
+
+    for_each_possible_cpu(cpu)
+       p2m->last_vcpu_ran[cpu] = INVALID_VCPU_ID;
 
     return rc;
 }

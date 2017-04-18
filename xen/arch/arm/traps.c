@@ -101,6 +101,19 @@ static int debug_stack_lines = 40;
 
 integer_param("debug_stack_lines", debug_stack_lines);
 
+static enum {
+	TRAP,
+	NATIVE,
+} vwfi;
+
+static void __init parse_vwfi(const char *s)
+{
+	if ( !strcmp(s, "native") )
+		vwfi = NATIVE;
+	else
+		vwfi = TRAP;
+}
+custom_param("vwfi", parse_vwfi);
 
 void init_traps(void)
 {
@@ -127,8 +140,8 @@ void init_traps(void)
 
     /* Setup hypervisor traps */
     WRITE_SYSREG(HCR_PTW|HCR_BSU_INNER|HCR_AMO|HCR_IMO|HCR_FMO|HCR_VM|
-                 HCR_TWE|HCR_TWI|HCR_TSC|HCR_TAC|HCR_SWIO|HCR_TIDCP|HCR_FB,
-                 HCR_EL2);
+                 (vwfi != NATIVE ? (HCR_TWI|HCR_TWE) : 0) |
+                 HCR_TSC|HCR_TAC|HCR_SWIO|HCR_TIDCP|HCR_FB,HCR_EL2);
     isb();
 }
 
@@ -643,7 +656,7 @@ static const char *mode_string(uint32_t cpsr)
     };
     mode = cpsr & PSR_MODE_MASK;
 
-    if ( mode > ARRAY_SIZE(mode_strings) )
+    if ( mode >= ARRAY_SIZE(mode_strings) )
         return "Unknown";
     return mode_strings[mode] ? : "Unknown";
 }
@@ -2278,6 +2291,20 @@ static void do_sysreg(struct cpu_user_regs *regs,
         dprintk(XENLOG_WARNING,
                 "Emulation of sysreg ICC_SGI0R_EL1/ASGI1R_EL1 not supported\n");
         return inject_undef64_exception(regs, hsr.len);
+
+    /*
+     *  ICC_SRE_EL2.Enable = 0
+     *
+     *  GIC Architecture Specification (IHI 0069C): Section 8.1.9
+     */
+    case HSR_SYSREG_ICC_SRE_EL1:
+        /*
+         * Trapped when the guest is using GICv2 whilst the platform
+         * interrupt controller is GICv3. In this case, the register
+         * should be emulate as RAZ/WI to tell the guest to use the GIC
+         * memory mapped interface (i.e GICv2 compatibility).
+         */
+        return handle_raz_wi(regs, regidx, hsr.sysreg.read, hsr, 1);
 
     /*
      * HCR_EL2.TIDCP

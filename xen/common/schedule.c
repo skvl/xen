@@ -84,7 +84,27 @@ static struct scheduler __read_mostly ops;
           : (typeof((opsptr)->fn(opsptr, ##__VA_ARGS__)))0 )
 
 #define DOM2OP(_d)    (((_d)->cpupool == NULL) ? &ops : ((_d)->cpupool->sched))
-#define VCPU2OP(_v)   (DOM2OP((_v)->domain))
+static inline struct scheduler *VCPU2OP(const struct vcpu *v)
+{
+    struct domain *d = v->domain;
+
+    if ( likely(d->cpupool != NULL) )
+        return d->cpupool->sched;
+
+    /*
+     * If d->cpupool is NULL, this is a vCPU of the idle domain. And this
+     * case is special because the idle domain does not really belong to
+     * a cpupool and, hence, doesn't really have a scheduler). In fact, its
+     * vCPUs (may) run on pCPUs which are in different pools, with different
+     * schedulers.
+     *
+     * What we want, in this case, is the scheduler of the pCPU where this
+     * particular idle vCPU is running. And, since v->processor never changes
+     * for idle vCPUs, it is safe to use it, with no locks, to figure that out.
+     */
+    ASSERT(is_idle_domain(d));
+    return per_cpu(scheduler, v->processor);
+}
 #define VCPU2ONLINE(_v) cpupool_domain_cpumask((_v)->domain)
 
 static inline void trace_runstate_change(struct vcpu *v, int new_state)
@@ -633,7 +653,10 @@ void vcpu_force_reschedule(struct vcpu *v)
 
 void restore_vcpu_affinity(struct domain *d)
 {
+    unsigned int cpu = smp_processor_id();
     struct vcpu *v;
+
+    ASSERT(system_state == SYS_STATE_resume);
 
     for_each_vcpu ( d, v )
     {
@@ -643,18 +666,34 @@ void restore_vcpu_affinity(struct domain *d)
         {
             cpumask_copy(v->cpu_hard_affinity, v->cpu_hard_affinity_saved);
             v->affinity_broken = 0;
+
         }
 
-        if ( v->processor == smp_processor_id() )
+        /*
+         * During suspend (in cpu_disable_scheduler()), we moved every vCPU
+         * to BSP (which, as of now, is pCPU 0), as a temporary measure to
+         * allow the nonboot processors to have their data structure freed
+         * and go to sleep. But nothing guardantees that the BSP is a valid
+         * pCPU for a particular domain.
+         *
+         * Therefore, here, before actually unpausing the domains, we should
+         * set v->processor of each of their vCPUs to something that will
+         * make sense for the scheduler of the cpupool in which they are in.
+         */
+        cpumask_and(cpumask_scratch_cpu(cpu), v->cpu_hard_affinity,
+                    cpupool_domain_cpumask(v->domain));
+        v->processor = cpumask_any(cpumask_scratch_cpu(cpu));
+
+        if ( v->processor == cpu )
         {
             set_bit(_VPF_migrating, &v->pause_flags);
-            vcpu_schedule_unlock_irq(lock, v);
+            spin_unlock_irq(lock);;
             vcpu_sleep_nosync(v);
             vcpu_migrate(v);
         }
         else
         {
-            vcpu_schedule_unlock_irq(lock, v);
+            spin_unlock_irq(lock);
         }
     }
 

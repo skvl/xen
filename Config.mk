@@ -277,8 +277,8 @@ SEABIOS_UPSTREAM_URL ?= git://xenbits.xen.org/seabios.git
 MINIOS_UPSTREAM_URL ?= git://xenbits.xen.org/mini-os.git
 endif
 OVMF_UPSTREAM_REVISION ?= bc54e50e0fe03c570014f363b547426913e92449
-QEMU_UPSTREAM_REVISION ?= qemu-xen-4.8.0
-MINIOS_UPSTREAM_REVISION ?= xen-RELEASE-4.8.0
+QEMU_UPSTREAM_REVISION ?= qemu-xen-4.8.1
+MINIOS_UPSTREAM_REVISION ?= xen-RELEASE-4.8.1
 # Wed Sep 28 11:50:04 2016 +0200
 # minios: fix build issue with xen_*mb defines
 
@@ -289,9 +289,7 @@ SEABIOS_UPSTREAM_REVISION ?= rel-1.10.0
 ETHERBOOT_NICS ?= rtl8139 8086100e
 
 
-QEMU_TRADITIONAL_REVISION ?= 095261a9ad5c31b9ed431f8382e8aa223089c85b
-# Mon Nov 14 17:19:46 2016 +0000
-# qemu: ioport_read, ioport_write: be defensive about 32-bit addresses
+QEMU_TRADITIONAL_REVISION ?= xen-4.8.1
 
 # Specify which qemu-dm to use. This may be `ioemu' to use the old
 # Mercurial in-tree version, or a local directory, or a git URL.

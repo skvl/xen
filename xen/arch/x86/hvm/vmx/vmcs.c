@@ -552,6 +552,20 @@ static void vmx_load_vmcs(struct vcpu *v)
     local_irq_restore(flags);
 }
 
+void vmx_vmcs_reload(struct vcpu *v)
+{
+    /*
+     * As we may be running with interrupts disabled, we can't acquire
+     * v->arch.hvm_vmx.vmcs_lock here. However, with interrupts disabled
+     * the VMCS can't be taken away from us anymore if we still own it.
+     */
+    ASSERT(v->is_running || !local_irq_is_enabled());
+    if ( v->arch.hvm_vmx.vmcs_pa == this_cpu(current_vmcs) )
+        return;
+
+    vmx_load_vmcs(v);
+}
+
 int vmx_cpu_up_prepare(unsigned int cpu)
 {
     /*
@@ -1089,6 +1103,9 @@ static int construct_vmcs(struct vcpu *v)
              (vmentry_ctl & VM_ENTRY_LOAD_BNDCFGS) )
             vmx_disable_intercept_for_msr(v, MSR_IA32_BNDCFGS, MSR_TYPE_R | MSR_TYPE_W);
     }
+
+    /* All guest MSR state is dirty. */
+    v->arch.hvm_vmx.msr_state.flags = ((1u << VMX_MSR_COUNT) - 1);
 
     /* I/O access bitmap. */
     __vmwrite(IO_BITMAP_A, __pa(d->arch.hvm_domain.io_bitmap));
@@ -1652,10 +1669,7 @@ void vmx_do_resume(struct vcpu *v)
     bool_t debug_state;
 
     if ( v->arch.hvm_vmx.active_cpu == smp_processor_id() )
-    {
-        if ( v->arch.hvm_vmx.vmcs_pa != this_cpu(current_vmcs) )
-            vmx_load_vmcs(v);
-    }
+        vmx_vmcs_reload(v);
     else
     {
         /*

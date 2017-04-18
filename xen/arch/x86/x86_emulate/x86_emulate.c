@@ -331,7 +331,11 @@ union vex {
 
 #define copy_REX_VEX(ptr, rex, vex) do { \
     if ( (vex).opcx != vex_none ) \
+    { \
+        if ( !mode_64bit() ) \
+            vex.reg |= 8; \
         ptr[0] = 0xc4, ptr[1] = (vex).raw[0], ptr[2] = (vex).raw[1]; \
+    } \
     else if ( mode_64bit() ) \
         ptr[1] = rex | REX_PREFIX; \
 } while (0)
@@ -870,15 +874,15 @@ do{ struct fpu_insn_ctxt fic;                           \
     put_fpu(&fic);                                      \
 } while (0)
 
-#define emulate_fpu_insn_stub(_bytes...)                                \
+#define emulate_fpu_insn_stub(bytes...)                                 \
 do {                                                                    \
-    uint8_t *buf = get_stub(stub);                                      \
-    unsigned int _nr = sizeof((uint8_t[]){ _bytes });                   \
-    struct fpu_insn_ctxt fic = { .insn_bytes = _nr };                   \
-    memcpy(buf, ((uint8_t[]){ _bytes, 0xc3 }), _nr + 1);                \
-    get_fpu(X86EMUL_FPU_fpu, &fic);                                     \
-    stub.func();                                                        \
-    put_fpu(&fic);                                                      \
+    unsigned int nr_ = sizeof((uint8_t[]){ bytes });                    \
+    struct fpu_insn_ctxt fic_ = { .insn_bytes = nr_ };                  \
+    memcpy(get_stub(stub), ((uint8_t[]){ bytes, 0xc3 }), nr_ + 1);      \
+    get_fpu(X86EMUL_FPU_fpu, &fic_);                                    \
+    asm volatile ( "call *%[stub]" : "+m" (fic_) :                      \
+                   [stub] "rm" (stub.func) );                           \
+    put_fpu(&fic_);                                                     \
     put_stub(stub);                                                     \
 } while (0)
 
@@ -893,7 +897,7 @@ do {                                                                    \
                    "call *%[func];"                                     \
                    _POST_EFLAGS("[eflags]", "[mask]", "[tmp]")          \
                    : [eflags] "+g" (_regs.eflags),                      \
-                     [tmp] "=&r" (tmp_)                                 \
+                     [tmp] "=&r" (tmp_), "+m" (fic_)                    \
                    : [func] "rm" (stub.func),                           \
                      [mask] "i" (EFLG_ZF|EFLG_PF|EFLG_CF) );            \
     put_fpu(&fic_);                                                     \
@@ -1356,6 +1360,11 @@ protmode_load_seg(
         }
         memset(sreg, 0, sizeof(*sreg));
         sreg->sel = sel;
+
+        /* Since CPL == SS.DPL, we need to put back DPL. */
+        if ( seg == x86_seg_ss )
+            sreg->attr.fields.dpl = sel;
+
         return X86EMUL_OKAY;
     }
 
@@ -2017,16 +2026,21 @@ x86_decode(
             default:
                 BUG(); /* Shouldn't be possible. */
             case 2:
-                if ( in_realmode(ctxt, ops) || (state->regs->eflags & EFLG_VM) )
+                if ( state->regs->eflags & EFLG_VM )
                     break;
                 /* fall through */
             case 4:
-                if ( modrm_mod != 3 )
+                if ( modrm_mod != 3 || in_realmode(ctxt, ops) )
                     break;
                 /* fall through */
             case 8:
                 /* VEX / XOP / EVEX */
                 generate_exception_if(rex_prefix || vex.pfx, EXC_UD, -1);
+                /*
+                 * With operand size override disallowed (see above), op_bytes
+                 * should not have changed from its default.
+                 */
+                ASSERT(op_bytes == def_op_bytes);
 
                 vex.raw[0] = modrm;
                 if ( b == 0xc5 )
@@ -2053,6 +2067,12 @@ x86_decode(
                             op_bytes = 8;
                         }
                     }
+                    else
+                    {
+                        /* Operand size fixed at 4 (no override via W bit). */
+                        op_bytes = 4;
+                        vex.b = 1;
+                    }
                     switch ( b )
                     {
                     case 0x62:
@@ -2071,7 +2091,7 @@ x86_decode(
                         break;
                     }
                 }
-                if ( mode_64bit() && !vex.r )
+                if ( !vex.r )
                     rex_prefix |= REX_R;
 
                 ext = vex.opcx;
@@ -2113,12 +2133,21 @@ x86_decode(
 
                 opcode |= b | MASK_INSR(vex.pfx, X86EMUL_OPC_PFX_MASK);
 
+                if ( !(d & ModRM) )
+                {
+                    modrm_reg = modrm_rm = modrm_mod = modrm = 0;
+                    break;
+                }
+
                 modrm = insn_fetch_type(uint8_t);
                 modrm_mod = (modrm & 0xc0) >> 6;
 
                 break;
             }
+    }
 
+    if ( d & ModRM )
+    {
         modrm_reg = ((rex_prefix & 4) << 1) | ((modrm & 0x38) >> 3);
         modrm_rm  = modrm & 0x07;
 
@@ -2181,6 +2210,17 @@ x86_decode(
                     d |= SrcMem16;
                     break;
                 }
+                break;
+            case 0x20: /* mov cr,reg */
+            case 0x21: /* mov dr,reg */
+            case 0x22: /* mov reg,cr */
+            case 0x23: /* mov reg,dr */
+                /*
+                 * Mov to/from cr/dr ignore the encoding of Mod, and behave as
+                 * if they were encoded as reg/reg instructions.  No futher
+                 * disp/SIB bytes are fetched.
+                 */
+                modrm_mod = 3;
                 break;
             }
             break;
@@ -4730,7 +4770,7 @@ x86_emulate(
     case X86EMUL_OPC(0x0f, 0x21): /* mov dr,reg */
     case X86EMUL_OPC(0x0f, 0x22): /* mov reg,cr */
     case X86EMUL_OPC(0x0f, 0x23): /* mov reg,dr */
-        generate_exception_if(ea.type != OP_REG, EXC_UD, -1);
+        ASSERT(ea.type == OP_REG); /* Early operand adjustment ensures this. */
         generate_exception_if(!mode_ring0(), EXC_GP, 0);
         modrm_reg |= lock_prefix << 3;
         if ( b & 2 )
@@ -5050,6 +5090,7 @@ x86_emulate(
     }
 
     case X86EMUL_OPC(0x0f, 0xa3): bt: /* bt */
+        generate_exception_if(lock_prefix, EXC_UD, 0);
         emulate_2op_SrcV_nobyte("bt", src, dst, _regs.eflags);
         dst.type = OP_NONE;
         break;

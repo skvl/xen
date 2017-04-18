@@ -739,13 +739,12 @@ static int vmx_vmcs_restore(struct vcpu *v, struct hvm_hw_cpu *c)
 static void vmx_save_cpu_state(struct vcpu *v, struct hvm_hw_cpu *data)
 {
     struct vmx_msr_state *guest_state = &v->arch.hvm_vmx.msr_state;
-    unsigned long guest_flags = guest_state->flags;
 
     data->shadow_gs = v->arch.hvm_vmx.shadow_gs;
     data->msr_cstar = v->arch.hvm_vmx.cstar;
 
     /* save msrs */
-    data->msr_flags        = guest_flags;
+    data->msr_flags        = 0;
     data->msr_lstar        = guest_state->msrs[VMX_INDEX_MSR_LSTAR];
     data->msr_star         = guest_state->msrs[VMX_INDEX_MSR_STAR];
     data->msr_syscall_mask = guest_state->msrs[VMX_INDEX_MSR_SYSCALL_MASK];
@@ -756,7 +755,7 @@ static void vmx_load_cpu_state(struct vcpu *v, struct hvm_hw_cpu *data)
     struct vmx_msr_state *guest_state = &v->arch.hvm_vmx.msr_state;
 
     /* restore msrs */
-    guest_state->flags = data->msr_flags & 7;
+    guest_state->flags = ((1u << VMX_MSR_COUNT) - 1);
     guest_state->msrs[VMX_INDEX_MSR_LSTAR]        = data->msr_lstar;
     guest_state->msrs[VMX_INDEX_MSR_STAR]         = data->msr_star;
     guest_state->msrs[VMX_INDEX_MSR_SYSCALL_MASK] = data->msr_syscall_mask;
@@ -895,6 +894,18 @@ static void vmx_ctxt_switch_from(struct vcpu *v)
      */
     if ( unlikely(!this_cpu(vmxon)) )
         return;
+
+    if ( !v->is_running )
+    {
+        /*
+         * When this vCPU isn't marked as running anymore, a remote pCPU's
+         * attempt to pause us (from vmx_vmcs_enter()) won't have a reason
+         * to spin in vcpu_sleep_sync(), and hence that pCPU might have taken
+         * away the VMCS from us. As we're running with interrupts disabled,
+         * we also can't call vmx_vmcs_enter().
+         */
+        vmx_vmcs_reload(v);
+    }
 
     vmx_fpu_leave(v);
     vmx_save_guest_msrs(v);
