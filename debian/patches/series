@@ -26,3 +26,5 @@ tools-xenmon-install.diff
 tools-xenstore-compatibility.diff
 ubuntu-tools-libs-abiname.diff
 toolstestsx86_emulator-pass--no-pie--fno
+multicall-deal-with-early-exit-condition
+x86-discard-type-information-when-steali
