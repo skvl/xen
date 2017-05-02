@@ -1,3 +1,10 @@
+xen (4.8.1-1+deb9u1) unstable; urgency=medium
+
+  * Security fixes for XSA-213 (Closes:#861659) and XSA-214
+    (Closes:#861660).  (Xen 4.7 and later is not affected by XSA-215.)
+
+ -- Ian Jackson <ian.jackson@eu.citrix.com>  Tue, 02 May 2017 12:19:57 +0100
+
 xen (4.8.1-1) unstable; urgency=high
 
   * Update to upstream 4.8.1 release.
