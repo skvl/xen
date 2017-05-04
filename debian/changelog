@@ -1,8 +1,11 @@
-xen (4.4.1-9+deb8u9~iwj) unstable; urgency=medium
+xen (4.4.1-9+deb8u9~iwj) jessie-security; urgency=medium
 
-  * 
+  Security updates:
+  * XSA-213: Closes:#861659: 64bit PV guest breakout
+  * XSA-214: Closes:#861660: grant transfer PV privilege escalation
+  * XSA-215: Closes:#861662: memory corruption via failsafe callback
 
- -- Ian Jackson <ian.jackson@eu.citrix.com>  Thu, 04 May 2017 18:15:12 +0100
+ -- Ian Jackson <ijackson@chiark.greenend.org.uk>  Thu, 04 May 2017 20:06:35 +0100
 
 xen (4.4.1-9+deb8u8) jessie-security; urgency=high
 
