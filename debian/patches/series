@@ -110,3 +110,10 @@ CVE-2016-9382-xsa192-4.5.patch
 CVE-2016-9385-xsa193-4.5.patch
 CVE-2016-9383-xsa195.patch
 CVE-2016-9379_CVE-2016-9380-xsa198.patch
+multicall-deal-with-early-exit-condition
+x86-discard-type-information-when-steali
+x86-correct-create_bounce_frame
+x86emul-cmpxchg8b-ignores-operand-size-p
+x86-force-eflags.if-on-when-exiting-to-p
+x86emul-correct-the-handling-of-eflags-w
+memory-properly-check-guest-memory-range
