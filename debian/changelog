@@ -1,4 +1,4 @@
-xen (4.4.1-9+deb8u9~iwj) jessie-security; urgency=medium
+xen (4.4.1-9+deb8u9) jessie-security; urgency=medium
 
   Security updates:
   * XSA-200: Closes:#848081: CVE-2016-9932: x86 emulation operand size
@@ -9,7 +9,7 @@ xen (4.4.1-9+deb8u9~iwj) jessie-security; urgency=medium
   * XSA-214: Closes:#861660: grant transfer PV privilege escalation
   * XSA-215: Closes:#861662: memory corruption via failsafe callback
 
- -- Ian Jackson <ijackson@chiark.greenend.org.uk>  Fri, 05 May 2017 16:01:25 +0100
+ -- Ian Jackson <ijackson@chiark.greenend.org.uk>  Mon, 08 May 2017 15:04:37 +0100
 
 xen (4.4.1-9+deb8u8) jessie-security; urgency=high
 
