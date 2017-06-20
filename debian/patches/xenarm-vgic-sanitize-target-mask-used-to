@@ -1,0 +1,30 @@
+From: Julien Grall <julien.grall@arm.com>
+Date: Tue, 6 Jun 2017 15:35:42 +0100
+X-Dgit-Generated: 4.8.1-1+deb9u2 27fd4ccdf9c97f3943679f2bbb1dbd3f70d18d7e
+Subject: xen/arm: vgic: Sanitize target mask used to send SGI
+
+The current function vgic_to_sgi does not sanitize the target mask and
+may therefore get an invalid vCPU ID. This will result to an out of
+bound access of d->vcpu[...] as there is no check whether the vCPU ID is
+within the maximum supported by the guest.
+
+This was introduced by commit ea37fd2111 "xen/arm: split vgic driver
+into generic and vgic-v2 driver".
+
+Signed-off-by: Julien Grall <julien.grall@arm.com>
+Reviewed-by: Stefano Stabellini <sstabellini@kernel.org>
+
+---
+
+--- xen-4.8.1.orig/xen/arch/arm/vgic.c
++++ xen-4.8.1/xen/arch/arm/vgic.c
+@@ -396,7 +396,8 @@ int vgic_to_sgi(struct vcpu *v, register
+         for_each_set_bit( i, &bitmap, sizeof(target->list) * 8 )
+         {
+             vcpuid = base + i;
+-            if ( d->vcpu[vcpuid] == NULL || !is_vcpu_online(d->vcpu[vcpuid]) )
++            if ( vcpuid >= d->max_vcpus || d->vcpu[vcpuid] == NULL ||
++                 !is_vcpu_online(d->vcpu[vcpuid]) )
+             {
+                 gprintk(XENLOG_WARNING, "VGIC: write r=%"PRIregister" \
+                         target->list=%hx, wrong CPUTargetList \n",
