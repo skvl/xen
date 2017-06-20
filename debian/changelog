@@ -1,10 +1,10 @@
-xen (4.8.1-1+deb9u2~) unstable; urgency=high
+xen (4.8.1-1+deb9u2) unstable; urgency=high
 
   * Security fixes for
       XSA-216 XSA-217 XSA-218 XSA-219 XSA-220
       XSA-221 XSA-222 XSA-223 XSA-224
 
- -- Ian Jackson <ian.jackson@eu.citrix.com>  Tue, 20 Jun 2017 13:26:27 +0100
+ -- Ian Jackson <ian.jackson@eu.citrix.com>  Tue, 20 Jun 2017 14:06:34 +0100
 
 xen (4.8.1-1+deb9u1) unstable; urgency=medium
 
