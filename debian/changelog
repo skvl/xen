@@ -1,9 +1,17 @@
-xen (4.8.1-2) unstable; urgency=high
+xen (4.8.1-2~~iwj) unstable; urgency=high
 
+  * Security fixes for
+      XSA-226 CVE-2017-12135
+      XSA-227 CVE-2017-12137
+      XSA-228 CVE-2017-12136
+      XSA-230 CVE-2017-12855
+      XSA-235 (no CVE yet)
   * Adjust changelog entry for 4.8.1-1+deb9u2 to record
     that XSA-225 fix was indeed included.
+  * Security fix for XSA-229 not included as that bug is in Linux, not Xen.
+  * Security fixes for XSA-231..234 inc. not inclued as still embargoed.
 
- --
+ -- Ian Jackson <ian.jackson@eu.citrix.com>  Thu, 07 Sep 2017 18:20:11 +0100
 
 xen (4.8.1-1+deb9u2) stretch-security; urgency=high
 
