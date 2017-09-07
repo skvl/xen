@@ -1,8 +1,15 @@
+xen (4.8.1-2) unstable; urgency=high
+
+  * Adjust changelog entry for 4.8.1-1+deb9u2 to record
+    that XSA-225 fix was indeed included.
+
+ --
+
 xen (4.8.1-1+deb9u2) stretch-security; urgency=high
 
   * Security fixes for
       XSA-216 XSA-217 XSA-218 XSA-219 XSA-220
-      XSA-221 XSA-222 XSA-223 XSA-224
+      XSA-221 XSA-222 XSA-223 XSA-224 XSA-225
 
  -- Ian Jackson <ian.jackson@eu.citrix.com>  Tue, 20 Jun 2017 14:06:34 +0100
 
