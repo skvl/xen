@@ -1,3 +1,28 @@
+xen (4.8.2+xsa243-0+deb9u1~iwj) stretch-security; urgency=high
+
+  * Update to upstream stable 4.8 branch, which is currently at Xen 4.8.2
+    plus a number of bugfixes and security fixes.
+    Result is that we now include security fixes for:
+       XSA-231 CVE-2017-14316
+       XSA-232 CVE-2017-14318
+       XSA-233 CVE-2017-14317
+       XSA-234 CVE-2017-14319
+       (235 already included in 4.8.1-1+deb9u3)
+       XSA-236 CVE-2017-15597
+       XSA-237 CVE-2017-15590
+       XSA-238 (no CVE yet)
+       XSA-239 CVE-2017-15589
+       XSA-240 CVE-2017-15595
+       XSA-241 CVE-2017-15588
+       XSA-242 CVE-2017-15593
+       XSA-243 CVE-2017-15592
+       XSA-244 CVE-2017-15594
+       XSA-245 (no CVE yet)
+    and a number of upstream functionality fixes, which are not easily
+    disentangled from the security fixes.
+
+ -- Ian Jackson <ijackson@chiark.greenend.org.uk>  Fri, 24 Nov 2017 14:51:42 +0000
+
 xen (4.8.1-1+deb9u3) stretch-security; urgency=high
 
   * Security fixes for
