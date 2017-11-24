@@ -1,0 +1,22 @@
+From: Bastian Blank <waldi@debian.org>
+Date: Sat, 5 Jul 2014 11:47:31 +0200
+X-Dgit-Generated: 4.8.2+xsa243-0+deb9u1~iwj 12797eb432cfee3eb7dd39a8855deb224d18269a
+Subject: tools-xenmon-install.diff
+
+Patch-Name: tools-xenmon-install.diff
+
+---
+
+--- xen-4.8.2+xsa243.orig/tools/xenmon/Makefile
++++ xen-4.8.2+xsa243/tools/xenmon/Makefile
+@@ -13,6 +13,10 @@
+ XEN_ROOT=$(CURDIR)/../..
+ include $(XEN_ROOT)/tools/Rules.mk
+ 
++DEFAULT_PYTHON_PATH := $(shell $(XEN_ROOT)/tools/python/get-path)
++PYTHON_PATH ?= $(DEFAULT_PYTHON_PATH)
++INSTALL_PYTHON_PROG = $(XEN_ROOT)/tools/python/install-wrap "$(PYTHON_PATH)" $(INSTALL_PROG)
++
+ CFLAGS  += -Werror
+ CFLAGS  += $(CFLAGS_libxenevtchn)
+ CFLAGS  += $(CFLAGS_libxenctrl)

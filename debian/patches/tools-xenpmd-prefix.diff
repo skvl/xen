@@ -1,0 +1,22 @@
+From: Bastian Blank <waldi@debian.org>
+Date: Sat, 13 Dec 2014 19:37:02 +0100
+X-Dgit-Generated: 4.8.2+xsa243-0+deb9u1~iwj b1ea971cd5ecc94c89bd5f56d23b6e71bce3e935
+Subject: tools-xenpmd-prefix.diff
+
+Patch-Name: tools-xenpmd-prefix.diff
+
+---
+
+--- xen-4.8.2+xsa243.orig/tools/xenpmd/Makefile
++++ xen-4.8.2+xsa243/tools/xenpmd/Makefile
+@@ -11,8 +11,8 @@ all: xenpmd
+ 
+ .PHONY: install
+ install: all
+-	$(INSTALL_DIR) $(DESTDIR)$(sbindir)
+-	$(INSTALL_PROG) xenpmd $(DESTDIR)$(sbindir)
++	$(INSTALL_DIR) $(DESTDIR)$(LIBEXEC_BIN)
++	$(INSTALL_PROG) xenpmd $(DESTDIR)$(LIBEXEC_BIN)
+ 
+ .PHONY: clean
+ clean:

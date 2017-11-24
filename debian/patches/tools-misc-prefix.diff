@@ -1,0 +1,25 @@
+From: Bastian Blank <waldi@debian.org>
+Date: Sat, 5 Jul 2014 11:46:59 +0200
+X-Dgit-Generated: 4.8.2+xsa243-0+deb9u1~iwj c65090baf860b994cc95248543eec351bdcf4752
+Subject: tools-misc-prefix.diff
+
+Patch-Name: tools-misc-prefix.diff
+
+---
+
+--- xen-4.8.2+xsa243.orig/tools/misc/Makefile
++++ xen-4.8.2+xsa243/tools/misc/Makefile
+@@ -54,12 +54,8 @@ all build: $(TARGETS_BUILD)
+ 
+ .PHONY: install
+ install: build
+-	$(INSTALL_DIR) $(DESTDIR)$(bindir)
+-	$(INSTALL_DIR) $(DESTDIR)$(sbindir)
+ 	$(INSTALL_DIR) $(DESTDIR)$(LIBEXEC_BIN)
+-	$(INSTALL_PYTHON_PROG) $(INSTALL_BIN) $(DESTDIR)$(bindir)
+-	$(INSTALL_PYTHON_PROG) $(INSTALL_SBIN) $(DESTDIR)$(sbindir)
+-	$(INSTALL_PYTHON_PROG) $(INSTALL_PRIVBIN) $(DESTDIR)$(LIBEXEC_BIN)
++	$(INSTALL_PYTHON_PROG) $(INSTALL_BIN) $(INSTALL_SBIN) $(INSTALL_PRIVBIN) $(DESTDIR)$(LIBEXEC_BIN)
+ 
+ .PHONY: clean
+ clean:
