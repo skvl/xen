@@ -115,6 +115,25 @@ static void __init parse_vwfi(const char *s)
 }
 custom_param("vwfi", parse_vwfi);
 
+static int __init vwfi_init(void)
+{
+    /*
+     * HCR_EL2 has already been set on cpu0, change the setting here, if
+     * needed. Other cpus haven't booted yet, init_traps will setup
+     * HCR_EL2 correctly.
+     */
+    if ( vwfi == NATIVE )
+    {
+        register_t hcr;
+
+        hcr = READ_SYSREG(HCR_EL2);
+        WRITE_SYSREG(hcr & ~(HCR_TWI|HCR_TWE), HCR_EL2);
+    }
+
+    return 0;
+}
+presmp_initcall(vwfi_init);
+
 void init_traps(void)
 {
     /* Setup Hyp vector base */
@@ -843,7 +862,7 @@ static void _show_registers(struct cpu_user_regs *regs,
     printk("   HCR_EL2: %016"PRIregister"\n", READ_SYSREG(HCR_EL2));
     printk(" TTBR0_EL2: %016"PRIx64"\n", READ_SYSREG64(TTBR0_EL2));
     printk("\n");
-    printk("   ESR_EL2: %08"PRIx32"\n", READ_SYSREG32(ESR_EL2));
+    printk("   ESR_EL2: %08"PRIx32"\n", regs->hsr);
     printk(" HPFAR_EL2: %016"PRIregister"\n", READ_SYSREG(HPFAR_EL2));
 
 #ifdef CONFIG_ARM_32
@@ -2638,9 +2657,9 @@ static void enter_hypervisor_head(struct cpu_user_regs *regs)
         gic_clear_lrs(current);
 }
 
-asmlinkage void do_trap_hypervisor(struct cpu_user_regs *regs)
+asmlinkage void do_trap_guest_sync(struct cpu_user_regs *regs)
 {
-    const union hsr hsr = { .bits = READ_SYSREG32(ESR_EL2) };
+    const union hsr hsr = { .bits = regs->hsr };
 
     enter_hypervisor_head(regs);
 
@@ -2758,6 +2777,22 @@ asmlinkage void do_trap_hypervisor(struct cpu_user_regs *regs)
         do_trap_data_abort_guest(regs, hsr);
         break;
 
+    default:
+        gprintk(XENLOG_WARNING,
+                "Unknown Guest Trap. HSR=0x%x EC=0x%x IL=%x Syndrome=0x%"PRIx32"\n",
+                hsr.bits, hsr.ec, hsr.len, hsr.iss);
+        inject_undef_exception(regs, hsr);
+    }
+}
+
+asmlinkage void do_trap_hyp_sync(struct cpu_user_regs *regs)
+{
+    const union hsr hsr = { .bits = regs->hsr };
+
+    enter_hypervisor_head(regs);
+
+    switch ( hsr.ec )
+    {
 #ifdef CONFIG_ARM_64
     case HSR_EC_BRK:
         do_trap_brk(regs, hsr);

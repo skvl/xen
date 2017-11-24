@@ -76,6 +76,8 @@ void mapcache_override_current(struct vcpu *);
 
 /* x86/64: toggle guest between kernel and user modes. */
 void toggle_guest_mode(struct vcpu *);
+/* x86/64: toggle guest page tables between kernel and user modes. */
+void toggle_guest_pt(struct vcpu *);
 
 /*
  * Initialise a hypercall-transfer page. The given pointer must be mapped
@@ -531,6 +533,8 @@ struct arch_vcpu
     pagetable_t guest_table_user;       /* (MFN) x86/64 user-space pagetable */
     pagetable_t guest_table;            /* (MFN) guest notion of cr3 */
     struct page_info *old_guest_table;  /* partially destructed pagetable */
+    struct page_info *old_guest_ptpg;   /* containing page table of the */
+                                        /* former, if any */
     /* guest_table holds a ref to the page, and also a type-count unless
      * shadow refcounts are in use */
     pagetable_t shadow_table[4];        /* (MFN) shadow(s) of guest */

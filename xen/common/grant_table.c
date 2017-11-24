@@ -411,7 +411,7 @@ get_maptrack_handle(
     struct vcpu          *curr = current;
     unsigned int          i, head;
     grant_handle_t        handle;
-    struct grant_mapping *new_mt;
+    struct grant_mapping *new_mt = NULL;
 
     handle = __get_maptrack_handle(lgt, curr);
     if ( likely(handle != -1) )
@@ -420,10 +420,15 @@ get_maptrack_handle(
     spin_lock(&lgt->maptrack_lock);
 
     /*
-     * If we've run out of frames, try stealing an entry from another
-     * VCPU (in case the guest isn't mapping across its VCPUs evenly).
+     * If we've run out of handles and still have frame headroom, try
+     * allocating a new maptrack frame.  If there is no headroom, or we're
+     * out of memory, try stealing an entry from another VCPU (in case the
+     * guest isn't mapping across its VCPUs evenly).
      */
-    if ( nr_maptrack_frames(lgt) >= max_maptrack_frames )
+    if ( nr_maptrack_frames(lgt) < max_maptrack_frames )
+        new_mt = alloc_xenheap_page();
+
+    if ( !new_mt )
     {
         spin_unlock(&lgt->maptrack_lock);
 
@@ -446,12 +451,6 @@ get_maptrack_handle(
         return steal_maptrack_handle(lgt, curr);
     }
 
-    new_mt = alloc_xenheap_page();
-    if ( !new_mt )
-    {
-        spin_unlock(&lgt->maptrack_lock);
-        return -1;
-    }
     clear_page(new_mt);
 
     /*
@@ -1191,7 +1190,7 @@ __gnttab_unmap_common(
     smp_rmb();
     if ( unlikely(op->ref >= nr_grant_entries(rgt)) )
     {
-        gdprintk(XENLOG_WARNING, "Unstable handle %u\n", op->handle);
+        gdprintk(XENLOG_WARNING, "Unstable handle %#x\n", op->handle);
         rc = GNTST_bad_handle;
         flags = 0;
         goto unlock_out;
@@ -1212,7 +1211,7 @@ __gnttab_unmap_common(
     if ( unlikely(!flags) || unlikely(map->domid != dom) ||
          unlikely(map->ref != op->ref) )
     {
-        gdprintk(XENLOG_WARNING, "Unstable handle %#x\n", op->handle);
+        gdprintk(XENLOG_WARNING, "Unstable handle %u\n", op->handle);
         rc = GNTST_bad_handle;
         goto act_release_out;
     }
@@ -1335,7 +1334,7 @@ __gnttab_unmap_common_complete(struct gnttab_unmap_common *op)
 
     if ( op->done & GNTMAP_host_map )
     {
-        if ( !is_iomem_page(op->frame) )
+        if ( !is_iomem_page(op->frame) ) 
         {
             if ( gnttab_host_mapping_get_page_type(op->done & GNTMAP_readonly,
                                                    ld, rd) )
@@ -2331,9 +2330,20 @@ __acquire_grant_for_copy(
         td = page_get_owner_and_reference(*page);
         /*
          * act->pin being non-zero should guarantee the page to have a
-         * non-zero refcount and hence a valid owner.
+         * non-zero refcount and hence a valid owner (matching the one on
+         * record), with one exception: If the owning domain is dying we
+         * had better not make implications from pin count (map_grant_ref()
+         * updates pin counts before obtaining page references, for
+         * example).
          */
-        ASSERT(td);
+        if ( td != rd || rd->is_dying )
+        {
+            if ( td )
+                put_page(*page);
+            *page = NULL;
+            rc = GNTST_bad_domain;
+            goto unlock_out_clear;
+        }
     }
 
     act->pin += readonly ? GNTPIN_hstr_inc : GNTPIN_hstw_inc;
@@ -2452,6 +2462,11 @@ static void gnttab_copy_release_buf(struct gnttab_copy_buf *buf)
         unmap_domain_page(buf->virt);
         buf->virt = NULL;
     }
+    if ( buf->have_grant )
+    {
+        __release_grant_for_copy(buf->domain, buf->ptr.u.ref, buf->read_only);
+        buf->have_grant = 0;
+    }
     if ( buf->have_type )
     {
         put_page_type(buf->page);
@@ -2461,11 +2476,6 @@ static void gnttab_copy_release_buf(struct gnttab_copy_buf *buf)
     {
         put_page(buf->page);
         buf->page = NULL;
-    }
-    if ( buf->have_grant )
-    {
-        __release_grant_for_copy(buf->domain, buf->ptr.u.ref, buf->read_only);
-        buf->have_grant = 0;
     }
 }
 
@@ -3031,7 +3041,7 @@ static int __gnttab_cache_flush(gnttab_cache_flush_t *cflush,
 
     page = mfn_to_page(mfn);
     owner = page_get_owner_and_reference(page);
-    if ( !owner )
+    if ( !owner || !owner->grant_table )
     {
         rcu_unlock_domain(d);
         return -EPERM;

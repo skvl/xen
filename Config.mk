@@ -82,7 +82,7 @@ EXTRA_LIB += $(EXTRA_PREFIX)/lib
 endif
 
 PYTHON      ?= python
-PYTHON_PREFIX_ARG ?= --home="$(LIBEXEC)"
+PYTHON_PREFIX_ARG ?= --prefix="$(prefix)"
 # The above requires that prefix contains *no spaces*. This variable is here
 # to permit the user to set PYTHON_PREFIX_ARG to '' to workaround this bug:
 #  https://bugs.launchpad.net/ubuntu/+bug/362570
@@ -277,8 +277,8 @@ SEABIOS_UPSTREAM_URL ?= git://xenbits.xen.org/seabios.git
 MINIOS_UPSTREAM_URL ?= git://xenbits.xen.org/mini-os.git
 endif
 OVMF_UPSTREAM_REVISION ?= bc54e50e0fe03c570014f363b547426913e92449
-QEMU_UPSTREAM_REVISION ?= qemu-xen-4.8.1
-MINIOS_UPSTREAM_REVISION ?= xen-RELEASE-4.8.1
+QEMU_UPSTREAM_REVISION ?= qemu-xen-4.8.2
+MINIOS_UPSTREAM_REVISION ?= xen-RELEASE-4.8.2
 # Wed Sep 28 11:50:04 2016 +0200
 # minios: fix build issue with xen_*mb defines
 
@@ -289,7 +289,7 @@ SEABIOS_UPSTREAM_REVISION ?= rel-1.10.0
 ETHERBOOT_NICS ?= rtl8139 8086100e
 
 
-QEMU_TRADITIONAL_REVISION ?= xen-4.8.1
+QEMU_TRADITIONAL_REVISION ?= xen-4.8.2
 
 # Specify which qemu-dm to use. This may be `ioemu' to use the old
 # Mercurial in-tree version, or a local directory, or a git URL.

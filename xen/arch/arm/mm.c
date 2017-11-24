@@ -39,6 +39,9 @@
 #include <xen/vmap.h>
 #include <xsm/xsm.h>
 #include <xen/pfn.h>
+#include <xen/sizes.h>
+#include <xen/libfdt/libfdt.h>
+#include <asm/setup.h>
 
 struct domain *dom_xen, *dom_io, *dom_cow;
 
@@ -270,6 +273,40 @@ void clear_fixmap(unsigned map)
     flush_xen_data_tlb_range_va(FIXMAP_ADDR(map), PAGE_SIZE);
 }
 
+/* Create Xen's mappings of memory.
+ * Mapping_size must be either 2MB or 32MB.
+ * Base and virt must be mapping_size aligned.
+ * Size must be a multiple of mapping_size.
+ * second must be a contiguous set of second level page tables
+ * covering the region starting at virt_offset. */
+static void __init create_mappings(lpae_t *second,
+                                   unsigned long virt_offset,
+                                   unsigned long base_mfn,
+                                   unsigned long nr_mfns,
+                                   unsigned int mapping_size)
+{
+    unsigned long i, count;
+    const unsigned long granularity = mapping_size >> PAGE_SHIFT;
+    lpae_t pte, *p;
+
+    ASSERT((mapping_size == MB(2)) || (mapping_size == MB(32)));
+    ASSERT(!((virt_offset >> PAGE_SHIFT) % granularity));
+    ASSERT(!(base_mfn % granularity));
+    ASSERT(!(nr_mfns % granularity));
+
+    count = nr_mfns / LPAE_ENTRIES;
+    p = second + second_linear_offset(virt_offset);
+    pte = mfn_to_xen_entry(base_mfn, WRITEALLOC);
+    if ( granularity == 16 * LPAE_ENTRIES )
+        pte.pt.contig = 1;  /* These maps are in 16-entry contiguous chunks. */
+    for ( i = 0; i < count; i++ )
+    {
+        write_pte(p + i, pte);
+        pte.pt.base += 1 << LPAE_SHIFT;
+    }
+    flush_xen_data_tlb_local();
+}
+
 #ifdef CONFIG_DOMAIN_PAGE
 void *map_domain_page_global(mfn_t mfn)
 {
@@ -384,7 +421,7 @@ unsigned long domain_page_map_to_mfn(const void *ptr)
 }
 #endif
 
-void flush_page_to_ram(unsigned long mfn)
+void flush_page_to_ram(unsigned long mfn, bool sync_icache)
 {
     void *v = map_domain_page(_mfn(mfn));
 
@@ -399,7 +436,8 @@ void flush_page_to_ram(unsigned long mfn)
      * I-Cache (See D4.9.2 in ARM DDI 0487A.k_iss10775). Instead of using flush
      * by VA on select platforms, we just flush the entire cache here.
      */
-    invalidate_icache();
+    if ( sync_icache )
+        invalidate_icache();
 }
 
 void __init arch_init_memory(void)
@@ -435,11 +473,59 @@ static inline lpae_t pte_of_xenaddr(vaddr_t va)
     return mfn_to_xen_entry(mfn, WRITEALLOC);
 }
 
+/* Map the FDT in the early boot page table */
+void * __init early_fdt_map(paddr_t fdt_paddr)
+{
+    /* We are using 2MB superpage for mapping the FDT */
+    paddr_t base_paddr = fdt_paddr & SECOND_MASK;
+    paddr_t offset;
+    void *fdt_virt;
+    uint32_t size;
+
+    /*
+     * Check whether the physical FDT address is set and meets the minimum
+     * alignment requirement. Since we are relying on MIN_FDT_ALIGN to be at
+     * least 8 bytes so that we always access the magic and size fields
+     * of the FDT header after mapping the first chunk, double check if
+     * that is indeed the case.
+     */
+    BUILD_BUG_ON(MIN_FDT_ALIGN < 8);
+    if ( !fdt_paddr || fdt_paddr % MIN_FDT_ALIGN )
+        return NULL;
+
+    /* The FDT is mapped using 2MB superpage */
+    BUILD_BUG_ON(BOOT_FDT_VIRT_START % SZ_2M);
+
+    create_mappings(boot_second, BOOT_FDT_VIRT_START, paddr_to_pfn(base_paddr),
+                    SZ_2M >> PAGE_SHIFT, SZ_2M);
+
+    offset = fdt_paddr % SECOND_SIZE;
+    fdt_virt = (void *)BOOT_FDT_VIRT_START + offset;
+
+    if ( fdt_magic(fdt_virt) != FDT_MAGIC )
+        return NULL;
+
+    size = fdt_totalsize(fdt_virt);
+    if ( size > MAX_FDT_SIZE )
+        return NULL;
+
+    if ( (offset + size) > SZ_2M )
+    {
+        create_mappings(boot_second, BOOT_FDT_VIRT_START + SZ_2M,
+                        paddr_to_pfn(base_paddr + SZ_2M),
+                        SZ_2M >> PAGE_SHIFT, SZ_2M);
+    }
+
+    return fdt_virt;
+}
+
 void __init remove_early_mappings(void)
 {
     lpae_t pte = {0};
     write_pte(xen_second + second_table_offset(BOOT_FDT_VIRT_START), pte);
-    flush_xen_data_tlb_range_va(BOOT_FDT_VIRT_START, SECOND_SIZE);
+    write_pte(xen_second + second_table_offset(BOOT_FDT_VIRT_START + SZ_2M),
+              pte);
+    flush_xen_data_tlb_range_va(BOOT_FDT_VIRT_START, BOOT_FDT_SLOT_SIZE);
 }
 
 extern void relocate_xen(uint64_t ttbr, void *src, void *dst, size_t len);
@@ -498,6 +584,8 @@ void __init setup_pagetables(unsigned long boot_phys_offset, paddr_t xen_paddr)
     /* ... DTB */
     pte = boot_second[second_table_offset(BOOT_FDT_VIRT_START)];
     xen_second[second_table_offset(BOOT_FDT_VIRT_START)] = pte;
+    pte = boot_second[second_table_offset(BOOT_FDT_VIRT_START + SZ_2M)];
+    xen_second[second_table_offset(BOOT_FDT_VIRT_START + SZ_2M)] = pte;
 
     /* ... Boot Misc area for xen relocation */
     dest_va = BOOT_RELOC_VIRT_START;
@@ -632,40 +720,6 @@ void mmu_init_secondary_cpu(void)
     /* From now on, no mapping may be both writable and executable. */
     WRITE_SYSREG32(READ_SYSREG32(SCTLR_EL2) | SCTLR_WXN, SCTLR_EL2);
     flush_xen_text_tlb_local();
-}
-
-/* Create Xen's mappings of memory.
- * Mapping_size must be either 2MB or 32MB.
- * Base and virt must be mapping_size aligned.
- * Size must be a multiple of mapping_size.
- * second must be a contiguous set of second level page tables
- * covering the region starting at virt_offset. */
-static void __init create_mappings(lpae_t *second,
-                                   unsigned long virt_offset,
-                                   unsigned long base_mfn,
-                                   unsigned long nr_mfns,
-                                   unsigned int mapping_size)
-{
-    unsigned long i, count;
-    const unsigned long granularity = mapping_size >> PAGE_SHIFT;
-    lpae_t pte, *p;
-
-    ASSERT((mapping_size == MB(2)) || (mapping_size == MB(32)));
-    ASSERT(!((virt_offset >> PAGE_SHIFT) % granularity));
-    ASSERT(!(base_mfn % granularity));
-    ASSERT(!(nr_mfns % granularity));
-
-    count = nr_mfns / LPAE_ENTRIES;
-    p = second + second_linear_offset(virt_offset);
-    pte = mfn_to_xen_entry(base_mfn, WRITEALLOC);
-    if ( granularity == 16 * LPAE_ENTRIES )
-        pte.pt.contig = 1;  /* These maps are in 16-entry contiguous chunks. */
-    for ( i = 0; i < count; i++ )
-    {
-        write_pte(p + i, pte);
-        pte.pt.base += 1 << LPAE_SHIFT;
-    }
-    flush_xen_data_tlb_local();
 }
 
 #ifdef CONFIG_ARM_32

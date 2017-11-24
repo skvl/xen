@@ -20,24 +20,19 @@ const char *xen_compile_time(void)
     return XEN_COMPILE_TIME;
 }
 
-const char *xen_compile_system_distribution(void)
+const char *xen_compile_by(void)
 {
-    return XEN_COMPILE_SYSTEM_DISTRIBUTION;
+    return XEN_COMPILE_BY;
 }
 
-const char *xen_compile_system_maintainer_local(void)
+const char *xen_compile_domain(void)
 {
-    return XEN_COMPILE_SYSTEM_MAINTAINER_LOCAL;
+    return XEN_COMPILE_DOMAIN;
 }
 
-const char *xen_compile_system_maintainer_domain(void)
+const char *xen_compile_host(void)
 {
-    return XEN_COMPILE_SYSTEM_MAINTAINER_DOMAIN;
-}
-
-const char *xen_compile_system_version(void)
-{
-    return XEN_COMPILE_SYSTEM_VERSION;
+    return XEN_COMPILE_HOST;
 }
 
 const char *xen_compiler(void)
@@ -63,6 +58,11 @@ const char *xen_extra_version(void)
 const char *xen_changeset(void)
 {
     return XEN_CHANGESET;
+}
+
+const char *xen_banner(void)
+{
+    return XEN_BANNER;
 }
 
 const char *xen_deny(void)

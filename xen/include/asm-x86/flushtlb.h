@@ -24,6 +24,20 @@ DECLARE_PER_CPU(u32, tlbflush_time);
 
 #define tlbflush_current_time() tlbflush_clock
 
+static inline void page_set_tlbflush_timestamp(struct page_info *page)
+{
+    /*
+     * Prevent storing a stale time stamp, which could happen if an update
+     * to tlbflush_clock plus a subsequent flush IPI happen between the
+     * reading of tlbflush_clock and the writing of the struct page_info
+     * field.
+     */
+    ASSERT(local_irq_is_enabled());
+    local_irq_disable();
+    page->tlbflush_timestamp = tlbflush_current_time();
+    local_irq_enable();
+}
+
 /*
  * @cpu_stamp is the timestamp at last TLB flush for the CPU we are testing.
  * @lastuse_stamp is a timestamp taken when the PFN we are testing was last 
@@ -118,7 +132,7 @@ void flush_area_mask(const cpumask_t *, const void *va, unsigned int flags);
 #define flush_tlb_one_all(v)                    \
     flush_tlb_one_mask(&cpu_online_map, v)
 
-static inline void flush_page_to_ram(unsigned long mfn) {}
+static inline void flush_page_to_ram(unsigned long mfn, bool sync_icache) {}
 static inline int invalidate_dcache_va_range(const void *p,
                                              unsigned long size)
 { return -EOPNOTSUPP; }

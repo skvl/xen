@@ -18,14 +18,18 @@ include $(XEN_ROOT)/tools/Rules.mk
 LDCONFIG=ldconfig
 MAKE_LINK=ln -sf
 
+MAJOR=0
+MINOR=0
+
 LIB=src/libxenstat.a
-SHLIB=src/libxenstat.so
+SHLIB=src/libxenstat.so.$(MAJOR).$(MINOR)
+SHLIB_LINKS=src/libxenstat.so.$(MAJOR) src/libxenstat.so
 OBJECTS-y=src/xenstat.o src/xenstat_qmp.o
 OBJECTS-$(CONFIG_Linux) += src/xenstat_linux.o
 OBJECTS-$(CONFIG_SunOS) += src/xenstat_solaris.o
 OBJECTS-$(CONFIG_NetBSD) += src/xenstat_netbsd.o
 OBJECTS-$(CONFIG_FreeBSD) += src/xenstat_freebsd.o
-SONAME_FLAGS=-Wl,$(SONAME_LDFLAG),libxenstat.so
+SONAME_FLAGS=-Wl,$(SONAME_LDFLAG) -Wl,libxenstat.so.$(MAJOR)
 
 CFLAGS+=-fPIC
 CFLAGS+=-Isrc $(CFLAGS_libxenctrl) $(CFLAGS_libxenstore) $(CFLAGS_xeninclude) -include $(XEN_ROOT)/tools/config.h
@@ -34,7 +38,7 @@ LDLIBS-y = $(LDLIBS_libxenstore) $(LDLIBS_libxenctrl)
 LDLIBS-$(CONFIG_SunOS) += -lkstat
 
 .PHONY: all
-all: $(LIB) $(SHLIB)
+all: $(LIB) $(SHLIB) $(SHLIB_LINKS)
 
 $(OBJECTS-y): src/_paths.h
 
@@ -46,13 +50,19 @@ $(SHLIB): $(OBJECTS-y)
 	$(CC) $(LDFLAGS) $(SONAME_FLAGS) $(SHLIB_LDFLAGS) -o $@ \
 	    $(OBJECTS-y) $(LDLIBS-y) $(APPEND_LDFLAGS)
 
+src/libxenstat.so.$(MAJOR): $(SHLIB)
+	$(MAKE_LINK) $(<F) $@
+
+src/libxenstat.so: src/libxenstat.so.$(MAJOR)
+	$(MAKE_LINK) $(<F) $@
+
 .PHONY: install
 install: all
-	$(INSTALL_DIR) $(DESTDIR)$(includedir)
-	$(INSTALL_DIR) $(DESTDIR)$(LIBEXEC_LIB)
 	$(INSTALL_DATA) src/xenstat.h $(DESTDIR)$(includedir)
 	$(INSTALL_DATA) $(LIB) $(DESTDIR)$(libdir)/libxenstat.a
-	$(INSTALL_PROG) src/libxenstat.so $(DESTDIR)$(LIBEXEC_LIB)
+	$(INSTALL_PROG) src/libxenstat.so.$(MAJOR).$(MINOR) $(DESTDIR)$(libdir)
+	ln -sf libxenstat.so.$(MAJOR).$(MINOR) $(DESTDIR)$(libdir)/libxenstat.so.$(MAJOR)
+	ln -sf libxenstat.so.$(MAJOR) $(DESTDIR)$(libdir)/libxenstat.so
 
 PYLIB=bindings/swig/python/_xenstat.so
 PYMOD=bindings/swig/python/xenstat.py

@@ -625,14 +625,24 @@ void fatal_trap(const struct cpu_user_regs *regs, bool_t show_remote)
           (regs->eflags & X86_EFLAGS_IF) ? "" : ", IN INTERRUPT CONTEXT");
 }
 
-static void do_guest_trap(unsigned int trapnr,
-                          const struct cpu_user_regs *regs)
+static void pv_inject_event(
+    unsigned int trapnr, const struct cpu_user_regs *regs, unsigned int type)
 {
     struct vcpu *v = current;
     struct trap_bounce *tb;
     const struct trap_info *ti;
-    const bool use_error_code =
-        ((trapnr < 32) && (TRAP_HAVE_EC & (1u << trapnr)));
+    bool use_error_code;
+
+    if ( type == X86_EVENTTYPE_HW_EXCEPTION )
+    {
+        ASSERT(trapnr < 32);
+        use_error_code = TRAP_HAVE_EC & (1u << trapnr);
+    }
+    else
+    {
+        ASSERT(type == X86_EVENTTYPE_SW_INTERRUPT);
+        use_error_code = false;
+    }
 
     trace_pv_trap(trapnr, regs->eip, use_error_code, regs->error_code);
 
@@ -656,6 +666,12 @@ static void do_guest_trap(unsigned int trapnr,
         gprintk(XENLOG_WARNING,
                 "Unhandled %s fault/trap [#%d, ec=%04x]\n",
                 trapstr(trapnr), trapnr, regs->error_code);
+}
+
+static void do_guest_trap(
+    unsigned int trapnr, const struct cpu_user_regs *regs)
+{
+    pv_inject_event(trapnr, regs, X86_EVENTTYPE_HW_EXCEPTION);
 }
 
 static void instruction_done(
@@ -2040,7 +2056,7 @@ static int guest_io_okay(
 {
     /* If in user mode, switch to kernel mode just to read I/O bitmap. */
     int user_mode = !(v->arch.flags & TF_kernel_mode);
-#define TOGGLE_MODE() if ( user_mode ) toggle_guest_mode(v)
+#define TOGGLE_MODE() if ( user_mode ) toggle_guest_pt(v)
 
     if ( iopl_ok(v, regs) )
         return 1;
@@ -2489,8 +2505,7 @@ static int priv_op_read_msr(unsigned int reg, uint64_t *val,
         return X86EMUL_OKAY;
 
     case MSR_INTEL_PLATFORM_INFO:
-        if ( boot_cpu_data.x86_vendor != X86_VENDOR_INTEL ||
-             rdmsr_safe(MSR_INTEL_PLATFORM_INFO, *val) )
+        if ( !boot_cpu_has(X86_FEATURE_MSR_PLATFORM_INFO) )
             break;
         *val = 0;
         if ( this_cpu(cpuid_faulting_enabled) )
@@ -2498,8 +2513,7 @@ static int priv_op_read_msr(unsigned int reg, uint64_t *val,
         return X86EMUL_OKAY;
 
     case MSR_INTEL_MISC_FEATURES_ENABLES:
-        if ( boot_cpu_data.x86_vendor != X86_VENDOR_INTEL ||
-             rdmsr_safe(MSR_INTEL_MISC_FEATURES_ENABLES, *val) )
+        if ( !boot_cpu_has(X86_FEATURE_MSR_MISC_FEATURES) )
             break;
         *val = 0;
         if ( curr->arch.cpuid_faulting )
@@ -2702,15 +2716,12 @@ static int priv_op_write_msr(unsigned int reg, uint64_t val,
         return X86EMUL_OKAY;
 
     case MSR_INTEL_PLATFORM_INFO:
-        if ( boot_cpu_data.x86_vendor != X86_VENDOR_INTEL ||
-             val || rdmsr_safe(MSR_INTEL_PLATFORM_INFO, val) )
-            break;
-        return X86EMUL_OKAY;
+        /* The MSR is read-only. */
+        break;
 
     case MSR_INTEL_MISC_FEATURES_ENABLES:
-        if ( boot_cpu_data.x86_vendor != X86_VENDOR_INTEL ||
-             (val & ~MSR_MISC_FEATURES_CPUID_FAULTING) ||
-             rdmsr_safe(MSR_INTEL_MISC_FEATURES_ENABLES, temp) )
+        if ( !boot_cpu_has(X86_FEATURE_MSR_MISC_FEATURES) ||
+             (val & ~MSR_MISC_FEATURES_CPUID_FAULTING) )
             break;
         if ( (val & MSR_MISC_FEATURES_CPUID_FAULTING) &&
              !this_cpu(cpuid_faulting_enabled) )
@@ -3565,7 +3576,7 @@ static void emulate_gate_op(struct cpu_user_regs *regs)
                 return;
             }
             stkp = (unsigned int *)(unsigned long)((unsigned int)base + esp);
-            if ( !compat_access_ok(stkp - 4 - nparm, (4 + nparm) * 4) )
+            if ( !compat_access_ok(stkp - 4 - nparm, 16 + nparm * 4) )
             {
                 do_guest_trap(TRAP_gp_fault, regs);
                 return;
@@ -3584,7 +3595,7 @@ static void emulate_gate_op(struct cpu_user_regs *regs)
                      !check_stack_limit(ar, limit, esp + nparm * 4, nparm * 4) )
                     return do_guest_trap(TRAP_gp_fault, regs);
                 ustkp = (unsigned int *)(unsigned long)((unsigned int)base + regs->_esp + nparm * 4);
-                if ( !compat_access_ok(ustkp - nparm, nparm * 4) )
+                if ( !compat_access_ok(ustkp - nparm, 0 + nparm * 4) )
                 {
                     do_guest_trap(TRAP_gp_fault, regs);
                     return;
@@ -3685,7 +3696,7 @@ void do_general_protection(struct cpu_user_regs *regs)
         if ( permit_softint(TI_GET_DPL(ti), v, regs) )
         {
             regs->eip += 2;
-            do_guest_trap(vector, regs);
+            pv_inject_event(vector, regs, X86_EVENTTYPE_SW_INTERRUPT);
             return;
         }
     }

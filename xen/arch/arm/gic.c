@@ -508,10 +508,18 @@ static void gic_update_one_lr(struct vcpu *v, int i)
             gic_raise_guest_irq(v, irq, p->priority);
         else {
             list_del_init(&p->inflight);
-            if ( test_and_clear_bit(GIC_IRQ_GUEST_MIGRATING, &p->status) )
+            /*
+             * Remove from inflight, then change physical affinity. It
+             * makes sure that when a new interrupt is received on the
+             * next pcpu, inflight is already cleared. No concurrent
+             * accesses to inflight.
+             */
+            smp_wmb();
+            if ( test_bit(GIC_IRQ_GUEST_MIGRATING, &p->status) )
             {
                 struct vcpu *v_target = vgic_get_target_vcpu(v, irq);
                 irq_set_affinity(p->desc, cpumask_of(v_target->processor));
+                clear_bit(GIC_IRQ_GUEST_MIGRATING, &p->status);
             }
         }
     }

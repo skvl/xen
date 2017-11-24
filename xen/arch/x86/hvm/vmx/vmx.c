@@ -1578,13 +1578,12 @@ static void vmx_update_guest_cr(struct vcpu *v, unsigned int cr)
         if ( !hvm_paging_enabled(v) )
         {
             /*
-             * SMEP/SMAP/PKU is disabled if CPU is in non-paging mode in
-             * hardware. However Xen always uses paging mode to emulate guest
-             * non-paging mode. To emulate this behavior, SMEP/SMAP/PKU needs
-             * to be manually disabled when guest VCPU is in non-paging mode.
+             * SMEP/SMAP is disabled if CPU is in non-paging mode in hardware.
+             * However Xen always uses paging mode to emulate guest non-paging
+             * mode. To emulate this behavior, SMEP/SMAP needs to be manually
+             * disabled when guest VCPU is in non-paging mode.
              */
-            v->arch.hvm_vcpu.hw_cr[4] &=
-                ~(X86_CR4_SMEP | X86_CR4_SMAP | X86_CR4_PKE);
+            v->arch.hvm_vcpu.hw_cr[4] &= ~(X86_CR4_SMEP | X86_CR4_SMAP);
         }
         __vmwrite(GUEST_CR4, v->arch.hvm_vcpu.hw_cr[4]);
         break;
@@ -2933,10 +2932,11 @@ static int vmx_msr_write_intercept(unsigned int msr, uint64_t msr_content)
         break;
     }
     case MSR_IA32_FEATURE_CONTROL:
-    case MSR_IA32_VMX_BASIC...MSR_IA32_VMX_TRUE_ENTRY_CTLS:
-        if ( !nvmx_msr_write_intercept(msr, msr_content) )
-            goto gp_fault;
-        break;
+    case MSR_INTEL_PLATFORM_INFO:
+    case MSR_IA32_VMX_BASIC ... MSR_IA32_VMX_VMFUNC:
+        /* None of these MSRs are writeable. */
+        goto gp_fault;
+
     case MSR_P6_PERFCTR(0)...MSR_P6_PERFCTR(7):
     case MSR_P6_EVNTSEL(0)...MSR_P6_EVNTSEL(7):
     case MSR_CORE_PERF_FIXED_CTR0...MSR_CORE_PERF_FIXED_CTR2:
@@ -2944,12 +2944,6 @@ static int vmx_msr_write_intercept(unsigned int msr, uint64_t msr_content)
     case MSR_IA32_PEBS_ENABLE:
     case MSR_IA32_DS_AREA:
          if ( vpmu_do_wrmsr(msr, msr_content, 0) )
-            goto gp_fault;
-        break;
-
-    case MSR_INTEL_PLATFORM_INFO:
-        if ( msr_content ||
-             rdmsr_safe(MSR_INTEL_PLATFORM_INFO, msr_content) )
             goto gp_fault;
         break;
 
