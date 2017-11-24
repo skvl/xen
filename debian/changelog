@@ -20,8 +20,11 @@ xen (4.8.2+xsa243-0+deb9u1~iwj) stretch-security; urgency=high
        XSA-245 (no CVE yet)
     and a number of upstream functionality fixes, which are not easily
     disentangled from the security fixes.
+  * Apply two more security fixes:
+       XSA-246 (no CVE yet)
+       XSA-247 (no CVE yet)
 
- -- Ian Jackson <ijackson@chiark.greenend.org.uk>  Fri, 24 Nov 2017 14:51:42 +0000
+ -- Ian Jackson <ijackson@chiark.greenend.org.uk>  Fri, 24 Nov 2017 15:54:14 +0000
 
 xen (4.8.1-1+deb9u3) stretch-security; urgency=high
 
