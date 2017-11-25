@@ -1,4 +1,4 @@
-xen (4.8.2+xsa243-0+deb9u1~iwj) stretch-security; urgency=high
+xen (4.8.2+xsa245-0+deb9u1) stretch-security; urgency=high
 
   * Update to upstream stable 4.8 branch, which is currently at Xen 4.8.2
     plus a number of bugfixes and security fixes.
@@ -24,7 +24,7 @@ xen (4.8.2+xsa243-0+deb9u1~iwj) stretch-security; urgency=high
        XSA-246 (no CVE yet)
        XSA-247 (no CVE yet)
 
- -- Ian Jackson <ijackson@chiark.greenend.org.uk>  Fri, 24 Nov 2017 15:54:14 +0000
+ -- Ian Jackson <ijackson@chiark.greenend.org.uk>  Sat, 25 Nov 2017 11:26:37 +0000
 
 xen (4.8.1-1+deb9u3) stretch-security; urgency=high
 
