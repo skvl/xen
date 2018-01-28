@@ -1,4 +1,4 @@
-xen (4.10.1~pre+1.728fadb586-1~exp1) UNRELEASED; urgency=medium
+xen (4.10.1~pre+1.728fadb586-1~exp1) experimental; urgency=medium
 
   [ Hans van Kranenburg ]
   * First update to upstream release 4.9.1 plus latest security patches. This
@@ -39,7 +39,7 @@ xen (4.10.1~pre+1.728fadb586-1~exp1) UNRELEASED; urgency=medium
   [ Mark Pryor ]
   * dh_shlibdeps: fix missing depend on libxentoolcore
 
- -- Hans van Kranenburg <hans@knorrie.org>  Sun, 28 Jan 2018 20:10:23 +0100
+ -- Hans van Kranenburg <hans@knorrie.org>  Sun, 28 Jan 2018 21:34:10 +0100
 
 xen (4.8.2+xsa245-0+deb9u1) stretch-security; urgency=high
 
