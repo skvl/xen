@@ -111,7 +111,7 @@ static int init_acpi_config(libxl__gc *gc,
 
     hvminfo = libxl__zalloc(gc, sizeof(*hvminfo));
 
-    hvminfo->apic_mode = libxl_defbool_val(b_info->u.hvm.apic);
+    hvminfo->apic_mode = libxl_defbool_val(*U_HVM_F(b_info,apic));
 
     if (dom->nr_vnodes) {
         unsigned int *vcpu_to_vnode, *vdistance;
@@ -151,6 +151,7 @@ static int init_acpi_config(libxl__gc *gc,
 
     config->lapic_base_address = LAPIC_BASE_ADDRESS;
     config->lapic_id = acpi_lapic_id;
+    config->acpi_revision = 5;
 
     rc = 0;
 out:
@@ -167,8 +168,7 @@ int libxl__dom_load_acpi(libxl__gc *gc,
     void *acpi_pages;
     unsigned long page_mask;
 
-    if ((b_info->type != LIBXL_DOMAIN_TYPE_HVM) ||
-        (b_info->device_model_version != LIBXL_DEVICE_MODEL_VERSION_NONE))
+    if (b_info->type != LIBXL_DOMAIN_TYPE_PVH)
         goto out;
 
     libxl_ctxt.page_size = XC_DOM_PAGE_SIZE(dom);

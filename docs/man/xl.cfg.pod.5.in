@@ -52,9 +52,9 @@ Pairs may be separated either by a newline or a semicolon.  Both
 of the following are valid:
 
   name="h0"
-  builder="hvm"
+  type="hvm"
 
-  name="h0"; builder="hvm"
+  name="h0"; type="hvm"
 
 =head1 OPTIONS
 
@@ -72,6 +72,31 @@ single host must be unique.
 =back
 
 =head2 Selecting Guest Type
+
+=over 4
+
+=item B<type="pv">
+
+Specifies that this is to be a PV domain, suitable for hosting Xen-aware
+guest operating systems. This is the default.
+
+=item B<type="pvh">
+
+Specifies that this is to be an PVH domain. That is a lightweight HVM-like
+guest without a device model and without many of the emulated devices
+available to HVM guests. Note that this mode requires a PVH aware kernel.
+
+=item B<type="hvm">
+
+Specifies that this is to be an HVM domain. That is, a fully virtualised
+computer with emulated BIOS, disk and network peripherals, etc.
+
+=back
+
+=head3 Deprecated guest type selection
+
+Note that the builder option is being deprecated in favor of the type
+option.
 
 =over 4
 
@@ -417,6 +442,102 @@ specific what meaning this has).
 
 Append B<STRING> to the kernel command line. (Note: it is guest
 specific what meaning this has).
+
+=back
+
+=head3 Non direct Kernel Boot
+
+Non direct kernel boot allows booting guests with a firmware. This can be
+used by all types of guests, although the selection of options is different
+depending on the guest type.
+
+This option provides the flexibly of letting the guest decide which kernel
+they want to boot, while preventing having to poke at the guest file
+system form the toolstack domain.
+
+=head4 PV guest options
+
+=over 4
+
+=item B<firmware="pvgrub32|pvgrub64">
+
+Boots a guest using a para-virtualized version of grub that runs inside
+of the guest. The bitness of the guest needs to be know, so that the right
+version of pvgrub can be selected.
+
+Note that xl expects to find the pvgrub32.bin and pvgrub64.bin binaries in
+F<@XENFIRMWAREDIR@>.
+
+=back
+
+=head4 HVM guest options
+
+=over 4
+
+=item B<firmware="bios">
+
+Boot the guest using the default BIOS firmware, which depends on the
+chosen device model.
+
+=item B<firmware="uefi">
+
+Boot the guest using the default UEFI firmware, currently OVMF.
+
+=item B<firmware="seabios">
+
+Boot the guest using the SeaBIOS BIOS firmware.
+
+=item B<firmware="rombios">
+
+Boot the guest using the ROMBIOS BIOS firmware.
+
+=item B<firmware="ovmf">
+
+Boot the guest using the OVMF UEFI firmware.
+
+=item B<firmware="PATH">
+
+Load the specified file as firmware for the guest.
+
+=back
+
+=head4 PVH guest options
+
+Currently there's no firmware available for PVH guests, they should be
+booted using the B<Direct Kernel Boot> method or the B<bootloader> option.
+
+=over 4
+
+=item B<pvshim=BOOLEAN>
+
+Whether to boot this guest as a PV guest within a PVH container.
+Ie, the guest will experience a PV environment,
+but
+processor hardware extensions are used to
+separate its address space
+to mitigate the Meltdown attack (CVE-2017-5754).
+
+Default is false.
+
+=item B<pvshim_path="PATH">
+
+The PV shim is a specially-built firmware-like executable
+constructed from the hypervisor source tree.
+This option specifies to use a non-default shim.
+Ignored if pvhsim is false.
+
+=item B<pvshim_cmdline="STRING">
+
+Command line for the shim.
+Default is "pv-shim console=xen,pv sched=null".
+Ignored if pvhsim is false.
+
+=item B<pvshim_extra="STRING">
+
+Extra command line arguments for the shim.
+If supplied, appended to the value for pvshim_cmdline.
+Default is empty.
+Ignored if pvhsim is false.
 
 =back
 
@@ -1899,6 +2020,116 @@ See F<docs/misc/pci-device-reservations.txt> for more information.
 
 =back
 
+=head2 PVH Guest Specific Options
+
+=over 4
+
+=item B<nestedhvm=BOOLEAN>
+
+Enable or disables guest access to hardware virtualisation features,
+e.g. it allows a guest Operating System to also function as a hypervisor.
+You may want this option if you want to run another hypervisor (including
+another copy of Xen) within a Xen guest or to support a guest Operating
+System which uses hardware virtualisation extensions (e.g. Windows XP
+compatibility mode on more modern Windows OS).
+
+This option is disabled by default.
+
+=item B<apic=BOOLEAN>
+
+Enable the local APIC emulation for the guest. The local APIC information
+will be exposed to the guest in the ACPI tables. This option is enabled by
+default.
+
+=item B<bootloader="PROGRAM">
+
+Run C<PROGRAM> to find the kernel image and ramdisk to use.  Normally
+C<PROGRAM> would be C<pygrub>, which is an emulation of
+grub/grub2/syslinux. Either B<kernel> or B<bootloader> must be specified
+for PV guests.
+
+=item B<bootloader_args=[ "ARG", "ARG", ...]>
+
+Append B<ARG>s to the arguments to the B<bootloader>
+program. Alternatively if the argument is a simple string then it will
+be split into words at whitespace B<(this second option is deprecated)>.
+
+=item B<timer_mode="MODE">
+
+Specifies the mode for Virtual Timers. The valid values are as follows:
+
+=over 4
+
+=item B<delay_for_missed_ticks>
+
+Delay for missed ticks. Do not advance a vCPU's time beyond the
+correct delivery time for interrupts that have been missed due to
+preemption. Deliver missed interrupts when the vCPU is rescheduled and
+advance the vCPU's virtual time stepwise for each one.
+
+=item B<no_delay_for_missed_ticks>
+
+No delay for missed ticks. As above, missed interrupts are delivered,
+but guest time always tracks wallclock (i.e., real) time while doing
+so.
+
+=item B<no_missed_ticks_pending>
+
+No missed interrupts are held pending. Instead, to ensure ticks are
+delivered at some non-zero rate, if we detect missed ticks then the
+internal tick alarm is not disabled if the vCPU is preempted during
+the next tick period.
+
+=item B<one_missed_tick_pending>
+
+One missed tick pending. Missed interrupts are collapsed
+together and delivered as one 'late tick'.  Guest time always tracks
+wallclock (i.e., real) time.
+
+=back
+
+=back
+
+=head3 Paging
+
+The following options control the mechanisms used to virtualise guest
+memory.  The defaults are selected to give the best results for the
+common cases so you should normally leave these options
+unspecified.
+
+=over 4
+
+=item B<hap=BOOLEAN>
+
+Turns "hardware assisted paging" (the use of the hardware nested page
+table feature) on or off.  This feature is called EPT (Extended Page
+Tables) by Intel and NPT (Nested Page Tables) or RVI (Rapid
+Virtualisation Indexing) by AMD. If turned
+off, Xen will run the guest in "shadow page table" mode where the
+guest's page table updates and/or TLB flushes etc. will be emulated.
+Use of HAP is the default when available.
+
+=item B<oos=BOOLEAN>
+
+Turns "out of sync pagetables" on or off.  When running in shadow page
+table mode, the guest's page table updates may be deferred as
+specified in the Intel/AMD architecture manuals.  However, this may
+expose unexpected bugs in the guest, or find bugs in Xen, so it is
+possible to disable this feature.  Use of out of sync page tables,
+when Xen thinks it appropriate, is the default.
+
+=item B<shadow_memory=MBYTES>
+
+Number of megabytes to set aside for shadowing guest pagetable pages
+(effectively acting as a cache of translated pages) or to use for HAP
+state. By default this is 1MB per guest vCPU plus 8KB per MB of guest
+RAM. You should not normally need to adjust this value. However, if you
+are not using hardware assisted paging (i.e. you are using shadow
+mode) and your guest workload consists of a very large number of
+similar processes then increasing this value may improve performance.
+
+=back
+
 =head2 Device-Model Options
 
 The following options control the selection of the device-model.  This
@@ -1925,11 +2156,6 @@ This device-model is the default for Linux dom0.
 
 Use the device-model based upon the historical Xen fork of Qemu.
 This device-model is still the default for NetBSD dom0.
-
-=item B<none>
-
-Don't use any device model. This requires a kernel capable of booting
-without emulated devices.
 
 =back
 

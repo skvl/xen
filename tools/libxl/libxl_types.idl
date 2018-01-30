@@ -75,6 +75,7 @@ libxl_domain_type = Enumeration("domain_type", [
     (-1, "INVALID"),
     (1, "HVM"),
     (2, "PV"),
+    (3, "PVH"),
     ], init_val = "LIBXL_DOMAIN_TYPE_INVALID")
 
 libxl_rdm_reserve_strategy = Enumeration("rdm_reserve_strategy", [
@@ -98,7 +99,6 @@ libxl_device_model_version = Enumeration("device_model_version", [
     (0, "UNKNOWN"),
     (1, "QEMU_XEN_TRADITIONAL"), # Historical qemu-xen device model (qemu-dm)
     (2, "QEMU_XEN"),             # Upstream based qemu-xen device model
-    (3, "NONE"),                 # No device model
     ])
 
 libxl_console_type = Enumeration("console_type", [
@@ -172,7 +172,8 @@ libxl_timer_mode = Enumeration("timer_mode", [
     (1, "no_delay_for_missed_ticks"),
     (2, "no_missed_ticks_pending"),
     (3, "one_missed_tick_pending"),
-    ], init_val = "LIBXL_TIMER_MODE_DEFAULT")
+    ], init_val = "LIBXL_TIMER_MODE_DEFAULT",
+       check_default_fn = "libxl__timer_mode_is_default")
 
 libxl_bios_type = Enumeration("bios_type", [
     (0, "unknown"),
@@ -560,6 +561,16 @@ libxl_domain_build_info = Struct("domain_build_info",[
                                       # Use host's E820 for PCI passthrough.
                                       ("e820_host", libxl_defbool),
                                       ])),
+                 ("pvh", Struct(None, [("bootloader",       string),
+                                       ("bootloader_args",  libxl_string_list),
+                                       ("timer_mode",       libxl_timer_mode),
+                                       ("nested_hvm",       libxl_defbool),
+                                       ("apic",             libxl_defbool),
+                                       ("pvshim",           libxl_defbool),
+                                       ("pvshim_path",      string),
+                                       ("pvshim_cmdline",   string),
+                                       ("pvshim_extra", string), # eg "loglvl=all guest_loglvl=all apic_verbosity=debug e820-verbose"
+                                       ])),
                  ("invalid", None),
                  ], keyvar_init_val = "LIBXL_DOMAIN_TYPE_INVALID")),
 
