@@ -1,3 +1,9 @@
+xen (4.8.3+comet2+shim4.10.0+comet3-1+deb9u4~~) UNRELEASED; urgency=medium
+
+  * Update to new upstream version 4.8.3+comet2+shim4.10.0+comet3.
+
+ -- 
+
 xen (4.8.2+xsa245-0+deb9u1) stretch-security; urgency=high
 
   * Update to upstream stable 4.8 branch, which is currently at Xen 4.8.2
