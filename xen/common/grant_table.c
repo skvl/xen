@@ -680,10 +680,10 @@ static int _set_status(unsigned gt_version,
         return _set_status_v2(domid, readonly, mapflag, shah, act, status);
 }
 
-static int grant_map_exists(const struct domain *ld,
-                            struct grant_table *rgt,
-                            unsigned long mfn,
-                            unsigned int *ref_count)
+static struct active_grant_entry *grant_map_exists(const struct domain *ld,
+                                                   struct grant_table *rgt,
+                                                   unsigned long mfn,
+                                                   unsigned int *ref_count)
 {
     unsigned int ref, max_iter;
     
@@ -699,28 +699,20 @@ static int grant_map_exists(const struct domain *ld,
                    nr_grant_entries(rgt));
     for ( ref = *ref_count; ref < max_iter; ref++ )
     {
-        struct active_grant_entry *act;
-        bool_t exists;
+        struct active_grant_entry *act = active_entry_acquire(rgt, ref);
 
-        act = active_entry_acquire(rgt, ref);
-
-        exists = act->pin
-            && act->domid == ld->domain_id
-            && act->frame == mfn;
-
+        if ( act->pin && act->domid == ld->domain_id && act->frame == mfn )
+            return act;
         active_entry_release(act);
-
-        if ( exists )
-            return 0;
     }
 
     if ( ref < nr_grant_entries(rgt) )
     {
         *ref_count = ref;
-        return 1;
+        return NULL;
     }
 
-    return -EINVAL;
+    return ERR_PTR(-EINVAL);
 }
 
 #define MAPKIND_READ 1
@@ -1614,7 +1606,7 @@ gnttab_setup_table(
     XEN_GUEST_HANDLE_PARAM(gnttab_setup_table_t) uop, unsigned int count)
 {
     struct gnttab_setup_table op;
-    struct domain *d;
+    struct domain *d = NULL;
     struct grant_table *gt;
     int            i;
     xen_pfn_t  gmfn;
@@ -1634,7 +1626,7 @@ gnttab_setup_table(
                 " per domain.\n",
                 max_grant_frames);
         op.status = GNTST_general_error;
-        goto out1;
+        goto out;
     }
 
     if ( !guest_handle_okay(op.frame_list, op.nr_frames) )
@@ -1645,13 +1637,13 @@ gnttab_setup_table(
     {
         gdprintk(XENLOG_INFO, "Bad domid %d.\n", op.dom);
         op.status = GNTST_bad_domain;
-        goto out2;
+        goto out;
     }
 
     if ( xsm_grant_setup(XSM_TARGET, current->domain, d) )
     {
         op.status = GNTST_permission_denied;
-        goto out2;
+        goto out;
     }
 
     gt = d->grant_table;
@@ -1669,7 +1661,7 @@ gnttab_setup_table(
                  "Expand grant table to %u failed. Current: %u Max: %u\n",
                  op.nr_frames, nr_grant_frames(gt), max_grant_frames);
         op.status = GNTST_general_error;
-        goto out3;
+        goto unlock;
     }
  
     op.status = GNTST_okay;
@@ -1682,11 +1674,12 @@ gnttab_setup_table(
             op.status = GNTST_bad_virt_addr;
     }
 
- out3:
+ unlock:
     grant_write_unlock(gt);
- out2:
-    rcu_unlock_domain(d);
- out1:
+ out:
+    if ( d )
+        rcu_unlock_domain(d);
+
     if ( unlikely(__copy_field_to_guest(uop, &op, status)) )
         return -EFAULT;
 
@@ -3006,29 +2999,28 @@ gnttab_swap_grant_ref(XEN_GUEST_HANDLE_PARAM(gnttab_swap_grant_ref_t) uop,
     return 0;
 }
 
-static int __gnttab_cache_flush(gnttab_cache_flush_t *cflush,
+static int __gnttab_cache_flush(const gnttab_cache_flush_t *cflush,
                                 unsigned int *ref_count)
 {
     struct domain *d, *owner;
     struct page_info *page;
     unsigned long mfn;
+    struct active_grant_entry *act = NULL;
     void *v;
     int ret;
 
     if ( (cflush->offset >= PAGE_SIZE) ||
          (cflush->length > PAGE_SIZE) ||
-         (cflush->offset + cflush->length > PAGE_SIZE) )
+         (cflush->offset + cflush->length > PAGE_SIZE) ||
+         (cflush->op & ~(GNTTAB_CACHE_INVAL | GNTTAB_CACHE_CLEAN)) )
         return -EINVAL;
 
     if ( cflush->length == 0 || cflush->op == 0 )
-        return 0;
+        return !*ref_count ? 0 : -EILSEQ;
 
     /* currently unimplemented */
     if ( cflush->op & GNTTAB_CACHE_SOURCE_GREF )
         return -EOPNOTSUPP;
-
-    if ( cflush->op & ~(GNTTAB_CACHE_INVAL|GNTTAB_CACHE_CLEAN) )
-        return -EINVAL;
 
     d = rcu_lock_current_domain();
     mfn = cflush->a.dev_bus_addr >> PAGE_SHIFT;
@@ -3051,13 +3043,13 @@ static int __gnttab_cache_flush(gnttab_cache_flush_t *cflush,
     {
         grant_read_lock(owner->grant_table);
 
-        ret = grant_map_exists(d, owner->grant_table, mfn, ref_count);
-        if ( ret != 0 )
+        act = grant_map_exists(d, owner->grant_table, mfn, ref_count);
+        if ( IS_ERR_OR_NULL(act) )
         {
             grant_read_unlock(owner->grant_table);
             rcu_unlock_domain(d);
             put_page(page);
-            return ret;
+            return act ? PTR_ERR(act) : 1;
         }
     }
 
@@ -3074,7 +3066,11 @@ static int __gnttab_cache_flush(gnttab_cache_flush_t *cflush,
         ret = 0;
 
     if ( d != owner )
+    {
+        active_entry_release(act);
         grant_read_unlock(owner->grant_table);
+    }
+
     unmap_domain_page(v);
     put_page(page);
 
@@ -3109,6 +3105,9 @@ gnttab_cache_flush(XEN_GUEST_HANDLE_PARAM(gnttab_cache_flush_t) uop,
         *ref_count = 0;
         guest_handle_add_offset(uop, 1);
     }
+
+    *ref_count = 0;
+
     return 0;
 }
 

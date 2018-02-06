@@ -1428,6 +1428,7 @@ static int hvm_save_cpu_msrs(struct domain *d, hvm_domain_context_t *h)
 
     for_each_vcpu ( d, v )
     {
+        struct hvm_save_descriptor *d = _p(&h->data[h->cur]);
         struct hvm_msr *ctxt;
         unsigned int i;
 
@@ -1446,8 +1447,13 @@ static int hvm_save_cpu_msrs(struct domain *d, hvm_domain_context_t *h)
             ctxt->msr[i]._rsvd = 0;
 
         if ( ctxt->count )
+        {
+            /* Rewrite length to indicate how much space we actually used. */
+            d->length = HVM_CPU_MSR_SIZE(ctxt->count);
             h->cur += HVM_CPU_MSR_SIZE(ctxt->count);
+        }
         else
+            /* or rewind and remove the descriptor from the stream. */
             h->cur -= sizeof(struct hvm_save_descriptor);
     }
 
@@ -3479,6 +3485,11 @@ void hvm_hypervisor_cpuid_leaf(uint32_t sub_idx,
         /* Indicate presence of vcpu id and set it in ebx */
         *eax |= XEN_HVM_CPUID_VCPU_ID_PRESENT;
         *ebx = current->vcpu_id;
+
+        /* Indicate presence of domain id and set it on ecx */
+        *eax |= XEN_HVM_CPUID_DOMID_PRESENT;
+        *ecx = current->domain->domain_id;
+
     }
 }
 
@@ -5078,6 +5089,7 @@ static int hvmop_set_evtchn_upcall_vector(
     printk(XENLOG_G_INFO "%pv: upcall vector %02x\n", v, op.vector);
 
     v->arch.hvm_vcpu.evtchn_upcall_vector = op.vector;
+    hvm_assert_evtchn_irq(v);
     return 0;
 }
 
@@ -5537,12 +5549,18 @@ static int do_altp2m_op(
 
         if ( a.u.enable_notify.pad || a.domain != DOMID_SELF ||
              a.u.enable_notify.vcpu_id != curr->vcpu_id )
+        {
             rc = -EINVAL;
+            break;
+        }
 
         if ( !gfn_eq(vcpu_altp2m(curr).veinfo_gfn, INVALID_GFN) ||
              mfn_eq(get_gfn_query_unlocked(curr->domain,
                     a.u.enable_notify.gfn, &p2mt), INVALID_MFN) )
-            return -EINVAL;
+        {
+            rc = -EINVAL;
+            break;
+        }
 
         vcpu_altp2m(curr).veinfo_gfn = _gfn(a.u.enable_notify.gfn);
         altp2m_vcpu_update_vmfunc_ve(curr);

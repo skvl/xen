@@ -1297,11 +1297,23 @@ get_page_from_l4e(
                                          _PAGE_USER|_PAGE_RW);      \
     } while ( 0 )
 
+/*
+ * When shadowing an L4 behind the guests back (e.g. for per-pcpu
+ * purposes), we cannot efficiently sync access bit updates from hardware
+ * (on the shadow tables) back into the guest view.
+ *
+ * We therefore unconditionally set _PAGE_ACCESSED even in the guests
+ * view.  This will appear to the guest as a CPU which proactively pulls
+ * all valid L4e's into its TLB, which is compatible with the x86 ABI.
+ *
+ * At the time of writing, all PV guests set the access bit anyway, so
+ * this is no actual change in their behaviour.
+ */
 #define adjust_guest_l4e(pl4e, d)                               \
     do {                                                        \
         if ( likely(l4e_get_flags((pl4e)) & _PAGE_PRESENT) &&   \
              likely(!is_pv_32bit_domain(d)) )                   \
-            l4e_add_flags((pl4e), _PAGE_USER);                  \
+            l4e_add_flags((pl4e), _PAGE_USER | _PAGE_ACCESSED); \
     } while ( 0 )
 
 #define unadjust_guest_l3e(pl3e, d)                                         \
@@ -2560,9 +2572,6 @@ static int _put_final_page_type(struct page_info *page, unsigned long type,
     {
         ASSERT((page->u.inuse.type_info &
                 (PGT_count_mask|PGT_validated|PGT_partial)) == 1);
-        if ( !(shadow_mode_enabled(page_get_owner(page)) &&
-               (page->count_info & PGC_page_table)) )
-            page_set_tlbflush_timestamp(page);
         wmb();
         page->u.inuse.type_info |= PGT_validated;
     }
@@ -3852,6 +3861,7 @@ long do_mmu_update(
     struct vcpu *curr = current, *v = curr;
     struct domain *d = v->domain, *pt_owner = d, *pg_owner;
     struct domain_mmap_cache mapcache;
+    bool sync_guest = false;
     uint32_t xsm_needed = 0;
     uint32_t xsm_checked = 0;
     int rc = put_old_guest_table(curr);
@@ -4000,6 +4010,8 @@ long do_mmu_update(
                 case PGT_l4_page_table:
                     rc = mod_l4_entry(va, l4e_from_intpte(req.val), mfn,
                                       cmd == MMU_PT_UPDATE_PRESERVE_AD, v);
+                    if ( !rc )
+                        sync_guest = this_cpu(root_pgt);
                     break;
                 case PGT_writable_page:
                     perfc_incr(writable_mmu_updates);
@@ -4101,6 +4113,20 @@ long do_mmu_update(
     put_pg_owner(pg_owner);
 
     domain_mmap_cache_destroy(&mapcache);
+
+    if ( sync_guest )
+    {
+        /*
+         * Force other vCPU-s of the affected guest to pick up L4 entry
+         * changes (if any). Issue a flush IPI with empty operation mask to
+         * facilitate this (including ourselves waiting for the IPI to
+         * actually have arrived). Utilize the fact that FLUSH_VA_VALID is
+         * meaningless without FLUSH_CACHE, but will allow to pass the no-op
+         * check in flush_area_mask().
+         */
+        flush_area_mask(pt_owner->domain_dirty_cpumask,
+                        ZERO_BLOCK_PTR, FLUSH_VA_VALID);
+    }
 
     perfc_add(num_page_updates, i);
 
@@ -5030,6 +5056,9 @@ int xenmem_add_to_physmap_one(
     int rc = 0;
     p2m_type_t p2mt;
 
+    if ( !paging_mode_translate(d) )
+        return -EACCES;
+
     switch ( space )
     {
         case XENMAPSPACE_shared_info:
@@ -5086,7 +5115,7 @@ int xenmem_add_to_physmap_one(
             break;
     }
 
-    if ( !paging_mode_translate(d) || (mfn == 0) )
+    if ( mfn == 0 )
     {
         if ( page )
             put_page(page);
@@ -5115,8 +5144,12 @@ int xenmem_add_to_physmap_one(
     /* Unmap from old location, if any. */
     old_gpfn = get_gpfn_from_mfn(mfn);
     ASSERT( old_gpfn != SHARED_M2P_ENTRY );
-    if ( space == XENMAPSPACE_gmfn || space == XENMAPSPACE_gmfn_range )
-        ASSERT( old_gpfn == gfn );
+    if ( (space == XENMAPSPACE_gmfn || space == XENMAPSPACE_gmfn_range) &&
+         old_gpfn != gfn )
+    {
+        rc = -EXDEV;
+        goto put_both;
+    }
     if ( old_gpfn != INVALID_M2P_ENTRY )
         rc = guest_physmap_remove_page(d, _gfn(old_gpfn), _mfn(mfn), PAGE_ORDER_4K);
 

@@ -1367,11 +1367,46 @@ static void parse_config_data(const char *config_source,
     }
 
     libxl_defbool_set(&c_info->run_hotplug_scripts, run_hotplug_scripts);
-    c_info->type = LIBXL_DOMAIN_TYPE_PV;
-    if (!xlu_cfg_get_string (config, "builder", &buf, 0) &&
-        !strncmp(buf, "hvm", strlen(buf)))
-        c_info->type = LIBXL_DOMAIN_TYPE_HVM;
+    
+    if (!xlu_cfg_get_string(config, "type", &buf, 0)) {
+        if (!strncmp(buf, "hvm", strlen(buf)))
+            c_info->type = LIBXL_DOMAIN_TYPE_HVM;
+        else if (!strncmp(buf, "pv", strlen(buf)))
+            c_info->type = LIBXL_DOMAIN_TYPE_PV;
+        else if (!strncmp(buf, "pvh", strlen(buf)))
+            c_info->type = LIBXL_DOMAIN_TYPE_PVH;
+        else {
+            fprintf(stderr, "Invalid domain type %s.\n", buf);
+            exit(1);
+        }
+    }
 
+    /* Deprecated since Xen 4.10. */
+    if (!xlu_cfg_get_string(config, "builder", &buf, 0)) {
+        libxl_domain_type builder_type;
+
+        if (!strncmp(buf, "hvm", strlen(buf)))
+            builder_type = LIBXL_DOMAIN_TYPE_HVM;
+        else if (!strncmp(buf, "generic", strlen(buf)))
+            builder_type = LIBXL_DOMAIN_TYPE_PV;
+        else {
+            fprintf(stderr, "Invalid domain type %s.\n", buf);
+            exit(1);
+        }
+
+        if (c_info->type != LIBXL_DOMAIN_TYPE_INVALID &&
+            c_info->type != builder_type) {
+            fprintf(stderr,
+            "Contradicting \"builder\" and \"type\" options specified.\n");
+            exit(1);
+        }
+        c_info->type = builder_type;
+    }
+
+    if (c_info->type == LIBXL_DOMAIN_TYPE_INVALID)
+        c_info->type = LIBXL_DOMAIN_TYPE_PV;
+
+    
     xlu_cfg_get_defbool(config, "pvh", &c_info->pvh, 0);
     xlu_cfg_get_defbool(config, "hap", &c_info->hap, 0);
 
@@ -1397,6 +1432,19 @@ static void parse_config_data(const char *config_source,
     libxl_domain_build_info_init_type(b_info, c_info->type);
     if (blkdev_start)
         b_info->blkdev_start = strdup(blkdev_start);
+
+    if (b_info->type == LIBXL_DOMAIN_TYPE_PVH) {
+        xlu_cfg_get_defbool(config, "pvshim", &b_info->u.pvh.pvshim, 0);
+        if (!xlu_cfg_get_string(config, "pvshim_path", &buf, 0))
+            xlu_cfg_replace_string(config, "pvshim_path",
+                                   &b_info->u.pvh.pvshim_path, 0);
+        if (!xlu_cfg_get_string(config, "pvshim_cmdline", &buf, 0))
+            xlu_cfg_replace_string(config, "pvshim_cmdline",
+                                   &b_info->u.pvh.pvshim_cmdline, 0);
+        if (!xlu_cfg_get_string(config, "pvshim_extra", &buf, 0))
+            xlu_cfg_replace_string(config, "pvshim_extra",
+                                   &b_info->u.pvh.pvshim_extra, 0);
+    }
 
     /* the following is the actual config parsing with overriding
      * values in the structures */
@@ -1552,6 +1600,69 @@ static void parse_config_data(const char *config_source,
     xlu_cfg_get_defbool(config, "driver_domain", &c_info->driver_domain, 0);
     xlu_cfg_get_defbool(config, "acpi", &b_info->acpi, 0);
 
+    xlu_cfg_replace_string (config, "bootloader",
+                            &b_info->u.pv.bootloader, 0);
+    switch (xlu_cfg_get_list_as_string_list(config, "bootloader_args",
+                                            &b_info->u.pv.bootloader_args, 1))
+    {
+        
+    case 0: break; /* Success */
+    case ESRCH: break; /* Option not present */
+    case EINVAL:
+        if (!xlu_cfg_get_string(config, "bootloader_args", &buf, 0)) {
+            
+            fprintf(stderr, "WARNING: Specifying \"bootloader_args\""
+                    " as a string is deprecated. "
+                    "Please use a list of arguments.\n");
+            split_string_into_string_list(buf, " \t\n",
+                                          &b_info->u.pv.bootloader_args);
+        }
+        break;
+    default:
+        fprintf(stderr,"xl: Unable to parse bootloader_args.\n");
+        exit(-ERROR_FAIL);
+    }
+
+    if (!xlu_cfg_get_long(config, "timer_mode", &l, 1)) {
+        const char *s = libxl_timer_mode_to_string(l);
+
+        if (b_info->type == LIBXL_DOMAIN_TYPE_PV) {
+            fprintf(stderr,
+                    "ERROR: \"timer_mode\" option is not supported for PV guests.\n");
+            exit(-ERROR_FAIL);
+        }
+
+        fprintf(stderr, "WARNING: specifying \"timer_mode\" as an integer is deprecated. "
+                "Please use the named parameter variant. %s%s%s\n",
+                s ? "e.g. timer_mode=\"" : "",
+                s ? s : "",
+                s ? "\"" : "");
+        
+        if (l < LIBXL_TIMER_MODE_DELAY_FOR_MISSED_TICKS ||
+            l > LIBXL_TIMER_MODE_ONE_MISSED_TICK_PENDING) {
+            fprintf(stderr, "ERROR: invalid value %ld for \"timer_mode\"\n", l);
+            exit (1);
+        }
+        b_info->u.hvm.timer_mode = l;
+    } else if (!xlu_cfg_get_string(config, "timer_mode", &buf, 0)) {
+        if (b_info->type == LIBXL_DOMAIN_TYPE_PV) {
+            fprintf(stderr,
+            "ERROR: \"timer_mode\" option is not supported for PV guests.\n");
+            exit(-ERROR_FAIL);
+        }
+
+        if (libxl_timer_mode_from_string(buf, &b_info->u.hvm.timer_mode)) {
+            fprintf(stderr, "ERROR: invalid value \"%s\" for \"timer_mode\"\n",
+                    buf);
+            exit (1);
+        }
+    }
+
+    if (U_HVM_OK(b_info)) {
+        xlu_cfg_get_defbool(config, "nestedhvm", U_HVM_F(b_info,nested_hvm), 0);
+        xlu_cfg_get_defbool(config, "apic", U_HVM_F(b_info,apic), 0);
+    }
+    
     switch(b_info->type) {
     case LIBXL_DOMAIN_TYPE_HVM:
         kernel_basename = libxl_basename(b_info->kernel);
@@ -1579,7 +1690,6 @@ static void parse_config_data(const char *config_source,
                     "bios_path_override given without specific bios name\n");
 
         xlu_cfg_get_defbool(config, "pae", &b_info->u.hvm.pae, 0);
-        xlu_cfg_get_defbool(config, "apic", &b_info->u.hvm.apic, 0);
         xlu_cfg_get_defbool(config, "acpi_s3", &b_info->u.hvm.acpi_s3, 0);
         xlu_cfg_get_defbool(config, "acpi_s4", &b_info->u.hvm.acpi_s4, 0);
         xlu_cfg_get_defbool(config, "nx", &b_info->u.hvm.nx, 0);
@@ -1648,29 +1758,6 @@ static void parse_config_data(const char *config_source,
                 exit (1);
             }
         }
-        if (!xlu_cfg_get_long(config, "timer_mode", &l, 1)) {
-            const char *s = libxl_timer_mode_to_string(l);
-            fprintf(stderr, "WARNING: specifying \"timer_mode\" as an integer is deprecated. "
-                    "Please use the named parameter variant. %s%s%s\n",
-                    s ? "e.g. timer_mode=\"" : "",
-                    s ? s : "",
-                    s ? "\"" : "");
-
-            if (l < LIBXL_TIMER_MODE_DELAY_FOR_MISSED_TICKS ||
-                l > LIBXL_TIMER_MODE_ONE_MISSED_TICK_PENDING) {
-                fprintf(stderr, "ERROR: invalid value %ld for \"timer_mode\"\n", l);
-                exit (1);
-            }
-            b_info->u.hvm.timer_mode = l;
-        } else if (!xlu_cfg_get_string(config, "timer_mode", &buf, 0)) {
-            if (libxl_timer_mode_from_string(buf, &b_info->u.hvm.timer_mode)) {
-                fprintf(stderr, "ERROR: invalid value \"%s\" for \"timer_mode\"\n",
-                        buf);
-                exit (1);
-            }
-        }
-
-        xlu_cfg_get_defbool(config, "nestedhvm", &b_info->u.hvm.nested_hvm, 0);
 
         xlu_cfg_get_defbool(config, "altp2mhvm", &b_info->u.hvm.altp2m, 0);
 
@@ -1696,32 +1783,58 @@ static void parse_config_data(const char *config_source,
 
         if (!xlu_cfg_get_long (config, "rdm_mem_boundary", &l, 0))
             b_info->u.hvm.rdm_mem_boundary_memkb = l * 1024;
-        break;
-    case LIBXL_DOMAIN_TYPE_PV:
-    {
-        xlu_cfg_replace_string (config, "bootloader", &b_info->u.pv.bootloader, 0);
-        switch (xlu_cfg_get_list_as_string_list(config, "bootloader_args",
-                                      &b_info->u.pv.bootloader_args, 1))
-        {
-
-        case 0: break; /* Success */
-        case ESRCH: break; /* Option not present */
-        case EINVAL:
-            if (!xlu_cfg_get_string(config, "bootloader_args", &buf, 0)) {
-
-                fprintf(stderr, "WARNING: Specifying \"bootloader_args\""
-                        " as a string is deprecated. "
-                        "Please use a list of arguments.\n");
-                split_string_into_string_list(buf, " \t\n",
-                                              &b_info->u.pv.bootloader_args);
-            }
-            break;
-        default:
-            fprintf(stderr,"xl: Unable to parse bootloader_args.\n");
-            exit(-ERROR_FAIL);
+        
+        /*
+         * The firmware config option can be used as a simplification
+         * instead of setting bios or firmware_override. It has the
+         * following meanings for HVM guests:
+         *
+         *  - ovmf | seabios | rombios: maps directly into the "bios"
+         *    option.
+         *  - uefi | bios: maps into one of the above options and is set
+         *    in the bios field.
+         *  - Anything else is treated as a path that is copied into
+         *    firmware.
+         */
+        if (!xlu_cfg_get_string (config, "firmware", &buf, 0) &&
+            libxl_bios_type_from_string(buf, &b_info->u.hvm.bios)) {
+            if (!strncmp(buf, "uefi", strlen(buf)))
+                b_info->u.hvm.bios = LIBXL_BIOS_TYPE_OVMF;
+            else if (strncmp(buf, "bios", strlen(buf)))
+                /* Assume it's a path to a custom firmware. */
+                xlu_cfg_replace_string(config, "firmware",
+                                       &b_info->u.hvm.firmware, 0);
+            /*
+             * BIOS is the default, and will be chosen by libxl based on
+             * the device model specified.
+             */
         }
 
-        if (!b_info->u.pv.bootloader && !b_info->kernel) {
+        break;
+    case LIBXL_DOMAIN_TYPE_PVH:
+    case LIBXL_DOMAIN_TYPE_PV:
+    {
+        /*
+         * The firmware config option can be used as a simplification
+         * instead of directly setting kernel. It will be translated to
+         * XENFIRMWAREDIR/<string>.bin
+         */
+        if (!xlu_cfg_get_string (config, "firmware", &buf, 0)) {
+            if (b_info->kernel) {
+                fprintf(stderr,
+                        "ERROR: both kernel and firmware specified\n");
+                exit(1);
+            }
+            if (strncmp(buf, "pvgrub32", strlen(buf)) &&
+                strncmp(buf, "pvgrub64", strlen(buf))) {
+                fprintf(stderr,
+            "ERROR: only pvgrub{32|64} supported as firmware options\n");
+                exit(1);
+            }
+
+            xasprintf(&b_info->kernel, XENFIRMWAREDIR "/%s.bin", buf);
+        }
+        if (!*U_PV_F(b_info,bootloader) && !b_info->kernel) {
             fprintf(stderr, "Neither kernel nor bootloader specified\n");
             exit(1);
         }
@@ -2308,8 +2421,6 @@ skip_usbdev:
         } else if (!strcmp(buf, "qemu-xen")) {
             b_info->device_model_version
                 = LIBXL_DEVICE_MODEL_VERSION_QEMU_XEN;
-        } else if (!strcmp(buf, "none")) {
-            b_info->device_model_version = LIBXL_DEVICE_MODEL_VERSION_NONE;
         } else {
             fprintf(stderr,
                     "Unknown device_model_version \"%s\" specified\n", buf);

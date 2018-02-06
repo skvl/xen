@@ -1011,14 +1011,11 @@ int libxl_domain_unpause(libxl_ctx *ctx, uint32_t domid)
     }
 
     if (type == LIBXL_DOMAIN_TYPE_HVM) {
-        if (libxl__device_model_version_running(gc, domid) !=
-            LIBXL_DEVICE_MODEL_VERSION_NONE) {
-            rc = libxl__domain_resume_device_model(gc, domid);
-            if (rc < 0) {
-                LOG(ERROR, "failed to unpause device model for domain %u:%d",
-                    domid, rc);
-                goto out;
-            }
+        rc = libxl__domain_resume_device_model(gc, domid);
+        if (rc < 0) {
+            LOG(ERROR, "failed to unpause device model for domain %u:%d",
+                domid, rc);
+            goto out;
         }
     }
     ret = xc_domain_unpause(ctx->xch, domid);
@@ -1584,6 +1581,7 @@ void libxl__destroy_domid(libxl__egc *egc, libxl__destroy_domid_state *dis)
             break;
         }
         /* fall through */
+    case LIBXL_DOMAIN_TYPE_PVH:
     case LIBXL_DOMAIN_TYPE_PV:
         dm_present = libxl__dm_active(gc, domid);
         break;
@@ -1859,6 +1857,7 @@ static int libxl__primary_console_find(libxl_ctx *ctx, uint32_t domid_vm,
             *cons_num = 0;
             *type = LIBXL_CONSOLE_TYPE_SERIAL;
             break;
+        case LIBXL_DOMAIN_TYPE_PVH:
         case LIBXL_DOMAIN_TYPE_PV:
             *domid = domid_vm;
             *cons_num = 0;
@@ -2063,9 +2062,7 @@ int libxl__device_disk_setdefault(libxl__gc *gc, libxl_device_disk *disk,
 
     /* Force Qdisk backend for CDROM devices of guests with a device model. */
     if (disk->is_cdrom != 0 &&
-        libxl__domain_type(gc, domid) == LIBXL_DOMAIN_TYPE_HVM &&
-        libxl__device_model_version_running(gc, domid) !=
-        LIBXL_DEVICE_MODEL_VERSION_NONE) {
+        libxl__domain_type(gc, domid) == LIBXL_DOMAIN_TYPE_HVM) {
         if (!(disk->backend == LIBXL_DISK_BACKEND_QDISK ||
               disk->backend == LIBXL_DISK_BACKEND_UNKNOWN)) {
             LOG(ERROR, "Backend for CD devices on HVM guests must be Qdisk");
@@ -2670,12 +2667,6 @@ int libxl_cdrom_insert(libxl_ctx *ctx, uint32_t domid, libxl_device_disk *disk,
     dm_ver = libxl__device_model_version_running(gc, domid);
     if (dm_ver == -1) {
         LOG(ERROR, "cannot determine device model version");
-        rc = ERROR_FAIL;
-        goto out;
-    }
-
-    if (dm_ver == LIBXL_DEVICE_MODEL_VERSION_NONE) {
-        LOG(ERROR, "Guests without a device model cannot use cd-insert");
         rc = ERROR_FAIL;
         goto out;
     }
@@ -4456,6 +4447,7 @@ int libxl_domain_need_memory(libxl_ctx *ctx,
 
     *need_memkb = b_info->target_memkb;
     switch (b_info->type) {
+    case LIBXL_DOMAIN_TYPE_PVH:
     case LIBXL_DOMAIN_TYPE_HVM:
         *need_memkb += b_info->shadow_memkb + LIBXL_HVM_EXTRA_MEMORY;
         if (libxl_defbool_val(b_info->device_model_stubdomain))
@@ -5156,8 +5148,6 @@ int libxl_set_vcpuonline(libxl_ctx *ctx, uint32_t domid, libxl_bitmap *cpumap)
     case LIBXL_DOMAIN_TYPE_HVM:
         switch (libxl__device_model_version_running(gc, domid)) {
         case LIBXL_DEVICE_MODEL_VERSION_QEMU_XEN_TRADITIONAL:
-        case LIBXL_DEVICE_MODEL_VERSION_NONE:
-            rc = libxl__set_vcpuonline_xenstore(gc, domid, cpumap, &info);
             break;
         case LIBXL_DEVICE_MODEL_VERSION_QEMU_XEN:
             rc = libxl__set_vcpuonline_qmp(gc, domid, cpumap, &info);
@@ -5166,12 +5156,16 @@ int libxl_set_vcpuonline(libxl_ctx *ctx, uint32_t domid, libxl_bitmap *cpumap)
             rc = ERROR_INVAL;
         }
         break;
+    case LIBXL_DOMAIN_TYPE_PVH:
     case LIBXL_DOMAIN_TYPE_PV:
-        rc = libxl__set_vcpuonline_xenstore(gc, domid, cpumap, &info);
         break;
     default:
         rc = ERROR_INVAL;
     }
+
+    if (!rc)
+        rc = libxl__set_vcpuonline_xenstore(gc, domid, cpumap, &info);
+
 out:
     libxl_dominfo_dispose(&info);
     GC_FREE;
@@ -6801,7 +6795,6 @@ int libxl_retrieve_domain_configuration(libxl_ctx *ctx, uint32_t domid,
                                                    max_vcpus, map);
                 break;
             case LIBXL_DEVICE_MODEL_VERSION_QEMU_XEN_TRADITIONAL:
-            case LIBXL_DEVICE_MODEL_VERSION_NONE:
                 rc = libxl__update_avail_vcpus_xenstore(gc, domid,
                                                         max_vcpus, map);
                 break;
@@ -6809,6 +6802,7 @@ int libxl_retrieve_domain_configuration(libxl_ctx *ctx, uint32_t domid,
                 abort();
             }
             break;
+        case LIBXL_DOMAIN_TYPE_PVH:
         case LIBXL_DOMAIN_TYPE_PV:
             rc = libxl__update_avail_vcpus_xenstore(gc, domid,
                                                     max_vcpus, map);

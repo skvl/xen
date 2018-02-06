@@ -38,9 +38,31 @@ libxl_domain_type libxl__domain_type(libxl__gc *gc, uint32_t domid)
         LOG(ERROR, "unable to get domain type for domid=%"PRIu32, domid);
         return LIBXL_DOMAIN_TYPE_INVALID;
     }
-    if (info.flags & XEN_DOMINF_hvm_guest)
-        return LIBXL_DOMAIN_TYPE_HVM;
-    else
+    if (info.flags & XEN_DOMINF_hvm_guest) {
+        const char *type_path = GCSPRINTF("%s/type",
+                                          libxl__xs_libxl_path(gc, domid));
+        const char *type;
+        libxl_domain_type t;
+        int rc;
+
+        rc = libxl__xs_read_mandatory(gc, XBT_NULL, type_path, &type);
+        if (rc) {
+            LOG(WARN,
+            "unable to get domain type for domid=%"PRIu32", assuming HVM",
+                domid);
+            return LIBXL_DOMAIN_TYPE_HVM;
+        }
+
+        rc = libxl_domain_type_from_string(type, &t);
+        if (rc) {
+            LOG(WARN,
+            "unable to get domain type for domid=%"PRIu32", assuming HVM",
+                domid);
+            return LIBXL_DOMAIN_TYPE_HVM;
+        }
+
+        return t;
+    } else
         return LIBXL_DOMAIN_TYPE_PV;
 }
 
@@ -190,7 +212,7 @@ static int numa_place_domain(libxl__gc *gc, uint32_t domid,
 
 static unsigned long timer_mode(const libxl_domain_build_info *info)
 {
-    const libxl_timer_mode mode = info->u.hvm.timer_mode;
+    const libxl_timer_mode mode = *U_HVM_F(info,timer_mode);
     assert(mode >= LIBXL_TIMER_MODE_DELAY_FOR_MISSED_TICKS &&
            mode <= LIBXL_TIMER_MODE_ONE_MISSED_TICK_PENDING);
     return ((unsigned long)mode);
@@ -280,19 +302,34 @@ err:
 static void hvm_set_conf_params(xc_interface *handle, uint32_t domid,
                                 libxl_domain_build_info *const info)
 {
-    xc_hvm_param_set(handle, domid, HVM_PARAM_PAE_ENABLED,
-                    libxl_defbool_val(info->u.hvm.pae));
+    switch(info->type) {
+    case LIBXL_DOMAIN_TYPE_PVH:
+        xc_hvm_param_set(handle, domid, HVM_PARAM_PAE_ENABLED, true);
+        xc_hvm_param_set(handle, domid, HVM_PARAM_TIMER_MODE,
+                         timer_mode(info));
+        xc_hvm_param_set(handle, domid, HVM_PARAM_NESTEDHVM,
+                         libxl_defbool_val(*U_HVM_F(info,nested_hvm)));
+        break;
+    case LIBXL_DOMAIN_TYPE_HVM:
+        xc_hvm_param_set(handle, domid, HVM_PARAM_PAE_ENABLED,
+                         libxl_defbool_val(info->u.hvm.pae));
 #if defined(__i386__) || defined(__x86_64__)
-    xc_hvm_param_set(handle, domid, HVM_PARAM_HPET_ENABLED,
-                    libxl_defbool_val(info->u.hvm.hpet));
+        xc_hvm_param_set(handle, domid, HVM_PARAM_HPET_ENABLED,
+                         libxl_defbool_val(info->u.hvm.hpet));
 #endif
-    xc_hvm_param_set(handle, domid, HVM_PARAM_TIMER_MODE, timer_mode(info));
-    xc_hvm_param_set(handle, domid, HVM_PARAM_VPT_ALIGN,
-                    libxl_defbool_val(info->u.hvm.vpt_align));
-    xc_hvm_param_set(handle, domid, HVM_PARAM_NESTEDHVM,
-                    libxl_defbool_val(info->u.hvm.nested_hvm));
-    xc_hvm_param_set(handle, domid, HVM_PARAM_ALTP2M,
-                    libxl_defbool_val(info->u.hvm.altp2m));
+        xc_hvm_param_set(handle, domid, HVM_PARAM_TIMER_MODE,
+                         timer_mode(info));
+        xc_hvm_param_set(handle, domid, HVM_PARAM_VPT_ALIGN,
+                         libxl_defbool_val(info->u.hvm.vpt_align));
+        xc_hvm_param_set(handle, domid, HVM_PARAM_NESTEDHVM,
+                         libxl_defbool_val(*U_HVM_F(info,nested_hvm)));
+        /* XXX */
+        xc_hvm_param_set(handle, domid, HVM_PARAM_ALTP2M,
+                         libxl_defbool_val(info->u.hvm.altp2m));
+        break;
+    default:
+        abort();
+    }
 }
 
 int libxl__build_pre(libxl__gc *gc, uint32_t domid,
@@ -432,17 +469,19 @@ int libxl__build_pre(libxl__gc *gc, uint32_t domid,
     state->store_port = xc_evtchn_alloc_unbound(ctx->xch, domid, state->store_domid);
     state->console_port = xc_evtchn_alloc_unbound(ctx->xch, domid, state->console_domid);
 
-    if (info->type == LIBXL_DOMAIN_TYPE_HVM) {
+    if (info->type != LIBXL_DOMAIN_TYPE_PV)
         hvm_set_conf_params(ctx->xch, domid, info);
+
 #if defined(__i386__) || defined(__x86_64__)
+    if (info->type == LIBXL_DOMAIN_TYPE_HVM) {
         rc = hvm_set_viridian_features(gc, domid, info);
         if (rc)
             return rc;
-#endif
     }
+#endif
 
     rc = libxl__arch_domain_create(gc, d_config, domid);
-
+    
     return rc;
 }
 
@@ -713,12 +752,12 @@ int libxl__build_pv(libxl__gc *gc, uint32_t domid,
 
     if ( state->pv_ramdisk.path && strlen(state->pv_ramdisk.path) ) {
         if (state->pv_ramdisk.mapped) {
-            if ( (ret = xc_dom_ramdisk_mem(dom, state->pv_ramdisk.data, state->pv_ramdisk.size)) != 0 ) {
+            if ( (ret = xc_dom_module_mem(dom, state->pv_ramdisk.data, state->pv_ramdisk.size, NULL)) != 0 ) {
                 LOGE(ERROR, "xc_dom_ramdisk_mem failed");
                 goto out;
             }
         } else {
-            if ( (ret = xc_dom_ramdisk_file(dom, state->pv_ramdisk.path)) != 0 ) {
+            if ( (ret = xc_dom_module_file(dom, state->pv_ramdisk.path, NULL)) != 0 ) {
                 LOGE(ERROR, "xc_dom_ramdisk_file failed");
                 goto out;
             }
@@ -793,7 +832,7 @@ static int hvm_build_set_params(xc_interface *handle, uint32_t domid,
     uint64_t str_mfn, cons_mfn;
     int i;
 
-    if (info->device_model_version != LIBXL_DEVICE_MODEL_VERSION_NONE) {
+    if (info->type == LIBXL_DOMAIN_TYPE_HVM) {
         va_map = xc_map_foreign_range(handle, domid,
                                       XC_PAGE_SIZE, PROT_READ | PROT_WRITE,
                                       HVM_INFO_PFN);
@@ -801,7 +840,7 @@ static int hvm_build_set_params(xc_interface *handle, uint32_t domid,
             return ERROR_FAIL;
 
         va_hvm = (struct hvm_info_table *)(va_map + HVM_INFO_OFFSET);
-        va_hvm->apic_mode = libxl_defbool_val(info->u.hvm.apic);
+        va_hvm->apic_mode = libxl_defbool_val(*U_HVM_F(info,apic));
         va_hvm->nr_vcpus = info->max_vcpus;
         memset(va_hvm->vcpu_online, 0, sizeof(va_hvm->vcpu_online));
         memcpy(va_hvm->vcpu_online, info->avail_vcpus.map, info->avail_vcpus.size);
@@ -849,7 +888,7 @@ static int hvm_build_set_xs_values(libxl__gc *gc,
 
     /* Only one module can be passed. PVHv2 guests do not support this. */
     if (dom->acpi_modules[0].guest_addr_out && 
-        info->device_model_version !=LIBXL_DEVICE_MODEL_VERSION_NONE) {
+        info->type == LIBXL_DOMAIN_TYPE_HVM) {
         path = GCSPRINTF("/local/domain/%d/"HVM_XS_ACPI_PT_ADDRESS, domid);
 
         ret = libxl__xs_printf(gc, XBT_NULL, path, "0x%"PRIx64,
@@ -910,6 +949,7 @@ out:
 
 static int libxl__domain_firmware(libxl__gc *gc,
                                   libxl_domain_build_info *info,
+                                  libxl__domain_build_state *state,
                                   struct xc_dom_image *dom)
 {
     libxl_ctx *ctx = libxl__gc_owner(gc);
@@ -919,39 +959,94 @@ static int libxl__domain_firmware(libxl__gc *gc,
     void *data;
     const char *bios_filename = NULL;
 
-    if (info->u.hvm.firmware)
-        firmware = info->u.hvm.firmware;
-    else {
-        switch (info->device_model_version)
-        {
-        case LIBXL_DEVICE_MODEL_VERSION_QEMU_XEN_TRADITIONAL:
-            firmware = "hvmloader";
-            break;
-        case LIBXL_DEVICE_MODEL_VERSION_QEMU_XEN:
-            firmware = "hvmloader";
-            break;
-        case LIBXL_DEVICE_MODEL_VERSION_NONE:
-            if (info->kernel == NULL) {
-                LOG(ERROR, "no device model requested without a kernel");
+    if (info->type == LIBXL_DOMAIN_TYPE_HVM) {
+        if (info->u.hvm.firmware) {
+            firmware = info->u.hvm.firmware;
+        } else {
+            switch (info->device_model_version)
+            {
+            case LIBXL_DEVICE_MODEL_VERSION_QEMU_XEN:
+            case LIBXL_DEVICE_MODEL_VERSION_QEMU_XEN_TRADITIONAL:
+                firmware = "hvmloader";
+                break;
+            default:
+                LOG(ERROR, "invalid device model version %d",
+                    info->device_model_version);
                 rc = ERROR_FAIL;
                 goto out;
             }
-            break;
-        default:
-            LOG(ERROR, "invalid device model version %d",
-                info->device_model_version);
-            rc = ERROR_FAIL;
-            goto out;
         }
     }
 
-    if (info->kernel != NULL &&
-        info->device_model_version == LIBXL_DEVICE_MODEL_VERSION_NONE) {
-        /* Try to load a kernel instead of the firmware. */
-        rc = xc_dom_kernel_file(dom, info->kernel);
-        if (rc == 0 && info->ramdisk != NULL)
-            rc = xc_dom_ramdisk_file(dom, info->ramdisk);
+    if (state->pv_kernel.path != NULL &&
+        info->type == LIBXL_DOMAIN_TYPE_PVH) {
+
+        if (state->shim_path) {
+            rc = xc_dom_kernel_file(dom, state->shim_path);
+            if (rc) {
+                LOGE(ERROR, "xc_dom_kernel_file failed");
+                goto out;
+            }
+
+            /* We've loaded the shim, so load the kernel as a secondary module */
+            if (state->pv_kernel.mapped) {
+                LOG(WARN, "xc_dom_module_mem, cmdline %s",
+                    state->pv_cmdline);
+                rc = xc_dom_module_mem(dom, state->pv_kernel.data,
+                                       state->pv_kernel.size, state->pv_cmdline);
+                if (rc) {
+                    LOGE(ERROR, "xc_dom_kernel_mem failed");
+                    goto out;
+                }
+            } else {
+                LOG(WARN, "xc_dom_module_file, path %s cmdline %s",
+                    state->pv_kernel.path, state->pv_cmdline);
+                rc = xc_dom_module_file(dom, state->pv_kernel.path, state->pv_cmdline);
+                if (rc) {
+                    LOGE(ERROR, "xc_dom_kernel_file failed");
+                    goto out;
+                }
+            }
+        } else {
+            /* No shim, so load the kernel directly */
+            if (state->pv_kernel.mapped) {
+                rc = xc_dom_kernel_mem(dom, state->pv_kernel.data,
+                                       state->pv_kernel.size);
+                if (rc) {
+                    LOGE(ERROR, "xc_dom_kernel_mem failed");
+                    goto out;
+                }
+            } else {
+                rc = xc_dom_kernel_file(dom, state->pv_kernel.path);
+                if (rc) {
+                    LOGE(ERROR, "xc_dom_kernel_file failed");
+                    goto out;
+                }
+            }
+        }
+        
+        if (state->pv_ramdisk.path && strlen(state->pv_ramdisk.path)) {
+            if (state->pv_ramdisk.mapped) {
+                rc = xc_dom_module_mem(dom, state->pv_ramdisk.data,
+                                       state->pv_ramdisk.size, NULL);
+                if (rc) {
+                    LOGE(ERROR, "xc_dom_ramdisk_mem failed");
+                    goto out;
+                }
+            } else {
+                rc = xc_dom_module_file(dom, state->pv_ramdisk.path, NULL);
+                if (rc) {
+                    LOGE(ERROR, "xc_dom_ramdisk_file failed");
+                    goto out;
+                }
+            }
+        }
     } else {
+        /*
+         * Only HVM guests should get here, PVH should always have a set
+         * kernel at this point.
+         */
+        assert(info->type == LIBXL_DOMAIN_TYPE_HVM);
         rc = xc_dom_kernel_file(dom, libxl__abs_path(gc, firmware,
                                                  libxl__xenfirmwaredir_path()));
     }
@@ -961,7 +1056,8 @@ static int libxl__domain_firmware(libxl__gc *gc,
         goto out;
     }
 
-    if (info->device_model_version == LIBXL_DEVICE_MODEL_VERSION_QEMU_XEN) {
+    if (info->type == LIBXL_DOMAIN_TYPE_HVM &&
+        info->device_model_version == LIBXL_DEVICE_MODEL_VERSION_QEMU_XEN) {
         if (info->u.hvm.system_firmware) {
             bios_filename = info->u.hvm.system_firmware;
         } else {
@@ -985,7 +1081,8 @@ static int libxl__domain_firmware(libxl__gc *gc,
         if (rc) goto out;
     }
 
-    if (info->u.hvm.smbios_firmware) {
+    if (info->type == LIBXL_DOMAIN_TYPE_HVM &&
+        info->u.hvm.smbios_firmware) {
         data = NULL;
         e = libxl_read_file_contents(ctx, info->u.hvm.smbios_firmware,
                                      &data, &datalen);
@@ -1003,14 +1100,8 @@ static int libxl__domain_firmware(libxl__gc *gc,
         }
     }
 
-    if (info->u.hvm.acpi_firmware) {
-
-        if (info->device_model_version == LIBXL_DEVICE_MODEL_VERSION_NONE) {
-            LOGE(ERROR, "PVH guests do not allow loading ACPI modules");
-            rc = ERROR_FAIL;
-            goto out;
-        }
-
+    if (info->type == LIBXL_DOMAIN_TYPE_HVM &&
+        info->u.hvm.acpi_firmware) {
         data = NULL;
         e = libxl_read_file_contents(ctx, info->u.hvm.acpi_firmware,
                                      &data, &datalen);
@@ -1043,13 +1134,18 @@ int libxl__build_hvm(libxl__gc *gc, uint32_t domid,
     uint64_t mmio_start, lowmem_end, highmem_end, mem_size;
     libxl_domain_build_info *const info = &d_config->b_info;
     struct xc_dom_image *dom = NULL;
-    bool device_model =
-        info->device_model_version != LIBXL_DEVICE_MODEL_VERSION_NONE ?
-        true : false;
+    bool device_model = info->type == LIBXL_DOMAIN_TYPE_HVM ? true : false;
 
     xc_dom_loginit(ctx->xch);
 
-    dom = xc_dom_allocate(ctx->xch, info->cmdline, NULL);
+    /* 
+     * If PVH and we have a shim override, use the shim cmdline.
+     * If PVH and no shim override, use the pv cmdline.
+     * If not PVH, use info->cmdline.
+     */
+    dom = xc_dom_allocate(ctx->xch, info->type == LIBXL_DOMAIN_TYPE_PVH ?
+                          (state->shim_path ? state->shim_cmdline : state->pv_cmdline) :
+                          info->cmdline, NULL);
     if (!dom) {
         LOGE(ERROR, "xc_dom_allocate failed");
         rc = ERROR_NOMEM;
@@ -1074,7 +1170,7 @@ int libxl__build_hvm(libxl__gc *gc, uint32_t domid,
             dom->mmio_size = info->u.hvm.mmio_hole_memkb << 10;
     }
 
-    rc = libxl__domain_firmware(gc, info, dom);
+    rc = libxl__domain_firmware(gc, info, state, dom);
     if (rc != 0) {
         LOG(ERROR, "initializing domain firmware failed");
         goto out;
@@ -1086,7 +1182,7 @@ int libxl__build_hvm(libxl__gc *gc, uint32_t domid,
         dom->mmio_size = HVM_BELOW_4G_MMIO_LENGTH;
     else if (dom->mmio_size == 0 && !device_model) {
 #if defined(__i386__) || defined(__x86_64__)
-        if (libxl_defbool_val(info->u.hvm.apic)) {
+        if (libxl_defbool_val(*U_HVM_F(info,apic))) {
             /* Make sure LAPIC_BASE_ADDRESS is below special pages */
             assert(((((X86_HVM_END_SPECIAL_REGION - X86_HVM_NR_SPECIAL_PAGES)
                       << XC_PAGE_SHIFT) - LAPIC_BASE_ADDRESS)) >= XC_PAGE_SIZE);
