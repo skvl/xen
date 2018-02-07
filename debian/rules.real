@@ -270,6 +270,7 @@ install-utils-common: $(STAMPS_DIR)/install-utils-common
 		$(SOURCE_DIR)/docs/man5/* \
 		$(SOURCE_DIR)/docs/man8/*
 	dh_installdocs $(SOURCE_DIR)/docs/txt/misc
+	dh_installdocs $(SOURCE_DIR)/README.comet $(SOURCE_DIR)/README.pti
 	dh_link
 	dh_ucf
 	+$(MAKE_SELF) install-base
