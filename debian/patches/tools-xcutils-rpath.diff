@@ -1,0 +1,20 @@
+From: Bastian Blank <waldi@debian.org>
+Date: Sat, 5 Jul 2014 11:47:05 +0200
+X-Dgit-Generated: 4.8.3+comet2+shim4.10.0+comet3-1+deb9u4 024a595db51f118175bcfce125ccafe61a9554b1
+Subject: tools-xcutils-rpath.diff
+
+Patch-Name: tools-xcutils-rpath.diff
+
+---
+
+--- xen-4.8.3+comet2+shim4.10.0+comet3.orig/tools/xcutils/Makefile
++++ xen-4.8.3+comet2+shim4.10.0+comet3/tools/xcutils/Makefile
+@@ -19,6 +19,8 @@ CFLAGS += -Werror
+ CFLAGS_readnotes.o  := $(CFLAGS_libxenevtchn) $(CFLAGS_libxenctrl) $(CFLAGS_libxenguest) -I$(XEN_ROOT)/tools/libxc $(CFLAGS_libxencall)
+ CFLAGS_lsevtchn.o   := $(CFLAGS_libxenevtchn) $(CFLAGS_libxenctrl)
+ 
++APPEND_LDFLAGS += $(call LDFLAGS_RPATH,../lib)
++
+ .PHONY: all
+ all: build
+ 

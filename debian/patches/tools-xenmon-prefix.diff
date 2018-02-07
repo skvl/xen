@@ -1,0 +1,34 @@
+From: Bastian Blank <waldi@debian.org>
+Date: Sat, 5 Jul 2014 11:47:06 +0200
+X-Dgit-Generated: 4.8.3+comet2+shim4.10.0+comet3-1+deb9u4 ad40681b88b71f2c24d90e3676c5ecdeb36ed0d9
+Subject: tools-xenmon-prefix.diff
+
+Patch-Name: tools-xenmon-prefix.diff
+
+---
+
+--- xen-4.8.3+comet2+shim4.10.0+comet3.orig/tools/xenmon/Makefile
++++ xen-4.8.3+comet2+shim4.10.0+comet3/tools/xenmon/Makefile
+@@ -18,6 +18,7 @@ CFLAGS  += $(CFLAGS_libxenevtchn)
+ CFLAGS  += $(CFLAGS_libxenctrl)
+ LDLIBS  += $(LDLIBS_libxenctrl)
+ LDLIBS  += $(LDLIBS_libxenevtchn)
++LDFLAGS += $(call LDFLAGS_RPATH,../lib)
+ 
+ SCRIPTS = xenmon.py
+ 
+@@ -29,10 +30,10 @@ build: xentrace_setmask xenbaked
+ 
+ .PHONY: install
+ install: build
+-	$(INSTALL_DIR) $(DESTDIR)$(sbindir)
+-	$(INSTALL_PROG) xenbaked $(DESTDIR)$(sbindir)/xenbaked
+-	$(INSTALL_PROG) xentrace_setmask  $(DESTDIR)$(sbindir)/xentrace_setmask
+-	$(INSTALL_PROG) xenmon.py  $(DESTDIR)$(sbindir)/xenmon.py
++	$(INSTALL_DIR) $(DESTDIR)$(LIBEXEC_BIN)
++	$(INSTALL_PROG) xenbaked $(DESTDIR)$(LIBEXEC_BIN)/xenbaked
++	$(INSTALL_PROG) xentrace_setmask  $(DESTDIR)$(LIBEXEC_BIN)/xentrace_setmask
++	$(INSTALL_PROG) xenmon.py  $(DESTDIR)$(LIBEXEC_BIN)/xenmon.py
+ 
+ .PHONY: clean
+ clean:

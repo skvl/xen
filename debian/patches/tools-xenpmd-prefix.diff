@@ -1,0 +1,22 @@
+From: Bastian Blank <waldi@debian.org>
+Date: Sat, 13 Dec 2014 19:37:02 +0100
+X-Dgit-Generated: 4.8.3+comet2+shim4.10.0+comet3-1+deb9u4 c651a2d318e60730b47fc8430f73aa69fb357f14
+Subject: tools-xenpmd-prefix.diff
+
+Patch-Name: tools-xenpmd-prefix.diff
+
+---
+
+--- xen-4.8.3+comet2+shim4.10.0+comet3.orig/tools/xenpmd/Makefile
++++ xen-4.8.3+comet2+shim4.10.0+comet3/tools/xenpmd/Makefile
+@@ -11,8 +11,8 @@ all: xenpmd
+ 
+ .PHONY: install
+ install: all
+-	$(INSTALL_DIR) $(DESTDIR)$(sbindir)
+-	$(INSTALL_PROG) xenpmd $(DESTDIR)$(sbindir)
++	$(INSTALL_DIR) $(DESTDIR)$(LIBEXEC_BIN)
++	$(INSTALL_PROG) xenpmd $(DESTDIR)$(LIBEXEC_BIN)
+ 
+ .PHONY: clean
+ clean:
