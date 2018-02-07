@@ -1,0 +1,96 @@
+			    PV-in-PVH shim
+                            ==============
+
+Summary
+-------
+
+This README describes one of three mitigation strategies for Meltdown.
+
+The basic principle is to run PV guests (which can read all of host
+memory due to the hardware bugs) as PVH guests (which cannot, at least
+not due to Meltdown).  The PV environment is still provided to the
+guest by an embedded copy of Xen, the "shim".  This version of the
+shim is codenamed "Comet".
+
+Unlike Vixen, Comet requires modifications to the toolstack and host
+hypervisor.
+
+Note that both of these shim-based approaches prevent attacks on the
+host, but leave the guest vulnerable to Meltdown attacks by its own
+unprivileged processes; this is true even if the guest OS has KPTI or
+similar Meltdown mitigation.
+
+Versions for Xen 4.8 and 4.10 are available.
+
+What you will need
+------------------
+
+ * You will need the xen.git with the following tags:
+  - For 4.10: 4.10.0-shim-comet-3
+  - For 4.8:  4.8.3pre-shim-comet-2   and  4.10.0-shim-comet-3
+
+Build instructions: 4.10
+------------------------
+
+1. Build a 4.10+ system
+    git clone git://xenbits.xenproject.org/xen.git xen.git
+    cd xen.git
+    git checkout 4.10.0-shim-comet-3
+
+Do a build and install as normal.  The shim will be built as part of the
+normal build process, and placed with other 'system' binaries where the
+toostack knows how to find it.
+
+Build instructions: 4.8
+-----------------------
+
+The code for shim itself is not backported to 4.8.  4.8 users should
+use a shim built from 4.10-based source code; this can be simply
+dropped into a Xen 4.8 installation.
+
+1. Build a 4.8+ system with support for running PVH, and for pvshim:
+
+    git clone git://xenbits.xenproject.org/xen.git xen.git
+    cd xen.git
+    git checkout 4.8.3pre-shim-comet-2
+
+  Do a build and install as normal.
+
+2. Build a 4.10+ system to be the shim:
+
+    git clone git://xenbits.xenproject.org/xen.git xen.git
+    cd xen.git
+    git checkout 4.10.0-shim-comet-3
+    ./configure
+    make -C tools/firmware/xen-dir
+
+  And then install the shim executable where
+  the 4.8 pv shim mode tools expect to find it
+
+    cp tools/firmware/xen-dir/xen-shim /usr/lib/xen/boot/xen-shim
+    cp tools/firmware/xen-dir/xen-shim /usr/local/lib/xen/boot/xen-shim
+
+  This step is only needed to boot guests in "PVH with PV shim"
+  mode; it is not needed when booting PVH-supporting guests as PVH.
+
+
+Usage instructions
+------------------
+
+* Converting a PV config to a PVH shim config
+
+- Remove any reference to 'builder' (e.g., `builder="generic"`)
+- Add the following two lines:
+  type="pvh"
+  pvshim=1
+
+* Converting a PV config to a PVH config
+
+If you have a kernel capable of booting PVH, then PVH mode is both
+faster and more secure than PV or PVH-shim mode.
+
+- Remove any reference to 'builder' (e.g., `builder="generic"`)
+- Add the following line:
+  type="pvh"
+
+* There is no need to reboot the host.
