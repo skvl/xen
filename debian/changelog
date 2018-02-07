@@ -1,8 +1,23 @@
-xen (4.8.3+comet2+shim4.10.0+comet3-1+deb9u4~~) UNRELEASED; urgency=medium
+xen (4.8.3+comet2+shim4.10.0+comet3-1+deb9u4) stretch-security; urgency=high
 
   * Update to new upstream version 4.8.3+comet2+shim4.10.0+comet3.
+    Specifically, this is two upstreams:
+      - Upstream Xen 4.8.3 "git merge"d with upstream
+        Xen Security Team (XSA-254) 4.8.3pre-shim-comet-2, in `.'
+      - Upstream Xen 4.10.0-shim-comet-3 in `shim'.
+    The upstream tarballs are from `git archive' with the
+    gitattributes for mangling .gitarchive-info disabled.
+    Therefore, we include these security fixes:
+       XSA-254 CVE-2017-5754 but SP3 "Meltdown" only
+       XSA-253 CVE-2018-5244
+       XSA-251 CVE-2017-17565
+       XSA-250 CVE-2017-17564
+       XSA-249 CVE-2017-17563
+       XSA-248 CVE-2017-17566
+  * Ship README.pti and README.comet from the upstream XSA-254
+    advisory in /usr/share/doc/xen-utils/common/.
 
- -- 
+ -- Ian Jackson <ijackson@chiark.greenend.org.uk>  Wed, 07 Feb 2018 17:50:45 +0000
 
 xen (4.8.2+xsa245-0+deb9u1) stretch-security; urgency=high
 
