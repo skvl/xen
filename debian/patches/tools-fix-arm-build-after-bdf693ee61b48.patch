@@ -1,0 +1,64 @@
+From: Wei Liu <wei.liu2@citrix.com>
+Date: Wed, 17 Jan 2018 09:50:27 +0000
+X-Dgit-Generated: 4.8.3+comet2+shim4.10.0+comet3-1+deb9u4.1 0acf3f5fe4dc9585aa0a31b54d58d3e8c59a5546
+Subject: tools: fix arm build after bdf693ee61b48
+
+The ramdisk fields were removed. We should use modules[0] instead.
+
+Signed-off-by: Wei Liu <wei.liu2@citrix.com>
+Acked-by: Ian Jackson <ian.jackson@eu.citrix.com>
+(cherry picked from commit db3ae8becc2b4f9f544eafa06a7c858c7cc9f029)
+
+---
+
+--- xen-4.8.3+comet2+shim4.10.0+comet3.orig/tools/libxc/xc_dom_arm.c
++++ xen-4.8.3+comet2+shim4.10.0+comet3/tools/libxc/xc_dom_arm.c
+@@ -386,8 +386,8 @@ static int meminit(struct xc_dom_image *
+     const uint64_t kernsize = kernend - kernbase;
+     const uint64_t dtb_size = dom->devicetree_blob ?
+         ROUNDUP(dom->devicetree_size, XC_PAGE_SHIFT) : 0;
+-    const uint64_t ramdisk_size = dom->ramdisk_blob ?
+-        ROUNDUP(dom->ramdisk_size, XC_PAGE_SHIFT) : 0;
++    const uint64_t ramdisk_size = dom->modules[0].blob ?
++        ROUNDUP(dom->modules[0].size, XC_PAGE_SHIFT) : 0;
+     const uint64_t modsize = dtb_size + ramdisk_size;
+     const uint64_t ram128mb = bankbase[0] + (128<<20);
+ 
+@@ -481,12 +481,12 @@ static int meminit(struct xc_dom_image *
+      */
+     if ( ramdisk_size )
+     {
+-        dom->ramdisk_seg.vstart = modbase;
+-        dom->ramdisk_seg.vend = modbase + ramdisk_size;
++        dom->modules[0].seg.vstart = modbase;
++        dom->modules[0].seg.vend = modbase + ramdisk_size;
+ 
+         DOMPRINTF("%s: ramdisk: 0x%" PRIx64 " -> 0x%" PRIx64 "",
+                   __FUNCTION__,
+-                  dom->ramdisk_seg.vstart, dom->ramdisk_seg.vend);
++                  dom->modules[0].seg.vstart, dom->modules[0].seg.vend);
+ 
+         modbase += ramdisk_size;
+     }
+--- xen-4.8.3+comet2+shim4.10.0+comet3.orig/tools/libxl/libxl_arm.c
++++ xen-4.8.3+comet2+shim4.10.0+comet3/tools/libxl/libxl_arm.c
+@@ -864,7 +864,7 @@ next_resize:
+         FDT( fdt_begin_node(fdt, "") );
+ 
+         FDT( make_root_properties(gc, vers, fdt) );
+-        FDT( make_chosen_node(gc, fdt, !!dom->ramdisk_blob, state, info) );
++        FDT( make_chosen_node(gc, fdt, !!dom->modules[0].blob, state, info) );
+         FDT( make_cpus_node(gc, fdt, info->max_vcpus, ainfo) );
+         FDT( make_psci_node(gc, fdt) );
+ 
+@@ -991,8 +991,8 @@ int libxl__arch_domain_finalise_hw_descr
+     int i;
+     const uint64_t bankbase[] = GUEST_RAM_BANK_BASES;
+ 
+-    const struct xc_dom_seg *ramdisk = dom->ramdisk_blob ?
+-        &dom->ramdisk_seg : NULL;
++    const struct xc_dom_seg *ramdisk = dom->modules[0].blob ?
++        &dom->modules[0].seg : NULL;
+ 
+     if (ramdisk) {
+         int chosen, res;

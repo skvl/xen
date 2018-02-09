@@ -27,3 +27,4 @@ tools-xenstore-compatibility.diff
 ubuntu-tools-libs-abiname.diff
 toolstestsx86_emulator-pass--no-pie--fno.patch
 copy-readme.pti-and-readme.comet-from-th.patch
+tools-fix-arm-build-after-bdf693ee61b48.patch
