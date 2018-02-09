@@ -1,3 +1,9 @@
+xen (4.8.3+comet2+shim4.10.0+comet3-1+deb9u4.1~~) stretch-security; urgency=high
+
+  * Fix builds on other than amd64.
+
+ -- Ian Jackson <ijackson@chiark.greenend.org.uk>  Fri, 09 Feb 2018 14:42:57 +0000
+
 xen (4.8.3+comet2+shim4.10.0+comet3-1+deb9u4) stretch-security; urgency=high
 
   * Update to new upstream version 4.8.3+comet2+shim4.10.0+comet3.
