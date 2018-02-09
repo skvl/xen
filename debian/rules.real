@@ -109,7 +109,10 @@ $(STAMPS_DIR)/build-hypervisor_$(ARCH)_$(FLAVOUR): $(STAMPS_DIR)/setup-hyperviso
 		XEN_COMPILE_ARCH=$(XEN_ARCH) \
 		XEN_TARGET_ARCH=$(XEN_ARCH) \
 		LANG=C.UTF-8
-	+$(MAKE_CLEAN) -C $(DIR)/shim/tools/firmware/xen-dir
+	+$(MAKE_CLEAN) -C $(DIR)/shim/tools/firmware/xen-dir \
+		XEN_COMPILE_ARCH=$(XEN_ARCH) \
+		XEN_TARGET_ARCH=$(XEN_ARCH) \
+		LANG=C.UTF-8
 	touch $@
 
 $(STAMPS_DIR)/build-utils_$(ARCH) \
