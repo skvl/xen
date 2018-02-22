@@ -93,6 +93,5 @@ if __name__ == '__main__':
     p.add_option('-t', '--tag', dest='tag')
     p.add_option('-V', '--override-version', dest='override_version')
     options, args = p.parse_args()
-    if len(args) != 1:
-        raise RuntimeError
+    assert(len(args) == 1)
     Main(options, *args)()
