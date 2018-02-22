@@ -73,6 +73,7 @@ $(STAMPS_DIR)/setup-utils_$(ARCH):
 			--disable-ocamltools \
 			--disable-qemu-traditional --disable-rombios \
 			--with-system-qemu=/usr/bin/qemu-system-i386 \
+			--enable-ovmf --with-system-ovmf=/usr/share/ovmf/OVMF.fd \
 			--with-system-seabios=/usr/share/seabios/bios-256k.bin
 	@$(stamp)
 

@@ -40,6 +40,9 @@ xen (4.10.1~pre+2.3921128fcb-1~) UNRELEASED; urgency=medium
   [ Mark Pryor ]
   * Fix shared library build dependencies for the new xentoolcore library.
 
+  [ John Keates ]
+  * Enable OVMF (Closes: #858962)
+
  -- Hans van Kranenburg <hans@knorrie.org>  Sun, 25 Feb 2018 01:21:20 +0100
 
 xen (4.8.2+xsa245-0+deb9u1) stretch-security; urgency=high
