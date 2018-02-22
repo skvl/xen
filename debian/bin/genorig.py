@@ -57,9 +57,14 @@ class Main(object):
         except OSError:
             pass
 
+        ga_exists = os.path.exists('.gitattributes')
         try:
+            if ga_exists:
+                os.rename('.gitattributes','.gitattributes.genorig-saved')
+            with open('.gitattributes', 'w') as ga:
+                print('* -export-subst\n', file=ga)
             with open(out, 'wb') as f:
-                _cmd = ('git', 'archive', '--prefix', '%s/' % self.orig_dir, treeish)
+                _cmd = ('git', 'archive', '--worktree-attributes', '--prefix', '%s/' % self.orig_dir, treeish)
                 p1 = subprocess.Popen(_cmd, stdout=subprocess.PIPE, cwd=self.repo)
                 subprocess.check_call(('xz', ), stdin=p1.stdout, stdout=f)
                 if p1.wait():
@@ -67,6 +72,13 @@ class Main(object):
         except:
             os.unlink(out)
             raise
+
+        try:
+            if ga_exists:
+                os.rename('.gitattributes.genorig-saved','.gitattributes')
+            else:
+                os.unlink('.gitattributes')
+        except Exception: pass
 
         try:
             os.symlink(os.path.join('orig', self.orig_tar), os.path.join('..', self.orig_tar))
