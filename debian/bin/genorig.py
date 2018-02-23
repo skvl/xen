@@ -81,7 +81,7 @@ class Main(object):
         except Exception: pass
 
         try:
-            os.symlink(os.path.join('orig', self.orig_tar), os.path.join('..', self.orig_tar))
+            os.link(os.path.join('..', 'orig', self.orig_tar), os.path.join('..', self.orig_tar))
         except OSError:
             pass
 
