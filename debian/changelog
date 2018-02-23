@@ -1,18 +1,7 @@
-xen (4.10.1~pre+2.3921128fcb-1) unstable; urgency=medium
-
-  * Update to latest 4.10-stable Xen, since there's no 4.10.1 release yet.
-    The added upstream changes are almost all related to Spectre/Meltdown
-    work-in-progress.
-  * Target unstable now, since the qemu packages don't need a change but just
-    a rebuild to pick up the new libxen dependency.
-
- -- Hans van Kranenburg <hans@knorrie.org>  Wed, 21 Feb 2018 18:49:26 +0100
-
-xen (4.10.1~pre+1.728fadb586-1~exp1) experimental; urgency=medium
+xen (4.10.1~pre+2.3921128fcb-1~) UNRELEASED; urgency=medium
 
   [ Hans van Kranenburg ]
-  * First update to upstream release 4.9.1 plus latest security patches. This
-    is upstream commit 32e364c4e7 which contains:
+  * Update to 4.10.1-pre, which also contains:
     - Additional fix for: Unlimited recursion in linear pagetable de-typing
       XSA-240 CVE-2017-15595 (listed as xsa240-4.8/0004)
     - Fix x86 PV guests may gain access to internally used pages
@@ -23,6 +12,15 @@ xen (4.10.1~pre+1.728fadb586-1~exp1) experimental; urgency=medium
       XSA-250 CVE-2017-17564
     - Fix improper bug check in x86 log-dirty handling
       XSA-251 CVE-2017-17565
+    - Fix x86: memory leak with MSR emulation
+      XSA-253 CVE-2018-5244
+    - Multiple parts of fixes for...
+      Information leak via side effects of speculative execution
+      XSA-254 CVE-2017-5753 CVE-2017-5715 CVE-2017-5754
+      - XPTI stage 1 a.k.a. 'Meltdown band-aid', XPTI-S1 or XPTI-lite
+      - Branch predictor hardening for affected Cortex-A CPUs (ARM)
+      - Support compiling with indirect branch thunks (e.g. retpoline)
+      - Report details of speculative mitigations in boot logging
   * Merge changes for 4.9 from the ubuntu packaging (thanks, Stefan Bader):
     - Rebase patches against upstream source (line numbers etc).
     - debian/rules.real:
@@ -34,22 +32,15 @@ xen (4.10.1~pre+1.728fadb586-1~exp1) experimental; urgency=medium
       - Re-introduce (fake) xs_restrict call to keep libxenstore version at
         3.0 for now.
     - debian/libxenstore3.0.symbols: add xs_control_command
-  * Update to 4.10.1-pre, commit 728fadb586, which also contains:
-    - Fix x86: memory leak with MSR emulation
-      XSA-253 CVE-2018-5244
-    - Multiple parts of fixes for...
-      Information leak via side effects of speculative execution
-      XSA-254 CVE-2017-5753 CVE-2017-5715 CVE-2017-5754
-      - XPTI stage 1 a.k.a. 'Meltdown band-aid', XPTI-S1 or XPTI-lite
-      - Branch predictor hardening for affected Cortex-A CPUs (ARM)
-  * Add README.source to document how the packaging works.
+  * Rebase patches against 4.10 upstream source.
+  * Add README.source.md to document how the packaging works.
   * Conflict with Xen packages < 4.10, until #852545 about moving the grub
     config file out of the hypervisor package gets fixed in stable.
 
   [ Mark Pryor ]
-  * dh_shlibdeps: fix missing depend on libxentoolcore
+  * Fix shared library build dependencies for the new xentoolcore library.
 
- -- Hans van Kranenburg <hans@knorrie.org>  Sun, 28 Jan 2018 21:34:10 +0100
+ -- Hans van Kranenburg <hans@knorrie.org>  Sun, 25 Feb 2018 01:21:20 +0100
 
 xen (4.8.2+xsa245-0+deb9u1) stretch-security; urgency=high
 
