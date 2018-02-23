@@ -1,6 +1,6 @@
 xen (4.8.3+comet2+shim4.10.0+comet3-1+deb9u5~) stretch-updates; urgency=medium
 
-  * 
+  * Install Meltdown READMEs on all architectures.  Closes:#890488.
 
  -- 
 

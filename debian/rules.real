@@ -279,9 +279,7 @@ install-utils-common: $(STAMPS_DIR)/install-utils-common
 		$(SOURCE_DIR)/docs/man5/* \
 		$(SOURCE_DIR)/docs/man8/*
 	dh_installdocs $(SOURCE_DIR)/docs/txt/misc
-ifneq ($(filter i386 amd64,$(ARCH)),)
 	dh_installdocs $(SOURCE_DIR)/README.comet $(SOURCE_DIR)/README.pti
-endif
 	dh_link
 	dh_ucf
 	+$(MAKE_SELF) install-base
