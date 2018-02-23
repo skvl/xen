@@ -1,6 +1,6 @@
 Package: xen-hypervisor-@version@@localversion@
 Depends: ${misc:Depends}
-Breaks: xen-utils-common (<< 4.10.0~)
+Breaks: xen-utils-common (<< 4.8.3~)
 Provides: xen-hypervisor, xen-hypervisor-@version@, xen-hypervisor@localversion@
 Recommends: xen-utils-@version@
 Description: Xen Hypervisor on @class@
