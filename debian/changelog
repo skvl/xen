@@ -35,6 +35,7 @@ xen (4.10.1~pre+2.3921128fcb-1~) UNRELEASED; urgency=medium
   * Rebase patches against 4.10 upstream source.
   * Add README.source.md to document how the packaging works.
   * This package builds correctly with gcc 7. (Closes: #853710)
+  * Fix grub config file conflict when upgrading from Stretch. (Closes: #852545)
 
   [ Mark Pryor ]
   * Fix shared library build dependencies for the new xentoolcore library.

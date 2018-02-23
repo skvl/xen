@@ -1,7 +1,7 @@
 Package: xen-hypervisor-@version@@localversion@
 Depends: ${misc:Depends}
 Provides: xen-hypervisor, xen-hypervisor-@version@, xen-hypervisor@localversion@
-Recommends: xen-utils-@version@
+Recommends: xen-utils-@version@, xen-hypervisor-common
 Description: Xen Hypervisor on @class@
  The hypervisor is the "core" for XEN itself. It gets booted by the boot loader
  and controls cpu and memory, sharing them between your administrative domain

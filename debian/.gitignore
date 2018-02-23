@@ -16,5 +16,7 @@ __pycache__
 /xen-utils-*.*.*
 !/xen-utils-common.*
 /xen-utils-common/
+!/xen-hypervisor-common.*
+/xen-hypervisor-common/
 *.debhelper*
 *.substvars

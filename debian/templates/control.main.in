@@ -58,3 +58,15 @@ Description: Xen administrative tools - common files
  .
  This package is only required on the host system (Domain 0) and not on
  the virtual guest systems (Domain U).
+
+Package: xen-hypervisor-common
+Architecture: all
+Depends: ${misc:Depends}
+Replaces: xen-hypervisor-4.8-amd64, xen-hypervisor-4.8-arm64, xen-hypervisor-4.8-armhf
+Description: Xen Hypervisor - common files
+ The configuration which arranges for an installed hypervisor to
+ be booted as default, with the right command line arguments passed
+ to both hypervisor and host (Domain 0) kernel.
+ .
+ This package is only required on the host system (Domain 0) and not on
+ the virtual guest systems (Domain U).

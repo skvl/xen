@@ -18,7 +18,7 @@ binary-arch-arch: install-utils_$(ARCH)
 binary-arch-arch: install-xenstore-utils_$(ARCH)
 binary-arch-flavour: install-hypervisor_$(ARCH)_$(FLAVOUR)
 
-binary-indep: install-utils-common
+binary-indep: install-utils-common install-hypervisor-common
 
 build-arch-arch: $(STAMPS_DIR)/build-utils_$(ARCH)
 build-arch-flavour: $(STAMPS_DIR)/build-hypervisor_$(ARCH)_$(FLAVOUR)
@@ -137,6 +137,12 @@ $(STAMPS_DIR)/install-utils-common: $(STAMPS_DIR)/build-docs
 	+$(MAKE_CLEAN) -C debian/scripts install
 	touch $@
 
+$(STAMPS_DIR)/install-hypervisor-common: INSTALL_DIR = $(BUILD_DIR)/install-hypervisor-common
+$(STAMPS_DIR)/install-hypervisor-common: $(STAMPS_DIR)/build-docs
+	@rm -rf $(INSTALL_DIR)
+	mkdir -p $(INSTALL_DIR)
+
+
 install-base:
 	dh_installchangelogs -XChangelog
 	dh_installdirs
@@ -163,10 +169,6 @@ install-hypervisor_$(ARCH)_$(FLAVOUR): $(STAMPS_DIR)/build-hypervisor_$(ARCH)_$(
 	dh_testroot
 	dh_prep
 	dh_installdirs boot
-	# FIXME: Think of better solution (grub used for other arches?)
-	dh_installdirs etc/default/grub.d
-	install -D -m644 debian/xen-hypervisor-$(VERSION).xen.cfg \
-		debian/$(PACKAGE_NAME)/etc/default/grub.d/xen.cfg
 	dh_install debian/templates/xen-hypervisor.bug/* usr/share/bug/$(PACKAGE_NAME)
 	cp $(DIR)/xen/xen$(IMAGE_SUFFIX) debian/$(PACKAGE_NAME)/boot/xen-$(VERSION)-$(FLAVOUR)$(IMAGE_SUFFIX)
 ifeq ($(ARCH),amd64)
@@ -255,6 +257,17 @@ install-utils-common: $(STAMPS_DIR)/install-utils-common
 		$(SOURCE_DIR)/docs/man8/*
 	dh_installdocs $(SOURCE_DIR)/docs/txt/misc
 	dh_link
+	dh_ucf
+	+$(MAKE_SELF) install-base
+
+install-hypervisor-common: DIR = $(BUILD_DIR)/install-hypervisor-common
+install-hypervisor-common: PACKAGE_NAME = xen-hypervisor-common
+install-hypervisor-common: DH_OPTIONS = -p$(PACKAGE_NAME)
+install-hypervisor-common: $(STAMPS_DIR)/install-hypervisor-common
+	dh_testdir
+	dh_testroot
+	dh_prep
+	dh_install --sourcedir=$(DIR)
 	dh_ucf
 	+$(MAKE_SELF) install-base
 
