@@ -163,6 +163,10 @@ install-hypervisor_$(ARCH)_$(FLAVOUR): $(STAMPS_DIR)/build-hypervisor_$(ARCH)_$(
 	dh_testroot
 	dh_prep
 	dh_installdirs boot
+	# FIXME: Think of better solution (grub used for other arches?)
+	dh_installdirs etc/default/grub.d
+	install -D -m644 debian/xen-hypervisor-$(VERSION).xen.cfg \
+		debian/$(PACKAGE_NAME)/etc/default/grub.d/xen.cfg
 	dh_install debian/templates/xen-hypervisor.bug/* usr/share/bug/$(PACKAGE_NAME)
 	cp $(DIR)/xen/xen$(IMAGE_SUFFIX) debian/$(PACKAGE_NAME)/boot/xen-$(VERSION)-$(FLAVOUR)$(IMAGE_SUFFIX)
 ifeq ($(ARCH),amd64)

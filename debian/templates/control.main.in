@@ -52,8 +52,6 @@ Description: Xenstore command line utilities for Xen
 Package: xen-utils-common
 Architecture: all
 Depends: lsb-base, python, udev, xenstore-utils, ${misc:Depends}
-Replaces: xen-hypervisor-4.8-amd64 (<< 4.8.3~), xen-hypervisor-4.8-arm64 (<< 4.8.3~), xen-hypervisor-4.8-armhf (<< 4.8.3~)
-Breaks: xen-hypervisor-4.8-amd64 (<< 4.8.3~), xen-hypervisor-4.8-arm64 (<< 4.8.3~), xen-hypervisor-4.8-armhf (<< 4.8.3~)
 Description: Xen administrative tools - common files
  The userspace tools to manage a system virtualized through the Xen virtual
  machine monitor.
