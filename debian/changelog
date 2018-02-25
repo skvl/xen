@@ -34,8 +34,6 @@ xen (4.10.1~pre+2.3921128fcb-1~) UNRELEASED; urgency=medium
     - debian/libxenstore3.0.symbols: add xs_control_command
   * Rebase patches against 4.10 upstream source.
   * Add README.source.md to document how the packaging works.
-  * Conflict with Xen packages < 4.10, until #852545 about moving the grub
-    config file out of the hypervisor package gets fixed in stable.
 
   [ Mark Pryor ]
   * Fix shared library build dependencies for the new xentoolcore library.
