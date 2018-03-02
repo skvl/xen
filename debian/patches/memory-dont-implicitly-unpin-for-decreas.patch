@@ -1,0 +1,29 @@
+From: Jan Beulich <jbeulich@suse.com>
+Date: Fri, 2 Mar 2018 15:39:41 +0000
+X-Dgit-Generated: 4.8.3+comet2+shim4.10.0+comet3-1+deb9u5 4f73378811165649bc50dcbeb6b42ff22db40be1
+Subject: memory: don't implicitly unpin for decrease-reservation
+
+It very likely was a mistake (copy-and-paste from domain cleanup code)
+to implicitly unpin here: The caller should really unpin itself before
+(or after, if they so wish) requesting the page to be removed.
+
+This is XSA-252.
+
+Reported-by: Jann Horn <jannh@google.com>
+Signed-off-by: Jan Beulich <jbeulich@suse.com>
+Reviewed-by: Andrew Cooper <andrew.cooper3@citrix.com>
+
+---
+
+--- xen-4.8.3+comet2+shim4.10.0+comet3.orig/xen/common/memory.c
++++ xen-4.8.3+comet2+shim4.10.0+comet3/xen/common/memory.c
+@@ -342,9 +342,6 @@ int guest_remove_page(struct domain *d,
+ 
+     rc = guest_physmap_remove_page(d, _gfn(gmfn), mfn, 0);
+ 
+-    if ( !rc && test_and_clear_bit(_PGT_pinned, &page->u.inuse.type_info) )
+-        put_page_and_type(page);
+-
+     /*
+      * With the lack of an IOMMU on some platforms, domains with DMA-capable
+      * device must retrieve the same pfn when the hypercall populate_physmap

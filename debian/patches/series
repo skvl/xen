@@ -28,3 +28,9 @@ ubuntu-tools-libs-abiname.diff
 toolstestsx86_emulator-pass--no-pie--fno.patch
 copy-readme.pti-and-readme.comet-from-th.patch
 tools-fix-arm-build-after-bdf693ee61b48.patch
+tools-utility-to-dump-guest-grant-table-.patch
+gitignore-add-toolsmiscxen-diag-to-.giti.patch
+memory-dont-implicitly-unpin-for-decreas.patch
+gnttabarm-dont-corrupt-shared-gfn-array.patch
+gnttab-dont-blindly-free-status-pages-up.patch
+x86hvm-disallow-the-creation-of-hvm-doma.patch
