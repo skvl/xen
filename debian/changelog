@@ -1,4 +1,4 @@
-xen (4.8.3+comet2+shim4.10.0+comet3-1+deb9u5~) stretch-updates; urgency=medium
+xen (4.8.3+comet2+shim4.10.0+comet3-1+deb9u5) stretch-security; urgency=high
 
   * Security fixes from upstream XSAs:
        XSA-252 CVE-2018-7540
@@ -11,7 +11,7 @@ xen (4.8.3+comet2+shim4.10.0+comet3-1+deb9u5~) stretch-updates; urgency=medium
   * Ship xen-diag (by cherry-picking the appropriate commits from
     upstream).  This can help with diagnosis of #880554.
 
- -- 
+ -- Ian Jackson <ijackson@chiark.greenend.org.uk>  Fri, 02 Mar 2018 16:07:18 +0000
 
 xen (4.8.3+comet2+shim4.10.0+comet3-1+deb9u4.1) stretch-security; urgency=high
 
