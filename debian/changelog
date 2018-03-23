@@ -1,4 +1,4 @@
-xen (4.10.1~pre+2.3921128fcb-1~) UNRELEASED; urgency=medium
+xen (4.10.1~pre+4.0f92968bcf-1~) UNRELEASED; urgency=medium
 
   [ Hans van Kranenburg ]
   * Update to 4.10.1-pre, which also contains:
@@ -12,6 +12,8 @@ xen (4.10.1~pre+2.3921128fcb-1~) UNRELEASED; urgency=medium
       XSA-250 CVE-2017-17564
     - Fix improper bug check in x86 log-dirty handling
       XSA-251 CVE-2017-17565
+    - Fix: DoS via non-preemptable L3/L4 pagetable freeing
+      XSA-252 CVE-2018-7540
     - Fix x86: memory leak with MSR emulation
       XSA-253 CVE-2018-5244
     - Multiple parts of fixes for...
@@ -21,6 +23,12 @@ xen (4.10.1~pre+2.3921128fcb-1~) UNRELEASED; urgency=medium
       - Branch predictor hardening for affected Cortex-A CPUs (ARM)
       - Support compiling with indirect branch thunks (e.g. retpoline)
       - Report details of speculative mitigations in boot logging
+    - Fix: grant table v2 -> v1 transition may crash Xen
+      XSA-255 CVE-2018-7541
+    - Fix: x86 PVH guest without LAPIC may DoS the host
+      XSA-256 CVE-2018-7542
+    - The "Comet" shim, which can be used as a mitigation for Meltdown to
+      shield the hypervisor against 64-bit PV guests.
   * Merge changes for 4.9 from the ubuntu packaging (thanks, Stefan Bader):
     - Rebase patches against upstream source (line numbers etc).
     - debian/rules.real:
