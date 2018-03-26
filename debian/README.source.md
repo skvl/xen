@@ -19,19 +19,18 @@ directory, somewhere else!):
 
     -$ git clone https://xenbits.xen.org/git-http/xen.git
 
-After cloning it, do:
-    -$ debian/bin/genorig.py /path/to/xen/repo
+After cloning it, we should generate an orig tar from the upstream source.
 
 Based on the version number in the newest debian/changelog entry, a release tag
-or specific commit will be used to generate the orig tar file. For now, see
-commit 55129e390c in this repository, "debian/lib/python: Recognize pre / rc
-versions" about more information.
+or specific commit can be used to generate the orig tar file. For example, if
+the latest entry in changelog is 4.10.0-1, then this will build the orig tar
+from the RELEASE-4.10.0 tag in upstream git:
 
-Example: If the latest entry in changelog is 4.10.0-1, then this will build the
-orig tar from the RELEASE-4.10.0 tag in upstream git:
-
-    -$ debian/bin/genorig.py ~/src/git/xen
+    -$ debian/bin/genorig.py /path/to/xen.git
     Generate tarball ../orig/xen_4.10.0.orig.tar.xz
+
+For now, see commit 55129e390c in this repository, "debian/lib/python:
+Recognize pre / rc versions" for additional information about package versions.
 
 Step 2: Combine the upstream source and packaging
 -------------------------------------------------
