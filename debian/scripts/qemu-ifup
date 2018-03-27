@@ -9,5 +9,5 @@ echo $*
 # (FE:FF:FF:FF:FF:FF)
 ip link set $1 address fe:ff:ff:ff:ff:ff || true
 
-ifconfig $1 0.0.0.0 up
+ip link set up dev $1
 brctl addif $2 $1
