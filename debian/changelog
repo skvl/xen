@@ -44,6 +44,7 @@ xen (4.10.1~pre+4.0f92968bcf-1~) UNRELEASED; urgency=medium
   * Add README.source.md to document how the packaging works.
   * This package builds correctly with gcc 7. (Closes: #853710)
   * Fix grub config file conflict when upgrading from Stretch. (Closes: #852545)
+  * Init scripts: Do not kill per-domain qemu processes. (Closes: #879751)
 
   [ Mark Pryor ]
   * Fix shared library build dependencies for the new xentoolcore library.
