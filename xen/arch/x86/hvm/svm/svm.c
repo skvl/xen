@@ -607,11 +607,12 @@ static void svm_update_guest_efer(struct vcpu *v)
     vmcb_set_efer(vmcb, new_efer);
 }
 
-static void svm_update_guest_vendor(struct vcpu *v)
+static void svm_cpuid_policy_changed(struct vcpu *v)
 {
     struct arch_svm_struct *arch_svm = &v->arch.hvm_svm;
     struct vmcb_struct *vmcb = arch_svm->vmcb;
     u32 bitmap = vmcb_get_exception_intercepts(vmcb);
+    uint32_t ebx, dummy;
 
     if ( opt_hvm_fep ||
          (v->domain->arch.x86_vendor != boot_cpu_data.x86_vendor) )
@@ -620,6 +621,12 @@ static void svm_update_guest_vendor(struct vcpu *v)
         bitmap &= ~(1U << TRAP_invalid_op);
 
     vmcb_set_exception_intercepts(vmcb, bitmap);
+
+    /* Give access to MSR_PRED_CMD if the guest has been told about it. */
+    domain_cpuid(v->domain, 0x80000008, 0, &dummy, &ebx, &dummy, &dummy);
+    svm_intercept_msr(v, MSR_PRED_CMD,
+                      ebx & cpufeat_mask(X86_FEATURE_IBPB) ? MSR_INTERCEPT_NONE
+                                                           : MSR_INTERCEPT_RW);
 }
 
 static void svm_sync_vmcb(struct vcpu *v)
@@ -1035,6 +1042,7 @@ static void svm_ctxt_switch_from(struct vcpu *v)
     set_ist(&idt_tables[cpu][TRAP_double_fault],  IST_DF);
     set_ist(&idt_tables[cpu][TRAP_nmi],           IST_NMI);
     set_ist(&idt_tables[cpu][TRAP_machine_check], IST_MCE);
+    set_ist(&idt_tables[cpu][TRAP_debug],         IST_DB);
 }
 
 static void svm_ctxt_switch_to(struct vcpu *v)
@@ -1056,6 +1064,7 @@ static void svm_ctxt_switch_to(struct vcpu *v)
     set_ist(&idt_tables[cpu][TRAP_double_fault],  IST_NONE);
     set_ist(&idt_tables[cpu][TRAP_nmi],           IST_NONE);
     set_ist(&idt_tables[cpu][TRAP_machine_check], IST_NONE);
+    set_ist(&idt_tables[cpu][TRAP_debug],         IST_NONE);
 
     svm_restore_dr(v);
 
@@ -1066,7 +1075,7 @@ static void svm_ctxt_switch_to(struct vcpu *v)
     svm_tsc_ratio_load(v);
 
     if ( cpu_has_rdtscp )
-        wrmsrl(MSR_TSC_AUX, hvm_msr_tsc_aux(v));
+        wrmsr_tsc_aux(hvm_msr_tsc_aux(v));
 }
 
 static void noreturn svm_do_resume(struct vcpu *v)
@@ -1947,6 +1956,13 @@ static int svm_msr_write_intercept(unsigned int msr, uint64_t msr_content)
             result = X86EMUL_RETRY;
             break;
         case 0:
+            /*
+             * Match up with the RDMSR side for now; ultimately this entire
+             * case block should go away.
+             */
+            if ( rdmsr_safe(msr, msr_content) == 0 )
+                break;
+            goto gpf;
         case 1:
             break;
         default:
@@ -2252,7 +2268,7 @@ static struct hvm_function_table __initdata svm_function_table = {
     .get_shadow_gs_base   = svm_get_shadow_gs_base,
     .update_guest_cr      = svm_update_guest_cr,
     .update_guest_efer    = svm_update_guest_efer,
-    .update_guest_vendor  = svm_update_guest_vendor,
+    .cpuid_policy_changed = svm_cpuid_policy_changed,
     .set_guest_pat        = svm_set_guest_pat,
     .get_guest_pat        = svm_get_guest_pat,
     .set_tsc_offset       = svm_set_tsc_offset,

@@ -648,7 +648,6 @@ static int libxl__build_device_model_args_old(libxl__gc *gc,
         flexarray_append(dm_args, b_info->extra[i]);
     flexarray_append(dm_args, "-M");
     switch (b_info->type) {
-    case LIBXL_DOMAIN_TYPE_PVH:
     case LIBXL_DOMAIN_TYPE_PV:
         flexarray_append(dm_args, "xenpv");
         for (i = 0; b_info->extra_pv && b_info->extra_pv[i] != NULL; i++)
@@ -668,18 +667,6 @@ static int libxl__build_device_model_args_old(libxl__gc *gc,
     if (envs)
         *envs = (char **) flexarray_contents(dm_envs);
     return 0;
-}
-
-static const char *qemu_disk_format_string(libxl_disk_format format)
-{
-    switch (format) {
-    case LIBXL_DISK_FORMAT_QCOW: return "qcow";
-    case LIBXL_DISK_FORMAT_QCOW2: return "qcow2";
-    case LIBXL_DISK_FORMAT_VHD: return "vpc";
-    case LIBXL_DISK_FORMAT_RAW: return "raw";
-    case LIBXL_DISK_FORMAT_EMPTY: return NULL;
-    default: return NULL;
-    }
 }
 
 static char *dm_spice_options(libxl__gc *gc,
@@ -991,7 +978,7 @@ static int libxl__build_device_model_args_new(libxl__gc *gc,
      */
     flexarray_append(dm_args, "-no-user-config");
 
-    if (b_info->type != LIBXL_DOMAIN_TYPE_HVM) {
+    if (b_info->type == LIBXL_DOMAIN_TYPE_PV) {
         flexarray_append(dm_args, "-xen-attach");
     }
 
@@ -1264,7 +1251,6 @@ static int libxl__build_device_model_args_new(libxl__gc *gc,
 
     flexarray_append(dm_args, "-machine");
     switch (b_info->type) {
-    case LIBXL_DOMAIN_TYPE_PVH:
     case LIBXL_DOMAIN_TYPE_PV:
         flexarray_append(dm_args, "xenpv");
         for (i = 0; b_info->extra_pv && b_info->extra_pv[i] != NULL; i++)
@@ -1344,9 +1330,9 @@ static int libxl__build_device_model_args_new(libxl__gc *gc,
              * always raw
              */
             if (disks[i].backend == LIBXL_DISK_BACKEND_QDISK)
-                format = qemu_disk_format_string(disks[i].format);
+                format = libxl__qemu_disk_format_string(disks[i].format);
             else
-                format = qemu_disk_format_string(LIBXL_DISK_FORMAT_RAW);
+                format = libxl__qemu_disk_format_string(LIBXL_DISK_FORMAT_RAW);
 
             if (disks[i].format == LIBXL_DISK_FORMAT_EMPTY) {
                 if (!disks[i].is_cdrom) {

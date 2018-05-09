@@ -280,6 +280,11 @@ int main(int argc, char **argv)
 
     pop_block();
 
+    if (dm_version == QEMU_NONE) {
+        pop_block();
+        return 0;
+    }
+
     /* Define GPE control method. */
     push_block("Scope", "\\_GPE");
     push_block("Method",
@@ -287,11 +292,6 @@ int main(int argc, char **argv)
     stmt("\\_SB.PRSC ()", NULL);
     pop_block();
     pop_block();
-
-    if (dm_version == QEMU_NONE) {
-        pop_block();
-        return 0;
-    }
     /**** Processor end ****/
 
 

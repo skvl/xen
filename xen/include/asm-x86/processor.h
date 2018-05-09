@@ -505,7 +505,8 @@ struct __packed __cacheline_aligned tss_struct {
 #define IST_DF   1UL
 #define IST_NMI  2UL
 #define IST_MCE  3UL
-#define IST_MAX  3UL
+#define IST_DB   4UL
+#define IST_MAX  4UL
 
 /* Set the interrupt stack table used by a particular interrupt
  * descriptor table entry. */
@@ -622,6 +623,10 @@ int wrmsr_hypervisor_regs(uint32_t idx, uint64_t val);
 void microcode_set_module(unsigned int);
 int microcode_update(XEN_GUEST_HANDLE_PARAM(const_void), unsigned long len);
 int microcode_resume_cpu(unsigned int cpu);
+int early_microcode_update_cpu(bool start_update);
+int early_microcode_init(void);
+int microcode_init_intel(void);
+int microcode_init_amd(void);
 
 enum get_cpu_vendor {
     gcv_host,

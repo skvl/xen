@@ -79,6 +79,8 @@ void toggle_guest_mode(struct vcpu *);
 /* x86/64: toggle guest page tables between kernel and user modes. */
 void toggle_guest_pt(struct vcpu *);
 
+void cpuid_policy_updated(struct vcpu *v);
+
 /*
  * Initialise a hypercall-transfer page. The given pointer must be mapped
  * in Xen virtual address space (accesses are not validated or checked).
@@ -574,6 +576,8 @@ struct arch_vcpu
 
     struct paging_vcpu paging;
 
+    uint32_t spec_ctrl;
+
     uint32_t gdbsx_vcpu_event;
 
     /* A secondary copy of the vcpu time info. */
@@ -613,7 +617,7 @@ unsigned long pv_guest_cr4_fixup(const struct vcpu *, unsigned long guest_cr4);
              X86_CR4_OSXSAVE | X86_CR4_SMEP |               \
              X86_CR4_FSGSBASE | X86_CR4_SMAP))
 
-void domain_cpuid(struct domain *d,
+void domain_cpuid(const struct domain *d,
                   unsigned int  input,
                   unsigned int  sub_input,
                   unsigned int  *eax,

@@ -584,7 +584,8 @@ static bool process_record(libxl__egc *egc,
         break;
 
     case REC_TYPE_EMULATOR_XENSTORE_DATA:
-        if (dcs->guest_config->b_info.type != LIBXL_DOMAIN_TYPE_HVM) {
+        if (dcs->guest_config->b_info.device_model_version ==
+            LIBXL_DEVICE_MODEL_VERSION_NONE) {
             rc = ERROR_FAIL;
             LOG(ERROR,
                 "Received a xenstore emulator record when none was expected");
@@ -612,7 +613,8 @@ static bool process_record(libxl__egc *egc,
         break;
 
     case REC_TYPE_EMULATOR_CONTEXT:
-        if (dcs->guest_config->b_info.type != LIBXL_DOMAIN_TYPE_HVM) {
+        if (dcs->guest_config->b_info.device_model_version ==
+            LIBXL_DEVICE_MODEL_VERSION_NONE) {
             rc = ERROR_FAIL;
             LOG(ERROR,
                 "Received an emulator context record when none was expected");

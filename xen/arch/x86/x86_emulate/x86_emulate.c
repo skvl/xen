@@ -880,8 +880,8 @@ do {                                                                    \
     struct fpu_insn_ctxt fic_ = { .insn_bytes = nr_ };                  \
     memcpy(get_stub(stub), ((uint8_t[]){ bytes, 0xc3 }), nr_ + 1);      \
     get_fpu(X86EMUL_FPU_fpu, &fic_);                                    \
-    asm volatile ( "call *%[stub]" : "+m" (fic_) :                      \
-                   [stub] "rm" (stub.func) );                           \
+    asm volatile ( "INDIRECT_CALL %[stub]" : "+m" (fic_) :              \
+                   [stub] "r" (stub.func) );                            \
     put_fpu(&fic_);                                                     \
     put_stub(stub);                                                     \
 } while (0)
@@ -894,11 +894,11 @@ do {                                                                    \
     memcpy(get_stub(stub), ((uint8_t[]){ bytes, 0xc3 }), nr_ + 1);      \
     get_fpu(X86EMUL_FPU_fpu, &fic_);                                    \
     asm volatile ( _PRE_EFLAGS("[eflags]", "[mask]", "[tmp]")           \
-                   "call *%[func];"                                     \
+                   "INDIRECT_CALL %[func];"                             \
                    _POST_EFLAGS("[eflags]", "[mask]", "[tmp]")          \
                    : [eflags] "+g" (_regs.eflags),                      \
                      [tmp] "=&r" (tmp_), "+m" (fic_)                    \
-                   : [func] "rm" (stub.func),                           \
+                   : [func] "r" (stub.func),                            \
                      [mask] "i" (EFLG_ZF|EFLG_PF|EFLG_CF) );            \
     put_fpu(&fic_);                                                     \
     put_stub(stub);                                                     \
@@ -1981,6 +1981,10 @@ x86_decode(
         rex_prefix = 0;
     }
  done_prefixes:
+
+    /* %{e,c,s,d}s overrides are ignored in 64bit mode. */
+    if ( mode_64bit() && (unsigned int)override_seg < x86_seg_fs )
+        override_seg = -1;
 
     if ( rex_prefix & REX_W )
         op_bytes = 8;
@@ -4419,14 +4423,24 @@ x86_emulate(
             _regs.eflags |= EFLG_ZF;
             break;
 
-        case 0xdf: /* invlpga */
-            generate_exception_if(!in_protmode(ctxt, ops), EXC_UD, -1);
+        case 0xdf: /* invlpga */ {
+            uint64_t msr_val;
+
+            fail_if(!ops->read_msr);
+            if ( (rc = ops->read_msr(MSR_EFER,
+                                     &msr_val, ctxt)) != X86EMUL_OKAY )
+                goto done;
+            /* Finding SVME set implies vcpu_has_svm(). */
+            generate_exception_if(!(msr_val & EFER_SVME) ||
+                                  !in_protmode(ctxt, ops), EXC_UD, -1);
             generate_exception_if(!mode_ring0(), EXC_GP, 0);
+            generate_exception_if((uint32_t)_regs.ecx, EXC_UD, -1); /* TODO: Support ASIDs. */
             fail_if(ops->invlpg == NULL);
             if ( (rc = ops->invlpg(x86_seg_none, truncate_ea(_regs.eax),
                                    ctxt)) )
                 goto done;
             break;
+        }
 
         case 0xf9: /* rdtscp */
         {
@@ -4766,8 +4780,8 @@ x86_emulate(
         if ( !rc )
         {
            copy_REX_VEX(buf, rex_prefix, vex);
-           asm volatile ( "call *%0" : : "r" (stub.func), "a" (mmvalp)
-                                     : "memory" );
+           asm volatile ( "INDIRECT_CALL %0" : : "r" (stub.func), "a" (mmvalp)
+                                             : "memory" );
         }
         put_fpu(&fic);
         put_stub(stub);
@@ -5058,8 +5072,8 @@ x86_emulate(
         if ( !rc )
         {
            copy_REX_VEX(buf, rex_prefix, vex);
-           asm volatile ( "call *%0" : : "r" (stub.func), "a" (ea.reg)
-                                     : "memory" );
+           asm volatile ( "INDIRECT_CALL %0" : : "r" (stub.func), "a" (ea.reg)
+                                             : "memory" );
         }
         put_fpu(&fic);
         put_stub(stub);

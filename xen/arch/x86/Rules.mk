@@ -25,3 +25,16 @@ CFLAGS += -fno-asynchronous-unwind-tables
 ifneq ($(call cc-option,$(CC),-fvisibility=hidden,n),n)
 CFLAGS += -DGCC_HAS_VISIBILITY_ATTRIBUTE
 endif
+
+# Compile with thunk-extern, indirect-branch-register if avaiable.
+ifneq ($(call cc-option,$(CC),-mindirect-branch-register,n),n)
+CFLAGS += -mindirect-branch=thunk-extern -mindirect-branch-register
+CFLAGS += -DCONFIG_INDIRECT_THUNK
+export CONFIG_INDIRECT_THUNK=y
+endif
+
+# Set up the assembler include path properly for older GCC toolchains.  Clang
+# objects to the agument being passed however.
+ifneq ($(clang),y)
+CFLAGS += -Wa,-I$(BASEDIR)/include
+endif

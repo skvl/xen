@@ -52,6 +52,7 @@
 #include <asm/alternative.h>
 #include <asm/mc146818rtc.h>
 #include <asm/cpuid.h>
+#include <asm/spec_ctrl.h>
 
 /* opt_nosmp: If true, secondary processors are ignored. */
 static bool_t __initdata opt_nosmp;
@@ -155,6 +156,9 @@ static void __init parse_smap_param(char *s)
         opt_smap = SMAP_HVM_ONLY;
 }
 custom_param("smap", parse_smap_param);
+
+static int8_t __initdata opt_xpti = -1;
+boolean_param("xpti", opt_xpti);
 
 bool_t __read_mostly acpi_disabled;
 bool_t __initdata acpi_force;
@@ -660,6 +664,7 @@ void __init noreturn __start_xen(unsigned long mbi_p)
     set_processor_id(0);
     set_current((struct vcpu *)0xfffff000); /* debug sanity. */
     idle_vcpu[0] = current;
+    init_shadow_spec_ctrl_state();
 
     percpu_init_areas();
 
@@ -1456,6 +1461,8 @@ void __init noreturn __start_xen(unsigned long mbi_p)
 
     timer_init();
 
+    early_microcode_init();
+
     identify_cpu(&boot_cpu_data);
 
     set_in_cr4(X86_CR4_OSFXSR | X86_CR4_OSXMMEXCPT);
@@ -1476,8 +1483,26 @@ void __init noreturn __start_xen(unsigned long mbi_p)
 
     cr4_pv32_mask = mmu_cr4_features & XEN_CR4_PV32_BITS;
 
+    if ( opt_xpti < 0 )
+    {
+        uint64_t caps = 0;
+
+        if ( boot_cpu_data.x86_vendor == X86_VENDOR_AMD )
+            caps = ARCH_CAPABILITIES_RDCL_NO;
+        else if ( boot_cpu_has(X86_FEATURE_ARCH_CAPS) )
+            rdmsrl(MSR_ARCH_CAPABILITIES, caps);
+
+        opt_xpti = !(caps & ARCH_CAPABILITIES_RDCL_NO);
+    }
+    if ( opt_xpti )
+        setup_clear_cpu_cap(X86_FEATURE_NO_XPTI);
+    else
+        setup_force_cpu_cap(X86_FEATURE_NO_XPTI);
+
     if ( cpu_has_fsgsbase )
         set_in_cr4(X86_CR4_FSGSBASE);
+
+    init_speculation_mitigations();
 
     init_idle_domain();
 

@@ -116,8 +116,6 @@
 #define TAP_DEVICE_SUFFIX "-emu"
 #define DOMID_XS_PATH "domid"
 #define INVALID_DOMID ~0
-#define PVSHIM_BASENAME "xen-shim"
-#define PVSHIM_CMDLINE "pv-shim console=xen,pv sched=null"
 
 /* Size macros. */
 #define __AC(X,Y)   (X##Y)
@@ -166,15 +164,6 @@
 
 /* Convert pfn to physical address space. */
 #define pfn_to_paddr(x) ((uint64_t)(x) << XC_PAGE_SHIFT)
-
-/* see libxl.h's definitions of LIBXL_BUILDINFO_SUBFIELD_PVH etc. */
-# define U_PV_OK( b) LIBXL_BUILDINFO_ACCESS_PVH_PV_OK( (b))
-# define U_HVM_OK(b) LIBXL_BUILDINFO_ACCESS_PVH_HVM_OK((b))
-# define U_PV_F( b, f) LIBXL_BUILDINFO_ACCESS_PVH_PV( (b),f)
-# define U_HVM_F(b, f) LIBXL_BUILDINFO_ACCESS_PVH_HVM((b),f)
-# define U_PVH LIBXL_BUILDINFO_SUBFIELD_PVH
-# define U_PV  LIBXL_BUILDINFO_SUBFIELD_PV
-# define U_HVM LIBXL_BUILDINFO_SUBFIELD_HVM
 
 /* logging */
 _hidden void libxl__logv(libxl_ctx *ctx, xentoollog_level msglevel, int errnoval,
@@ -738,13 +727,6 @@ int libxl__xs_mknod(libxl__gc *gc, xs_transaction_t t,
 
 /* On success, *result_out came from the gc.
  * On error, *result_out is undefined.
- * ENOENT is regarded as error.
- */
-int libxl__xs_read_mandatory(libxl__gc *gc, xs_transaction_t t,
-                             const char *path, const char **result_out);
-
-/* On success, *result_out came from the gc.
- * On error, *result_out is undefined.
  * ENOENT counts as success but sets *result_out=0
  */
 int libxl__xs_read_checked(libxl__gc *gc, xs_transaction_t t,
@@ -1128,8 +1110,6 @@ typedef struct {
 
     libxl__file_reference pv_kernel;
     libxl__file_reference pv_ramdisk;
-    const char * shim_path;
-    const char * shim_cmdline;
     const char * pv_cmdline;
     bool pvh_enabled;
 
@@ -1190,6 +1170,7 @@ _hidden int libxl__domain_pvcontrol_write(libxl__gc *gc, xs_transaction_t t,
 /* from xl_device */
 _hidden char *libxl__device_disk_string_of_backend(libxl_disk_backend backend);
 _hidden char *libxl__device_disk_string_of_format(libxl_disk_format format);
+_hidden const char *libxl__qemu_disk_format_string(libxl_disk_format format);
 _hidden int libxl__device_disk_set_backend(libxl__gc*, libxl_device_disk*);
 
 _hidden int libxl__device_physdisk_major_minor(const char *physpath, int *major, int *minor);
@@ -4322,16 +4303,6 @@ static inline bool libxl__acpi_defbool_val(const libxl_domain_build_info *b_info
 {
     return libxl_defbool_val(b_info->acpi) &&
            libxl_defbool_val(b_info->u.hvm.acpi);
-}
-
-static inline bool libxl__timer_mode_is_default(libxl_timer_mode *tm)
-{
-    return *tm == LIBXL_TIMER_MODE_DEFAULT;
-}
-
-static inline bool libxl__string_is_default(char **s)
-{
-    return *s == NULL;
 }
 #endif
 

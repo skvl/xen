@@ -72,7 +72,6 @@ static void vmx_free_vlapic_mapping(struct domain *d);
 static void vmx_install_vlapic_mapping(struct vcpu *v);
 static void vmx_update_guest_cr(struct vcpu *v, unsigned int cr);
 static void vmx_update_guest_efer(struct vcpu *v);
-static void vmx_update_guest_vendor(struct vcpu *v);
 static void vmx_cpuid_intercept(
     unsigned int *eax, unsigned int *ebx,
     unsigned int *ecx, unsigned int *edx);
@@ -512,7 +511,7 @@ static void vmx_restore_guest_msrs(struct vcpu *v)
     }
 
     if ( cpu_has_rdtscp )
-        wrmsrl(MSR_TSC_AUX, hvm_msr_tsc_aux(v));
+        wrmsr_tsc_aux(hvm_msr_tsc_aux(v));
 }
 
 void vmx_update_cpu_exec_control(struct vcpu *v)
@@ -544,8 +543,10 @@ void vmx_update_exception_bitmap(struct vcpu *v)
         __vmwrite(EXCEPTION_BITMAP, bitmap);
 }
 
-static void vmx_update_guest_vendor(struct vcpu *v)
+static void vmx_cpuid_policy_changed(struct vcpu *v)
 {
+    uint32_t _7d0, e8b, dummy;
+
     if ( opt_hvm_fep ||
          (v->domain->arch.x86_vendor != boot_cpu_data.x86_vendor) )
         v->arch.hvm_vmx.exception_bitmap |= (1U << TRAP_invalid_op);
@@ -555,6 +556,25 @@ static void vmx_update_guest_vendor(struct vcpu *v)
     vmx_vmcs_enter(v);
     vmx_update_exception_bitmap(v);
     vmx_vmcs_exit(v);
+
+    domain_cpuid(v->domain, 7, 0, &dummy, &dummy, &dummy, &_7d0);
+    domain_cpuid(v->domain, 0x80000008, 0, &dummy, &e8b, &dummy, &dummy);
+
+    /*
+     * We can safely pass MSR_SPEC_CTRL through to the guest, even if STIBP
+     * isn't enumerated in hardware, as SPEC_CTRL_STIBP is ignored.
+     */
+    if ( _7d0 & cpufeat_mask(X86_FEATURE_IBRSB) )
+        vmx_disable_intercept_for_msr(v, MSR_SPEC_CTRL, MSR_TYPE_R | MSR_TYPE_W);
+    else
+        vmx_enable_intercept_for_msr(v, MSR_SPEC_CTRL, MSR_TYPE_R | MSR_TYPE_W);
+
+    /* MSR_PRED_CMD is safe to pass through if the guest knows about it. */
+    if ( (_7d0 & cpufeat_mask(X86_FEATURE_IBRSB)) ||
+         (e8b & cpufeat_mask(X86_FEATURE_IBPB)) )
+        vmx_disable_intercept_for_msr(v, MSR_PRED_CMD, MSR_TYPE_R | MSR_TYPE_W);
+    else
+        vmx_enable_intercept_for_msr(v, MSR_PRED_CMD, MSR_TYPE_R | MSR_TYPE_W);
 }
 
 static int vmx_guest_x86_mode(struct vcpu *v)
@@ -787,13 +807,30 @@ static int vmx_load_vmcs_ctxt(struct vcpu *v, struct hvm_hw_cpu *ctxt)
 
 static unsigned int __init vmx_init_msr(void)
 {
-    return (cpu_has_mpx && cpu_has_vmx_mpx) +
+    return 1 /* MISC_FEATURES_ENABLES */ +
+           !!boot_cpu_has(X86_FEATURE_IBRSB) +
+           (cpu_has_mpx && cpu_has_vmx_mpx) +
            (cpu_has_xsaves && cpu_has_vmx_xsaves);
 }
 
 static void vmx_save_msr(struct vcpu *v, struct hvm_msr *ctxt)
 {
+    uint32_t edx, dummy;
+
     vmx_vmcs_enter(v);
+
+    if ( v->arch.cpuid_faulting )
+    {
+        ctxt->msr[ctxt->count].index = MSR_INTEL_MISC_FEATURES_ENABLES;
+        ctxt->msr[ctxt->count++].val = MSR_MISC_FEATURES_CPUID_FAULTING;
+    }
+
+    domain_cpuid(v->domain, 7, 0, &dummy, &dummy, &dummy, &edx);
+    if ( (edx & cpufeat_mask(X86_FEATURE_IBRSB)) && v->arch.spec_ctrl )
+    {
+        ctxt->msr[ctxt->count].index = MSR_SPEC_CTRL;
+        ctxt->msr[ctxt->count++].val = v->arch.spec_ctrl;
+    }
 
     if ( cpu_has_mpx && cpu_has_vmx_mpx )
     {
@@ -823,6 +860,23 @@ static int vmx_load_msr(struct vcpu *v, struct hvm_msr *ctxt)
     {
         switch ( ctxt->msr[i].index )
         {
+        case MSR_SPEC_CTRL:
+            if ( !boot_cpu_has(X86_FEATURE_IBRSB) )
+                err = -ENXIO; /* MSR available? */
+            /*
+             * Note: SPEC_CTRL_STIBP is specified as safe to use (i.e.
+             * ignored) when STIBP isn't enumerated in hardware.
+             */
+            else if ( ctxt->msr[i].val &
+                      ~(SPEC_CTRL_IBRS | SPEC_CTRL_STIBP) )
+                err = -ENXIO;
+            else
+                v->arch.spec_ctrl = ctxt->msr[i].val;
+            break;
+        case MSR_INTEL_MISC_FEATURES_ENABLES:
+            v->arch.cpuid_faulting = !!(ctxt->msr[i].val &
+                                        MSR_MISC_FEATURES_CPUID_FAULTING);
+            break;
         case MSR_IA32_BNDCFGS:
             if ( cpu_has_mpx && cpu_has_vmx_mpx &&
                  is_canonical_address(ctxt->msr[i].val) &&
@@ -1898,13 +1952,53 @@ static void __vmx_deliver_posted_interrupt(struct vcpu *v)
     bool_t running = v->is_running;
 
     vcpu_unblock(v);
+    /*
+     * Just like vcpu_kick(), nothing is needed for the following two cases:
+     * 1. The target vCPU is not running, meaning it is blocked or runnable.
+     * 2. The target vCPU is the current vCPU and we're in non-interrupt
+     * context.
+     */
     if ( running && (in_irq() || (v != current)) )
     {
+        /*
+         * Note: Only two cases will reach here:
+         * 1. The target vCPU is running on other pCPU.
+         * 2. The target vCPU is the current vCPU.
+         *
+         * Note2: Don't worry the v->processor may change. The vCPU being
+         * moved to another processor is guaranteed to sync PIR to vIRR,
+         * due to the involved scheduling cycle.
+         */
         unsigned int cpu = v->processor;
 
-        if ( !test_and_set_bit(VCPU_KICK_SOFTIRQ, &softirq_pending(cpu))
-             && (cpu != smp_processor_id()) )
+        /*
+         * For case 1, we send an IPI to the pCPU. When an IPI arrives, the
+         * target vCPU maybe is running in non-root mode, running in root
+         * mode, runnable or blocked. If the target vCPU is running in
+         * non-root mode, the hardware will sync PIR to vIRR for
+         * 'posted_intr_vector' is special to the pCPU. If the target vCPU is
+         * running in root-mode, the interrupt handler starts to run.
+         * Considering an IPI may arrive in the window between the call to
+         * vmx_intr_assist() and interrupts getting disabled, the interrupt
+         * handler should raise a softirq to ensure events will be delivered
+         * in time. If the target vCPU is runnable, it will sync PIR to
+         * vIRR next time it is chose to run. In this case, a IPI and a
+         * softirq is sent to a wrong vCPU which will not have any adverse
+         * effect. If the target vCPU is blocked, since vcpu_block() checks
+         * whether there is an event to be delivered through
+         * local_events_need_delivery() just after blocking, the vCPU must
+         * have synced PIR to vIRR. Similarly, there is a IPI and a softirq
+         * sent to a wrong vCPU.
+         */
+        if ( cpu != smp_processor_id() )
             send_IPI_mask(cpumask_of(cpu), posted_intr_vector);
+        /*
+         * For case 2, raising a softirq ensures PIR will be synced to vIRR.
+         * As any softirq will do, as an optimization we only raise one if
+         * none is pending already.
+         */
+        else if ( !softirq_pending(cpu) )
+            raise_softirq(VCPU_KICK_SOFTIRQ);
     }
 }
 
@@ -2168,7 +2262,7 @@ static struct hvm_function_table __initdata vmx_function_table = {
     .update_host_cr3      = vmx_update_host_cr3,
     .update_guest_cr      = vmx_update_guest_cr,
     .update_guest_efer    = vmx_update_guest_efer,
-    .update_guest_vendor  = vmx_update_guest_vendor,
+    .cpuid_policy_changed = vmx_cpuid_policy_changed,
     .set_guest_pat        = vmx_set_guest_pat,
     .get_guest_pat        = vmx_get_guest_pat,
     .set_tsc_offset       = vmx_set_tsc_offset,
@@ -2334,13 +2428,9 @@ const struct hvm_function_table * __init start_vmx(void)
 
     if ( cpu_has_vmx_posted_intr_processing )
     {
+        alloc_direct_apic_vector(&posted_intr_vector, pi_notification_interrupt);
         if ( iommu_intpost )
-        {
-            alloc_direct_apic_vector(&posted_intr_vector, pi_notification_interrupt);
             alloc_direct_apic_vector(&pi_wakeup_vector, pi_wakeup_interrupt);
-        }
-        else
-            alloc_direct_apic_vector(&posted_intr_vector, event_check_interrupt);
     }
     else
     {
@@ -2971,6 +3061,13 @@ static int vmx_msr_write_intercept(unsigned int msr, uint64_t msr_content)
                     case -ERESTART:
                         return X86EMUL_RETRY;
                     case 0:
+                        /*
+                         * Match up with the RDMSR side for now; ultimately this
+                         * entire case block should go away.
+                         */
+                        if ( rdmsr_safe(msr, msr_content) == 0 )
+                            break;
+                        goto gp_fault;
                     case 1:
                         break;
                     default:

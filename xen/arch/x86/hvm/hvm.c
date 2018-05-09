@@ -1621,8 +1621,6 @@ int hvm_vcpu_initialise(struct vcpu *v)
         hvm_set_guest_tsc(v, 0);
     }
 
-    hvm_update_guest_vendor(v);
-
     return 0;
 
  fail6:
@@ -3485,11 +3483,6 @@ void hvm_hypervisor_cpuid_leaf(uint32_t sub_idx,
         /* Indicate presence of vcpu id and set it in ebx */
         *eax |= XEN_HVM_CPUID_VCPU_ID_PRESENT;
         *ebx = current->vcpu_id;
-
-        /* Indicate presence of domain id and set it on ecx */
-        *eax |= XEN_HVM_CPUID_DOMID_PRESENT;
-        *ecx = current->domain->domain_id;
-
     }
 }
 
@@ -3593,6 +3586,9 @@ void hvm_cpuid(unsigned int input, unsigned int *eax, unsigned int *ebx,
                      special_features[FEATURESET_7b0]);
 
             *ecx &= hvm_featureset[FEATURESET_7c0];
+
+            *edx |= cpufeat_mask(X86_FEATURE_STIBP);
+            *edx &= hvm_featureset[FEATURESET_7d0];
 
             /* Don't expose HAP-only features to non-hap guests. */
             if ( !hap_enabled(d) )
@@ -3765,6 +3761,7 @@ void hvm_cpuid(unsigned int input, unsigned int *eax, unsigned int *ebx,
         hvm_cpuid(0x80000001, NULL, NULL, NULL, &_edx);
         *eax |= (_edx & cpufeat_mask(X86_FEATURE_LM) ? vaddr_bits : 32) << 8;
 
+        *ebx |= cpufeat_mask(X86_FEATURE_IBPB);
         *ebx &= hvm_featureset[FEATURESET_e8b];
         break;
     }
@@ -3847,7 +3844,7 @@ int hvm_msr_read_intercept(unsigned int msr, uint64_t *msr_content)
 
     switch ( msr )
     {
-        unsigned int eax, ebx, ecx, index;
+        unsigned int eax, ebx, ecx, edx, index;
 
     case MSR_EFER:
         *msr_content = v->arch.hvm_vcpu.guest_efer;
@@ -3934,6 +3931,23 @@ int hvm_msr_read_intercept(unsigned int msr, uint64_t *msr_content)
             goto gp_fault;
         break;
 
+    case MSR_AMD_PATCHLOADER:
+    case MSR_IA32_UCODE_WRITE:
+    case MSR_PRED_CMD:
+        /* Write-only */
+        goto gp_fault;
+
+    case MSR_SPEC_CTRL:
+        hvm_cpuid(7, NULL, NULL, NULL, &edx);
+        if ( !(edx & cpufeat_mask(X86_FEATURE_IBRSB)) )
+            goto gp_fault;
+        *msr_content = v->arch.spec_ctrl;
+        break;
+
+    case MSR_ARCH_CAPABILITIES:
+        /* Not implemented yet. */
+        goto gp_fault;
+
     case MSR_K8_ENABLE_C1E:
     case MSR_AMD64_NB_CFG:
          /*
@@ -4000,7 +4014,7 @@ int hvm_msr_write_intercept(unsigned int msr, uint64_t msr_content,
 
     switch ( msr )
     {
-        unsigned int eax, ebx, ecx, index;
+        unsigned int eax, ebx, ecx, edx, index;
 
     case MSR_EFER:
         if ( hvm_set_efer(msr_content) )
@@ -4019,7 +4033,7 @@ int hvm_msr_write_intercept(unsigned int msr, uint64_t msr_content,
         v->arch.hvm_vcpu.msr_tsc_aux = (uint32_t)msr_content;
         if ( cpu_has_rdtscp
              && (v->domain->arch.tsc_mode != TSC_MODE_PVRDTSCP) )
-            wrmsrl(MSR_TSC_AUX, (uint32_t)msr_content);
+            wrmsr_tsc_aux(msr_content);
         break;
 
     case MSR_IA32_APICBASE:
@@ -4084,6 +4098,26 @@ int hvm_msr_write_intercept(unsigned int msr, uint64_t msr_content,
             goto gp_fault;
         break;
 
+    case MSR_AMD_PATCHLOADER:
+        /*
+         * See note on MSR_IA32_UCODE_WRITE below, which may or may not apply
+         * to AMD CPUs as well (at least the architectural/CPUID part does).
+         */
+        if ( v->domain->arch.x86_vendor != X86_VENDOR_AMD )
+            goto gp_fault;
+        break;
+
+    case MSR_IA32_UCODE_WRITE:
+        /*
+         * Some versions of Windows at least on certain hardware try to load
+         * microcode before setting up an IDT. Therefore we must not inject #GP
+         * for such attempts. Also the MSR is architectural and not qualified
+         * by any CPUID bit.
+         */
+        if ( v->domain->arch.x86_vendor != X86_VENDOR_INTEL )
+            goto gp_fault;
+        break;
+
     case MSR_IA32_XSS:
         ecx = 1;
         hvm_cpuid(XSTATE_CPUID, &eax, NULL, &ecx, NULL);
@@ -4100,6 +4134,39 @@ int hvm_msr_write_intercept(unsigned int msr, uint64_t msr_content,
              !hvm_set_guest_bndcfgs(v, msr_content) )
             goto gp_fault;
         break;
+
+    case MSR_SPEC_CTRL:
+        hvm_cpuid(7, NULL, NULL, NULL, &edx);
+        if ( !(edx & cpufeat_mask(X86_FEATURE_IBRSB)) )
+            goto gp_fault; /* MSR available? */
+
+        /*
+         * Note: SPEC_CTRL_STIBP is specified as safe to use (i.e. ignored)
+         * when STIBP isn't enumerated in hardware.
+         */
+
+        if ( msr_content & ~(SPEC_CTRL_IBRS | SPEC_CTRL_STIBP) )
+            goto gp_fault; /* Rsvd bit set? */
+
+        v->arch.spec_ctrl = msr_content;
+        break;
+
+    case MSR_PRED_CMD:
+        hvm_cpuid(7, NULL, NULL, NULL, &edx);
+        hvm_cpuid(0x80000008, NULL, &ebx, NULL, NULL);
+        if ( !(edx & cpufeat_mask(X86_FEATURE_IBRSB)) &&
+             !(ebx & cpufeat_mask(X86_FEATURE_IBPB)) )
+            goto gp_fault; /* MSR available? */
+
+        if ( msr_content & ~PRED_CMD_IBPB )
+            goto gp_fault; /* Rsvd bit set? */
+
+        wrmsrl(MSR_PRED_CMD, msr_content);
+        break;
+
+    case MSR_ARCH_CAPABILITIES:
+        /* Read-only */
+        goto gp_fault;
 
     case MSR_AMD64_NB_CFG:
         /* ignore the write */

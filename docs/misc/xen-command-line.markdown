@@ -252,6 +252,33 @@ and not running softirqs. Reduce this if softirqs are not being run frequently
 enough. Setting this to a high value may cause boot failure, particularly if
 the NMI watchdog is also enabled.
 
+### bti (x86)
+> `= List of [ thunk=retpoline|lfence|jmp, ibrs=<bool>, ibpb=<bool>, rsb_{vmexit,native}=<bool> ]`
+
+Branch Target Injection controls.  By default, Xen will pick the most
+appropriate BTI mitigations based on compiled in support, loaded microcode,
+and hardware details.
+
+**WARNING: Any use of this option may interfere with heuristics.  Use with
+extreme care.**
+
+If Xen was compiled with INDIRECT_THUNK support, `thunk=` can be used to
+select which of the thunks gets patched into the `__x86_indirect_thunk_%reg`
+locations.  The default thunk is `retpoline` (generally preferred for Intel
+hardware), with the alternatives being `jmp` (a `jmp *%reg` gadget, minimal
+overhead), and `lfence` (an `lfence; jmp *%reg` gadget, preferred for AMD).
+
+On hardware supporting IBRS, the `ibrs=` option can be used to force or
+prevent Xen using the feature itself.  If Xen is not using IBRS itself,
+functionality is still set up so IBRS can be virtualised for guests.
+
+On hardware supporting IBPB, the `ibpb=` option can be used to prevent Xen
+from issuing Branch Prediction Barriers on vcpu context switches.
+
+The `rsb_vmexit=` and `rsb_native=` options can be used to fine tune when the
+RSB gets overwritten.  There are individual controls for an entry from HVM
+context, and an entry from a native (PV or Xen) context.
+
 ### xenheap\_megabytes (arm32)
 > `= <size>`
 
@@ -417,6 +444,18 @@ choice of `dom0-kernel` is deprecated and not supported by all Dom0 kernels.
 * `<maxfreq>` and `<minfreq>` are integers which represent max and min processor frequencies
   respectively.
 * `verbose` option can be included as a string or also as `verbose=<integer>`
+
+### cpuid (x86)
+> `= List of comma separated booleans`
+
+This option allows for fine tuning of the facilities Xen will use, after
+accounting for hardware capabilities as enumerated via CPUID.
+
+Currently accepted:
+
+The Speculation Control hardware features `ibrsb`, `stibp`, `ibpb` are used by
+default if avaiable.  They can be ignored, e.g. `no-ibrsb`, at which point Xen
+won't use them itself, and won't offer them to guests.
 
 ### cpuid\_mask\_cpu (AMD only)
 > `= fam_0f_rev_c | fam_0f_rev_d | fam_0f_rev_e | fam_0f_rev_f | fam_0f_rev_g | fam_10_rev_b | fam_10_rev_c | fam_11_rev_b`
@@ -1695,9 +1734,6 @@ mode.
 
 Override default selection of whether to isolate 64-bit PV guest page
 tables.
-
-** WARNING: Not yet a complete isolation implementation, but better than
-nothing. **
 
 ### xsave
 > `= <boolean>`

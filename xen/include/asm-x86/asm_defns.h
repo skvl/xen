@@ -7,11 +7,20 @@
 #include <asm/asm-offsets.h>
 #endif
 #include <asm/bug.h>
+#include <asm/page.h>
 #include <asm/processor.h>
 #include <asm/percpu.h>
 #include <xen/stringify.h>
 #include <asm/cpufeature.h>
 #include <asm/alternative.h>
+
+#ifdef __ASSEMBLY__
+# include <asm/indirect_thunk_asm.h>
+#else
+asm ( "\t.equ CONFIG_INDIRECT_THUNK, "
+      __stringify(IS_ENABLED(CONFIG_INDIRECT_THUNK)) );
+asm ( "\t.include \"asm/indirect_thunk_asm.h\"" );
+#endif
 
 #ifndef __ASSEMBLY__
 void ret_from_intr(void);
@@ -112,7 +121,7 @@ void ret_from_intr(void);
 
 #define STACK_CPUINFO_FIELD(field) (1 - CPUINFO_sizeof + CPUINFO_##field)
 #define GET_STACK_END(reg)                        \
-        .if .Lr##reg > 8;                         \
+        .if .Lr##reg >= 8;                        \
         movq $STACK_SIZE-1, %r##reg;              \
         .else;                                    \
         movl $STACK_SIZE-1, %e##reg;              \
@@ -198,15 +207,6 @@ void ret_from_intr(void);
 #define ASM_STAC ASM_AC(STAC)
 #define ASM_CLAC ASM_AC(CLAC)
 
-.macro write_cr3 val:req, tmp1:req, tmp2:req
-        mov   %cr4, %\tmp1
-        mov   %\tmp1, %\tmp2
-        and   $~X86_CR4_PGE, %\tmp1
-        mov   %\tmp1, %cr4
-        mov   %\val, %cr3
-        mov   %\tmp2, %cr4
-.endm
-
 #define CR4_PV32_RESTORE                                           \
         667: ASM_NOP5;                                             \
         .pushsection .altinstr_replacement, "ax";                  \
@@ -247,22 +247,34 @@ static always_inline void stac(void)
         addq  $-(UREGS_error_code-UREGS_r15), %rsp
         cld
         movq  %rdi,UREGS_rdi(%rsp)
+        xor   %edi, %edi
         movq  %rsi,UREGS_rsi(%rsp)
+        xor   %esi, %esi
         movq  %rdx,UREGS_rdx(%rsp)
+        xor   %edx, %edx
         movq  %rcx,UREGS_rcx(%rsp)
+        xor   %ecx, %ecx
         movq  %rax,UREGS_rax(%rsp)
+        xor   %eax, %eax
 .if !\compat
         movq  %r8,UREGS_r8(%rsp)
         movq  %r9,UREGS_r9(%rsp)
         movq  %r10,UREGS_r10(%rsp)
         movq  %r11,UREGS_r11(%rsp)
 .endif
+        xor   %r8d, %r8d
+        xor   %r9d, %r9d
+        xor   %r10d, %r10d
+        xor   %r11d, %r11d
         movq  %rbx,UREGS_rbx(%rsp)
+        xor   %ebx, %ebx
         movq  %rbp,UREGS_rbp(%rsp)
 #ifdef CONFIG_FRAME_POINTER
 /* Indicate special exception stack frame by inverting the frame pointer. */
         leaq  UREGS_rbp(%rsp), %rbp
         notq  %rbp
+#else
+        xor   %ebp, %ebp
 #endif
 .if !\compat
         movq  %r12,UREGS_r12(%rsp)
@@ -270,6 +282,10 @@ static always_inline void stac(void)
         movq  %r14,UREGS_r14(%rsp)
         movq  %r15,UREGS_r15(%rsp)
 .endif
+        xor   %r12d, %r12d
+        xor   %r13d, %r13d
+        xor   %r14d, %r14d
+        xor   %r15d, %r15d
 .endm
 
 #define LOAD_ONE_REG(reg, compat) \
@@ -310,7 +326,6 @@ static always_inline void stac(void)
  * @compat: R8-R15 don't need reloading
  */
 .macro RESTORE_ALL adj=0 compat=0
-        LOAD_C_CLOBBERED \compat
 .if !\compat
         movq  UREGS_r15(%rsp),%r15
         movq  UREGS_r14(%rsp),%r14
@@ -319,6 +334,7 @@ static always_inline void stac(void)
 .endif
         LOAD_ONE_REG(bp, \compat)
         LOAD_ONE_REG(bx, \compat)
+        LOAD_C_CLOBBERED \compat
         subq  $-(UREGS_error_code-UREGS_r15+\adj), %rsp
 .endm
 
@@ -351,5 +367,7 @@ static always_inline void stac(void)
 #else
 #define REX64_PREFIX "rex64/"
 #endif
+
+#include <asm/spec_ctrl_asm.h>
 
 #endif /* __X86_ASM_DEFNS_H__ */

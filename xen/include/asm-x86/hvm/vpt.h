@@ -45,6 +45,7 @@ struct periodic_time {
     bool_t warned_timeout_too_short;
 #define PTSRC_isa    1 /* ISA time source */
 #define PTSRC_lapic  2 /* LAPIC time source */
+#define PTSRC_ioapic 3 /* IOAPIC time source */
     u8 source;                  /* PTSRC_ */
     u8 irq;
     struct vcpu *vcpu;          /* vcpu timer interrupt delivers to */
@@ -121,6 +122,7 @@ typedef struct RTCState {
 
 #define FREQUENCE_PMTIMER  3579545  /* Timer should run at 3.579545 MHz */
 typedef struct PMTState {
+    struct hvm_hw_pmtimer pm;   /* 32bit timer value */
     struct vcpu *vcpu;          /* Keeps sync with this vcpu's guest-time */
     uint64_t last_gtime;        /* Last (guest) time we updated the timer */
     uint32_t not_accounted;     /* time not accounted at last update */

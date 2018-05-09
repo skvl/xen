@@ -49,8 +49,10 @@ static int gdbsx_guest_mem_io(domid_t domid, struct xen_domctl_gdbsx_memio *iop)
 }
 
 static void update_domain_cpuid_info(struct domain *d,
-                                     const xen_domctl_cpuid_t *ctl)
+                                     cpuid_input_t *ctl)
 {
+    bool call_policy_changed = false; /* Avoid for_each_vcpu() unnecessarily */
+
     switch ( ctl->input[0] )
     {
     case 0: {
@@ -69,14 +71,7 @@ static void update_domain_cpuid_info(struct domain *d,
         int old_vendor = d->arch.x86_vendor;
 
         d->arch.x86_vendor = get_cpu_vendor(vendor_id.str, gcv_guest);
-
-        if ( is_hvm_domain(d) && (d->arch.x86_vendor != old_vendor) )
-        {
-            struct vcpu *v;
-
-            for_each_vcpu( d, v )
-                hvm_update_guest_vendor(v);
-        }
+        call_policy_changed = (d->arch.x86_vendor != old_vendor);
 
         break;
     }
@@ -174,6 +169,23 @@ static void update_domain_cpuid_info(struct domain *d,
 
             d->arch.pv_domain.cpuidmasks->_7ab0 = mask;
         }
+
+        /*
+         * Override STIBP to match IBRS.  Guests can safely use STIBP
+         * functionality on non-HT hardware, but can't necesserily protect
+         * themselves from SP2/Spectre/Branch Target Injection if STIBP is
+         * hidden on HT-capable hardware.
+         */
+        if ( ctl->edx & cpufeat_mask(X86_FEATURE_IBRSB) )
+            ctl->edx |= cpufeat_mask(X86_FEATURE_STIBP);
+        else
+            ctl->edx &= ~cpufeat_mask(X86_FEATURE_STIBP);
+
+        /*
+         * If the IBRS/IBPB policy has changed, we need to recalculate the MSR
+         * interception bitmaps.
+         */
+        call_policy_changed = is_hvm_domain(d);
         break;
 
     case 0xd:
@@ -234,6 +246,22 @@ static void update_domain_cpuid_info(struct domain *d,
             d->arch.pv_domain.cpuidmasks->e1cd = mask;
         }
         break;
+
+    case 0x80000008:
+        /*
+         * If the IBPB policy has changed, we need to recalculate the MSR
+         * interception bitmaps.
+         */
+        call_policy_changed = is_hvm_domain(d);
+        break;
+    }
+
+    if ( call_policy_changed )
+    {
+        struct vcpu *v;
+
+        for_each_vcpu( d, v )
+            cpuid_policy_updated(v);
     }
 }
 
@@ -899,16 +927,18 @@ long arch_do_domctl(
         {
             if ( i < MAX_CPUID_INPUT )
                 cpuid->input[0] = XEN_CPUID_INPUT_UNUSED;
+            else
+                cpuid = NULL;
         }
         else if ( i < MAX_CPUID_INPUT )
             *cpuid = *ctl;
         else if ( unused )
-            *unused = *ctl;
+            *(cpuid = unused) = *ctl;
         else
             ret = -ENOENT;
 
-        if ( !ret )
-            update_domain_cpuid_info(d, ctl);
+        if ( !ret && cpuid )
+            update_domain_cpuid_info(d, cpuid);
 
         domain_unpause(d);
         break;
@@ -1230,7 +1260,8 @@ long arch_do_domctl(
         struct xen_domctl_vcpu_msrs *vmsrs = &domctl->u.vcpu_msrs;
         struct xen_domctl_vcpu_msr msr;
         struct vcpu *v;
-        uint32_t nr_msrs = 0;
+        uint32_t nr_msrs = 0, edx, dummy;
+        bool has_ibrsb;
 
         ret = -ESRCH;
         if ( (vmsrs->vcpu >= d->max_vcpus) ||
@@ -1245,6 +1276,10 @@ long arch_do_domctl(
         /* Count maximum number of optional msrs. */
         if ( boot_cpu_has(X86_FEATURE_DBEXT) )
             nr_msrs += 4;
+
+        domain_cpuid(d, 7, 0, &dummy, &dummy, &dummy, &edx);
+        has_ibrsb = (edx & cpufeat_mask(X86_FEATURE_IBRSB));
+        nr_msrs += !!cpu_has_cpuid_faulting + has_ibrsb;
 
         if ( domctl->cmd == XEN_DOMCTL_get_vcpu_msrs )
         {
@@ -1292,6 +1327,32 @@ long arch_do_domctl(
                     }
                 }
 
+                if ( v->arch.cpuid_faulting )
+                {
+                    if ( i < vmsrs->msr_count && !ret )
+                    {
+                        msr.index = MSR_INTEL_MISC_FEATURES_ENABLES;
+                        msr.reserved = 0;
+                        msr.value = MSR_MISC_FEATURES_CPUID_FAULTING;
+                        if ( copy_to_guest_offset(vmsrs->msrs, i, &msr, 1) )
+                            ret = -EFAULT;
+                    }
+                    ++i;
+                }
+
+                if ( has_ibrsb && v->arch.spec_ctrl )
+                {
+                    if ( i < vmsrs->msr_count && !ret )
+                    {
+                        msr.index = MSR_SPEC_CTRL;
+                        msr.reserved = 0;
+                        msr.value = v->arch.spec_ctrl;
+                        if ( copy_to_guest_offset(vmsrs->msrs, i, &msr, 1) )
+                            ret = -EFAULT;
+                    }
+                    ++i;
+                }
+
                 vcpu_unpause(v);
 
                 if ( i > vmsrs->msr_count && !ret )
@@ -1319,6 +1380,25 @@ long arch_do_domctl(
 
                 switch ( msr.index )
                 {
+                case MSR_SPEC_CTRL:
+                    if ( !boot_cpu_has(X86_FEATURE_IBRSB) )
+                        break; /* MSR available? */
+
+                    /*
+                     * Note: SPEC_CTRL_STIBP is specified as safe to use (i.e.
+                     * ignored) when STIBP isn't enumerated in hardware.
+                     */
+
+                    if ( msr.value & ~(SPEC_CTRL_IBRS | SPEC_CTRL_STIBP) )
+                        break;
+                    v->arch.spec_ctrl = msr.value;
+                    continue;
+
+                case MSR_INTEL_MISC_FEATURES_ENABLES:
+                    v->arch.cpuid_faulting = !!(msr.value &
+                                                MSR_MISC_FEATURES_CPUID_FAULTING);
+                    continue;
+
                 case MSR_AMD64_DR0_ADDRESS_MASK:
                     if ( !boot_cpu_has(X86_FEATURE_DBEXT) ||
                          (msr.value >> 32) )
