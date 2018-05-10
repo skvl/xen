@@ -1,0 +1,24 @@
+From: Andrew Cooper <andrew.cooper3@citrix.com>
+Date: Wed, 9 May 2018 16:25:14 +0100
+X-Dgit-Generated: 4.8.3+xsa262+shim4.10.0+comet3-1+deb9u6~ d96b0e5b2d5e6c9541591aaee9caf9c95d71a2fd
+Subject: x86/emul: Fix emulator test harness build following a91b2ec337a
+
+Versions of Xen before c/s 5c6c3ac in Xen 4.9 don't use msr-index.h for the
+test harness.
+
+Reported-by: Ian Jackson <Ian.Jackson@eu.citrix.com>
+Signed-off-by: Andrew Cooper <andrew.cooper3@citrix.com>
+(cherry picked from commit e017133490d35eab64c0a61bfb233162fdacccc4)
+
+---
+
+--- xen-4.8.3+xsa262+shim4.10.0+comet3.orig/tools/tests/x86_emulator/x86_emulate.c
++++ xen-4.8.3+xsa262+shim4.10.0+comet3/tools/tests/x86_emulator/x86_emulate.c
+@@ -14,6 +14,7 @@ typedef bool bool_t;
+ 
+ #define EFER_SCE       (1 << 0)
+ #define EFER_LMA       (1 << 10)
++#define EFER_SVME      (1 << 12)
+ 
+ #define BUG() abort()
+ #define ASSERT assert
