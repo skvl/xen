@@ -1,8 +1,20 @@
 xen (4.8.3+xsa262+shim4.10.0+comet3-1+deb9u6~) UNRELEASED; urgency=medium
 
   * Update to new upstream version 4.8.3+xsa262+shim4.10.0+comet3.
+    (This is the upstream staging-4.8 branch, which is ahead of the
+    upstream CI-tested stable-4.8 branch by precisely the three
+    most recent XSA fixes.)
 
- -- Ian Jackson <ian.jackson@citrix.com>  Wed, 9 May 2018 15:23:26 +0100
+  * Resulting security fixes:
+       XSA-258 CVE-2018-10472
+       XSA-259 CVE-2018-10471
+       XSA-260 CVE-2018-8897
+       XSA-261 (No CVE yet)
+       XSA-262 (No CVE yet)
+
+   * Apply two further build fixes from upstream staging-4.8.
+
+ -- Ian Jackson <ijackson@chiark.greenend.org.uk>  Thu, 10 May 2018 16:50:52 +0100
 
 xen (4.8.3+comet2+shim4.10.0+comet3-1+deb9u5) stretch-security; urgency=high
 
