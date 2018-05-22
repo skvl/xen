@@ -1,6 +1,35 @@
-xen (4.8.3+xsa262+shim4.10.0+comet3-1+deb9u7~) unstable; urgency=medium
+xen (4.8.3+xsa263+shim4.10.0+comet3-1+deb9u7~) unstable; urgency=medium
 
-  * 
+  * Include upstream XSA-263 (speculative store bypass) fixes for x86.
+    I hear that ARM fixes will be forthcoming RSN.  Ie,
+       XSA-263 CVE-2018-3639 (amd64/i386; armhf/arm64 still vuln.)
+
+  * Include a number of upstream bugfixes, including fixes to previous
+    security fixes, some of which are security-relevant:
+      x86: correct ordering of operations during S3 resume
+      x86: suppress BTI mitigations around S3 suspend/resume
+      x86/spec_ctrl: Updates to retpoline-safety decision making
+      x86/HPET: fix race triggering ASSERT(cpu < nr_cpu_ids)
+      x86/HVM: never retain emulated insn cache when exiting back to guest
+      xpti: fix bug in double fault handling
+      x86/cpuidle: don't init stats lock more than once
+      xen: Introduce vcpu_sleep_nosync_locked()
+      xen/schedule: Fix races in vcpu migration
+      x86: Fix "x86: further CPUID handling adjustments"
+
+    The result is very similar to upstream staging-4.8.  However, as
+    upstream staging-4.8 has not yet passed upstream CI, I have chosen to
+    cherry pick fixes so that I can drop a couple that don't look
+    immediately important.  We will expect to resynchronise with
+    upstream's 4.8 stable branch soon.
+
+  * Drop our patch `tools: fix arm build after bdf693ee61b48' (which was
+    needed to build the upstream 4.8 comet branch on ARM but is not needed
+    for the the upstream staging/stable branch).  Closes:#898898.
+
+  * Update changelog for 4.8.3+xsa262+shim4.10.0+comet3-1+deb9u6 to
+    mention branch switch from upstream 4.8 comet to upstream main 4.8,
+    and add some missing CVEs.
 
  --
 
@@ -9,14 +38,15 @@ xen (4.8.3+xsa262+shim4.10.0+comet3-1+deb9u6) stretch-security; urgency=high
   * Update to new upstream version 4.8.3+xsa262+shim4.10.0+comet3.
     (This is the upstream staging-4.8 branch, which is ahead of the
     upstream CI-tested stable-4.8 branch by precisely the three
-    most recent XSA fixes.)
+    most recent XSA fixes.  We are switching away from the special
+    upstream 4.8 comet branch.)
 
   * Resulting security fixes:
        XSA-258 CVE-2018-10472
        XSA-259 CVE-2018-10471
        XSA-260 CVE-2018-8897
-       XSA-261 (No CVE yet)
-       XSA-262 (No CVE yet)
+       XSA-261 CVE-2018-10982
+       XSA-262 CVE-2018-10981
 
    * Apply two further build fixes from upstream staging-4.8.
 
