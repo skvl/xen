@@ -1,0 +1,51 @@
+From: David Wang <davidwang@zhaoxin.com>
+Date: Fri, 18 May 2018 12:09:41 +0200
+X-Dgit-Generated: 4.8.3+xsa262+shim4.10.0+comet3-1+deb9u7~ 894d4f90fd8a0679bd219dfec73973e187c34965
+Subject: x86/HPET: fix race triggering ASSERT(cpu < nr_cpu_ids)
+
+CPUs may share an in-use channel. Hence clearing of a bit from the
+cpumask (in hpet_broadcast_exit()) as well as setting one (in
+hpet_broadcast_enter()) must not race evaluation of that same cpumask.
+Therefore avoid evaluating the cpumask twice in hpet_detach_channel().
+Otherwise cpumask_empty() may e.g.return false while the subsequent
+cpumask_first() could return nr_cpu_ids, which then triggers the
+assertion in cpumask_of() reached through set_channel_irq_affinity().
+
+Signed-off-by: David Wang <davidwang@zhaoxin.com>
+Reviewed-by: Jan Beulich <jbeulich@suse.com>
+master commit: 8c02a19230502a9522b097ee15742599091064aa
+master date: 2018-04-23 11:00:07 +0200
+
+(cherry picked from commit 4cdd4cc106433921dd46a471148411cb91150a4a)
+
+---
+
+--- xen-4.8.3+xsa262+shim4.10.0+comet3.orig/xen/arch/x86/hpet.c
++++ xen-4.8.3+xsa262+shim4.10.0+comet3/xen/arch/x86/hpet.c
+@@ -511,6 +511,8 @@ static void hpet_attach_channel(unsigned
+ static void hpet_detach_channel(unsigned int cpu,
+                                 struct hpet_event_channel *ch)
+ {
++    unsigned int next;
++
+     spin_lock_irq(&ch->lock);
+ 
+     ASSERT(ch == per_cpu(cpu_bc_channel, cpu));
+@@ -519,7 +521,7 @@ static void hpet_detach_channel(unsigned
+ 
+     if ( cpu != ch->cpu )
+         spin_unlock_irq(&ch->lock);
+-    else if ( cpumask_empty(ch->cpumask) )
++    else if ( (next = cpumask_first(ch->cpumask)) >= nr_cpu_ids )
+     {
+         ch->cpu = -1;
+         clear_bit(HPET_EVT_USED_BIT, &ch->flags);
+@@ -527,7 +529,7 @@ static void hpet_detach_channel(unsigned
+     }
+     else
+     {
+-        ch->cpu = cpumask_first(ch->cpumask);
++        ch->cpu = next;
+         set_channel_irq_affinity(ch);
+         local_irq_enable();
+     }

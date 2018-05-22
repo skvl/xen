@@ -1,0 +1,65 @@
+From: Jan Beulich <jbeulich@suse.com>
+Date: Fri, 18 May 2018 12:11:58 +0200
+X-Dgit-Generated: 4.8.3+xsa262+shim4.10.0+comet3-1+deb9u7~ 401f07e493682e060212caeffa55030fabefbe85
+Subject: x86/cpuidle: don't init stats lock more than once
+
+Osstest flight 122363, having hit an NMI watchdog timeout, shows CPU1 at
+
+Xen call trace:
+   [<ffff82d08023d3f4>] _spin_lock+0x30/0x57
+   [<ffff82d0802d9346>] update_last_cx_stat+0x29/0x42
+   [<ffff82d0802d96f3>] cpu_idle.c#acpi_processor_idle+0x2ff/0x596
+   [<ffff82d080276713>] domain.c#idle_loop+0xa8/0xc3
+
+and CPU0 at
+
+Xen call trace:
+   [<ffff82d08023d173>] on_selected_cpus+0xb7/0xde
+   [<ffff82d0802dbe22>] powernow.c#powernow_cpufreq_target+0x110/0x1cb
+   [<ffff82d080257973>] __cpufreq_driver_target+0x43/0xa6
+   [<ffff82d080256b0d>] cpufreq_governor_dbs+0x324/0x37a
+   [<ffff82d080257bf2>] __cpufreq_set_policy+0xfa/0x19d
+   [<ffff82d080256044>] cpufreq_add_cpu+0x3a1/0x5df
+   [<ffff82d0802dbab4>] cpufreq_cpu_init+0x17/0x1a
+   [<ffff82d0802567a8>] set_px_pminfo+0x2b6/0x2f7
+   [<ffff82d08029f1bf>] do_platform_op+0xe75/0x1977
+   [<ffff82d0803712c5>] pv_hypercall+0x1f4/0x440
+   [<ffff82d0803784a5>] lstar_enter+0x115/0x120
+
+That is, Dom0's ACPI processor driver is in the process of uploading Px
+and Cx data. Looking at the ticket lock state in CPU1's registers, it is
+waiting for ticket 0x0000 to have its turn, while the supposed current
+owner's ticket is 0x0001, which is an invalid state (and neither of the
+other two CPUs holds the lock anyway). Hence I can only conclude that
+cpuidle_init_cpu(1) ran on CPU 0 while some other CPU held the lock (the
+unlock then put the lock in the state that CPU1 is observing).
+
+Signed-off-by: Jan Beulich <jbeulich@suse.com>
+Acked-by: Andrew Cooper <andrew.cooper3@citrix.com>
+master commit: 2f64a251fa10dd4d62f84967e3dafa709f5e96ab
+master date: 2018-04-27 14:35:35 +0200
+
+(cherry picked from commit f2837b5f11394fc8107f0a06b2cebaa4f8d42d7c)
+
+---
+
+--- xen-4.8.3+xsa262+shim4.10.0+comet3.orig/xen/arch/x86/acpi/cpu_idle.c
++++ xen-4.8.3+xsa262+shim4.10.0+comet3/xen/arch/x86/acpi/cpu_idle.c
+@@ -833,6 +833,9 @@ int cpuidle_init_cpu(unsigned int cpu)
+             acpi_power->states[i].idx = i;
+ 
+         acpi_power->cpu = cpu;
++
++        spin_lock_init(&acpi_power->stat_lock);
++
+         processor_powers[cpu] = acpi_power;
+     }
+ 
+@@ -840,7 +843,6 @@ int cpuidle_init_cpu(unsigned int cpu)
+     acpi_power->states[1].type = ACPI_STATE_C1;
+     acpi_power->states[1].entry_method = ACPI_CSTATE_EM_HALT;
+     acpi_power->safe_state = &acpi_power->states[1];
+-    spin_lock_init(&acpi_power->stat_lock);
+ 
+     return 0;
+ }

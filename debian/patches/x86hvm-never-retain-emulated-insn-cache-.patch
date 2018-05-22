@@ -1,0 +1,54 @@
+From: Jan Beulich <jbeulich@suse.com>
+Date: Fri, 18 May 2018 12:10:11 +0200
+X-Dgit-Generated: 4.8.3+xsa262+shim4.10.0+comet3-1+deb9u7~ 121261b7834d3bd36cec6774961c0fb5f4184d82
+Subject: x86/HVM: never retain emulated insn cache when exiting back to guest
+
+Commit 5fcb26e69e ("x86/HVM: don't retain emulated insn cache when
+exiting back to guest") didn't go quite far enough: The insn emulator
+may itself decide to return X86EMUL_RETRY (currently for certain
+CMPXCHG failures and AVX2 gather insns), in which case we'd also exit
+back to guest context. Tie the caching to whether we have an I/O
+completion pending, instead of x86_emulate()'s return value.
+
+Signed-off-by: Jan Beulich <jbeulich@suse.com>
+Reviewed-by: Paul Durrant <paul.durrant@citrix.com>
+master commit: 25b0dad541e31bd892d57cbeafe8e0c0bf4e8385
+master date: 2018-04-23 11:01:09 +0200
+
+(cherry picked from commit b4ad8a6f152efbd426ce6d11a13f955798fde2cf)
+
+---
+
+--- xen-4.8.3+xsa262+shim4.10.0+comet3.orig/xen/arch/x86/hvm/emulate.c
++++ xen-4.8.3+xsa262+shim4.10.0+comet3/xen/arch/x86/hvm/emulate.c
+@@ -1794,22 +1794,20 @@ static int _hvm_emulate_one(struct hvm_e
+     else
+         hvmemul_ctxt->ctxt.swint_emulate = x86_swint_emulate_all;
+ 
+-    switch ( rc = x86_emulate(&hvmemul_ctxt->ctxt, ops) )
++    rc = x86_emulate(&hvmemul_ctxt->ctxt, ops);
++    if ( rc == X86EMUL_OKAY && vio->mmio_retry )
++        rc = X86EMUL_RETRY;
++
++    if ( !hvm_vcpu_io_need_completion(vio) )
+     {
+-    case X86EMUL_OKAY:
+-        if ( vio->mmio_retry )
+-            rc = X86EMUL_RETRY;
+-        /* fall through */
+-    default:
+         vio->mmio_cache_count = 0;
+         vio->mmio_insn_bytes = 0;
+-        break;
+-
+-    case X86EMUL_RETRY:
++    }
++    else
++    {
+         BUILD_BUG_ON(sizeof(vio->mmio_insn) < sizeof(hvmemul_ctxt->insn_buf));
+         vio->mmio_insn_bytes = hvmemul_ctxt->insn_buf_bytes;
+         memcpy(vio->mmio_insn, hvmemul_ctxt->insn_buf, vio->mmio_insn_bytes);
+-        break;
+     }
+ 
+     if ( rc != X86EMUL_OKAY )

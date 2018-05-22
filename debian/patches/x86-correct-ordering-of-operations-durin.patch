@@ -1,0 +1,59 @@
+From: Jan Beulich <jbeulich@suse.com>
+Date: Fri, 18 May 2018 12:07:41 +0200
+X-Dgit-Generated: 4.8.3+xsa262+shim4.10.0+comet3-1+deb9u7~ 65171265acc12796f50510a71a7a86c96757d6b5
+Subject: x86: correct ordering of operations during S3 resume
+
+Microcode loading needs to happen before re-enabling interrupts, in case
+only updated microcode allows the use of e.g. the SPEC_{CTRL,CMD} MSRs.
+Otoh it doesn't need to happen at all when we didn't suspend in the
+first place. It needs to happen before spin_debug_enable() though, as it
+acquires a lock and hence would otherwise make
+common/spinlock.c:check_lock() unhappy. As micrcode loading can be
+pretty verbose, also make sure it only runs after console_end_sync().
+
+cpufreq_add_cpu() doesn't need calling on the only "goto enable_cpu"
+path, which sits ahead of cpufreq_del_cpu().
+
+Reported-by: Simon Gaiser <simon@invisiblethingslab.com>
+Signed-off-by: Jan Beulich <jbeulich@suse.com>
+Acked-by: Andrew Cooper <andrew.cooper3@citrix.com>
+master commit: cb2a4a449dfd50af309a333aa805835015fbc8c8
+master date: 2018-04-16 14:08:30 +0200
+
+(cherry picked from commit 9cba9aeb4d9b8edad91db30ccfab451244e67a9d)
+
+---
+
+--- xen-4.8.3+xsa262+shim4.10.0+comet3.orig/xen/arch/x86/acpi/power.c
++++ xen-4.8.3+xsa262+shim4.10.0+comet3/xen/arch/x86/acpi/power.c
+@@ -204,6 +204,7 @@ static int enter_state(u32 state)
+         printk(XENLOG_ERR "Some devices failed to power down.");
+         system_state = SYS_STATE_resume;
+         device_power_up(error);
++        console_end_sync();
+         error = -EIO;
+         goto done;
+     }
+@@ -244,17 +245,19 @@ static int enter_state(u32 state)
+     if ( (state == ACPI_STATE_S3) && error )
+         tboot_s3_error(error);
+ 
++    console_end_sync();
++
++    microcode_resume_cpu(0);
++
+  done:
+     spin_debug_enable();
+     local_irq_restore(flags);
+-    console_end_sync();
+     acpi_sleep_post(state);
+     if ( hvm_cpu_up() )
+         BUG();
++    cpufreq_add_cpu(0);
+ 
+  enable_cpu:
+-    cpufreq_add_cpu(0);
+-    microcode_resume_cpu(0);
+     rcu_barrier();
+     mtrr_aps_sync_begin();
+     enable_nonboot_cpus();

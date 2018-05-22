@@ -1,0 +1,60 @@
+From: Andrew Cooper <andrew.cooper3@citrix.com>
+Date: Fri, 13 Apr 2018 15:42:34 +0000
+X-Dgit-Generated: 4.8.3+xsa262+shim4.10.0+comet3-1+deb9u7~ bc4a6b2c14f3e9e5ba093a1f565982a16ac55b63
+Subject: x86/msr: Virtualise MSR_SPEC_CTRL.SSBD for guests to use
+
+Almost all infrastructure is already in place.  Update the reserved bits
+calculation in guest_wrmsr(), and offer SSBD to guests by default.
+
+Signed-off-by: Andrew Cooper <andrew.cooper3@citrix.com>
+Reviewed-by: Jan Beulich <jbeulich@suse.com>
+
+---
+
+--- xen-4.8.3+xsa262+shim4.10.0+comet3.orig/xen/arch/x86/domctl.c
++++ xen-4.8.3+xsa262+shim4.10.0+comet3/xen/arch/x86/domctl.c
+@@ -1389,7 +1389,8 @@ long arch_do_domctl(
+                      * ignored) when STIBP isn't enumerated in hardware.
+                      */
+ 
+-                    if ( msr.value & ~(SPEC_CTRL_IBRS | SPEC_CTRL_STIBP) )
++                    if ( msr.value & ~(SPEC_CTRL_IBRS | SPEC_CTRL_STIBP |
++                                       (boot_cpu_has(X86_FEATURE_SSBD) ? SPEC_CTRL_SSBD : 0)) )
+                         break;
+                     v->arch.spec_ctrl = msr.value;
+                     continue;
+--- xen-4.8.3+xsa262+shim4.10.0+comet3.orig/xen/arch/x86/hvm/hvm.c
++++ xen-4.8.3+xsa262+shim4.10.0+comet3/xen/arch/x86/hvm/hvm.c
+@@ -4147,7 +4147,8 @@ int hvm_msr_write_intercept(unsigned int
+          * when STIBP isn't enumerated in hardware.
+          */
+ 
+-        if ( msr_content & ~(SPEC_CTRL_IBRS | SPEC_CTRL_STIBP) )
++        if ( msr_content & ~(SPEC_CTRL_IBRS | SPEC_CTRL_STIBP |
++                             ((edx & cpufeat_mask(X86_FEATURE_SSBD) ? SPEC_CTRL_SSBD : 0))) )
+             goto gp_fault; /* Rsvd bit set? */
+ 
+         v->arch.spec_ctrl = msr_content;
+--- xen-4.8.3+xsa262+shim4.10.0+comet3.orig/xen/arch/x86/traps.c
++++ xen-4.8.3+xsa262+shim4.10.0+comet3/xen/arch/x86/traps.c
+@@ -2752,7 +2752,8 @@ static int priv_op_write_msr(unsigned in
+          * when STIBP isn't enumerated in hardware.
+          */
+ 
+-        if ( val & ~(SPEC_CTRL_IBRS | SPEC_CTRL_STIBP) )
++        if ( val & ~(SPEC_CTRL_IBRS | SPEC_CTRL_STIBP |
++                     ((edx & cpufeat_mask(X86_FEATURE_SSBD) ? SPEC_CTRL_SSBD : 0))) )
+             break; /* Rsvd bit set? */
+ 
+         curr->arch.spec_ctrl = val;
+--- xen-4.8.3+xsa262+shim4.10.0+comet3.orig/xen/include/public/arch-x86/cpufeatureset.h
++++ xen-4.8.3+xsa262+shim4.10.0+comet3/xen/include/public/arch-x86/cpufeatureset.h
+@@ -239,7 +239,7 @@ XEN_CPUFEATURE(IBPB,          8*32+12) /
+ XEN_CPUFEATURE(IBRSB,         9*32+26) /*A  IBRS and IBPB support (used by Intel) */
+ XEN_CPUFEATURE(STIBP,         9*32+27) /*A! STIBP */
+ XEN_CPUFEATURE(ARCH_CAPS,     9*32+29) /*   IA32_ARCH_CAPABILITIES MSR */
+-XEN_CPUFEATURE(SSBD,          9*32+31) /*   MSR_SPEC_CTRL.SSBD available */
++XEN_CPUFEATURE(SSBD,          9*32+31) /*A  MSR_SPEC_CTRL.SSBD available */
+ 
+ #endif /* XEN_CPUFEATURE */
+ 
