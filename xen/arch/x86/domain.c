@@ -47,7 +47,9 @@
 #include <asm/desc.h>
 #include <asm/i387.h>
 #include <asm/xstate.h>
+#include <asm/cpufeature.h>
 #include <asm/cpuidle.h>
+#include <asm/invpcid.h>
 #include <asm/mpspec.h>
 #include <asm/ldt.h>
 #include <asm/hvm/hvm.h>
@@ -65,6 +67,49 @@
 #include <compat/vcpu.h>
 #include <asm/psr.h>
 #include <asm/spec_ctrl.h>
+
+static __read_mostly enum {
+    PCID_OFF,
+    PCID_ALL,
+    PCID_XPTI,
+    PCID_NOXPTI
+} opt_pcid = PCID_XPTI;
+
+static __init int parse_pcid(const char *s)
+{
+    int rc = 0;
+
+    switch ( parse_bool(s) )
+    {
+    case 0:
+        opt_pcid = PCID_OFF;
+        break;
+
+    case 1:
+        opt_pcid = PCID_ALL;
+        break;
+
+    default:
+        switch ( parse_boolean("xpti", s, NULL) )
+        {
+        case 0:
+            opt_pcid = PCID_NOXPTI;
+            break;
+
+        case 1:
+            opt_pcid = PCID_XPTI;
+            break;
+
+        default:
+            rc = -EINVAL;
+            break;
+        }
+        break;
+    }
+
+    return rc;
+}
+custom_param("pcid", parse_pcid);
 
 DEFINE_PER_CPU(struct vcpu *, curr_vcpu);
 
@@ -330,6 +375,43 @@ static void release_compat_l4(struct vcpu *v)
     v->arch.guest_table_user = pagetable_null();
 }
 
+static void set_domain_xpti(struct domain *d)
+{
+    if ( is_pv_32bit_domain(d) )
+    {
+        d->arch.pv_domain.xpti = false;
+        d->arch.pv_domain.pcid = false;
+    }
+    else
+    {
+        d->arch.pv_domain.xpti = opt_xpti & (is_hardware_domain(d)
+                                             ? OPT_XPTI_DOM0 : OPT_XPTI_DOMU);
+
+        if ( use_invpcid && cpu_has_pcid )
+            switch ( opt_pcid )
+            {
+            case PCID_OFF:
+                break;
+
+            case PCID_ALL:
+                d->arch.pv_domain.pcid = true;
+                break;
+
+            case PCID_XPTI:
+                d->arch.pv_domain.pcid = d->arch.pv_domain.xpti;
+                break;
+
+            case PCID_NOXPTI:
+                d->arch.pv_domain.pcid = !d->arch.pv_domain.xpti;
+                break;
+
+            default:
+                ASSERT_UNREACHABLE();
+                break;
+            }
+    }
+}
+
 static inline int may_switch_mode(struct domain *d)
 {
     return (!is_hvm_domain(d) && (d->tot_pages == 0));
@@ -357,6 +439,9 @@ int switch_native(struct domain *d)
     }
 
     d->arch.x87_fip_width = cpu_has_fpu_sel ? 0 : 8;
+
+    if ( is_pv_domain(d) )
+        set_domain_xpti(d);
 
     return 0;
 }
@@ -393,6 +478,9 @@ int switch_compat(struct domain *d)
     domain_set_alloc_bitsize(d);
 
     d->arch.x87_fip_width = 4;
+
+    if ( is_pv_domain(d) )
+        set_domain_xpti(d);
 
     return 0;
 
@@ -670,9 +758,13 @@ int arch_domain_create(struct domain *d, unsigned int domcr_flags,
         if ( (rc = hvm_domain_initialise(d)) != 0 )
             goto fail;
     }
-    else
+    else if ( !is_idle_domain(d) )
+    {
         /* 64-bit PV guest by default. */
         d->arch.is_32bit_pv = d->arch.has_32bit_shinfo = 0;
+
+        set_domain_xpti(d);
+    }
 
     /* initialize default tsc behavior in case tools don't */
     tsc_set_info(d, TSC_MODE_DEFAULT, 0UL, 0, 0);
@@ -1957,7 +2049,6 @@ static void paravirt_ctxt_switch_from(struct vcpu *v)
 static void paravirt_ctxt_switch_to(struct vcpu *v)
 {
     root_pgentry_t *root_pgt = this_cpu(root_pgt);
-    unsigned long cr4;
 
     switch_kernel_stack(v);
 
@@ -1965,10 +2056,6 @@ static void paravirt_ctxt_switch_to(struct vcpu *v)
         root_pgt[root_table_offset(PERDOMAIN_VIRT_START)] =
             l4e_from_page(v->domain->arch.perdomain_l3_pg,
                           __PAGE_HYPERVISOR_RW);
-
-    cr4 = pv_guest_cr4_to_real_cr4(v);
-    if ( unlikely(cr4 != read_cr4()) )
-        write_cr4(cr4);
 
     if ( unlikely(v->arch.debugreg[7] & DR7_ACTIVE_MASK) )
         activate_debugregs(v);
@@ -2134,6 +2221,7 @@ void context_switch(struct vcpu *prev, struct vcpu *next)
 
     ASSERT(local_irq_is_enabled());
 
+    get_cpu_info()->use_pv_cr3 = false;
     get_cpu_info()->xen_cr3 = 0;
 
     cpumask_copy(&dirty_mask, next->vcpu_dirty_cpumask);

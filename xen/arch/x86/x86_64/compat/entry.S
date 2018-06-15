@@ -171,7 +171,7 @@ ENTRY(compat_restore_all_guest)
         mov VCPU_arch_spec_ctrl(%rbx), %eax
 
         /* WARNING! `ret`, `call *`, `jmp *` not safe beyond this point. */
-        SPEC_CTRL_EXIT_TO_GUEST /* Req: a=spec_ctrl %rsp=regs/cpuinfo, Clob: cd */
+        SPEC_CTRL_EXIT_TO_PV    /* Req: a=spec_ctrl %rsp=regs/cpuinfo, Clob: cd */
 
         RESTORE_ALL adj=8 compat=1
 .Lft0:  iretq
@@ -229,10 +229,9 @@ ENTRY(cstar_enter)
 
         GET_STACK_END(bx)
         mov   STACK_CPUINFO_FIELD(xen_cr3)(%rbx), %rcx
-        neg   %rcx
+        test  %rcx, %rcx
         jz    .Lcstar_cr3_okay
-        mov   %rcx, STACK_CPUINFO_FIELD(xen_cr3)(%rbx)
-        neg   %rcx
+        movb  $0, STACK_CPUINFO_FIELD(use_pv_cr3)(%rbx)
         mov   %rcx, %cr3
         movq  $0, STACK_CPUINFO_FIELD(xen_cr3)(%rbx)
 .Lcstar_cr3_okay:

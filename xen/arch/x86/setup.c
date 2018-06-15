@@ -62,6 +62,11 @@ boolean_param("nosmp", opt_nosmp);
 static unsigned int __initdata max_cpus;
 integer_param("maxcpus", max_cpus);
 
+/* opt_invpcid: If false, don't use INVPCID instruction even if available. */
+static bool __initdata opt_invpcid = true;
+boolean_param("invpcid", opt_invpcid);
+bool __read_mostly use_invpcid;
+
 unsigned long __read_mostly cr4_pv32_mask;
 
 /* Boot dom0 in pvh mode */
@@ -156,9 +161,6 @@ static void __init parse_smap_param(char *s)
         opt_smap = SMAP_HVM_ONLY;
 }
 custom_param("smap", parse_smap_param);
-
-static int8_t __initdata opt_xpti = -1;
-boolean_param("xpti", opt_xpti);
 
 bool_t __read_mostly acpi_disabled;
 bool_t __initdata acpi_force;
@@ -1483,24 +1485,11 @@ void __init noreturn __start_xen(unsigned long mbi_p)
 
     cr4_pv32_mask = mmu_cr4_features & XEN_CR4_PV32_BITS;
 
-    if ( opt_xpti < 0 )
-    {
-        uint64_t caps = 0;
-
-        if ( boot_cpu_data.x86_vendor == X86_VENDOR_AMD )
-            caps = ARCH_CAPABILITIES_RDCL_NO;
-        else if ( boot_cpu_has(X86_FEATURE_ARCH_CAPS) )
-            rdmsrl(MSR_ARCH_CAPABILITIES, caps);
-
-        opt_xpti = !(caps & ARCH_CAPABILITIES_RDCL_NO);
-    }
-    if ( opt_xpti )
-        setup_clear_cpu_cap(X86_FEATURE_NO_XPTI);
-    else
-        setup_force_cpu_cap(X86_FEATURE_NO_XPTI);
-
     if ( cpu_has_fsgsbase )
         set_in_cr4(X86_CR4_FSGSBASE);
+
+    if ( opt_invpcid && cpu_has_invpcid )
+        use_invpcid = true;
 
     init_speculation_mitigations();
 
@@ -1675,6 +1664,13 @@ void __init noreturn __start_xen(unsigned long mbi_p)
     dmi_end_boot();
 
     setup_io_bitmap(dom0);
+
+    if ( bsp_delay_spec_ctrl )
+    {
+        get_cpu_info()->spec_ctrl_flags &= ~SCF_use_shadow;
+        barrier();
+        wrmsrl(MSR_SPEC_CTRL, default_xen_spec_ctrl);
+    }
 
     /* Jump to the 1:1 virtual mappings of cpu0_stack. */
     asm volatile ("mov %[stk], %%rsp; jmp %c[fn]" ::

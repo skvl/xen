@@ -25,11 +25,12 @@ XEN_CPUFEATURE(LFENCE_DISPATCH, (FSCAPINTS+0)*32+14) /* lfence set as Dispatch S
 XEN_CPUFEATURE(IND_THUNK_LFENCE,(FSCAPINTS+0)*32+15) /* Use IND_THUNK_LFENCE */
 XEN_CPUFEATURE(IND_THUNK_JMP,   (FSCAPINTS+0)*32+16) /* Use IND_THUNK_JMP */
 XEN_CPUFEATURE(XEN_IBPB,        (FSCAPINTS+0)*32+17) /* IBRSB || IBPB */
-XEN_CPUFEATURE(XEN_IBRS_SET,    (FSCAPINTS+0)*32+18) /* IBRSB && IRBS set in Xen */
-XEN_CPUFEATURE(XEN_IBRS_CLEAR,  (FSCAPINTS+0)*32+19) /* IBRSB && IBRS clear in Xen */
-XEN_CPUFEATURE(RSB_NATIVE,      (FSCAPINTS+0)*32+20) /* RSB overwrite needed for native */
-XEN_CPUFEATURE(RSB_VMEXIT,      (FSCAPINTS+0)*32+21) /* RSB overwrite needed for vmexit */
+XEN_CPUFEATURE(SC_MSR_PV,       (FSCAPINTS+0)*32+18) /* MSR_SPEC_CTRL used by Xen for PV */
+XEN_CPUFEATURE(SC_MSR_HVM,      (FSCAPINTS+0)*32+19) /* MSR_SPEC_CTRL used by Xen for HVM */
+XEN_CPUFEATURE(SC_RSB_PV,       (FSCAPINTS+0)*32+20) /* RSB overwrite needed for PV */
+XEN_CPUFEATURE(SC_RSB_HVM,      (FSCAPINTS+0)*32+21) /* RSB overwrite needed for HVM */
 XEN_CPUFEATURE(NO_XPTI,         (FSCAPINTS+0)*32+22) /* XPTI mitigation not in use */
+XEN_CPUFEATURE(SC_MSR_IDLE,     (FSCAPINTS+0)*32+23) /* (SC_MSR_PV || SC_MSR_HVM) && default_xen_spec_ctrl */
 
 #define NCAPINTS (FSCAPINTS + 1) /* N 32-bit words worth of info */
 
@@ -81,6 +82,7 @@ XEN_CPUFEATURE(NO_XPTI,         (FSCAPINTS+0)*32+22) /* XPTI mitigation not in u
 #define cpu_has_fsgsbase	boot_cpu_has(X86_FEATURE_FSGSBASE)
 #define cpu_has_aperfmperf	boot_cpu_has(X86_FEATURE_APERFMPERF)
 #define cpu_has_smep            boot_cpu_has(X86_FEATURE_SMEP)
+#define cpu_has_invpcid         boot_cpu_has(X86_FEATURE_INVPCID)
 #define cpu_has_smap            boot_cpu_has(X86_FEATURE_SMAP)
 #define cpu_has_fpu_sel         (!boot_cpu_has(X86_FEATURE_NO_FPU_SEL))
 #define cpu_has_ffxsr           ((boot_cpu_data.x86_vendor == X86_VENDOR_AMD) \
