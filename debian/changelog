@@ -1,3 +1,9 @@
+xen (4.8.3+xsa267+shim4.10.0+comet3-1+deb9u8~) UNRELEASED; urgency=medium
+
+  * Update to new upstream version 4.8.3+xsa267+shim4.10.0+comet3.
+
+ -- Ian Jackson <ian.jackson@citrix.com>  Fri, 15 Jun 2018 16:52:00 +0100
+
 xen (4.8.3+xsa262+shim4.10.0+comet3-1+deb9u7) stretch-security; urgency=high
 
   * Include upstream XSA-263 (speculative store bypass) fixes for x86.
