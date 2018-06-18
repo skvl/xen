@@ -52,6 +52,7 @@
 #include <asm/mc146818rtc.h>
 #include <asm/cpuid.h>
 #include <asm/guest.h>
+#include <asm/spec_ctrl.h>
 
 /* opt_nosmp: If true, secondary processors are ignored. */
 static bool __initdata opt_nosmp;
@@ -60,6 +61,11 @@ boolean_param("nosmp", opt_nosmp);
 /* maxcpus: maximum number of CPUs to activate. */
 static unsigned int __initdata max_cpus;
 integer_param("maxcpus", max_cpus);
+
+/* opt_invpcid: If false, don't use INVPCID instruction even if available. */
+static bool __initdata opt_invpcid = true;
+boolean_param("invpcid", opt_invpcid);
+bool __read_mostly use_invpcid;
 
 unsigned long __read_mostly cr4_pv32_mask;
 
@@ -677,6 +683,7 @@ void __init noreturn __start_xen(unsigned long mbi_p)
     set_processor_id(0);
     set_current(INVALID_VCPU); /* debug sanity. */
     idle_vcpu[0] = current;
+    init_shadow_spec_ctrl_state();
 
     percpu_init_areas();
 
@@ -1537,6 +1544,11 @@ void __init noreturn __start_xen(unsigned long mbi_p)
     if ( cpu_has_fsgsbase )
         set_in_cr4(X86_CR4_FSGSBASE);
 
+    if ( opt_invpcid && cpu_has_invpcid )
+        use_invpcid = true;
+
+    init_speculation_mitigations();
+
     init_idle_domain();
 
     this_cpu(stubs.addr) = alloc_stub_page(smp_processor_id(),
@@ -1722,6 +1734,13 @@ void __init noreturn __start_xen(unsigned long mbi_p)
     dmi_end_boot();
 
     setup_io_bitmap(dom0);
+
+    if ( bsp_delay_spec_ctrl )
+    {
+        get_cpu_info()->spec_ctrl_flags &= ~SCF_use_shadow;
+        barrier();
+        wrmsrl(MSR_SPEC_CTRL, default_xen_spec_ctrl);
+    }
 
     /* Jump to the 1:1 virtual mappings of cpu0_stack. */
     asm volatile ("mov %[stk], %%rsp; jmp %c[fn]" ::

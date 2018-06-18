@@ -55,6 +55,7 @@
 #include <asm/hvm/viridian.h>
 #include <asm/debugreg.h>
 #include <asm/msr.h>
+#include <asm/spec_ctrl.h>
 #include <asm/traps.h>
 #include <asm/nmi.h>
 #include <asm/mce.h>
@@ -65,6 +66,7 @@
 #include <asm/psr.h>
 #include <asm/pv/domain.h>
 #include <asm/pv/mm.h>
+#include <asm/spec_ctrl.h>
 
 DEFINE_PER_CPU(struct vcpu *, curr_vcpu);
 
@@ -74,9 +76,15 @@ void (*dead_idle) (void) __read_mostly = default_dead_idle;
 
 static void default_idle(void)
 {
+    struct cpu_info *info = get_cpu_info();
+
     local_irq_disable();
     if ( cpu_is_haltable(smp_processor_id()) )
+    {
+        spec_ctrl_enter_idle(info);
         safe_halt();
+        spec_ctrl_exit_idle(info);
+    }
     else
         local_irq_enable();
 }
@@ -88,6 +96,7 @@ void default_dead_idle(void)
      * held by the CPUs spinning here indefinitely, and get discarded by
      * a subsequent INIT.
      */
+    spec_ctrl_enter_idle(get_cpu_info());
     wbinvd();
     for ( ; ; )
         halt();
@@ -363,6 +372,8 @@ int vcpu_initialise(struct vcpu *v)
 
         if ( (rc = init_vcpu_msr_policy(v)) )
             goto fail;
+
+        cpuid_policy_updated(v);
     }
 
     return rc;
@@ -402,7 +413,7 @@ static bool emulation_flags_ok(const struct domain *d, uint32_t emflags)
         if ( is_hardware_domain(d) &&
              emflags != (XEN_X86_EMU_LAPIC|XEN_X86_EMU_IOAPIC) )
             return false;
-        if ( !is_hardware_domain(d) && emflags &&
+        if ( !is_hardware_domain(d) &&
              emflags != XEN_X86_EMU_ALL && emflags != XEN_X86_EMU_LAPIC )
             return false;
     }
@@ -1505,18 +1516,19 @@ void paravirt_ctxt_switch_from(struct vcpu *v)
 
 void paravirt_ctxt_switch_to(struct vcpu *v)
 {
-    unsigned long cr4;
+    root_pgentry_t *root_pgt = this_cpu(root_pgt);
 
-    cr4 = pv_guest_cr4_to_real_cr4(v);
-    if ( unlikely(cr4 != read_cr4()) )
-        write_cr4(cr4);
+    if ( root_pgt )
+        root_pgt[root_table_offset(PERDOMAIN_VIRT_START)] =
+            l4e_from_page(v->domain->arch.perdomain_l3_pg,
+                          __PAGE_HYPERVISOR_RW);
 
     if ( unlikely(v->arch.debugreg[7] & DR7_ACTIVE_MASK) )
         activate_debugregs(v);
 
-    if ( (v->domain->arch.tsc_mode ==  TSC_MODE_PVRDTSCP) &&
-         boot_cpu_has(X86_FEATURE_RDTSCP) )
-        write_rdtscp_aux(v->domain->arch.incarnation);
+    if ( cpu_has_rdtscp )
+        wrmsr_tsc_aux(v->domain->arch.tsc_mode == TSC_MODE_PVRDTSCP
+                      ? v->domain->arch.incarnation : 0);
 }
 
 /* Update per-VCPU guest runstate shared memory area (if registered). */
@@ -1676,6 +1688,9 @@ void context_switch(struct vcpu *prev, struct vcpu *next)
 
     ASSERT(local_irq_is_enabled());
 
+    get_cpu_info()->use_pv_cr3 = false;
+    get_cpu_info()->xen_cr3 = 0;
+
     cpumask_copy(&dirty_mask, next->vcpu_dirty_cpumask);
     /* Allow at most one CPU at a time to be dirty. */
     ASSERT(cpumask_weight(&dirty_mask) <= 1);
@@ -1729,6 +1744,34 @@ void context_switch(struct vcpu *prev, struct vcpu *next)
         }
 
         ctxt_switch_levelling(next);
+
+        if ( opt_ibpb && !is_idle_domain(nextd) )
+        {
+            static DEFINE_PER_CPU(unsigned int, last);
+            unsigned int *last_id = &this_cpu(last);
+
+            /*
+             * Squash the domid and vcpu id together for comparison
+             * efficiency.  We could in principle stash and compare the struct
+             * vcpu pointer, but this risks a false alias if a domain has died
+             * and the same 4k page gets reused for a new vcpu.
+             */
+            unsigned int next_id = (((unsigned int)nextd->domain_id << 16) |
+                                    (uint16_t)next->vcpu_id);
+            BUILD_BUG_ON(MAX_VIRT_CPUS > 0xffff);
+
+            /*
+             * When scheduling from a vcpu, to idle, and back to the same vcpu
+             * (which might be common in a lightly loaded system, or when
+             * using vcpu pinning), there is no need to issue IBPB, as we are
+             * returning to the same security context.
+             */
+            if ( *last_id != next_id )
+            {
+                wrmsrl(MSR_PRED_CMD, PRED_CMD_IBPB);
+                *last_id = next_id;
+            }
+        }
     }
 
     context_saved(prev);
@@ -2016,6 +2059,16 @@ int domain_relinquish_resources(struct domain *d)
         hvm_domain_relinquish_resources(d);
 
     return 0;
+}
+
+/*
+ * Called during vcpu construction, and each time the toolstack changes the
+ * CPUID configuration for the domain.
+ */
+void cpuid_policy_updated(struct vcpu *v)
+{
+    if ( is_hvm_vcpu(v) )
+        hvm_cpuid_policy_changed(v);
 }
 
 void arch_dump_domain_info(struct domain *d)

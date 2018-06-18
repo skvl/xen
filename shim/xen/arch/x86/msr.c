@@ -24,6 +24,8 @@
 #include <xen/sched.h>
 #include <asm/msr.h>
 
+DEFINE_PER_CPU(uint32_t, tsc_aux);
+
 struct msr_domain_policy __read_mostly hvm_max_msr_domain_policy,
                          __read_mostly  pv_max_msr_domain_policy;
 
@@ -120,17 +122,34 @@ int init_vcpu_msr_policy(struct vcpu *v)
 
 int guest_rdmsr(const struct vcpu *v, uint32_t msr, uint64_t *val)
 {
+    const struct cpuid_policy *cp = v->domain->arch.cpuid;
     const struct msr_domain_policy *dp = v->domain->arch.msr;
     const struct msr_vcpu_policy *vp = v->arch.msr;
 
     switch ( msr )
     {
+    case MSR_AMD_PATCHLOADER:
+    case MSR_IA32_UCODE_WRITE:
+    case MSR_PRED_CMD:
+        /* Write-only */
+        goto gp_fault;
+
+    case MSR_SPEC_CTRL:
+        if ( !cp->feat.ibrsb )
+            goto gp_fault;
+        *val = vp->spec_ctrl.raw;
+        break;
+
     case MSR_INTEL_PLATFORM_INFO:
         if ( !dp->plaform_info.available )
             goto gp_fault;
         *val = (uint64_t)dp->plaform_info.cpuid_faulting <<
                _MSR_PLATFORM_INFO_CPUID_FAULTING;
         break;
+
+    case MSR_ARCH_CAPABILITIES:
+        /* Not implemented yet. */
+        goto gp_fault;
 
     case MSR_INTEL_MISC_FEATURES_ENABLES:
         if ( !vp->misc_features_enables.available )
@@ -153,22 +172,77 @@ int guest_wrmsr(struct vcpu *v, uint32_t msr, uint64_t val)
 {
     const struct vcpu *curr = current;
     struct domain *d = v->domain;
+    const struct cpuid_policy *cp = d->arch.cpuid;
     struct msr_domain_policy *dp = d->arch.msr;
     struct msr_vcpu_policy *vp = v->arch.msr;
 
     switch ( msr )
     {
+        uint64_t rsvd;
+
     case MSR_INTEL_PLATFORM_INFO:
+    case MSR_ARCH_CAPABILITIES:
+        /* Read-only */
         goto gp_fault;
+
+    case MSR_AMD_PATCHLOADER:
+        /*
+         * See note on MSR_IA32_UCODE_WRITE below, which may or may not apply
+         * to AMD CPUs as well (at least the architectural/CPUID part does).
+         */
+        if ( is_pv_domain(d) ||
+             d->arch.cpuid->x86_vendor != X86_VENDOR_AMD )
+            goto gp_fault;
+        break;
+
+    case MSR_IA32_UCODE_WRITE:
+        /*
+         * Some versions of Windows at least on certain hardware try to load
+         * microcode before setting up an IDT. Therefore we must not inject #GP
+         * for such attempts. Also the MSR is architectural and not qualified
+         * by any CPUID bit.
+         */
+        if ( is_pv_domain(d) ||
+             d->arch.cpuid->x86_vendor != X86_VENDOR_INTEL )
+            goto gp_fault;
+        break;
+
+    case MSR_SPEC_CTRL:
+        if ( !cp->feat.ibrsb )
+            goto gp_fault; /* MSR available? */
+
+        /*
+         * Note: SPEC_CTRL_STIBP is specified as safe to use (i.e. ignored)
+         * when STIBP isn't enumerated in hardware.
+         */
+        rsvd = ~(SPEC_CTRL_IBRS | SPEC_CTRL_STIBP |
+                 (cp->feat.ssbd ? SPEC_CTRL_SSBD : 0));
+
+        if ( val & rsvd )
+            goto gp_fault; /* Rsvd bit set? */
+
+        vp->spec_ctrl.raw = val;
+        break;
+
+    case MSR_PRED_CMD:
+        if ( !cp->feat.ibrsb && !cp->extd.ibpb )
+            goto gp_fault; /* MSR available? */
+
+        if ( val & ~PRED_CMD_IBPB )
+            goto gp_fault; /* Rsvd bit set? */
+
+        if ( v == curr )
+            wrmsrl(MSR_PRED_CMD, val);
+        break;
 
     case MSR_INTEL_MISC_FEATURES_ENABLES:
     {
-        uint64_t rsvd = ~0ull;
         bool old_cpuid_faulting = vp->misc_features_enables.cpuid_faulting;
 
         if ( !vp->misc_features_enables.available )
             goto gp_fault;
 
+        rsvd = ~0ull;
         if ( dp->plaform_info.cpuid_faulting )
             rsvd &= ~MSR_MISC_FEATURES_CPUID_FAULTING;
 

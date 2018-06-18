@@ -41,6 +41,7 @@
 #include <asm/guest.h>
 #include <asm/msr.h>
 #include <asm/mtrr.h>
+#include <asm/spec_ctrl.h>
 #include <asm/time.h>
 #include <asm/tboot.h>
 #include <mach_apic.h>
@@ -309,6 +310,7 @@ void start_secondary(void *unused)
     set_current(idle_vcpu[cpu]);
     this_cpu(curr_vcpu) = idle_vcpu[cpu];
     rdmsrl(MSR_EFER, this_cpu(efer));
+    init_shadow_spec_ctrl_state();
 
     /*
      * Just as during early bootstrap, it is convenient here to disable
@@ -328,6 +330,10 @@ void start_secondary(void *unused)
      */
     spin_debug_disable();
 
+    get_cpu_info()->use_pv_cr3 = false;
+    get_cpu_info()->xen_cr3 = 0;
+    get_cpu_info()->pv_cr3 = 0;
+
     load_system_tables();
 
     /* Full exception support from here on in. */
@@ -345,6 +351,14 @@ void start_secondary(void *unused)
         early_microcode_update_cpu(false);
     else
         microcode_resume_cpu(cpu);
+
+    /*
+     * If MSR_SPEC_CTRL is available, apply Xen's default setting and discard
+     * any firmware settings.  Note: MSR_SPEC_CTRL may only become available
+     * after loading microcode.
+     */
+    if ( boot_cpu_has(X86_FEATURE_IBRSB) )
+        wrmsrl(MSR_SPEC_CTRL, default_xen_spec_ctrl);
 
     if ( xen_guest )
         hypervisor_ap_setup();
@@ -639,6 +653,236 @@ void cpu_exit_clear(unsigned int cpu)
     set_cpu_state(CPU_STATE_DEAD);
 }
 
+static int clone_mapping(const void *ptr, root_pgentry_t *rpt)
+{
+    unsigned long linear = (unsigned long)ptr, pfn;
+    unsigned int flags;
+    l3_pgentry_t *pl3e;
+    l2_pgentry_t *pl2e;
+    l1_pgentry_t *pl1e;
+
+    /*
+     * Sanity check 'linear'.  We only allow cloning from the Xen virtual
+     * range, and in particular, only from the directmap and .text ranges.
+     */
+    if ( root_table_offset(linear) > ROOT_PAGETABLE_LAST_XEN_SLOT ||
+         root_table_offset(linear) < ROOT_PAGETABLE_FIRST_XEN_SLOT )
+        return -EINVAL;
+
+    if ( linear < XEN_VIRT_START ||
+         (linear >= XEN_VIRT_END && linear < DIRECTMAP_VIRT_START) )
+        return -EINVAL;
+
+    pl3e = l4e_to_l3e(idle_pg_table[root_table_offset(linear)]) +
+        l3_table_offset(linear);
+
+    flags = l3e_get_flags(*pl3e);
+    ASSERT(flags & _PAGE_PRESENT);
+    if ( flags & _PAGE_PSE )
+    {
+        pfn = (l3e_get_pfn(*pl3e) & ~((1UL << (2 * PAGETABLE_ORDER)) - 1)) |
+              (PFN_DOWN(linear) & ((1UL << (2 * PAGETABLE_ORDER)) - 1));
+        flags &= ~_PAGE_PSE;
+    }
+    else
+    {
+        pl2e = l3e_to_l2e(*pl3e) + l2_table_offset(linear);
+        flags = l2e_get_flags(*pl2e);
+        ASSERT(flags & _PAGE_PRESENT);
+        if ( flags & _PAGE_PSE )
+        {
+            pfn = (l2e_get_pfn(*pl2e) & ~((1UL << PAGETABLE_ORDER) - 1)) |
+                  (PFN_DOWN(linear) & ((1UL << PAGETABLE_ORDER) - 1));
+            flags &= ~_PAGE_PSE;
+        }
+        else
+        {
+            pl1e = l2e_to_l1e(*pl2e) + l1_table_offset(linear);
+            flags = l1e_get_flags(*pl1e);
+            if ( !(flags & _PAGE_PRESENT) )
+                return 0;
+            pfn = l1e_get_pfn(*pl1e);
+        }
+    }
+
+    if ( !(root_get_flags(rpt[root_table_offset(linear)]) & _PAGE_PRESENT) )
+    {
+        pl3e = alloc_xen_pagetable();
+        if ( !pl3e )
+            return -ENOMEM;
+        clear_page(pl3e);
+        l4e_write(&rpt[root_table_offset(linear)],
+                  l4e_from_paddr(__pa(pl3e), __PAGE_HYPERVISOR));
+    }
+    else
+        pl3e = l4e_to_l3e(rpt[root_table_offset(linear)]);
+
+    pl3e += l3_table_offset(linear);
+
+    if ( !(l3e_get_flags(*pl3e) & _PAGE_PRESENT) )
+    {
+        pl2e = alloc_xen_pagetable();
+        if ( !pl2e )
+            return -ENOMEM;
+        clear_page(pl2e);
+        l3e_write(pl3e, l3e_from_paddr(__pa(pl2e), __PAGE_HYPERVISOR));
+    }
+    else
+    {
+        ASSERT(!(l3e_get_flags(*pl3e) & _PAGE_PSE));
+        pl2e = l3e_to_l2e(*pl3e);
+    }
+
+    pl2e += l2_table_offset(linear);
+
+    if ( !(l2e_get_flags(*pl2e) & _PAGE_PRESENT) )
+    {
+        pl1e = alloc_xen_pagetable();
+        if ( !pl1e )
+            return -ENOMEM;
+        clear_page(pl1e);
+        l2e_write(pl2e, l2e_from_paddr(__pa(pl1e), __PAGE_HYPERVISOR));
+    }
+    else
+    {
+        ASSERT(!(l2e_get_flags(*pl2e) & _PAGE_PSE));
+        pl1e = l2e_to_l1e(*pl2e);
+    }
+
+    pl1e += l1_table_offset(linear);
+    flags &= ~_PAGE_GLOBAL;
+
+    if ( l1e_get_flags(*pl1e) & _PAGE_PRESENT )
+    {
+        ASSERT(l1e_get_pfn(*pl1e) == pfn);
+        ASSERT(l1e_get_flags(*pl1e) == flags);
+    }
+    else
+        l1e_write(pl1e, l1e_from_pfn(pfn, flags));
+
+    return 0;
+}
+
+DEFINE_PER_CPU(root_pgentry_t *, root_pgt);
+
+static root_pgentry_t common_pgt;
+
+extern const char _stextentry[], _etextentry[];
+
+static int setup_cpu_root_pgt(unsigned int cpu)
+{
+    root_pgentry_t *rpt;
+    unsigned int off;
+    int rc;
+
+    if ( cpu_has_no_xpti )
+        return 0;
+
+    rpt = alloc_xen_pagetable();
+    if ( !rpt )
+        return -ENOMEM;
+
+    clear_page(rpt);
+    per_cpu(root_pgt, cpu) = rpt;
+
+    rpt[root_table_offset(RO_MPT_VIRT_START)] =
+        idle_pg_table[root_table_offset(RO_MPT_VIRT_START)];
+    /* SH_LINEAR_PT inserted together with guest mappings. */
+    /* PERDOMAIN inserted during context switch. */
+
+    /* One-time setup of common_pgt, which maps .text.entry and the stubs. */
+    if ( unlikely(!root_get_intpte(common_pgt)) )
+    {
+        const char *ptr;
+
+        for ( rc = 0, ptr = _stextentry;
+              !rc && ptr < _etextentry; ptr += PAGE_SIZE )
+            rc = clone_mapping(ptr, rpt);
+
+        if ( rc )
+            return rc;
+
+        common_pgt = rpt[root_table_offset(XEN_VIRT_START)];
+    }
+
+    rpt[root_table_offset(XEN_VIRT_START)] = common_pgt;
+
+    /* Install direct map page table entries for stack, IDT, and TSS. */
+    for ( off = rc = 0; !rc && off < STACK_SIZE; off += PAGE_SIZE )
+        if ( !memguard_is_stack_guard_page(off) )
+            rc = clone_mapping(__va(__pa(stack_base[cpu])) + off, rpt);
+
+    if ( !rc )
+        rc = clone_mapping(idt_tables[cpu], rpt);
+    if ( !rc )
+        rc = clone_mapping(&per_cpu(init_tss, cpu), rpt);
+    if ( !rc )
+        rc = clone_mapping((void *)per_cpu(stubs.addr, cpu), rpt);
+
+    return rc;
+}
+
+static void cleanup_cpu_root_pgt(unsigned int cpu)
+{
+    root_pgentry_t *rpt = per_cpu(root_pgt, cpu);
+    unsigned int r;
+    unsigned long stub_linear = per_cpu(stubs.addr, cpu);
+
+    if ( !rpt )
+        return;
+
+    per_cpu(root_pgt, cpu) = NULL;
+
+    for ( r = root_table_offset(DIRECTMAP_VIRT_START);
+          r < root_table_offset(HYPERVISOR_VIRT_END); ++r )
+    {
+        l3_pgentry_t *l3t;
+        unsigned int i3;
+
+        if ( !(root_get_flags(rpt[r]) & _PAGE_PRESENT) )
+            continue;
+
+        l3t = l4e_to_l3e(rpt[r]);
+
+        for ( i3 = 0; i3 < L3_PAGETABLE_ENTRIES; ++i3 )
+        {
+            l2_pgentry_t *l2t;
+            unsigned int i2;
+
+            if ( !(l3e_get_flags(l3t[i3]) & _PAGE_PRESENT) )
+                continue;
+
+            ASSERT(!(l3e_get_flags(l3t[i3]) & _PAGE_PSE));
+            l2t = l3e_to_l2e(l3t[i3]);
+
+            for ( i2 = 0; i2 < L2_PAGETABLE_ENTRIES; ++i2 )
+            {
+                if ( !(l2e_get_flags(l2t[i2]) & _PAGE_PRESENT) )
+                    continue;
+
+                ASSERT(!(l2e_get_flags(l2t[i2]) & _PAGE_PSE));
+                free_xen_pagetable(l2e_to_l1e(l2t[i2]));
+            }
+
+            free_xen_pagetable(l2t);
+        }
+
+        free_xen_pagetable(l3t);
+    }
+
+    free_xen_pagetable(rpt);
+
+    /* Also zap the stub mapping for this CPU. */
+    if ( stub_linear )
+    {
+        l3_pgentry_t *l3t = l4e_to_l3e(common_pgt);
+        l2_pgentry_t *l2t = l3e_to_l2e(l3t[l3_table_offset(stub_linear)]);
+        l1_pgentry_t *l1t = l2e_to_l1e(l2t[l2_table_offset(stub_linear)]);
+
+        l1t[l1_table_offset(stub_linear)] = l1e_empty();
+    }
+}
+
 static void cpu_smpboot_free(unsigned int cpu)
 {
     unsigned int order, socket = cpu_to_socket(cpu);
@@ -659,6 +903,8 @@ static void cpu_smpboot_free(unsigned int cpu)
     free_cpumask_var(per_cpu(cpu_core_mask, cpu));
     if ( per_cpu(scratch_cpumask, cpu) != &scratch_cpu0mask )
         free_cpumask_var(per_cpu(scratch_cpumask, cpu));
+
+    cleanup_cpu_root_pgt(cpu);
 
     if ( per_cpu(stubs.addr, cpu) )
     {
@@ -731,6 +977,7 @@ static int cpu_smpboot_alloc(unsigned int cpu)
     set_ist(&idt_tables[cpu][TRAP_double_fault],  IST_NONE);
     set_ist(&idt_tables[cpu][TRAP_nmi],           IST_NONE);
     set_ist(&idt_tables[cpu][TRAP_machine_check], IST_NONE);
+    set_ist(&idt_tables[cpu][TRAP_debug],         IST_NONE);
 
     for ( stub_page = 0, i = cpu & ~(STUBS_PER_PAGE - 1);
           i < nr_cpu_ids && i <= (cpu | (STUBS_PER_PAGE - 1)); ++i )
@@ -744,6 +991,9 @@ static int cpu_smpboot_alloc(unsigned int cpu)
     if ( !stub_page )
         goto oom;
     per_cpu(stubs.addr, cpu) = stub_page + STUB_BUF_CPU_OFFS(cpu);
+
+    if ( setup_cpu_root_pgt(cpu) )
+        goto oom;
 
     if ( secondary_socket_cpumask == NULL &&
          (secondary_socket_cpumask = xzalloc(cpumask_t)) == NULL )
@@ -787,6 +1037,8 @@ static struct notifier_block cpu_smpboot_nfb = {
 
 void __init smp_prepare_cpus(unsigned int max_cpus)
 {
+    int rc;
+
     register_cpu_notifier(&cpu_smpboot_nfb);
 
     mtrr_aps_sync_begin();
@@ -799,6 +1051,21 @@ void __init smp_prepare_cpus(unsigned int max_cpus)
     x86_cpu_to_apicid[0] = boot_cpu_physical_apicid;
 
     stack_base[0] = stack_start;
+
+    rc = setup_cpu_root_pgt(0);
+    if ( rc )
+        panic("Error %d setting up PV root page table\n", rc);
+    if ( per_cpu(root_pgt, 0) )
+    {
+        get_cpu_info()->pv_cr3 = 0;
+
+        /*
+         * All entry points which may need to switch page tables have to start
+         * with interrupts off. Re-write what pv_trap_init() has put there.
+         */
+        _set_gate(idt_table + LEGACY_SYSCALL_VECTOR, SYS_DESC_irq_gate, 3,
+                  &int80_direct_trap);
+    }
 
     set_nr_sockets();
 
@@ -868,6 +1135,10 @@ void __init smp_prepare_boot_cpu(void)
 #if NR_CPUS > 2 * BITS_PER_LONG
     per_cpu(scratch_cpumask, cpu) = &scratch_cpu0mask;
 #endif
+
+    get_cpu_info()->use_pv_cr3 = false;
+    get_cpu_info()->xen_cr3 = 0;
+    get_cpu_info()->pv_cr3 = 0;
 }
 
 static void
@@ -1034,7 +1305,10 @@ int __cpu_up(unsigned int cpu)
 void __init smp_cpus_done(void)
 {
     if ( nmi_watchdog == NMI_LOCAL_APIC )
+    {
+        setup_apic_nmi_watchdog();
         check_nmi_watchdog();
+    }
 
     setup_ioapic_dest();
 

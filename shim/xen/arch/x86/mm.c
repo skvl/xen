@@ -125,6 +125,7 @@
 #include <asm/guest.h>
 
 #include <asm/hvm/grant_table.h>
+#include <asm/pv/domain.h>
 #include <asm/pv/grant_table.h>
 
 #include "pv/mm.h"
@@ -503,12 +504,60 @@ void free_shared_domheap_page(struct page_info *page)
 
 void make_cr3(struct vcpu *v, mfn_t mfn)
 {
+    struct domain *d = v->domain;
+
     v->arch.cr3 = mfn_x(mfn) << PAGE_SHIFT;
+    if ( is_pv_domain(d) && d->arch.pv_domain.pcid )
+        v->arch.cr3 |= get_pcid_bits(v, false);
+}
+
+unsigned long pv_guest_cr4_to_real_cr4(const struct vcpu *v)
+{
+    const struct domain *d = v->domain;
+    unsigned long cr4;
+
+    cr4 = v->arch.pv_vcpu.ctrlreg[4] & ~X86_CR4_DE;
+    cr4 |= mmu_cr4_features & (X86_CR4_PSE | X86_CR4_SMEP | X86_CR4_SMAP |
+                               X86_CR4_OSXSAVE | X86_CR4_FSGSBASE);
+
+    if ( d->arch.pv_domain.pcid )
+        cr4 |= X86_CR4_PCIDE;
+    else if ( !d->arch.pv_domain.xpti )
+        cr4 |= X86_CR4_PGE;
+
+    cr4 |= d->arch.vtsc ? X86_CR4_TSD : 0;
+
+    return cr4;
 }
 
 void write_ptbase(struct vcpu *v)
 {
-    write_cr3(v->arch.cr3);
+    struct cpu_info *cpu_info = get_cpu_info();
+    unsigned long new_cr4;
+
+    new_cr4 = (is_pv_vcpu(v) && !is_idle_vcpu(v))
+              ? pv_guest_cr4_to_real_cr4(v)
+              : ((read_cr4() & ~(X86_CR4_PCIDE | X86_CR4_TSD)) | X86_CR4_PGE);
+
+    if ( is_pv_vcpu(v) && v->domain->arch.pv_domain.xpti )
+    {
+        cpu_info->root_pgt_changed = true;
+        cpu_info->pv_cr3 = __pa(this_cpu(root_pgt));
+        if ( new_cr4 & X86_CR4_PCIDE )
+            cpu_info->pv_cr3 |= get_pcid_bits(v, true);
+        switch_cr3_cr4(v->arch.cr3, new_cr4);
+    }
+    else
+    {
+        /* Make sure to clear use_pv_cr3 and xen_cr3 before pv_cr3. */
+        cpu_info->use_pv_cr3 = false;
+        cpu_info->xen_cr3 = 0;
+        /* switch_cr3_cr4() serializes. */
+        switch_cr3_cr4(v->arch.cr3, new_cr4);
+        cpu_info->pv_cr3 = 0;
+    }
+
+    ASSERT(is_pv_vcpu(v) || read_cr4() == mmu_cr4_features);
 }
 
 /*
@@ -3519,6 +3568,7 @@ long do_mmu_update(
     struct vcpu *curr = current, *v = curr;
     struct domain *d = v->domain, *pt_owner = d, *pg_owner;
     mfn_t map_mfn = INVALID_MFN;
+    bool sync_guest = false;
     uint32_t xsm_needed = 0;
     uint32_t xsm_checked = 0;
     int rc = put_old_guest_table(curr);
@@ -3673,6 +3723,27 @@ long do_mmu_update(
                 case PGT_l4_page_table:
                     rc = mod_l4_entry(va, l4e_from_intpte(req.val), mfn,
                                       cmd == MMU_PT_UPDATE_PRESERVE_AD, v);
+                    if ( !rc && !cpu_has_no_xpti )
+                    {
+                        bool local_in_use = false;
+
+                        if ( pagetable_get_pfn(curr->arch.guest_table) == mfn )
+                        {
+                            local_in_use = true;
+                            get_cpu_info()->root_pgt_changed = true;
+                        }
+
+                        /*
+                         * No need to sync if all uses of the page can be
+                         * accounted to the page lock we hold, its pinned
+                         * status, and uses on this (v)CPU.
+                         */
+                        if ( (page->u.inuse.type_info & PGT_count_mask) >
+                             (1 + !!(page->u.inuse.type_info & PGT_pinned) +
+                              (pagetable_get_pfn(curr->arch.guest_table_user) ==
+                               mfn) + local_in_use) )
+                            sync_guest = true;
+                    }
                     break;
                 case PGT_writable_page:
                     perfc_incr(writable_mmu_updates);
@@ -3774,6 +3845,20 @@ long do_mmu_update(
 
     if ( va )
         unmap_domain_page(va);
+
+    if ( sync_guest )
+    {
+        /*
+         * Force other vCPU-s of the affected guest to pick up L4 entry
+         * changes (if any).
+         */
+        unsigned int cpu = smp_processor_id();
+        cpumask_t *mask = per_cpu(scratch_cpumask, cpu);
+
+        cpumask_andnot(mask, pt_owner->domain_dirty_cpumask, cpumask_of(cpu));
+        if ( !cpumask_empty(mask) )
+            flush_mask(mask, FLUSH_TLB_GLOBAL | FLUSH_ROOT_PGTBL);
+    }
 
     perfc_add(num_page_updates, i);
 
@@ -5515,6 +5600,14 @@ void memguard_unguard_stack(void *p)
     p = (void *)((unsigned long)p + STACK_SIZE -
                  PRIMARY_STACK_SIZE - PAGE_SIZE);
     memguard_unguard_range(p, PAGE_SIZE);
+}
+
+bool memguard_is_stack_guard_page(unsigned long addr)
+{
+    addr &= STACK_SIZE - 1;
+
+    return addr >= STACK_SIZE - PRIMARY_STACK_SIZE - PAGE_SIZE &&
+           addr < STACK_SIZE - PRIMARY_STACK_SIZE;
 }
 
 void arch_dump_shared_mem_info(void)

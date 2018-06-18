@@ -90,6 +90,7 @@
 #define cpu_has_avx2            boot_cpu_has(X86_FEATURE_AVX2)
 #define cpu_has_smep            boot_cpu_has(X86_FEATURE_SMEP)
 #define cpu_has_bmi2            boot_cpu_has(X86_FEATURE_BMI2)
+#define cpu_has_invpcid         boot_cpu_has(X86_FEATURE_INVPCID)
 #define cpu_has_rtm             boot_cpu_has(X86_FEATURE_RTM)
 #define cpu_has_fpu_sel         (!boot_cpu_has(X86_FEATURE_NO_FPU_SEL))
 #define cpu_has_mpx             boot_cpu_has(X86_FEATURE_MPX)
@@ -104,6 +105,8 @@
 #define cpu_has_arch_perfmon    boot_cpu_has(X86_FEATURE_ARCH_PERFMON)
 #define cpu_has_cpuid_faulting  boot_cpu_has(X86_FEATURE_CPUID_FAULTING)
 #define cpu_has_aperfmperf      boot_cpu_has(X86_FEATURE_APERFMPERF)
+#define cpu_has_lfence_dispatch boot_cpu_has(X86_FEATURE_LFENCE_DISPATCH)
+#define cpu_has_no_xpti         boot_cpu_has(X86_FEATURE_NO_XPTI)
 
 enum _cache_type {
     CACHE_TYPE_NULL = 0,

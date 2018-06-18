@@ -119,7 +119,7 @@
 #define DOMID_XS_PATH "domid"
 #define INVALID_DOMID ~0
 #define PVSHIM_BASENAME "xen-shim"
-#define PVSHIM_CMDLINE "pv-shim console=xen,pv sched=null"
+#define PVSHIM_CMDLINE "pv-shim console=xen,pv"
 
 /* Size macros. */
 #define __AC(X,Y)   (X##Y)
@@ -1202,6 +1202,7 @@ _hidden int libxl__domain_pvcontrol_write(libxl__gc *gc, xs_transaction_t t,
 /* from xl_device */
 _hidden char *libxl__device_disk_string_of_backend(libxl_disk_backend backend);
 _hidden char *libxl__device_disk_string_of_format(libxl_disk_format format);
+_hidden const char *libxl__qemu_disk_format_string(libxl_disk_format format);
 _hidden int libxl__device_disk_set_backend(libxl__gc*, libxl_device_disk*);
 
 _hidden int libxl__device_physdisk_major_minor(const char *physpath, int *major, int *minor);

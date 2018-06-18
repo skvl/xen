@@ -410,7 +410,8 @@ static int make_psci_node(libxl__gc *gc, void *fdt)
     res = fdt_begin_node(fdt, "psci");
     if (res) return res;
 
-    res = fdt_property_compat(gc, fdt, 2, "arm,psci-0.2","arm,psci");
+    res = fdt_property_compat(gc, fdt, 3, "arm,psci-1.0",
+                              "arm,psci-0.2", "arm,psci");
     if (res) return res;
 
     res = fdt_property_string(fdt, "method", "hvc");
@@ -923,7 +924,7 @@ next_resize:
         FDT( fdt_begin_node(fdt, "") );
 
         FDT( make_root_properties(gc, vers, fdt) );
-        FDT( make_chosen_node(gc, fdt, !!dom->ramdisk_blob, state, info) );
+        FDT( make_chosen_node(gc, fdt, !!dom->modules[0].blob, state, info) );
         FDT( make_cpus_node(gc, fdt, info->max_vcpus, ainfo) );
         FDT( make_psci_node(gc, fdt) );
 
@@ -1053,8 +1054,8 @@ int libxl__arch_domain_finalise_hw_description(libxl__gc *gc,
     int i;
     const uint64_t bankbase[] = GUEST_RAM_BANK_BASES;
 
-    const struct xc_dom_seg *ramdisk = dom->ramdisk_blob ?
-        &dom->ramdisk_seg : NULL;
+    const struct xc_dom_seg *ramdisk = dom->modules[0].blob ?
+        &dom->modules[0].seg : NULL;
 
     if (ramdisk) {
         int chosen, res;

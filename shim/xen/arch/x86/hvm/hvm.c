@@ -1323,6 +1323,7 @@ static int hvm_load_cpu_xsave_states(struct domain *d, hvm_domain_context_t *h)
 
 #define HVM_CPU_MSR_SIZE(cnt) offsetof(struct hvm_msr, msr[cnt])
 static const uint32_t msrs_to_send[] = {
+    MSR_SPEC_CTRL,
     MSR_INTEL_MISC_FEATURES_ENABLES,
 };
 static unsigned int __read_mostly msr_count_max = ARRAY_SIZE(msrs_to_send);
@@ -1458,6 +1459,7 @@ static int hvm_load_cpu_msrs(struct domain *d, hvm_domain_context_t *h)
         {
             int rc;
 
+        case MSR_SPEC_CTRL:
         case MSR_INTEL_MISC_FEATURES_ENABLES:
             rc = guest_wrmsr(v, ctxt->msr[i].index, ctxt->msr[i].val);
 
@@ -1554,8 +1556,6 @@ int hvm_vcpu_initialise(struct vcpu *v)
         /* Init guest TSC to start from zero. */
         hvm_set_guest_tsc(v, 0);
     }
-
-    hvm_update_guest_vendor(v);
 
     return 0;
 
@@ -3582,7 +3582,7 @@ int hvm_msr_write_intercept(unsigned int msr, uint64_t msr_content,
         v->arch.hvm_vcpu.msr_tsc_aux = (uint32_t)msr_content;
         if ( cpu_has_rdtscp
              && (v->domain->arch.tsc_mode != TSC_MODE_PVRDTSCP) )
-            wrmsrl(MSR_TSC_AUX, (uint32_t)msr_content);
+            wrmsr_tsc_aux(msr_content);
         break;
 
     case MSR_IA32_APICBASE:

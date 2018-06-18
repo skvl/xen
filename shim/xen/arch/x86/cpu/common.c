@@ -547,8 +547,8 @@ void detect_extended_topology(struct cpuinfo_x86 *c)
 	initial_apicid = edx;
 
 	/* Populate HT related information from sub-leaf level 0 */
-	core_level_siblings = c->x86_num_siblings = LEVEL_MAX_SIBLINGS(ebx);
 	core_plus_mask_width = ht_mask_width = BITS_SHIFT_NEXT_LEVEL(eax);
+	core_level_siblings = c->x86_num_siblings = 1u << ht_mask_width;
 
 	sub_index = 1;
 	do {
@@ -556,8 +556,8 @@ void detect_extended_topology(struct cpuinfo_x86 *c)
 
 		/* Check for the Core type in the implemented sub leaves */
 		if ( LEAFB_SUBTYPE(ecx) == CORE_TYPE ) {
-			core_level_siblings = LEVEL_MAX_SIBLINGS(ebx);
 			core_plus_mask_width = BITS_SHIFT_NEXT_LEVEL(eax);
+			core_level_siblings = 1u << core_plus_mask_width;
 			break;
 		}
 
@@ -747,6 +747,7 @@ void load_system_tables(void)
 			[IST_MCE - 1] = stack_top + IST_MCE * PAGE_SIZE,
 			[IST_DF  - 1] = stack_top + IST_DF  * PAGE_SIZE,
 			[IST_NMI - 1] = stack_top + IST_NMI * PAGE_SIZE,
+			[IST_DB  - 1] = stack_top + IST_DB  * PAGE_SIZE,
 
 			[IST_MAX ... ARRAY_SIZE(tss->ist) - 1] =
 				0x8600111111111111ul,
@@ -774,6 +775,7 @@ void load_system_tables(void)
 	set_ist(&idt_tables[cpu][TRAP_double_fault],  IST_DF);
 	set_ist(&idt_tables[cpu][TRAP_nmi],	      IST_NMI);
 	set_ist(&idt_tables[cpu][TRAP_machine_check], IST_MCE);
+	set_ist(&idt_tables[cpu][TRAP_debug],         IST_DB);
 
 	/*
 	 * Bottom-of-stack must be 16-byte aligned!

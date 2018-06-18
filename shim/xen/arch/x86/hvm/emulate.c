@@ -281,7 +281,11 @@ static int hvmemul_do_io(
             rc = hvm_send_ioreq(s, &p, 0);
             if ( rc != X86EMUL_RETRY || currd->is_shutting_down )
                 vio->io_req.state = STATE_IOREQ_NONE;
-            else if ( data_is_addr )
+            /*
+             * This effectively is !hvm_vcpu_io_need_completion(vio), slightly
+             * optimized and using local variables we have available.
+             */
+            else if ( data_is_addr || (!is_mmio && dir == IOREQ_WRITE) )
                 rc = X86EMUL_OKAY;
         }
         break;
@@ -1987,13 +1991,20 @@ static void hvmemul_put_fpu(
     if ( backout == X86EMUL_FPU_fpu )
     {
         /*
-         * To back out changes to the register file simply adjust state such
-         * that upon next FPU insn use by the guest we'll reload the state
-         * saved (or freshly loaded) by hvmemul_get_fpu().
+         * To back out changes to the register file
+         * - in fully eager mode, restore original state immediately,
+         * - in lazy mode, simply adjust state such that upon next FPU insn
+         *   use by the guest we'll reload the state saved (or freshly loaded)
+         *   by hvmemul_get_fpu().
          */
-        curr->fpu_dirtied = false;
-        stts();
-        hvm_funcs.fpu_leave(curr);
+        if ( curr->arch.fully_eager_fpu )
+            vcpu_restore_fpu_eager(curr);
+        else
+        {
+            curr->fpu_dirtied = false;
+            stts();
+            hvm_funcs.fpu_leave(curr);
+        }
     }
 }
 
@@ -2109,22 +2120,20 @@ static int _hvm_emulate_one(struct hvm_emulate_ctxt *hvmemul_ctxt,
 
     vio->mmio_retry = 0;
 
-    switch ( rc = x86_emulate(&hvmemul_ctxt->ctxt, ops) )
+    rc = x86_emulate(&hvmemul_ctxt->ctxt, ops);
+    if ( rc == X86EMUL_OKAY && vio->mmio_retry )
+        rc = X86EMUL_RETRY;
+
+    if ( !hvm_vcpu_io_need_completion(vio) )
     {
-    case X86EMUL_OKAY:
-        if ( vio->mmio_retry )
-            rc = X86EMUL_RETRY;
-        /* fall through */
-    default:
         vio->mmio_cache_count = 0;
         vio->mmio_insn_bytes = 0;
-        break;
-
-    case X86EMUL_RETRY:
+    }
+    else
+    {
         BUILD_BUG_ON(sizeof(vio->mmio_insn) < sizeof(hvmemul_ctxt->insn_buf));
         vio->mmio_insn_bytes = hvmemul_ctxt->insn_buf_bytes;
         memcpy(vio->mmio_insn, hvmemul_ctxt->insn_buf, vio->mmio_insn_bytes);
-        break;
     }
 
     if ( hvmemul_ctxt->ctxt.retire.singlestep )

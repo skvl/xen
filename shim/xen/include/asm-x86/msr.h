@@ -115,8 +115,6 @@ static inline uint64_t rdtsc_ordered(void)
     __write_tsc(val);                                           \
 })
 
-#define write_rdtscp_aux(val) wrmsr(MSR_TSC_AUX, (val), 0)
-
 #define rdpmc(counter,low,high) \
      __asm__ __volatile__("rdpmc" \
 			  : "=a" (low), "=d" (high) \
@@ -202,6 +200,20 @@ void write_efer(u64 val);
 
 DECLARE_PER_CPU(u32, ler_msr);
 
+DECLARE_PER_CPU(uint32_t, tsc_aux);
+
+/* Lazy update of MSR_TSC_AUX */
+static inline void wrmsr_tsc_aux(uint32_t val)
+{
+    uint32_t *this_tsc_aux = &this_cpu(tsc_aux);
+
+    if ( *this_tsc_aux != val )
+    {
+        wrmsr(MSR_TSC_AUX, val, 0);
+        *this_tsc_aux = val;
+    }
+}
+
 /* MSR policy object for shared per-domain MSRs */
 struct msr_domain_policy
 {
@@ -215,6 +227,16 @@ struct msr_domain_policy
 /* MSR policy object for per-vCPU MSRs */
 struct msr_vcpu_policy
 {
+    /* 0x00000048 - MSR_SPEC_CTRL */
+    struct {
+        /*
+         * Only the bottom two bits are defined, so no need to waste space
+         * with uint64_t at the moment, but use uint32_t for the convenience
+         * of the assembly code.
+         */
+        uint32_t raw;
+    } spec_ctrl;
+
     /* 0x00000140  MSR_INTEL_MISC_FEATURES_ENABLES */
     struct {
         bool available; /* This MSR is non-architectural */

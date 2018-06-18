@@ -37,6 +37,7 @@ obj-y += io_apic.o
 obj-$(CONFIG_LIVEPATCH) += alternative.o livepatch.o
 obj-y += msi.o
 obj-y += msr.o
+obj-$(CONFIG_INDIRECT_THUNK) += indirect-thunk.o
 obj-y += ioport_emulate.o
 obj-y += irq.o
 obj-$(CONFIG_KEXEC) += machine_kexec.o
@@ -57,6 +58,7 @@ obj-y += setup.o
 obj-y += shutdown.o
 obj-y += smp.o
 obj-y += smpboot.o
+obj-y += spec_ctrl.o
 obj-y += srat.o
 obj-y += string.o
 obj-y += sysctl.o
@@ -76,12 +78,12 @@ efi-y := $(shell if [ ! -r $(BASEDIR)/include/xen/compile.h -o \
                       -O $(BASEDIR)/include/xen/compile.h ]; then \
                          echo '$(TARGET).efi'; fi)
 
-shim-$(CONFIG_PVH_GUEST) := $(TARGET)-shim
-
 ifneq ($(build_id_linker),)
 notes_phdrs = --notes
 else
-notes_phdrs =
+ifeq ($(CONFIG_PVH_GUEST),y)
+notes_phdrs = --notes
+endif
 endif
 
 ifdef CONFIG_LIVEPATCH
@@ -146,11 +148,6 @@ $(TARGET)-syms: prelink.o xen.lds $(BASEDIR)/common/symbols-dummy.o
 		| $(BASEDIR)/tools/symbols --xensyms --sysv --sort \
 		>$(@D)/$(@F).map
 	rm -f $(@D)/.$(@F).[0-9]*
-
-# Use elf32-x86-64 if toolchain support exists, elf32-i386 otherwise.
-$(TARGET)-shim: FORMAT = $(firstword $(filter elf32-x86-64,$(shell $(OBJCOPY) --help)) elf32-i386)
-$(TARGET)-shim: $(TARGET)-syms
-	$(OBJCOPY) -O $(FORMAT) $< $@
 
 note.o: $(TARGET)-syms
 	$(OBJCOPY) -O binary --only-section=.note.gnu.build-id  $(BASEDIR)/xen-syms $@.bin
@@ -232,6 +229,5 @@ clean::
 	rm -f asm-offsets.s *.lds boot/*.o boot/*~ boot/core boot/mkelf32
 	rm -f $(BASEDIR)/.xen-syms.[0-9]* boot/.*.d
 	rm -f $(BASEDIR)/.xen.efi.[0-9]* efi/*.efi efi/disabled efi/mkreloc
-	rm -f $(BASEDIR)/xen-shim
 	rm -f boot/cmdline.S boot/reloc.S boot/*.lnk boot/*.bin
 	rm -f note.o

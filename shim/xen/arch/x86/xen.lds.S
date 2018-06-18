@@ -65,6 +65,14 @@ SECTIONS
   DECL_SECTION(.text) {
         _stext = .;            /* Text and read-only data */
        *(.text)
+       *(.text.__x86_indirect_thunk_*)
+
+       . = ALIGN(PAGE_SIZE);
+       _stextentry = .;
+       *(.text.entry)
+       . = ALIGN(PAGE_SIZE);
+       _etextentry = .;
+
        *(.text.page_aligned)
        *(.text.cold)
        *(.text.unlikely)
