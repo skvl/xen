@@ -1,3 +1,9 @@
+xen (4.8.3+xsa267+shim4.10.1+xsa267-1+deb9u8~) UNRELEASED; urgency=medium
+
+  * Update to new upstream version 4.8.3+xsa267+shim4.10.1+xsa267.
+
+ -- Ian Jackson <ian.jackson@citrix.com>  Mon, 18 Jun 2018 16:10:38 +0100
+
 xen (4.8.3+xsa267+shim4.10.0+comet3-1+deb9u8~) UNRELEASED; urgency=medium
 
   * Update to new upstream version 4.8.3+xsa267+shim4.10.0+comet3.
