@@ -37,6 +37,11 @@
 
 #include <compat/grant_table.h>
 
+#undef mfn_to_page
+#define mfn_to_page(mfn) __mfn_to_page(mfn_x(mfn))
+#undef virt_to_mfn
+#define virt_to_mfn(va) _mfn(__virt_to_mfn(va))
+
 #ifndef CONFIG_PV_SHIM_EXCLUSIVE
 bool pv_shim;
 boolean_param("pv-shim", pv_shim);
@@ -115,26 +120,17 @@ uint64_t pv_shim_mem(uint64_t avail)
 #define COMPAT_L1_PROT (_PAGE_PRESENT|_PAGE_RW|_PAGE_ACCESSED)
 
 static void __init replace_va_mapping(struct domain *d, l4_pgentry_t *l4start,
-                                      unsigned long va, unsigned long mfn)
+                                      unsigned long va, mfn_t mfn)
 {
-    struct page_info *page;
-    l4_pgentry_t *pl4e;
-    l3_pgentry_t *pl3e;
-    l2_pgentry_t *pl2e;
-    l1_pgentry_t *pl1e;
+    l4_pgentry_t *pl4e = l4start + l4_table_offset(va);
+    l3_pgentry_t *pl3e = l4e_to_l3e(*pl4e) + l3_table_offset(va);
+    l2_pgentry_t *pl2e = l3e_to_l2e(*pl3e) + l2_table_offset(va);
+    l1_pgentry_t *pl1e = l2e_to_l1e(*pl2e) + l1_table_offset(va);
+    struct page_info *page = mfn_to_page(l1e_get_mfn(*pl1e));
 
-    pl4e = l4start + l4_table_offset(va);
-    pl3e = l4e_to_l3e(*pl4e);
-    pl3e += l3_table_offset(va);
-    pl2e = l3e_to_l2e(*pl3e);
-    pl2e += l2_table_offset(va);
-    pl1e = l2e_to_l1e(*pl2e);
-    pl1e += l1_table_offset(va);
-
-    page = mfn_to_page(l1e_get_pfn(*pl1e));
     put_page_and_type(page);
 
-    *pl1e = l1e_from_pfn(mfn, (!is_pv_32bit_domain(d) ? L1_PROT
+    *pl1e = l1e_from_mfn(mfn, (!is_pv_32bit_domain(d) ? L1_PROT
                                                       : COMPAT_L1_PROT));
 }
 
@@ -174,8 +170,9 @@ void __init pv_shim_setup_dom(struct domain *d, l4_pgentry_t *l4start,
     (si) = param;                                                              \
     if ( va )                                                                  \
     {                                                                          \
-        share_xen_page_with_guest(mfn_to_page(param), d, XENSHARE_writable);   \
-        replace_va_mapping(d, l4start, va, param);                             \
+        share_xen_page_with_guest(mfn_to_page(_mfn(param)), d,                 \
+                                  XENSHARE_writable);                          \
+        replace_va_mapping(d, l4start, va, _mfn(param));                       \
         dom0_update_physmap(d, PFN_DOWN((va) - va_start), param, vphysmap);    \
     }                                                                          \
     else                                                                       \
@@ -195,17 +192,17 @@ void __init pv_shim_setup_dom(struct domain *d, l4_pgentry_t *l4start,
     {
         /* Allocate a new page for DomU's PV console */
         void *page = alloc_xenheap_pages(0, MEMF_bits(32));
-        uint64_t console_mfn;
+        mfn_t console_mfn;
 
         ASSERT(page);
         clear_page(page);
         console_mfn = virt_to_mfn(page);
-        si->console.domU.mfn = console_mfn;
+        si->console.domU.mfn = mfn_x(console_mfn);
         share_xen_page_with_guest(mfn_to_page(console_mfn), d,
                                   XENSHARE_writable);
         replace_va_mapping(d, l4start, console_va, console_mfn);
         dom0_update_physmap(d, (console_va - va_start) >> PAGE_SHIFT,
-                            console_mfn, vphysmap);
+                            mfn_x(console_mfn), vphysmap);
         consoled_set_ring_addr(page);
     }
     pv_hypercall_table_replace(__HYPERVISOR_event_channel_op,
@@ -241,7 +238,7 @@ static void write_start_info(struct domain *d)
     BUG_ON(xen_hypercall_hvm_get_param(HVM_PARAM_CONSOLE_EVTCHN, &param));
     si->console.domU.evtchn = param;
     if ( pv_console )
-        si->console.domU.mfn = virt_to_mfn(consoled_get_ring_addr());
+        si->console.domU.mfn = mfn_x(virt_to_mfn(consoled_get_ring_addr()));
     else if ( xen_hypercall_hvm_get_param(HVM_PARAM_CONSOLE_PFN,
                                           &si->console.domU.mfn) )
         BUG();
@@ -273,14 +270,14 @@ int pv_shim_shutdown(uint8_t reason)
                                            &old_console_pfn));
 
     /* Pause the other vcpus before starting the migration. */
-    for_each_vcpu(d, v)
+    for_each_vcpu ( d, v )
         if ( v != current )
             vcpu_pause_by_systemcontroller(v);
 
     rc = xen_hypercall_shutdown(SHUTDOWN_suspend);
     if ( rc )
     {
-        for_each_vcpu(d, v)
+        for_each_vcpu ( d, v )
             if ( v != current )
                 vcpu_unpause_by_systemcontroller(v);
 
@@ -343,7 +340,7 @@ int pv_shim_shutdown(uint8_t reason)
     if ( d->arch.pirq_eoi_map != NULL )
     {
         unmap_domain_page_global(d->arch.pirq_eoi_map);
-        put_page_and_type(mfn_to_page(d->arch.pirq_eoi_map_mfn));
+        put_page_and_type(mfn_to_page(_mfn(d->arch.pirq_eoi_map_mfn)));
         d->arch.pirq_eoi_map = NULL;
         d->arch.pirq_eoi_map_mfn = 0;
         d->arch.auto_unmask = 0;
@@ -356,7 +353,7 @@ int pv_shim_shutdown(uint8_t reason)
      */
     write_start_info(d);
 
-    for_each_vcpu(d, v)
+    for_each_vcpu ( d, v )
     {
         /* Unmap guest vcpu_info pages. */
         unmap_vcpu_info(v);
@@ -437,7 +434,7 @@ static long pv_shim_event_channel_op(int cmd, XEN_GUEST_HANDLE_PARAM(void) arg)
          */
         rc = xen_hypercall_event_channel_op(EVTCHNOP_alloc_unbound, &alloc);
         if ( rc )
-           break;
+            break;
 
         /* Force L1 to use the event channel port allocated on L0. */
         rc = evtchn_bind_virq(&virq, alloc.port);
@@ -486,7 +483,7 @@ static long pv_shim_event_channel_op(int cmd, XEN_GUEST_HANDLE_PARAM(void) arg)
         {
             rc = xen_hypercall_event_channel_op(EVTCHNOP_bind_vcpu, &vcpu);
             if ( !rc )
-                 evtchn_assign_vcpu(d, vcpu.port, vcpu.vcpu);
+                evtchn_assign_vcpu(d, vcpu.port, vcpu.vcpu);
         }
 
         break;
@@ -605,9 +602,9 @@ void pv_shim_inject_evtchn(unsigned int port)
 {
     if ( port_is_valid(guest, port) )
     {
-         struct evtchn *chn = evtchn_from_port(guest, port);
+        struct evtchn *chn = evtchn_from_port(guest, port);
 
-         evtchn_port_set_pending(guest, chn->notify_vcpu_id, chn);
+        evtchn_port_set_pending(guest, chn->notify_vcpu_id, chn);
     }
 }
 
@@ -642,7 +639,7 @@ static long pv_shim_grant_table_op(unsigned int cmd,
         }
         if ( compat )
 #define XLAT_gnttab_setup_table_HNDL_frame_list(d, s)
-                XLAT_gnttab_setup_table(&nat, &cmp);
+            XLAT_gnttab_setup_table(&nat, &cmp);
 #undef XLAT_gnttab_setup_table_HNDL_frame_list
 
         nat.status = GNTST_okay;
@@ -737,7 +734,7 @@ static long pv_shim_grant_table_op(unsigned int cmd,
 
         if ( compat )
 #define XLAT_gnttab_setup_table_HNDL_frame_list(d, s)
-                XLAT_gnttab_setup_table(&cmp, &nat);
+            XLAT_gnttab_setup_table(&cmp, &nat);
 #undef XLAT_gnttab_setup_table_HNDL_frame_list
 
         if ( unlikely(compat ? __copy_to_guest(uop, &cmp, 1)
@@ -751,7 +748,10 @@ static long pv_shim_grant_table_op(unsigned int cmd,
     }
 
     case GNTTABOP_query_size:
+        /* Disable SMAP so L0 can access the buffer. */
+        stac();
         rc = xen_hypercall_grant_table_op(GNTTABOP_query_size, uop.p, count);
+        clac();
         break;
 
     default:

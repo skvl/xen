@@ -293,6 +293,21 @@ static inline unsigned long read_cr2(void)
     return cr2;
 }
 
+static inline void write_cr3(unsigned long val)
+{
+    asm volatile ( "mov %0, %%cr3" : : "r" (val) : "memory" );
+}
+
+static inline unsigned long cr3_pa(unsigned long cr3)
+{
+    return cr3 & X86_CR3_ADDR_MASK;
+}
+
+static inline unsigned long cr3_pcid(unsigned long cr3)
+{
+    return cr3 & X86_CR3_PCID_MASK;
+}
+
 static inline unsigned long read_cr4(void)
 {
     return get_cpu_info()->cr4;
@@ -300,6 +315,9 @@ static inline unsigned long read_cr4(void)
 
 static inline void write_cr4(unsigned long val)
 {
+    /* No global pages in case of PCIDs enabled! */
+    ASSERT(!(val & X86_CR4_PGE) || !(val & X86_CR4_PCIDE));
+
     get_cpu_info()->cr4 = val;
     asm volatile ( "mov %0,%%cr4" : : "r" (val) );
 }
@@ -445,7 +463,8 @@ struct __packed __cacheline_aligned tss_struct {
 #define IST_DF   1UL
 #define IST_NMI  2UL
 #define IST_MCE  3UL
-#define IST_MAX  3UL
+#define IST_DB   4UL
+#define IST_MAX  4UL
 
 /* Set the interrupt stack table used by a particular interrupt
  * descriptor table entry. */
@@ -464,6 +483,7 @@ extern idt_entry_t idt_table[];
 extern idt_entry_t *idt_tables[];
 
 DECLARE_PER_CPU(struct tss_struct, init_tss);
+DECLARE_PER_CPU(root_pgentry_t *, root_pgt);
 
 extern void init_int80_direct_trap(struct vcpu *v);
 

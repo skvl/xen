@@ -1035,7 +1035,7 @@ static int libxl__domain_firmware(libxl__gc *gc,
 
             /* We've loaded the shim, so load the kernel as a secondary module */
             if (state->pv_kernel.mapped) {
-                LOG(WARN, "xc_dom_module_mem, cmdline %s",
+                LOG(DEBUG, "xc_dom_module_mem, cmdline %s",
                     state->pv_cmdline);
                 rc = xc_dom_module_mem(dom, state->pv_kernel.data,
                                        state->pv_kernel.size, state->pv_cmdline);
@@ -1044,7 +1044,7 @@ static int libxl__domain_firmware(libxl__gc *gc,
                     goto out;
                 }
             } else {
-                LOG(WARN, "xc_dom_module_file, path %s cmdline %s",
+                LOG(DEBUG, "xc_dom_module_file, path %s cmdline %s",
                     state->pv_kernel.path, state->pv_cmdline);
                 rc = xc_dom_module_file(dom, state->pv_kernel.path, state->pv_cmdline);
                 if (rc) {
@@ -1069,7 +1069,7 @@ static int libxl__domain_firmware(libxl__gc *gc,
                 }
             }
         }
-        
+
         if (state->pv_ramdisk.path && strlen(state->pv_ramdisk.path)) {
             if (state->pv_ramdisk.mapped) {
                 rc = xc_dom_module_mem(dom, state->pv_ramdisk.data,
@@ -1183,7 +1183,7 @@ int libxl__build_hvm(libxl__gc *gc, uint32_t domid,
 
     xc_dom_loginit(ctx->xch);
 
-    /* 
+    /*
      * If PVH and we have a shim override, use the shim cmdline.
      * If PVH and no shim override, use the pv cmdline.
      * If not PVH, use info->cmdline.

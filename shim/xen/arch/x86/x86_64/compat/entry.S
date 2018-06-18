@@ -16,7 +16,12 @@
 ENTRY(entry_int82)
         ASM_CLAC
         pushq $0
-        SAVE_VOLATILE type=HYPERCALL_VECTOR compat=1
+        movl  $HYPERCALL_VECTOR, 4(%rsp)
+        SAVE_ALL compat=1 /* DPL1 gate, restricted to 32bit PV guests only. */
+
+        SPEC_CTRL_ENTRY_FROM_PV /* Req: %rsp=regs/cpuinfo, Clob: acd */
+        /* WARNING! `ret`, `call *`, `jmp *` not safe before this point. */
+
         CR4_PV32_RESTORE
 
         GET_CURRENT(bx)
@@ -34,6 +39,12 @@ ENTRY(compat_test_all_events)
         leaq  irq_stat+IRQSTAT_softirq_pending(%rip),%rcx
         cmpl  $0,(%rcx,%rax,1)
         jne   compat_process_softirqs
+
+        /* Inject exception if pending. */
+        lea   VCPU_trap_bounce(%rbx), %rdx
+        testb $TBF_EXCEPTION, TRAPBOUNCE_flags(%rdx)
+        jnz   .Lcompat_process_trapbounce
+
         testb $1,VCPU_mce_pending(%rbx)
         jnz   compat_process_mce
 .Lcompat_test_guest_nmi:
@@ -60,8 +71,16 @@ compat_test_guest_events:
 /* %rbx: struct vcpu */
 compat_process_softirqs:
         sti
-        andl  $~TRAP_regs_partial,UREGS_entry_vector(%rsp)
         call  do_softirq
+        jmp   compat_test_all_events
+
+        ALIGN
+/* %rbx: struct vcpu, %rdx: struct trap_bounce */
+.Lcompat_process_trapbounce:
+        sti
+.Lcompat_bounce_exception:
+        call  compat_create_bounce_frame
+        movb  $0, TRAPBOUNCE_flags(%rdx)
         jmp   compat_test_all_events
 
 	ALIGN
@@ -70,9 +89,9 @@ compat_process_mce:
         testb $1 << VCPU_TRAP_MCE,VCPU_async_exception_mask(%rbx)
         jnz   .Lcompat_test_guest_nmi
         sti
-        movb $0,VCPU_mce_pending(%rbx)
-        call set_guest_machinecheck_trapbounce
-        testl %eax,%eax
+        movb  $0, VCPU_mce_pending(%rbx)
+        call  set_guest_machinecheck_trapbounce
+        test  %al, %al
         jz    compat_test_all_events
         movzbl VCPU_async_exception_mask(%rbx),%edx # save mask for the
         movb %dl,VCPU_mce_old_mask(%rbx)            # iret hypercall
@@ -84,11 +103,11 @@ compat_process_mce:
 /* %rbx: struct vcpu */
 compat_process_nmi:
         testb $1 << VCPU_TRAP_NMI,VCPU_async_exception_mask(%rbx)
-        jnz  compat_test_guest_events
+        jnz   compat_test_guest_events
         sti
-        movb  $0,VCPU_nmi_pending(%rbx)
+        movb  $0, VCPU_nmi_pending(%rbx)
         call  set_guest_nmi_trapbounce
-        testl %eax,%eax
+        test  %al, %al
         jz    compat_test_all_events
         movzbl VCPU_async_exception_mask(%rbx),%edx # save mask for the
         movb %dl,VCPU_nmi_old_mask(%rbx)            # iret hypercall
@@ -142,6 +161,13 @@ ENTRY(compat_restore_all_guest)
         .popsection
         or    $X86_EFLAGS_IF,%r11
         mov   %r11d,UREGS_eflags(%rsp)
+
+        mov VCPU_arch_msr(%rbx), %rax
+        mov VCPUMSR_spec_ctrl_raw(%rax), %eax
+
+        /* WARNING! `ret`, `call *`, `jmp *` not safe beyond this point. */
+        SPEC_CTRL_EXIT_TO_PV    /* Req: a=spec_ctrl %rsp=regs/cpuinfo, Clob: cd */
+
         RESTORE_ALL adj=8 compat=1
 .Lft0:  iretq
         _ASM_PRE_EXTABLE(.Lft0, handle_exception)
@@ -178,30 +204,43 @@ ENTRY(cr4_pv32_restore)
         xor   %eax, %eax
         ret
 
-/* %rdx: trap_bounce, %rbx: struct vcpu */
-ENTRY(compat_post_handle_exception)
-        testb $TBF_EXCEPTION,TRAPBOUNCE_flags(%rdx)
-        jz    compat_test_all_events
-.Lcompat_bounce_exception:
-        call  compat_create_bounce_frame
-        movb  $0,TRAPBOUNCE_flags(%rdx)
-        jmp   compat_test_all_events
+        .section .text.entry, "ax", @progbits
 
 /* See lstar_enter for entry register state. */
 ENTRY(cstar_enter)
-        sti
+        /* sti could live here when we don't switch page tables below. */
         CR4_PV32_RESTORE
         movq  8(%rsp),%rax /* Restore %rax. */
-        movq  $FLAT_KERNEL_SS,8(%rsp)
+        movq  $FLAT_USER_SS32, 8(%rsp) /* Assume a 64bit domain.  Compat handled lower. */
         pushq %r11
         pushq $FLAT_USER_CS32
         pushq %rcx
         pushq $0
-        SAVE_VOLATILE TRAP_syscall
-        GET_CURRENT(bx)
+        movl  $TRAP_syscall, 4(%rsp)
+        SAVE_ALL
+
+        SPEC_CTRL_ENTRY_FROM_PV /* Req: %rsp=regs/cpuinfo, Clob: acd */
+        /* WARNING! `ret`, `call *`, `jmp *` not safe before this point. */
+
+        GET_STACK_END(bx)
+        mov   STACK_CPUINFO_FIELD(xen_cr3)(%rbx), %rcx
+        test  %rcx, %rcx
+        jz    .Lcstar_cr3_okay
+        movb  $0, STACK_CPUINFO_FIELD(use_pv_cr3)(%rbx)
+        mov   %rcx, %cr3
+        movq  $0, STACK_CPUINFO_FIELD(xen_cr3)(%rbx)
+.Lcstar_cr3_okay:
+        sti
+
+        __GET_CURRENT(bx)
         movq  VCPU_domain(%rbx),%rcx
         cmpb  $0,DOMAIN_is_32bit_pv(%rcx)
         je    switch_to_kernel
+
+        /* Fix up reported %cs/%ss for compat domains. */
+        movl  $FLAT_COMPAT_USER_SS, UREGS_ss(%rsp)
+        movl  $FLAT_COMPAT_USER_CS, UREGS_cs(%rsp)
+
         cmpb  $0,VCPU_syscall32_disables_events(%rbx)
         movzwl VCPU_syscall32_sel(%rbx),%esi
         movq  VCPU_syscall32_addr(%rbx),%rax
@@ -224,6 +263,8 @@ UNLIKELY_END(compat_syscall_gpf)
         movw  %si,TRAPBOUNCE_cs(%rdx)
         movb  %cl,TRAPBOUNCE_flags(%rdx)
         jmp   .Lcompat_bounce_exception
+
+        .text
 
 ENTRY(compat_sysenter)
         CR4_PV32_RESTORE

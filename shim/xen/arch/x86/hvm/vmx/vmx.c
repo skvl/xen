@@ -72,7 +72,6 @@ static void vmx_free_vlapic_mapping(struct domain *d);
 static void vmx_install_vlapic_mapping(struct vcpu *v);
 static void vmx_update_guest_cr(struct vcpu *v, unsigned int cr);
 static void vmx_update_guest_efer(struct vcpu *v);
-static void vmx_update_guest_vendor(struct vcpu *v);
 static void vmx_wbinvd_intercept(void);
 static void vmx_fpu_dirty_intercept(void);
 static int vmx_msr_read_intercept(unsigned int msr, uint64_t *msr_content);
@@ -623,7 +622,7 @@ static void vmx_restore_guest_msrs(struct vcpu *v)
     }
 
     if ( cpu_has_rdtscp )
-        wrmsrl(MSR_TSC_AUX, hvm_msr_tsc_aux(v));
+        wrmsr_tsc_aux(hvm_msr_tsc_aux(v));
 }
 
 void vmx_update_cpu_exec_control(struct vcpu *v)
@@ -655,8 +654,10 @@ void vmx_update_exception_bitmap(struct vcpu *v)
         __vmwrite(EXCEPTION_BITMAP, bitmap);
 }
 
-static void vmx_update_guest_vendor(struct vcpu *v)
+static void vmx_cpuid_policy_changed(struct vcpu *v)
 {
+    const struct cpuid_policy *cp = v->domain->arch.cpuid;
+
     if ( opt_hvm_fep ||
          (v->domain->arch.cpuid->x86_vendor != boot_cpu_data.x86_vendor) )
         v->arch.hvm_vmx.exception_bitmap |= (1U << TRAP_invalid_op);
@@ -666,6 +667,21 @@ static void vmx_update_guest_vendor(struct vcpu *v)
     vmx_vmcs_enter(v);
     vmx_update_exception_bitmap(v);
     vmx_vmcs_exit(v);
+
+    /*
+     * We can safely pass MSR_SPEC_CTRL through to the guest, even if STIBP
+     * isn't enumerated in hardware, as SPEC_CTRL_STIBP is ignored.
+     */
+    if ( cp->feat.ibrsb )
+        vmx_clear_msr_intercept(v, MSR_SPEC_CTRL, VMX_MSR_RW);
+    else
+        vmx_set_msr_intercept(v, MSR_SPEC_CTRL, VMX_MSR_RW);
+
+    /* MSR_PRED_CMD is safe to pass through if the guest knows about it. */
+    if ( cp->feat.ibrsb || cp->extd.ibpb )
+        vmx_clear_msr_intercept(v, MSR_PRED_CMD,  VMX_MSR_RW);
+    else
+        vmx_set_msr_intercept(v, MSR_PRED_CMD,  VMX_MSR_RW);
 }
 
 int vmx_guest_x86_mode(struct vcpu *v)
@@ -2318,7 +2334,7 @@ static struct hvm_function_table __initdata vmx_function_table = {
     .update_host_cr3      = vmx_update_host_cr3,
     .update_guest_cr      = vmx_update_guest_cr,
     .update_guest_efer    = vmx_update_guest_efer,
-    .update_guest_vendor  = vmx_update_guest_vendor,
+    .cpuid_policy_changed = vmx_cpuid_policy_changed,
     .fpu_leave            = vmx_fpu_leave,
     .set_guest_pat        = vmx_set_guest_pat,
     .get_guest_pat        = vmx_get_guest_pat,
@@ -3166,6 +3182,13 @@ static int vmx_msr_write_intercept(unsigned int msr, uint64_t msr_content)
                     case -ERESTART:
                         return X86EMUL_RETRY;
                     case 0:
+                        /*
+                         * Match up with the RDMSR side for now; ultimately this
+                         * entire case block should go away.
+                         */
+                        if ( rdmsr_safe(msr, msr_content) == 0 )
+                            break;
+                        goto gp_fault;
                     case 1:
                         break;
                     default:

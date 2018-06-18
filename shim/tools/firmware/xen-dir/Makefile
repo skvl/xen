@@ -16,18 +16,18 @@ DEP_FILES=$(foreach i, $(LINK_FILES), $(XEN_ROOT)/$(i))
 
 linkfarm.stamp: $(DEP_DIRS) $(DEP_FILES) FORCE
 	mkdir -p $(D)
-	set -e
 	rm -f linkfarm.stamp.tmp
+	set -e; \
 	$(foreach d, $(LINK_DIRS), \
 		 (mkdir -p $(D)/$(d); \
 		  cd $(D)/$(d); \
-		  find $(XEN_ROOT)/$(d)/ -type d -exec sh -c \
-		      "echo {} | sed 's,^$(XEN_ROOT)/$(d)/,,g' | xargs mkdir -p" \;);)
+		  find $(XEN_ROOT)/$(d)/ -type d |\
+			sed 's,^$(XEN_ROOT)/$(d)/,,g' | xargs mkdir -p .);) \
 	$(foreach d, $(LINK_DIRS), \
 		(cd $(XEN_ROOT); \
 		 find $(d) ! -type l -type f \
-		 $(addprefix ! -path , '*.[oda1]' '*.d[12]')) \
-		 >> linkfarm.stamp.tmp ; )
+		 $(addprefix ! -name , '*.[isoa]' '.*.d' '.*.d2')) \
+		 >> linkfarm.stamp.tmp ; ) \
 	$(foreach f, $(LINK_FILES), \
 		echo $(f) >> linkfarm.stamp.tmp ;)
 	cmp -s linkfarm.stamp.tmp linkfarm.stamp && \
@@ -48,13 +48,14 @@ shim-%config: $(D) FORCE
 		KCONFIG_CONFIG=$(CURDIR)/shim.config
 
 xen-shim: $(D) shim-olddefconfig
-	$(MAKE) -C $(D)/xen install-shim \
+	$(MAKE) -C $(D)/xen build \
 		XEN_CONFIG_EXPERT=y \
-		KCONFIG_CONFIG=$(CURDIR)/shim.config \
-		DESTDIR=$(CURDIR)
+		KCONFIG_CONFIG=$(CURDIR)/shim.config
+	ln -sf $(D)/xen/xen $@
+	ln -sf $(D)/xen/xen-syms $@-syms
 
 .PHONY: distclean clean
 distclean clean:
-	rm -f xen-shim *.old
+	rm -f xen-shim xen-shim-syms *.old
 	rm -rf $(D)
 	rm -f linkfarm.stamp*

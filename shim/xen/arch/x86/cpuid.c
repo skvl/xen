@@ -18,6 +18,46 @@ static const uint32_t hvm_shadow_featuremask[] = INIT_HVM_SHADOW_FEATURES;
 static const uint32_t hvm_hap_featuremask[] = INIT_HVM_HAP_FEATURES;
 static const uint32_t deep_features[] = INIT_DEEP_FEATURES;
 
+static int __init parse_xen_cpuid(const char *s)
+{
+    const char *ss;
+    int val, rc = 0;
+
+    do {
+        ss = strchr(s, ',');
+        if ( !ss )
+            ss = strchr(s, '\0');
+
+        if ( (val = parse_boolean("ibpb", s, ss)) >= 0 )
+        {
+            if ( !val )
+                setup_clear_cpu_cap(X86_FEATURE_IBPB);
+        }
+        else if ( (val = parse_boolean("ibrsb", s, ss)) >= 0 )
+        {
+            if ( !val )
+                setup_clear_cpu_cap(X86_FEATURE_IBRSB);
+        }
+        else if ( (val = parse_boolean("stibp", s, ss)) >= 0 )
+        {
+            if ( !val )
+                setup_clear_cpu_cap(X86_FEATURE_STIBP);
+        }
+        else if ( (val = parse_boolean("ssbd", s, ss)) >= 0 )
+        {
+            if ( !val )
+                setup_clear_cpu_cap(X86_FEATURE_SSBD);
+        }
+        else
+            rc = -EINVAL;
+
+        s = ss + 1;
+    } while ( *ss );
+
+    return rc;
+}
+custom_param("cpuid", parse_xen_cpuid);
+
 #define EMPTY_LEAF ((struct cpuid_leaf){})
 static void zero_leaves(struct cpuid_leaf *l,
                         unsigned int first, unsigned int last)
@@ -333,6 +373,28 @@ static void __init calculate_host_policy(void)
     }
 }
 
+static void __init guest_common_feature_adjustments(uint32_t *fs)
+{
+    /* Unconditionally claim to be able to set the hypervisor bit. */
+    __set_bit(X86_FEATURE_HYPERVISOR, fs);
+
+    /*
+     * If IBRS is offered to the guest, unconditionally offer STIBP.  It is a
+     * nop on non-HT hardware, and has this behaviour to make heterogeneous
+     * setups easier to manage.
+     */
+    if ( test_bit(X86_FEATURE_IBRSB, fs) )
+        __set_bit(X86_FEATURE_STIBP, fs);
+
+    /*
+     * On hardware which supports IBRS/IBPB, we can offer IBPB independently
+     * of IBRS by using the AMD feature bit.  An administrator may wish for
+     * performance reasons to offer IBPB without IBRS.
+     */
+    if ( host_cpuid_policy.feat.ibrsb )
+        __set_bit(X86_FEATURE_IBPB, fs);
+}
+
 static void __init calculate_pv_max_policy(void)
 {
     struct cpuid_policy *p = &pv_max_cpuid_policy;
@@ -345,8 +407,14 @@ static void __init calculate_pv_max_policy(void)
     for ( i = 0; i < ARRAY_SIZE(pv_featureset); ++i )
         pv_featureset[i] &= pv_featuremask[i];
 
-    /* Unconditionally claim to be able to set the hypervisor bit. */
-    __set_bit(X86_FEATURE_HYPERVISOR, pv_featureset);
+    /*
+     * If Xen isn't virtualising MSR_SPEC_CTRL for PV guests because of
+     * administrator choice, hide the feature.
+     */
+    if ( !boot_cpu_has(X86_FEATURE_SC_MSR_PV) )
+        __clear_bit(X86_FEATURE_IBRSB, pv_featureset);
+
+    guest_common_feature_adjustments(pv_featureset);
 
     sanitise_featureset(pv_featureset);
     cpuid_featureset_to_policy(pv_featureset, p);
@@ -374,9 +442,6 @@ static void __init calculate_hvm_max_policy(void)
     for ( i = 0; i < ARRAY_SIZE(hvm_featureset); ++i )
         hvm_featureset[i] &= hvm_featuremask[i];
 
-    /* Unconditionally claim to be able to set the hypervisor bit. */
-    __set_bit(X86_FEATURE_HYPERVISOR, hvm_featureset);
-
     /*
      * Xen can provide an APIC emulation to HVM guests even if the host's APIC
      * isn't enabled.
@@ -393,6 +458,13 @@ static void __init calculate_hvm_max_policy(void)
         __set_bit(X86_FEATURE_SEP, hvm_featureset);
 
     /*
+     * If Xen isn't virtualising MSR_SPEC_CTRL for HVM guests because of
+     * administrator choice, hide the feature.
+     */
+    if ( !boot_cpu_has(X86_FEATURE_SC_MSR_HVM) )
+        __clear_bit(X86_FEATURE_IBRSB, hvm_featureset);
+
+    /*
      * With VT-x, some features are only supported by Xen if dedicated
      * hardware support is also available.
      */
@@ -404,6 +476,8 @@ static void __init calculate_hvm_max_policy(void)
         if ( !cpu_has_vmx_xsaves )
             __clear_bit(X86_FEATURE_XSAVES, hvm_featureset);
     }
+
+    guest_common_feature_adjustments(hvm_featureset);
 
     sanitise_featureset(hvm_featureset);
     cpuid_featureset_to_policy(hvm_featureset, p);
@@ -545,6 +619,14 @@ void recalculate_cpuid_policy(struct domain *d)
 
     recalculate_xstate(p);
     recalculate_misc(p);
+
+    /*
+     * Override STIBP to match IBRS.  Guests can safely use STIBP
+     * functionality on non-HT hardware, but can't necesserily protect
+     * themselves from SP2/Spectre/Branch Target Injection if STIBP is hidden
+     * on HT-capable hardware.
+     */
+    p->feat.stibp = p->feat.ibrsb;
 
     for ( i = 0; i < ARRAY_SIZE(p->cache.raw); ++i )
     {

@@ -1,4 +1,4 @@
-# Support statement for this release
+% Support statement for this release
 
 This document describes the support status
 and in particular the security support status of the Xen branch
@@ -9,10 +9,10 @@ for the definitions of the support status levels etc.
 
 # Release Support
 
-    Xen-Version: 4.10-unstable
-    Initial-Release: n/a
-    Supported-Until: TBD
-    Security-Support-Until: Unreleased - not yet security-supported
+    Xen-Version: 4.10
+    Initial-Release: 2017-12-13
+    Supported-Until: 2019-06-13
+    Security-Support-Until: 2020-12-13
 
 # Feature Support
 
@@ -58,31 +58,29 @@ for the definitions of the support status levels etc.
 
 ### ARM/GICv3 ITS
 
-    Status: Experimental
-
 Extension to the GICv3 interrupt controller to support MSI.
+
+    Status: Experimental
 
 ## Guest Type
 
 ### x86/PV
 
-    Status: Supported
-
 Traditional Xen PV guest
 
 No hardware requirements
 
-### x86/HVM
-
     Status: Supported
+
+### x86/HVM
 
 Fully virtualised guest using hardware virtualisation extensions
 
 Requires hardware virtualisation support (Intel VMX / AMD SVM)
 
-### x86/PVH guest
+    Status, domU: Supported
 
-    Status: Supported
+### x86/PVH
 
 PVH is a next-generation paravirtualized mode
 designed to take advantage of hardware virtualization support when possible.
@@ -90,11 +88,13 @@ During development this was sometimes called HVMLite or PVHv2.
 
 Requires hardware virtualisation support (Intel VMX / AMD SVM)
 
-### ARM guest
+    Status, domU: Supported
 
-    Status: Supported
+### ARM
 
 ARM only has one guest type at the moment
+
+    Status: Supported
 
 ## Toolstack
 
@@ -104,11 +104,11 @@ ARM only has one guest type at the moment
 
 ### Direct-boot kernel image format
 
+Format which the toolstack accepts for direct-boot kernels
+
     Supported, x86: bzImage, ELF
     Supported, ARM32: zImage
     Supported, ARM64: Image
-
-Format which the toolstack accepts for direct-boot kernels
 
 ### Dom0 init support for xl
 
@@ -118,9 +118,9 @@ Format which the toolstack accepts for direct-boot kernels
 
 ### JSON output support for xl
 
-    Status: Experimental
-
 Output of information in machine-parseable JSON format
+
+    Status: Experimental
 
 ### Open vSwitch integration for xl
 
@@ -154,17 +154,18 @@ Output of information in machine-parseable JSON format
 
 ### Hypervisor 'debug keys'
 
-    Status: Supported, not security supported
-
 These are functions triggered either from the host serial console,
 or via the xl 'debug-keys' command,
 which cause Xen to dump various hypervisor state to the console.
 
+    Status: Supported, not security supported
+
 ### Hypervisor synchronous console output (sync_console)
+
+Xen command-line flag to force synchronous console output.
 
     Status: Supported, not security supported
 
-Xen command-line flag to force synchronous console output.
 Useful for debugging, but not suitable for production environments
 due to incurred overhead.
 
@@ -176,56 +177,54 @@ Debugger to debug ELF guests
 
 ### Soft-reset for PV guests
 
-    Status: Supported
-
 Soft-reset allows a new kernel to start 'from scratch' with a fresh VM state,
 but with all the memory from the previous state of the VM intact.
 This is primarily designed to allow "crash kernels",
 which can do core dumps of memory to help with debugging in the event of a crash.
 
-### xentrace
+    Status: Supported
 
-    Status, x86: Supported
+### xentrace
 
 Tool to capture Xen trace buffer data
 
+    Status, x86: Supported
+
 ### gcov
 
-    Status: Supported, Not security supported
-
 Export hypervisor coverage data suitable for analysis by gcov or lcov.
+
+    Status: Supported, Not security supported
 
 ## Memory Management
 
 ### Dynamic memory control
 
-    Status: Supported
-
 Allows a guest to add or remove memory after boot-time.
 This is typically done by a guest kernel agent known as a "balloon driver".
 
-### Populate-on-demand memory
+    Status: Supported
 
-    Status, x86 HVM: Supported
+### Populate-on-demand memory
 
 This is a mechanism that allows normal operating systems with only a balloon driver
 to boot with memory < maxmem.
 
-### Memory Sharing
+    Status, x86 HVM: Supported
 
-    Status, x86 HVM: Expermental
+### Memory Sharing
 
 Allow sharing of identical pages between guests
 
-### Memory Paging
+    Status, x86 HVM: Expermental
 
-    Status, x86 HVM: Experimenal
+### Memory Paging
 
 Allow pages belonging to guests to be paged to disk
 
-### Transcendent Memory
+    Status, x86 HVM: Experimenal
 
-    Status: Experimental
+### Transcendent Memory
 
 Transcendent Memory (tmem) allows the creation of hypervisor memory pools
 which guests can use to store memory
@@ -233,95 +232,99 @@ rather than caching in its own memory or swapping to disk.
 Having these in the hypervisor
 can allow more efficient aggregate use of memory across VMs.
 
-### Alternative p2m
+    Status: Experimental
 
-    Status, x86 HVM: Tech Preview
-    Status, ARM: Tech Preview
+### Alternative p2m
 
 Allows external monitoring of hypervisor memory
 by maintaining multiple physical to machine (p2m) memory mappings.
+
+    Status, x86 HVM: Tech Preview
+    Status, ARM: Tech Preview
 
 ## Resource Management
 
 ### CPU Pools
 
-    Status: Supported
-
 Groups physical cpus into distinct groups called "cpupools",
 with each pool having the capability
 of using different schedulers and scheduling properties.
 
-### Credit Scheduler
-
     Status: Supported
+
+### Credit Scheduler
 
 A weighted proportional fair share virtual CPU scheduler.
 This is the default scheduler.
 
-### Credit2 Scheduler
-
     Status: Supported
+
+### Credit2 Scheduler
 
 A general purpose scheduler for Xen,
 designed with particular focus on fairness, responsiveness, and scalability
 
-### RTDS based Scheduler
+    Status: Supported
 
-    Status: Experimental
+### RTDS based Scheduler
 
 A soft real-time CPU scheduler
 built to provide guaranteed CPU capacity to guest VMs on SMP hosts
 
+    Status: Experimental
+
 ### ARINC653 Scheduler
+
+A periodically repeating fixed timeslice scheduler.
 
     Status: Supported
 
-A periodically repeating fixed timeslice scheduler.
 Currently only single-vcpu domains are supported.
 
 ### Null Scheduler
-
-    Status: Experimental
 
 A very simple, very static scheduling policy
 that always schedules the same vCPU(s) on the same pCPU(s).
 It is designed for maximum determinism and minimum overhead
 on embedded platforms.
 
+    Status: Experimental
+
 ### NUMA scheduler affinity
 
-    Status, x86: Supported
-
 Enables NUMA aware scheduling in Xen
+
+    Status, x86: Supported
 
 ## Scalability
 
 ### Super page support
-
-    Status, x86 HVM/PVH, HAP: Supported
-    Status, x86 HVM/PVH, Shadow, 2MiB: Supported
-    Status, ARM: Supported
 
 NB that this refers to the ability of guests
 to have higher-level page table entries point directly to memory,
 improving TLB performance.
 On ARM, and on x86 in HAP mode,
 the guest has whatever support is enabled by the hardware.
+
+This feature is independent
+of the ARM "page granularity" feature (see below).
+
+    Status, x86 HVM/PVH, HAP: Supported
+    Status, x86 HVM/PVH, Shadow, 2MiB: Supported
+    Status, ARM: Supported
+
 On x86 in shadow mode, only 2MiB (L2) superpages are available;
 furthermore, they do not have the performance characteristics
 of hardware superpages.
 
-Also note is feature independent
-of the ARM "page granularity" feature (see below).
-
 ### x86/PVHVM
-
-    Status: Supported
 
 This is a useful label for a set of hypervisor features
 which add paravirtualized functionality to HVM guests
 for improved performance and scalability.
 This includes exposing event channels to HVM guests.
+
+    Status: Supported
 
 ## High Availability and Fault Tolerance
 
@@ -335,13 +338,15 @@ This includes exposing event channels to HVM guests.
 
 ### x86/vMCE
 
-    Status: Supported
-
 Forward Machine Check Exceptions to appropriate guests
+
+    Status: Supported
 
 ## Virtual driver support, guest side
 
 ### Blkfront
+
+Guest-side driver capable of speaking the Xen PV block protocol
 
     Status, Linux: Supported
     Status, FreeBSD: Supported, Security support external
@@ -349,38 +354,37 @@ Forward Machine Check Exceptions to appropriate guests
     Status, OpenBSD: Supported, Security support external
     Status, Windows: Supported
 
-Guest-side driver capable of speaking the Xen PV block protocol
-
 ### Netfront
+
+Guest-side driver capable of speaking the Xen PV networking protocol
 
     Status, Linux: Supported
     Status, FreeBSD: Supported, Security support external
     Status, NetBSD: Supported, Security support external
     Status, OpenBSD: Supported, Security support external
-    States, Windows: Supported
-
-Guest-side driver capable of speaking the Xen PV networking protocol
+    Status, Windows: Supported
 
 ### PV Framebuffer (frontend)
 
-    Status, Linux (xen-fbfront): Supported
-
 Guest-side driver capable of speaking the Xen PV Framebuffer protocol
 
+    Status, Linux (xen-fbfront): Supported
+
 ### PV Console (frontend)
+
+Guest-side driver capable of speaking the Xen PV console protocol
 
     Status, Linux (hvc_xen): Supported
     Status, FreeBSD: Supported, Security support external
     Status, NetBSD: Supported, Security support external
     Status, Windows: Supported
 
-Guest-side driver capable of speaking the Xen PV console protocol
-
 ### PV keyboard (frontend)
 
-    Status, Linux (xen-kbdfront): Supported
+Guest-side driver capable of speaking the Xen PV keyboard protocol.
+Note that the "keyboard protocol" includes mouse / pointer support as well.
 
-Guest-side driver capable of speaking the Xen PV keyboard protocol
+    Status, Linux (xen-kbdfront): Supported
 
 ### PV USB (frontend)
 
@@ -395,21 +399,21 @@ there is currently no xl support.
 
 ### PV TPM (frontend)
 
-    Status, Linux (xen-tpmfront): Tech Preview
-
 Guest-side driver capable of speaking the Xen PV TPM protocol
+
+    Status, Linux (xen-tpmfront): Tech Preview
 
 ### PV 9pfs frontend
 
-    Status, Linux: Tech Preview
-
 Guest-side driver capable of speaking the Xen 9pfs protocol
+
+    Status, Linux: Tech Preview
 
 ### PVCalls (frontend)
 
-    Status, Linux: Tech Preview
-
 Guest-side driver capable of making pv system calls
+
+    Status, Linux: Tech Preview
 
 ## Virtual device support, host side
 
@@ -419,45 +423,52 @@ unless otherwise noted.
 
 ### Blkback
 
+Host-side implementations of the Xen PV block protocol.
+
     Status, Linux (xen-blkback): Supported
-    Status, QEMU (xen_disk): Supported
+    Status, QEMU (xen_disk), raw format: Supported
+    Status, QEMU (xen_disk), qcow format: Supported
+    Status, QEMU (xen_disk), qcow2 format: Supported
+    Status, QEMU (xen_disk), vhd format: Supported
     Status, FreeBSD (blkback): Supported, Security support external
     Status, NetBSD (xbdback): Supported, security support external
-    Status, Blktap2: Deprecated
+    Status, Blktap2, raw format: Deprecated
+    Status, Blktap2, vhd format: Deprecated
 
-Host-side implementations of the Xen PV block protocol
+Backends only support raw format unless otherwise specified.
 
 ### Netback
+
+Host-side implementations of Xen PV network protocol
 
     Status, Linux (xen-netback): Supported
     Status, FreeBSD (netback): Supported, Security support external
     Status, NetBSD (xennetback): Supported, Security support external
 
-Host-side implementations of Xen PV network protocol
-
 ### PV Framebuffer (backend)
-
-    Status, QEMU: Supported
 
 Host-side implementation of the Xen PV framebuffer protocol
 
-### PV Console (xenconsoled)
+    Status, QEMU: Supported
 
-    Status: Supported
+### PV Console (xenconsoled)
 
 Host-side implementation of the Xen PV console protocol
 
+    Status: Supported
+
 ### PV keyboard (backend)
 
-    Status, QEMU: Supported
+Host-side implementation of the Xen PV keyboard protocol.
+Note that the "keyboard protocol" includes mouse / pointer support as well.
 
-Host-side implementation fo the Xen PV keyboard protocol
+    Status, QEMU: Supported
 
 ### PV USB (backend)
 
-    Status, QEMU: Supported
-
 Host-side implementation of the Xen PV USB protocol
+
+    Status, QEMU: Supported
 
 ### PV SCSI protocol (backend)
 
@@ -489,10 +500,10 @@ but has no xl support.
 
 ### Driver Domains
 
-    Status: Supported, with caveats
-
 "Driver domains" means allowing non-Domain 0 domains
 with access to physical devices to act as back-ends.
+
+    Status: Supported, with caveats
 
 See the appropriate "Device Passthrough" section
 for more information about security support.
@@ -543,12 +554,12 @@ with dom0, driver domains, stub domains, domUs, and so on.
 
 ### x86/Nested PV
 
-    Status, x86 Xen HVM: Tech Preview
-
 This means running a Xen hypervisor inside an HVM domain on a Xen system,
 with support for PV L2 guests only
 (i.e., hardware virtualization extensions not provided
 to the guest).
+
+    Status, x86 Xen HVM: Tech Preview
 
 This works, but has performance limitations
 because the L1 dom0 can only access emulated L1 devices.
@@ -558,18 +569,18 @@ but nobody has reported on performance.
 
 ### x86/Nested HVM
 
-    Status, x86 HVM: Experimental
-
 This means providing hardware virtulization support to guest VMs
 allowing, for instance, a nested Xen to support both PV and HVM guests.
 It also implies support for other hypervisors,
 such as KVM, Hyper-V, Bromium, and so on as guests.
 
+    Status, x86 HVM: Experimental
+
 ### vPMU
 
-    Status, x86: Supported, Not security supported
-
 Virtual Performance Management Unit for HVM guests
+
+    Status, x86: Supported, Not security supported
 
 Disabled by default (enable with hypervisor command line option).
 This feature is not security supported: see http://xenbits.xen.org/xsa/advisory-163.html
@@ -615,7 +626,11 @@ No support for QEMU backends in a 16K or 64K domain.
 
 ## Virtual Hardware, QEMU
 
-These are devices available in HVM mode using a qemu devicemodel (the default).
+This section describes supported devices available in HVM mode using a
+qemu devicemodel (the default).
+
+    Status: Support scope restricted 
+
 Note that other devices are available but not security supported.
 
 ### x86/Emulated platform devices (QEMU):
@@ -632,11 +647,13 @@ Note that other devices are available but not security supported.
 
     Status, piix3 ide: Supported
     Status, ahci: Supported
+	
+See the section **Blkback** for image formats supported by QEMU.
 
 ### x86/Emulated graphics (QEMU):
 
     Status, cirrus-vga: Supported
-    Status, stgvga: Supported
+    Status, stdvga: Supported
 
 ### x86/Emulated audio (QEMU):
 
@@ -663,9 +680,10 @@ Note that other devices are available but not security supported.
 
 ### x86/HVM iPXE
 
+Booting a guest via PXE.
+
     Status: Supported, with caveats
 
-Booting a guest via PXE.
 PXE inherently places full trust of the guest in the network,
 and so should only be used
 when the guest network is under the same administrative control
@@ -673,16 +691,16 @@ as the guest itself.
 
 ### x86/HVM BIOS
 
+Booting a guest via guest BIOS firmware
+
     Status, SeaBIOS (qemu-xen): Supported
     Status, ROMBIOS (qemu-xen-traditional): Supported
 
-Booting a guest via guest BIOS firmware
-
 ### x86/HVM OVMF
 
-    Status, qemu-xen: Supported
-
 OVMF firmware implements the UEFI boot protocol.
+
+    Status, qemu-xen: Supported
 
 # Format and definitions
 
@@ -693,6 +711,11 @@ the section and subsection in which it is found.
 The file is in markdown format.
 The machine-readable fragments are markdown literals
 containing RFC-822-like (deb822-like) data.
+
+In each case, descriptions which expand on the name of a feature as
+provided in the section heading, precede the Status indications.
+Any paragraphs which follow the Status indication are caveats or
+qualifications of the information provided in Status fields.
 
 ## Keys found in the Feature Support subsections
 
@@ -761,40 +784,40 @@ What is the risk of it exhibiting bugs?
 
 General answers to the above:
 
- * **Here be dragons**
+  * **Here be dragons**
 
-   Pretty likely to still crash / fail to work.
-   Not recommended unless you like life on the bleeding edge.
+    Pretty likely to still crash / fail to work.
+    Not recommended unless you like life on the bleeding edge.
 
- * **Quirky**
+  * **Quirky**
 
-   Mostly works but may have odd behavior here and there.
-   Recommended for playing around or for non-production use cases.
+    Mostly works but may have odd behavior here and there.
+    Recommended for playing around or for non-production use cases.
 
- * **Normal**
+  * **Normal**
 
-   Ready for production use
+    Ready for production use
 
 ### Interface stability
 
 If I build a system based on the current interfaces,
 will they still work when I upgrade to the next version?
 
- * **Not stable**
+  * **Not stable**
 
-   Interface is still in the early stages and
-   still fairly likely to be broken in future updates.
+    Interface is still in the early stages and
+    still fairly likely to be broken in future updates.
 
- * **Provisionally stable**
+  * **Provisionally stable**
 
-   We're not yet promising backwards compatibility,
-   but we think this is probably the final form of the interface.
-   It may still require some tweaks.
+    We're not yet promising backwards compatibility,
+    but we think this is probably the final form of the interface.
+    It may still require some tweaks.
 
- * **Stable**
+  * **Stable**
 
-   We will try very hard to avoid breaking backwards  compatibility,
-   and to fix any regressions that are reported.
+    We will try very hard to avoid breaking backwards  compatibility,
+    and to fix any regressions that are reported.
 
 ### Security supported
 

@@ -79,6 +79,12 @@ UNLIKELY_END(svm_trace)
         or   $X86_EFLAGS_MBS,%rax
         mov  %rax,VMCB_rflags(%rcx)
 
+        mov VCPU_arch_msr(%rbx), %rax
+        mov VCPUMSR_spec_ctrl_raw(%rax), %eax
+
+        /* WARNING! `ret`, `call *`, `jmp *` not safe beyond this point. */
+        SPEC_CTRL_EXIT_TO_HVM   /* Req: a=spec_ctrl %rsp=regs/cpuinfo, Clob: cd */
+
         pop  %r15
         pop  %r14
         pop  %r13
@@ -98,25 +104,14 @@ UNLIKELY_END(svm_trace)
 
         VMRUN
 
-        GET_CURRENT(ax)
-        push %rdi
-        push %rsi
-        push %rdx
-        push %rcx
-        mov  VCPU_svm_vmcb(%rax),%rcx
-        push %rax
-        push %r8
-        push %r9
-        push %r10
-        push %r11
-        push %rbx
-        mov  %rax,%rbx
-        push %rbp
-        push %r12
-        push %r13
-        push %r14
-        push %r15
+        SAVE_ALL
 
+        GET_CURRENT(bx)
+
+        SPEC_CTRL_ENTRY_FROM_HVM    /* Req: b=curr %rsp=regs/cpuinfo, Clob: acd */
+        /* WARNING! `ret`, `call *`, `jmp *` not safe before this point. */
+
+        mov  VCPU_svm_vmcb(%rbx),%rcx
         movb $0,VCPU_svm_vmcb_in_sync(%rbx)
         mov  VMCB_rax(%rcx),%rax
         mov  %rax,UREGS_rax(%rsp)

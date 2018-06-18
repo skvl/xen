@@ -79,6 +79,8 @@ void toggle_guest_mode(struct vcpu *);
 /* x86/64: toggle guest page tables between kernel and user modes. */
 void toggle_guest_pt(struct vcpu *);
 
+void cpuid_policy_updated(struct vcpu *v);
+
 /*
  * Initialise a hypercall-transfer page. The given pointer must be mapped
  * in Xen virtual address space (accesses are not validated or checked).
@@ -250,6 +252,11 @@ struct pv_domain
     l1_pgentry_t **gdt_ldt_l1tab;
 
     atomic_t nr_l4_pages;
+
+    /* XPTI active? */
+    bool xpti;
+    /* Use PCID feature? */
+    bool pcid;
 
     /* map_domain_page() mapping cache. */
     struct mapcache_domain mapcache;
@@ -562,6 +569,9 @@ struct arch_vcpu
      * and thus should be saved/restored. */
     bool_t nonlazy_xstate_used;
 
+    /* Restore all FPU state (lazy and non-lazy state) on context switch? */
+    bool fully_eager_fpu;
+
     /*
      * The SMAP check policy when updating runstate_guest(v) and the
      * secondary system time.
@@ -610,18 +620,12 @@ void vcpu_show_registers(const struct vcpu *);
 unsigned long pv_guest_cr4_fixup(const struct vcpu *, unsigned long guest_cr4);
 
 /* Convert between guest-visible and real CR4 values. */
-#define pv_guest_cr4_to_real_cr4(v)                         \
-    (((v)->arch.pv_vcpu.ctrlreg[4]                          \
-      | (mmu_cr4_features                                   \
-         & (X86_CR4_PGE | X86_CR4_PSE | X86_CR4_SMEP |      \
-            X86_CR4_SMAP | X86_CR4_OSXSAVE |                \
-            X86_CR4_FSGSBASE))                              \
-      | ((v)->domain->arch.vtsc ? X86_CR4_TSD : 0))         \
-     & ~X86_CR4_DE)
+unsigned long pv_guest_cr4_to_real_cr4(const struct vcpu *v);
+
 #define real_cr4_to_pv_guest_cr4(c)                         \
     ((c) & ~(X86_CR4_PGE | X86_CR4_PSE | X86_CR4_TSD |      \
              X86_CR4_OSXSAVE | X86_CR4_SMEP |               \
-             X86_CR4_FSGSBASE | X86_CR4_SMAP))
+             X86_CR4_FSGSBASE | X86_CR4_SMAP | X86_CR4_PCIDE))
 
 #define domain_max_vcpus(d) (is_hvm_domain(d) ? HVM_MAX_VCPUS : MAX_VIRT_CPUS)
 

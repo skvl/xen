@@ -53,6 +53,8 @@ static int update_domain_cpuid_info(struct domain *d,
     struct cpuid_policy *p = d->arch.cpuid;
     const struct cpuid_leaf leaf = { ctl->eax, ctl->ebx, ctl->ecx, ctl->edx };
     int old_vendor = p->x86_vendor;
+    unsigned int old_7d0 = p->feat.raw[0].d, old_e8b = p->extd.raw[8].b;
+    bool call_policy_changed = false; /* Avoid for_each_vcpu() unnecessarily */
 
     /*
      * Skip update for leaves we don't care about.  This avoids the overhead
@@ -128,13 +130,7 @@ static int update_domain_cpuid_info(struct domain *d,
     switch ( ctl->input[0] )
     {
     case 0:
-        if ( is_hvm_domain(d) && (p->x86_vendor != old_vendor) )
-        {
-            struct vcpu *v;
-
-            for_each_vcpu( d, v )
-                hvm_update_guest_vendor(v);
-        }
+        call_policy_changed = (p->x86_vendor != old_vendor);
         break;
 
     case 1:
@@ -223,6 +219,14 @@ static int update_domain_cpuid_info(struct domain *d,
 
             d->arch.pv_domain.cpuidmasks->_7ab0 = mask;
         }
+
+        /*
+         * If the IBRS/IBPB policy has changed, we need to recalculate the MSR
+         * interception bitmaps.
+         */
+        call_policy_changed = (is_hvm_domain(d) &&
+                               ((old_7d0 ^ p->feat.raw[0].d) &
+                                cpufeat_mask(X86_FEATURE_IBRSB)));
         break;
 
     case 0xa:
@@ -297,6 +301,24 @@ static int update_domain_cpuid_info(struct domain *d,
             d->arch.pv_domain.cpuidmasks->e1cd = mask;
         }
         break;
+
+    case 0x80000008:
+        /*
+         * If the IBPB policy has changed, we need to recalculate the MSR
+         * interception bitmaps.
+         */
+        call_policy_changed = (is_hvm_domain(d) &&
+                               ((old_e8b ^ p->extd.raw[8].b) &
+                                cpufeat_mask(X86_FEATURE_IBPB)));
+        break;
+    }
+
+    if ( call_policy_changed )
+    {
+        struct vcpu *v;
+
+        for_each_vcpu( d, v )
+            cpuid_policy_updated(v);
     }
 
     return 0;
@@ -1289,6 +1311,7 @@ long arch_do_domctl(
         struct xen_domctl_vcpu_msr msr;
         struct vcpu *v;
         static const uint32_t msrs_to_send[] = {
+            MSR_SPEC_CTRL,
             MSR_INTEL_MISC_FEATURES_ENABLES,
         };
         uint32_t nr_msrs = ARRAY_SIZE(msrs_to_send);
@@ -1415,6 +1438,7 @@ long arch_do_domctl(
 
                 switch ( msr.index )
                 {
+                case MSR_SPEC_CTRL:
                 case MSR_INTEL_MISC_FEATURES_ENABLES:
                     if ( guest_wrmsr(v, msr.index, msr.value) != X86EMUL_OKAY )
                         break;
