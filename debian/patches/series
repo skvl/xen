@@ -29,3 +29,7 @@ ubuntu-tools-libs-abiname.diff
 0029-Copy-README.pti-and-README.comet-from-the-XSA-254-ad.patch
 0030-tools-utility-to-dump-guest-grant-table-info.patch
 0031-gitignore-add-tools-misc-xen-diag-to-.gitignore.patch
+x86mm-dont-bypass-preemption-checks.patch
+x86-refine-checks-in-db-handler-for-faul.patch
+libxl-qemu_disk_scsi_drive_string-break-.patch
+libxl-restore-passing-readonly=-to-qemu-.patch
