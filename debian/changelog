@@ -1,4 +1,4 @@
-xen (4.8.3+xsa267+shim4.10.1+xsa267-1+deb9u8~) UNRELEASED; urgency=medium
+xen (4.8.3+xsa267+shim4.10.1+xsa267-1+deb9u8) stretch-security; urgency=high
 
   * Update to new upstream version 4.8.3+xsa267+shim4.10.1+xsa267.
        XSA-267 CVE-2018-3665
