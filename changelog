@@ -1,0 +1,1537 @@
+xen (4.8.3+xsa267+shim4.10.1+xsa267-1+deb9u9) stretch-security; urgency=high
+
+  * Security upload [thanks to Wolodja Wentland]:
+       XSA-264 (no CVE yet)
+       XSA-265 (no CVE yet)
+       XSA-266 (no CVE yet)
+
+ -- Ian Jackson <ijackson@chiark.greenend.org.uk>  Fri, 22 Jun 2018 16:38:39 +0100
+
+xen (4.8.3+xsa267+shim4.10.1+xsa267-1+deb9u8) stretch-security; urgency=high
+
+  * Update to new upstream version 4.8.3+xsa267+shim4.10.1+xsa267.
+       XSA-267 CVE-2018-3665
+
+    I have actually taken upstream's staging-4.8 CI input branch, which is
+    identical to the CI-tested stable-4.8 except that it also has the
+    XSA-267 patches.  There are additional patches in upstream's
+    stable-4.8 branch, beyond what was in the previous Debian stretch
+    security update, which are prerequisites for the XSA-267 patches.
+
+    For the shim, I have updated to upstream's staging-4.10, which is
+    identical to the CI-tested stable-4.10q except, again, for
+    XSA-267-related patches.  The 4.10.0-comet branch lacks speculation
+    control entirely and has been superseded upstream.
+
+ -- Ian Jackson <ian.jackson@citrix.com>  Mon, 18 Jun 2018 16:10:38 +0100
+
+xen (4.8.3+xsa262+shim4.10.0+comet3-1+deb9u7) stretch-security; urgency=high
+
+  * Include upstream XSA-263 (speculative store bypass) fixes for x86.
+    I hear that ARM fixes will be forthcoming RSN.  Ie,
+       XSA-263 CVE-2018-3639 (amd64/i386; armhf/arm64 still vuln.)
+
+  * Include a number of upstream bugfixes, including fixes to previous
+    security fixes, some of which are security-relevant:
+      x86: correct ordering of operations during S3 resume
+      x86: suppress BTI mitigations around S3 suspend/resume
+      x86/spec_ctrl: Updates to retpoline-safety decision making
+      x86/HPET: fix race triggering ASSERT(cpu < nr_cpu_ids)
+      x86/HVM: never retain emulated insn cache when exiting back to guest
+      xpti: fix bug in double fault handling
+      x86/cpuidle: don't init stats lock more than once
+      xen: Introduce vcpu_sleep_nosync_locked()
+      xen/schedule: Fix races in vcpu migration
+      x86: Fix "x86: further CPUID handling adjustments"
+
+    The result is very similar to upstream staging-4.8.  However, as
+    upstream staging-4.8 has not yet passed upstream CI, I have chosen to
+    cherry pick fixes so that I can drop a couple that don't look
+    immediately important.  We will expect to resynchronise with
+    upstream's 4.8 stable branch soon.
+
+  * Drop our patch `tools: fix arm build after bdf693ee61b48' (which was
+    needed to build the upstream 4.8 comet branch on ARM but is not needed
+    for the the upstream staging/stable branch).  Closes:#898898.
+
+  * Update changelog for 4.8.3+xsa262+shim4.10.0+comet3-1+deb9u6 to
+    mention branch switch from upstream 4.8 comet to upstream main 4.8,
+    and add some missing CVEs.
+
+ -- Ian Jackson <ijackson@chiark.greenend.org.uk>  Tue, 22 May 2018 18:41:33 +0100
+
+xen (4.8.3+xsa262+shim4.10.0+comet3-1+deb9u6) stretch-security; urgency=high
+
+  * Update to new upstream version 4.8.3+xsa262+shim4.10.0+comet3.
+    (This is the upstream staging-4.8 branch, which is ahead of the
+    upstream CI-tested stable-4.8 branch by precisely the three
+    most recent XSA fixes.  We are switching away from the special
+    upstream 4.8 comet branch.)
+
+  * Resulting security fixes:
+       XSA-258 CVE-2018-10472
+       XSA-259 CVE-2018-10471
+       XSA-260 CVE-2018-8897
+       XSA-261 CVE-2018-10982
+       XSA-262 CVE-2018-10981
+
+   * Apply two further build fixes from upstream staging-4.8.
+
+ -- Ian Jackson <ijackson@chiark.greenend.org.uk>  Thu, 10 May 2018 16:50:52 +0100
+
+xen (4.8.3+comet2+shim4.10.0+comet3-1+deb9u5) stretch-security; urgency=high
+
+  * Security fixes from upstream XSAs:
+       XSA-252 CVE-2018-7540
+       XSA-255 CVE-2018-7541
+       XSA-256 CVE-2018-7542
+    The upstream BTI changes from XSA-254 (Spectre v2 mitigation)
+    are *not* included.  They are currently failing in upstream CI.
+  * init scripts: Do not kill per-domain qemu processes.  Closes:#879751.
+  * Install Meltdown READMEs on all architectures.  Closes:#890488.
+  * Ship xen-diag (by cherry-picking the appropriate commits from
+    upstream).  This can help with diagnosis of #880554.
+
+ -- Ian Jackson <ijackson@chiark.greenend.org.uk>  Fri, 02 Mar 2018 16:07:18 +0000
+
+xen (4.8.3+comet2+shim4.10.0+comet3-1+deb9u4.1) stretch-security; urgency=high
+
+  * Fix builds on other than amd64.
+
+ -- Ian Jackson <ijackson@chiark.greenend.org.uk>  Fri, 09 Feb 2018 14:42:57 +0000
+
+xen (4.8.3+comet2+shim4.10.0+comet3-1+deb9u4) stretch-security; urgency=high
+
+  * Update to new upstream version 4.8.3+comet2+shim4.10.0+comet3.
+    Specifically, this is two upstreams:
+      - Upstream Xen 4.8.3 "git merge"d with upstream
+        Xen Security Team (XSA-254) 4.8.3pre-shim-comet-2, in `.'
+      - Upstream Xen 4.10.0-shim-comet-3 in `shim'.
+    The upstream tarballs are from `git archive' with the
+    gitattributes for mangling .gitarchive-info disabled.
+    Therefore, we include these security fixes:
+       XSA-254 CVE-2017-5754 but SP3 "Meltdown" only
+       XSA-253 CVE-2018-5244
+       XSA-251 CVE-2017-17565
+       XSA-250 CVE-2017-17564
+       XSA-249 CVE-2017-17563
+       XSA-248 CVE-2017-17566
+  * Ship README.pti and README.comet from the upstream XSA-254
+    advisory in /usr/share/doc/xen-utils/common/.
+
+ -- Ian Jackson <ijackson@chiark.greenend.org.uk>  Wed, 07 Feb 2018 17:50:45 +0000
+
+xen (4.8.2+xsa245-0+deb9u1) stretch-security; urgency=high
+
+  * Update to upstream stable 4.8 branch, which is currently at Xen 4.8.2
+    plus a number of bugfixes and security fixes.
+    Result is that we now include security fixes for:
+       XSA-231 CVE-2017-14316
+       XSA-232 CVE-2017-14318
+       XSA-233 CVE-2017-14317
+       XSA-234 CVE-2017-14319
+       (235 already included in 4.8.1-1+deb9u3)
+       XSA-236 CVE-2017-15597
+       XSA-237 CVE-2017-15590
+       XSA-238 (no CVE yet)
+       XSA-239 CVE-2017-15589
+       XSA-240 CVE-2017-15595
+       XSA-241 CVE-2017-15588
+       XSA-242 CVE-2017-15593
+       XSA-243 CVE-2017-15592
+       XSA-244 CVE-2017-15594
+       XSA-245 (no CVE yet)
+    and a number of upstream functionality fixes, which are not easily
+    disentangled from the security fixes.
+  * Apply two more security fixes:
+       XSA-246 (no CVE yet)
+       XSA-247 (no CVE yet)
+
+ -- Ian Jackson <ijackson@chiark.greenend.org.uk>  Sat, 25 Nov 2017 11:26:37 +0000
+
+xen (4.8.1-1+deb9u3) stretch-security; urgency=high
+
+  * Security fixes for
+      XSA-226 CVE-2017-12135
+      XSA-227 CVE-2017-12137
+      XSA-228 CVE-2017-12136
+      XSA-230 CVE-2017-12855
+      XSA-235 (no CVE yet)
+  * Adjust changelog entry for 4.8.1-1+deb9u2 to record
+    that XSA-225 fix was indeed included.
+  * Security fix for XSA-229 not included as that bug is in Linux, not Xen.
+  * Security fixes for XSA-231..234 inc. not inclued as still embargoed.
+
+ -- Ian Jackson <ian.jackson@eu.citrix.com>  Thu, 07 Sep 2017 19:17:58 +0100
+
+xen (4.8.1-1+deb9u2) stretch-security; urgency=high
+
+  * Security fixes for
+      XSA-216 XSA-217 XSA-218 XSA-219 XSA-220
+      XSA-221 XSA-222 XSA-223 XSA-224 XSA-225
+
+ -- Ian Jackson <ian.jackson@eu.citrix.com>  Tue, 20 Jun 2017 14:06:34 +0100
+
+xen (4.8.1-1+deb9u1) unstable; urgency=medium
+
+  * Security fixes for XSA-213 (Closes:#861659) and XSA-214
+    (Closes:#861660).  (Xen 4.7 and later is not affected by XSA-215.)
+
+ -- Ian Jackson <ian.jackson@eu.citrix.com>  Tue, 02 May 2017 12:19:57 +0100
+
+xen (4.8.1-1) unstable; urgency=high
+
+  * Update to upstream 4.8.1 release.
+    Changes include numerous bugfixes, including security fixes for:
+      XSA-212 / CVE-2017-7228   Closes:#859560
+      XSA-207 / no cve yet      Closes:#856229
+      XSA-206 / no cve yet      no Debian bug
+
+ -- Ian Jackson <ian.jackson@eu.citrix.com>  Tue, 18 Apr 2017 18:05:00 +0100
+
+xen (4.8.1~pre.2017.01.23-1) unstable; urgency=medium
+
+  * Update to current upstream stable-4.8 git branch (Xen 4.8.1-pre).
+    Contains bugfixes.
+  * debian/control-real etc.: debian.py: Allow version numbers like this.
+
+ -- Ian Jackson <ian.jackson@eu.citrix.com>  Mon, 23 Jan 2017 16:03:31 +0000
+
+xen (4.8.0-1) unstable; urgency=high
+
+  * Update to upstream Xen 4.8.0.
+    Includes the following security fixes:
+        XSA-201   CVE-2016-9815 CVE-2016-9816 CVE-2016-9817 CVE-2016-9818
+        XSA-198   CVE-2016-9379 CVE-2016-9380
+        XSA-196   CVE-2016-9378 CVE-2016-9377   Closes:#845669
+        XSA-195   CVE-2016-9383
+        XSA-194   CVE-2016-9384                 Closes:#845667
+        XSA-193   CVE-2016-9385
+        XSA-192   CVE-2016-9382
+        XSA-191   CVE-2016-9386
+    Includes other bugfixes too:
+        Closes:#812166, Closes:#818525.
+
+  Cherry picks from upstream:
+  * Security fixes:
+        XSA-204   CVE-2016-10013                 Closes:#848713
+        XSA-203   CVE-2016-10025
+        XSA-202   CVE-2016-10024
+    For completeness, the following XSAs do not apply here:
+        XSA-197   CVE-2016-9381      Bug is in qemu
+        XSA-199   CVE-2016-9637      Bug is in qemu
+        XSA-200   CVE-2016-9932      Xen 4.8 is not affected
+  * Cherry pick a build failure fix:
+      "x86/emul: add likely()/unlikely() to test harness"
+
+  [ Ian Jackson ]
+  * Drop -lcrypto search from upstream configure, and from our
+    Build-Depends.  Closes:#844419.
+  * Change my own email address to my work (Citrix) address.  When
+    uploading, I will swap hats to effectively sponsor my own upload.
+
+  [ Ian Campbell ]
+  * Start a qemu process in dom0 to service the toolstacks loopback disk
+    attaches. (Closes: #770456)
+  * Remove correct pidfile when stopping xenconsoled.
+  * Check that xenstored has actually started before talking to it.
+    Incorporate a timeout so as not to block boot (Mitigates #737613)
+  * Correct syntax error in xen-init-list when running with xend
+    (Closes: #763102)
+  * Apply SELinux labels to directories created by initscripts. Patch from
+    Russell Coker. (Closes: #764912)
+  * Include a reportbug control file to redirect bugs to src:xen for
+    packages which contain the Xen version in the name.  Closes:#796370.
+
+  [ Lubomir Host ]
+  * Fix xen-init-name to not fail looking for a nonexistent 'config'
+    entry in xl's JSON output.  Closes:#818129.
+
+ -- Ian Jackson <ian.jackson@eu.citrix.com>  Thu, 22 Dec 2016 14:51:46 +0000
+
+xen (4.8.0~rc5-1) unstable; urgency=medium
+
+  * New upstream version, Xen 4.8.0 RC5.
+
+ -- Ian Jackson <ijackson@chiark.greenend.org.uk>  Fri, 11 Nov 2016 15:26:58 +0000
+
+xen (4.8.0~rc3-1) unstable; urgency=medium
+
+  * Upload 4.8.0~rc3 to unstable.  (RC5 is out upstream, but let's not
+    update to that in the middle of the Xen 4.6 -> 4.8 transition.)
+  * No source changes.
+
+ -- Ian Jackson <ijackson@chiark.greenend.org.uk>  Sat, 05 Nov 2016 15:08:47 +0000
+
+xen (4.8.0~rc3-0exp2) experimental; urgency=medium
+
+  * Build-Depend on iasl on all architectures.  ARM has ACPI now.
+    Fixes FTBFS on arm64 (at least).
+  * Add qemu-utils and seabios to Suggests.
+  * Pass -no-pie -fno-pic to x86 emulator test build.  (Patch
+    also submitted upstream.)  Fixes FTBFS on i386 with GCC6.
+  * Add myself to Uploaders.
+
+ -- Ian Jackson <ijackson@chiark.greenend.org.uk>  Tue, 01 Nov 2016 18:00:25 +0000
+
+xen (4.8.0~rc3-0exp1) experimental; urgency=high
+
+  * New upstream version, Xen 4.8.0 RC3.
+    Fixes many outstanding CVEs.
+  * Incorporated many changes from 4.8.0-0ubuntu2
+    - libxen-dev is M-A: same
+    - Work around grep bug http://bugs.launchpad.net/bugs/1547466
+    - debian/xen-hypervisor-4.6.xen.cfg:
+      Additional config file to simplify grub configuration.
+    - Use new library/abiname scheme.
+    - Document what xl and xm are in default.xen
+    - Add libvirtd dependency to xendomains init script
+    (Thanks to Stefan Bader and others.)
+
+ -- Ian Jackson <ijackson@chiark.greenend.org.uk>  Mon, 24 Oct 2016 17:31:27 +0100
+
+xen (4.6.0-1+nmu2) unstable; urgency=medium
+
+  * Ensure debian/control.md5sum is correctly updated. Fixes FTBFS of
+    4.6.0-1+nmu1 on buildds where linux-support-4.2.0-1 is not expected to be
+    installed.
+
+ -- Ian Campbell <ijc@debian.org>  Tue, 09 Feb 2016 16:41:16 +0000
+
+xen (4.6.0-1+nmu1) unstable; urgency=medium
+
+  * Non-maintainer upload.
+  * Drop unused patching in of $(PREFIX), $(SBINDIR) and $(BINDIR)
+    which are no longer used by the upstream build system.
+  * Use correct/consistent LIBEXEC dirs throughout build
+    (Closes: #805508).
+
+ -- Ian Campbell <ijc@debian.org>  Tue, 19 Jan 2016 14:43:54 +0000
+
+xen (4.6.0-1) unstable; urgency=medium
+
+  * New upstream release.
+  * CVE-2015-7812
+  * CVE-2015-7813
+  * CVE-2015-7814
+  * CVE-2015-7835
+  * CVE-2015-7969
+  * CVE-2015-7970
+  * CVE-2015-7971
+  * CVE-2015-7972
+
+ -- Bastian Blank <waldi@debian.org>  Sun, 01 Nov 2015 21:49:07 +0100
+
+xen (4.5.1~rc1-1) experimental; urgency=medium
+
+  [ Ian Campbell ]
+  * Use xen-init-dom0 from initscript when it is available.
+  * Install some user facing docs in xen-utils-common. (Closes: #688308)
+
+  [ Bastian Blank ]
+  * New upstream release candidate.
+
+ -- Bastian Blank <waldi@debian.org>  Sun, 31 May 2015 21:59:56 +0200
+
+xen (4.5.0-1) experimental; urgency=medium
+
+  [ Ian Campbell ]
+  * New upstream release
+
+ -- Bastian Blank <waldi@debian.org>  Wed, 21 Jan 2015 20:21:45 +0100
+
+xen (4.5.0~rc3-1) experimental; urgency=medium
+
+  * New upstream release candidate.
+  * Re-add xend config.
+
+ -- Bastian Blank <waldi@debian.org>  Wed, 17 Dec 2014 22:37:23 +0100
+
+xen (4.4.1-6) unstable; urgency=medium
+
+  * Fix starvation of writers in locks.
+    CVE-2014-9065
+
+ -- Bastian Blank <waldi@debian.org>  Thu, 11 Dec 2014 15:56:08 +0100
+
+xen (4.4.1-5) unstable; urgency=medium
+
+  * Fix excessive checks of hypercall arguments.
+    CVE-2014-8866
+  * Fix boundary checks of emulated MMIO access.
+    CVE-2014-8867
+  * Fix additional memory leaks in xl. (closes: #767295)
+
+ -- Bastian Blank <waldi@debian.org>  Sun, 30 Nov 2014 20:13:32 +0100
+
+xen (4.4.1-4) unstable; urgency=medium
+
+  [ Bastian Blank ]
+  * Make operations pre-emptible.
+    CVE-2014-5146, CVE-2014-5149
+  * Don't allow page table updates from non-PV page tables.
+    CVE-2014-8594
+  * Enforce privilege level while loading code segment.
+    CVE-2014-8595
+  * Fix reference counter leak.
+    CVE-2014-9030
+  * Use linux 3.16.0-4 stuff.
+  * Fix memory leak in xl. (closes: #767295)
+
+  [ Ian Campbell ]
+  * Add licensing for tools/python/logging to debian/copyright.
+    (Closes: #759384)
+  * Correctly include xen-init-name in xen-utils-common. (Closes: #769543)
+  * xen-utils recommends grub-xen-host package (Closes: #770460)
+
+ -- Bastian Blank <waldi@debian.org>  Thu, 27 Nov 2014 20:17:36 +0100
+
+xen (4.4.1-3) unstable; urgency=medium
+
+  [ Bastian Blank ]
+  * Remove unused build-depencencies.
+  * Extend list affected systems for broken interrupt assignment.
+    CVE-2013-3495
+  * Fix race in hvm memory management.
+    CVE-2014-7154
+  * Fix missing privilege checks on instruction emulation.
+    CVE-2014-7155, CVE-2014-7156
+  * Fix uninitialized control structures in FIFO handling.
+    CVE-2014-6268
+  * Fix MSR range check in emulation.
+    CVE-2014-7188
+
+  [ Ian Campbell ]
+  * Install xen.efi into /boot for amd64 builds.
+
+ -- Bastian Blank <waldi@debian.org>  Fri, 17 Oct 2014 16:27:46 +0200
+
+xen (4.4.1-2) unstable; urgency=medium
+
+  * Re-build with correct content.
+  * Use dh_lintian.
+
+ -- Bastian Blank <waldi@debian.org>  Wed, 24 Sep 2014 20:23:14 +0200
+
+xen (4.4.1-1) unstable; urgency=medium
+
+  * New upstream release.
+    - Fix several vulnerabilities. (closes: #757724)
+      CVE-2014-2599, CVE-2014-3124,
+      CVE-2014-3967, CVE-2014-3968,
+      CVE-2014-4021
+
+ -- Bastian Blank <waldi@debian.org>  Sun, 21 Sep 2014 10:45:47 +0200
+
+xen (4.4.0-5) unstable; urgency=medium
+
+  [ Ian Campbell ]
+  * Expand on the descriptions of some packages. (Closes: #466683)
+  * Clarify where xen-utils-common is required. (Closes: #612403)
+  * No longer depend on gawk. Xen can now use any awk one of which is always
+    present. (Closes: #589176)
+  * Put core dumps in /var/lib/xen/dump and ensure it exists.
+    (Closes: #444000)
+
+  [ Bastian Blank ]
+  * Handle JSON output from xl in xendomains init script.
+
+ -- Bastian Blank <waldi@debian.org>  Sat, 06 Sep 2014 22:11:20 +0200
+
+xen (4.4.0-4) unstable; urgency=medium
+
+  [ Bastian Blank ]
+  * Also remove unused OCaml packages from control file.
+  * Make library packages multi-arch: same. (closes: #730417)
+  * Use debhelper compat level 9. (closes: #692352)
+
+  [ Ian Campbell ]
+  * Correct contents of /etc/xen/scripts/hotplugpath.sh (Closes: #706283)
+  * Drop references cpuperf-xen and cpuperf-perfcntr. (Closes: #733847)
+  * Install xentrace_format(1), xentrace(8) and xentop(1). (Closes: #407143)
+
+ -- Bastian Blank <waldi@debian.org>  Sat, 30 Aug 2014 13:34:04 +0200
+
+xen (4.4.0-3) unstable; urgency=medium
+
+  [ Ian Campbell ]
+  * Use correct SeaBIOS binary which supports Xen (Closes: #737905).
+
+  [ Bastian Blank ]
+  * Really update config.{sub,guess}.
+
+ -- Bastian Blank <waldi@debian.org>  Fri, 29 Aug 2014 16:33:19 +0200
+
+xen (4.4.0-2) unstable; urgency=medium
+
+  * Remove broken and unused OCaml-support.
+
+ -- Bastian Blank <waldi@debian.org>  Mon, 18 Aug 2014 15:18:42 +0200
+
+xen (4.4.0-1) unstable; urgency=medium
+
+  [ Bastian Blank ]
+  * New upstream release.
+    - Update scripts for compatiblity with latest coreutils.
+      (closes: #718898)
+    - Fix guest reboot with xl toolstack. (closes: #727100)
+    - CVE-2013-6375: Insufficient TLB flushing in VT-d (iommu) code.
+      (closes: #730254)
+    - xl support for global VNC options. (closes: #744157)
+    - vif scripts can now be named relative to /etc/xen/scripts.
+      (closes: #744160)
+    - Support for arbitrary sized SeaBIOS binaries. (closes: #737905)
+    - pygrub searches for extlinux.conf in the expected places.
+      (closes: #697407)
+    - Update scripts to use correct syntax for ip command.
+      (closes: #705659)
+  * Fix install of xend configs to not break compatibility.
+
+  [ Ian Campbell ]
+  * Disable blktap1 support using new configure option instead of by patching.
+  * Disable qemu-traditional and rombios support using new configure option
+    instead of by patching. No need to build-depend on ipxe any more.
+  * Use system qemu-xen via new configure option instead of patching.
+  * Use system seabios via new configure option instead of patching.
+  * Use EXTRA_CFLAGS_XEN_TOOLS and APPEND_{CPPFLAGS,LDFLAGS} during build.
+  * Add support for armhf and arm64.
+  * Update config.{sub,guess}.
+
+ -- Bastian Blank <waldi@debian.org>  Sat, 09 Aug 2014 13:09:00 +0200
+
+xen (4.3.0-3) unstable; urgency=low
+
+  * Revive hypervisor on i386.
+
+ -- Bastian Blank <waldi@debian.org>  Fri, 18 Oct 2013 00:15:16 +0200
+
+xen (4.3.0-2) unstable; urgency=low
+
+  * Force proper install order. (closes: #721999)
+
+ -- Bastian Blank <waldi@debian.org>  Sat, 05 Oct 2013 15:03:36 +0000
+
+xen (4.3.0-1) unstable; urgency=low
+
+  * New upstream release.
+    - Fix HVM PCI passthrough. (closes: #706543)
+  * Call configure with proper arguments.
+  * Remove now empty xen-docs package.
+  * Disable external code retrieval.
+  * Drop all i386 hypervisor packages.
+  * Drop complete blktap support.
+  * Create /run/xen.
+  * Make xen-utils recommend qemu-system-x86. (closes: #688311)
+    - This version comes with audio support. (closes: #635166)
+  * Make libxenlight and libxlutil public. (closes: #644390)
+    - Set versioned ABI name.
+    - Install headers.
+    - Move libs into normal library path.
+  * Use build flags in the tools build.
+    - Fix fallout from harderning flags.
+  * Update Standards-Version to 3.9.4. No changes.
+
+ -- Bastian Blank <waldi@debian.org>  Thu, 05 Sep 2013 13:54:03 +0200
+
+xen (4.2.2-1) unstable; urgency=low
+
+  * New upstream release.
+    - Fix build with gcc 4.8. (closes: #712376)
+  * Build-depend on libssl-dev. (closes: #712366)
+  * Enable hardening as much as possible.
+  * Re-enable ocaml build fixes. (closes: #695176)
+  * Check for out-of-bound values in CPU affinity setup.
+    CVE-2013-2072
+  * Fix information leak on AMD CPUs.
+    CVE-2013-2076
+  * Recover from faults on XRSTOR.
+    CVE-2013-2077
+  * Properly check guest input to XSETBV.
+    CVE-2013-2078
+
+ -- Bastian Blank <waldi@debian.org>  Thu, 11 Jul 2013 00:28:24 +0200
+
+xen (4.2.1-2) unstable; urgency=low
+
+  * Actually upload to unstable.
+
+ -- Bastian Blank <waldi@debian.org>  Sun, 12 May 2013 00:20:58 +0200
+
+xen (4.2.1-1) experimental; urgency=low
+
+  * New upstream release.
+  * Enable usage of seabios.
+  * Fix some toolchain issues.
+
+ -- Bastian Blank <waldi@debian.org>  Sat, 11 May 2013 23:55:46 +0200
+
+xen (4.2.0-2) experimental; urgency=low
+
+  * Support JSON output in domain init script helper.
+
+ -- Bastian Blank <waldi@debian.org>  Mon, 01 Oct 2012 15:11:30 +0200
+
+xen (4.2.0-1) experimental; urgency=low
+
+  * New upstream release.
+
+ -- Bastian Blank <waldi@debian.org>  Tue, 18 Sep 2012 13:54:30 +0200
+
+xen (4.2.0~rc3-1) experimental; urgency=low
+
+  * New upstream snapshot.
+
+ -- Bastian Blank <waldi@debian.org>  Fri, 07 Sep 2012 20:28:46 +0200
+
+xen (4.2.0~rc2-1) experimental; urgency=low
+
+  * New upstream snapshot.
+  * Build-depend against libglib2.0-dev and libyajl-dev.
+  * Disable seabios build for now.
+  * Remove support for Lenny and earlier.
+  * Support build-arch and build-indep make targets.
+
+ -- Bastian Blank <waldi@debian.org>  Sun, 13 May 2012 12:21:10 +0000
+
+xen (4.1.4-4) unstable; urgency=high
+
+  * Make several long runing operations preemptible.
+    CVE-2013-1918
+  * Fix source validation for VT-d interrupt remapping.
+    CVE-2013-1952
+
+ -- Bastian Blank <waldi@debian.org>  Thu, 02 May 2013 14:30:29 +0200
+
+xen (4.1.4-3) unstable; urgency=high
+
+  * Fix return from SYSENTER.
+    CVE-2013-1917
+  * Fix various problems with guest interrupt handling.
+    CVE-2013-1919
+  * Only save pointer after access checks.
+    CVE-2013-1920
+  * Fix domain locking for transitive grants.
+    CVE-2013-1964
+
+ -- Bastian Blank <waldi@debian.org>  Fri, 19 Apr 2013 13:01:57 +0200
+
+xen (4.1.4-2) unstable; urgency=low
+
+  * Use pre-device interrupt remapping mode per default. Fix removing old
+    remappings.
+    CVE-2013-0153
+
+ -- Bastian Blank <waldi@debian.org>  Wed, 06 Feb 2013 13:04:52 +0100
+
+xen (4.1.4-1) unstable; urgency=low
+
+  * New upstream release.
+    - Disable process-context identifier support in newer CPUs for all
+      domains.
+    - Add workarounds for AMD errata.
+    - Don't allow any non-canonical addresses.
+    - Use Multiboot memory map if BIOS emulation does not provide one.
+    - Fix several problems in tmem.
+      CVE-2012-3497
+    - Fix error handling in domain creation.
+    - Adjust locking and interrupt handling during S3 resume.
+    - Tighten more resource and memory range checks.
+    - Reset performance counters. (closes: #698651)
+    - Remove special-case for first IO-APIC.
+    - Fix MSI handling for HVM domains. (closes: #695123)
+    - Revert cache value of disks in HVM domains.
+
+ -- Bastian Blank <waldi@debian.org>  Thu, 31 Jan 2013 15:44:50 +0100
+
+xen (4.1.3-8) unstable; urgency=high
+
+  * Fix error in VT-d interrupt remapping source validation.
+    CVE-2012-5634
+  * Fix buffer overflow in qemu e1000 emulation.
+    CVE-2012-6075
+  * Update patch, mention second CVE.
+    CVE-2012-5511, CVE-2012-6333
+
+ -- Bastian Blank <waldi@debian.org>  Sat, 19 Jan 2013 13:55:07 +0100
+
+xen (4.1.3-7) unstable; urgency=low
+
+  * Fix clock jump due to incorrect annotated inline assembler.
+    (closes: #599161)
+  * Add support for XZ compressed Linux kernels to hypervisor and userspace
+    based loaders, it is needed for any Linux kernels newer then Wheezy.
+    (closes: #695056)
+
+ -- Bastian Blank <waldi@debian.org>  Tue, 11 Dec 2012 18:54:59 +0100
+
+xen (4.1.3-6) unstable; urgency=high
+
+  * Fix error handling in physical to machine memory mapping.
+    CVE-2012-5514
+
+ -- Bastian Blank <waldi@debian.org>  Tue, 04 Dec 2012 10:51:43 +0100
+
+xen (4.1.3-5) unstable; urgency=high
+
+  * Fix state corruption due to incomplete grant table switch.
+    CVE-2012-5510
+  * Check range of arguments to several HVM operations.
+    CVE-2012-5511, CVE-2012-6333
+  * Check array index before using it in HVM memory operation.
+    CVE-2012-5512
+  * Check memory range in memory exchange operation.
+    CVE-2012-5513
+  * Don't allow too large memory size and avoid busy looping.
+    CVE-2012-5515
+
+ -- Bastian Blank <waldi@debian.org>  Mon, 03 Dec 2012 19:37:38 +0100
+
+xen (4.1.3-4) unstable; urgency=high
+
+  * Use linux 3.2.0-4 stuff.
+  * Fix overflow in timer calculations.
+    CVE-2012-4535
+  * Check value of physical interrupts parameter before using it.
+    CVE-2012-4536
+  * Error out on incorrect memory mapping updates.
+    CVE-2012-4537
+  * Check if toplevel page tables are present.
+    CVE-2012-4538
+  * Fix infinite loop in compatibility code.
+    CVE-2012-4539
+  * Limit maximum kernel and ramdisk size.
+    CVE-2012-2625, CVE-2012-4544
+
+ -- Bastian Blank <waldi@debian.org>  Tue, 20 Nov 2012 15:51:01 +0100
+
+xen (4.1.3-3) unstable; urgency=low
+
+  * Xen domain init script:
+    - Make sure Open vSwitch is started before any domain.
+    - Properly handle and show output of failed migration and save.
+    - Ask all domains to shut down before checking them.
+
+ -- Bastian Blank <waldi@debian.org>  Tue, 18 Sep 2012 13:26:32 +0200
+
+xen (4.1.3-2) unstable; urgency=medium
+
+  * Don't allow writing reserved bits in debug register.
+    CVE-2012-3494
+  * Fix error handling in interrupt assignment.
+    CVE-2012-3495
+  * Don't trigger bug messages on invalid flags.
+    CVE-2012-3496
+  * Check array bounds in interrupt assignment.
+    CVE-2012-3498
+  * Properly check bounds while setting the cursor in qemu.
+    CVE-2012-3515
+  * Disable monitor in qemu by default.
+    CVE-2012-4411
+
+ -- Bastian Blank <waldi@debian.org>  Fri, 07 Sep 2012 19:41:46 +0200
+
+xen (4.1.3-1) unstable; urgency=medium
+
+  * New upstream release: (closes: #683286)
+    - Don't leave the x86 emulation in a bad state. (closes: #683279)
+      CVE-2012-3432
+    - Only check for shared pages while any exist on teardown.
+      CVE-2012-3433
+    - Fix error handling for unexpected conditions.
+    - Update CPUID masking to latest Intel spec.
+    - Allow large ACPI ids.
+    - Fix IOMMU support for PCI-to-PCIe bridges.
+    - Disallow access to some sensitive IO-ports.
+    - Fix wrong address in IOTLB.
+    - Fix deadlock on CPUs without working cpufreq driver.
+    - Use uncached disk access in qemu.
+    - Fix buffer size on emulated e1000 device in qemu.
+  * Fixup broken and remove applied patches.
+
+ -- Bastian Blank <waldi@debian.org>  Fri, 17 Aug 2012 11:25:02 +0200
+
+xen (4.1.3~rc1+hg-20120614.a9c0a89c08f2-5) unstable; urgency=low
+
+  [ Ian Campbell ]
+  * Set tap device MAC addresses to fe:ff:ff:ff:ff:ff (Closes: #671018)
+  * Only run xendomains initscript if toolstack is xl or xm (Closes: #680528)
+
+  [ Bastian Blank ]
+  * Actually build-depend on new enough version of dpkg-dev.
+  * Add xen-sytem-* meta-packages. We are finally in a position to do
+    automatic upgrades and this package is missing. (closes: #681376)
+
+ -- Bastian Blank <waldi@debian.org>  Sat, 28 Jul 2012 10:23:26 +0200
+
+xen (4.1.3~rc1+hg-20120614.a9c0a89c08f2-4) unstable; urgency=low
+
+  * Add Build-Using info to xen-utils package.
+  * Fix build-arch target.
+
+ -- Bastian Blank <waldi@debian.org>  Sun, 01 Jul 2012 19:52:30 +0200
+
+xen (4.1.3~rc1+hg-20120614.a9c0a89c08f2-3) unstable; urgency=low
+
+  * Remove /usr/lib/xen-default. It breaks systems if xenstored is not
+    compatible.
+  * Fix init script usage.
+  * Fix udev rules for emulated network devices:
+    - Force names of emulated network devices to a predictable name.
+
+ -- Bastian Blank <waldi@debian.org>  Sun, 01 Jul 2012 16:59:04 +0200
+
+xen (4.1.3~rc1+hg-20120614.a9c0a89c08f2-2) unstable; urgency=low
+
+  * Fix pointer missmatch in interrupt functions. Fixes build on i386.
+
+ -- Bastian Blank <waldi@debian.org>  Fri, 15 Jun 2012 18:00:51 +0200
+
+xen (4.1.3~rc1+hg-20120614.a9c0a89c08f2-1) unstable; urgency=low
+
+  * New upstream snapshot.
+    - Fix privilege escalation and syscall/sysenter DoS while using
+      non-canonical addresses by untrusted PV guests. (closes: #677221)
+      CVE-2012-0217
+      CVE-2012-0218
+    - Disable Xen on CPUs affected by AMD Erratum #121. PV guests can
+      cause a DoS of the host.
+      CVE-2012-2934
+  * Don't fail if standard toolstacks are not available. (closes: #677244)
+
+ -- Bastian Blank <waldi@debian.org>  Thu, 14 Jun 2012 17:06:25 +0200
+
+xen (4.1.2-7) unstable; urgency=low
+
+  * Really use ucf.
+  * Update init script dependencies:
+    - Start $syslog before xen.
+    - Start drbd and iscsi before xendomains. (closes: #626356)
+    - Start corosync and heartbeat after xendomains.
+  * Remove /var/log/xen on purge. (closes: #656216)
+
+ -- Bastian Blank <waldi@debian.org>  Tue, 22 May 2012 10:44:41 +0200
+
+xen (4.1.2-6) unstable; urgency=low
+
+  * Fix generation of architectures for hypervisor packages.
+  * Remove information about loop devices, it is incorrect. (closes: #503044)
+  * Update xendomains init script:
+    - Create directory for domain images only root readable. (closes: #596048)
+    - Add missing sanity checks for variables. (closes: #671750)
+    - Remove not longer supported config options.
+    - Don't fail if no config is available.
+    - Remove extra output if domain was restored.
+
+ -- Bastian Blank <waldi@debian.org>  Sun, 06 May 2012 20:07:41 +0200
+
+xen (4.1.2-5) unstable; urgency=low
+
+  * Actually force init script rename. (closes: #669341)
+  * Fix long output from xl.
+  * Move complete init script setup.
+  * Rewrite xendomains init script:
+    - Use LSB output functions.
+    - Make output more clear.
+    - Use xen toolstack wrapper.
+    - Use a python script to properly read domain details.
+  * Set name for Domain-0.
+
+ -- Bastian Blank <waldi@debian.org>  Mon, 23 Apr 2012 11:56:45 +0200
+
+xen (4.1.2-4) unstable; urgency=low
+
+  [ Bastian Blank ]
+  * Build-depend on ipxe-qemu instead of ipxe. (closes: #665070)
+  * Don't longer use a4wide latex package.
+  * Use ucf for /etc/default/xen.
+  * Remove handling for old udev rules link and xenstored directory.
+  * Rename xend init script to xen.
+
+  [ Lionel Elie Mamane ]
+  * Fix toolstack script to work with old dash. (closes: #648029)
+
+ -- Bastian Blank <waldi@debian.org>  Mon, 16 Apr 2012 08:47:29 +0000
+
+xen (4.1.2-3) unstable; urgency=low
+
+  * Merge xen-common source package.
+  * Remove xend wrapper, it should not be called by users.
+  * Support xl in init script.
+  * Restart xen daemons on upgrade.
+  * Restart and stop xenconsoled in init script.
+  * Load xen-gntdev module.
+  * Create /var/lib/xen. (closes: #658101)
+  * Cleanup udev rules. (closes: #657745)
+
+ -- Bastian Blank <waldi@debian.org>  Wed, 01 Feb 2012 19:28:28 +0100
+
+xen (4.1.2-2) unstable; urgency=low
+
+  [ Jon Ludlam ]
+  * Import (partially reworked) upstream changes for OCaml support.
+    - Rename the ocamlfind packages.
+    - Remove uuid and log libraries.
+    - Fix 2 bit-twiddling bugs and an off-by-one
+  * Fix build of OCaml libraries.
+  * Add OCaml library and development package.
+  * Include some missing headers.
+
+ -- Bastian Blank <waldi@debian.org>  Sat, 10 Dec 2011 19:13:25 +0000
+
+xen (4.1.2-1) unstable; urgency=low
+
+  * New upstream release.
+  * Build-depend on pkg-config.
+  * Add package libxen-4.1. Includes some shared libs.
+
+ -- Bastian Blank <waldi@debian.org>  Sat, 26 Nov 2011 18:28:06 +0100
+
+xen (4.1.1-3) unstable; urgency=low
+
+  [ Julien Danjou ]
+  * Remove Julien Danjou from the Uploaders field. (closes: #590439)
+
+  [ Bastian Blank ]
+  * Use current version of python. (closes: #646660)
+  * Build-depend against liblzma-dev, it is used if available.
+    (closes: #646694)
+  * Update Standards-Version to 3.9.2. No changes.
+  * Don't use brace-expansion in debhelper install files.
+
+ -- Bastian Blank <waldi@debian.org>  Wed, 26 Oct 2011 14:42:33 +0200
+
+xen (4.1.1-2) unstable; urgency=low
+
+  * Fix hvmloader with gcc 4.6.
+
+ -- Bastian Blank <waldi@debian.org>  Fri, 05 Aug 2011 23:58:36 +0200
+
+xen (4.1.1-1) unstable; urgency=low
+
+  * New upstream release.
+  * Don't use qemu-dm if it is not needed. (Backport from xen-unstable.)
+  * Use dh_python2.
+
+ -- Bastian Blank <waldi@debian.org>  Mon, 18 Jul 2011 19:38:38 +0200
+
+xen (4.1.0-3) unstable; urgency=low
+
+  * Add ghostscript to build-deps.
+  * Enable qemu-dm build.
+    - Add qemu as another orig tar.
+    - Remove blktap1, bluetooth and sdl support from qemu.
+    - Recommend qemu-keymaps and qemu-utils.
+
+ -- Bastian Blank <waldi@debian.org>  Thu, 28 Apr 2011 15:20:45 +0200
+
+xen (4.1.0-2) unstable; urgency=low
+
+  * Re-enable hvmloader:
+    - Use packaged ipxe.
+  * Workaround incompatibility with xenstored of Xen 4.0.
+
+ -- Bastian Blank <waldi@debian.org>  Fri, 15 Apr 2011 11:38:25 +0200
+
+xen (4.1.0-1) unstable; urgency=low
+
+  * New upstream release.
+
+ -- Bastian Blank <waldi@debian.org>  Sun, 27 Mar 2011 18:09:28 +0000
+
+xen (4.1.0~rc6-1) unstable; urgency=low
+
+  * New upstream release candidate.
+  * Build documentation using pdflatex.
+  * Use python 2.6. (closes: #596545)
+  * Fix lintian override.
+  * Install new tools: xl, xenpaging.
+  * Enable blktap2.
+    - Use own md5 implementation.
+    - Fix includes.
+    - Fix linking of blktap2 binaries.
+    - Remove optimization setting.
+  * Temporarily disable hvmloader, wants to download ipxe.
+  * Remove xenstored pid check from xl.
+
+ -- Bastian Blank <waldi@debian.org>  Thu, 17 Mar 2011 16:12:45 +0100
+
+xen (4.0.1-2) unstable; urgency=low
+
+  * Fix races in memory management.
+  * Make sure that frame-table compression leaves enough alligned.
+  * Disable XSAVE support. (closes: #595490)
+  * Check for dying domain instead of raising an assertion.
+  * Add C6 state with EOI errata for Intel.
+  * Make some memory management interrupt safe. Unsure if really needed.
+  * Raise bar for inter-socket migrations on mostly-idle systems.
+  * Fix interrupt handling for legacy routed interrupts.
+  * Allow to set maximal domain memory even during a running change.
+  * Support new partition name in pygrub. (closes: #599243)
+  * Fix some comparisions "< 0" that may be optimized away.
+  * Check for MWAIT support before using it.
+  * Fix endless loop on interrupts on Nehalem cpus.
+  * Don't crash upon direct GDT/LDT access. (closes: #609531)
+    CVE-2010-4255  
+  * Don't loose timer ticks after domain restore.
+  * Reserve some space for IOMMU area in dom0. (closes: #608715)
+  * Fix hypercall arguments after trace callout.
+  * Fix some error paths in vtd support. Memory leak.
+  * Reinstate ACPI DMAR table.
+
+ -- Bastian Blank <waldi@debian.org>  Wed, 12 Jan 2011 15:01:40 +0100
+
+xen (4.0.1-1) unstable; urgency=low
+
+  * New upstream release.
+    - Fix IOAPIC S3 with interrupt remapping enabled.
+
+ -- Bastian Blank <waldi@debian.org>  Fri, 03 Sep 2010 17:14:28 +0200
+
+xen (4.0.1~rc6-1) unstable; urgency=low
+
+  * New upstream release candidate.
+    - Add some missing locks for page table walk.
+    - Fix NMU injection into guest.
+    - Fix ioapic updates for vt-d.
+    - Add check for GRUB2 commandline behaviour.
+    - Fix handling of invalid kernel images.
+    - Allow usage of powernow.
+  * Remove lowlevel python modules usage from pygrub. (closes: #588811)
+
+ -- Bastian Blank <waldi@debian.org>  Tue, 17 Aug 2010 23:15:34 +0200
+
+xen (4.0.1~rc5-1) unstable; urgency=low
+
+  * New upstream release candidate.
+
+ -- Bastian Blank <waldi@debian.org>  Mon, 02 Aug 2010 17:06:27 +0200
+
+xen (4.0.1~rc3-1) unstable; urgency=low
+
+  * New upstream release candidate.
+  * Call dh_pyversion with the correct version.
+  * Restart xen daemon on upgrade.
+
+ -- Bastian Blank <waldi@debian.org>  Wed, 30 Jun 2010 16:30:47 +0200
+
+xen (4.0.0-2) unstable; urgency=low
+
+  * Fix python dependency. (closes: #586666)
+    - Use python-support.
+    - Hardcode to use python 2.5 for now.
+
+ -- Bastian Blank <waldi@debian.org>  Mon, 21 Jun 2010 17:23:16 +0200
+
+xen (4.0.0-1) unstable; urgency=low
+
+  * Update to unstable.
+  * Fix spelling in README.
+  * Remove unnecessary build-depends.
+  * Fixup xend to use different filename lookup.
+
+ -- Bastian Blank <waldi@debian.org>  Thu, 17 Jun 2010 11:16:55 +0200
+
+xen (4.0.0-1~experimental.2) experimental; urgency=low
+
+  * Merge changes from 3.4.3-1.
+
+ -- Bastian Blank <waldi@debian.org>  Fri, 28 May 2010 12:58:12 +0200
+
+xen (4.0.0-1~experimental.1) experimental; urgency=low
+
+  * New upstream version.
+  * Rename source package to xen.
+  * Build depend against iasl and uuid-dev.
+  * Disable blktap2 support, it links against OpenSSL.
+  * Update copyright file.
+
+ -- Bastian Blank <waldi@debian.org>  Thu, 06 May 2010 15:47:38 +0200
+
+xen-3 (3.4.3-1) unstable; urgency=low
+
+  * New upstream version.
+  * Disable blktap support, it is unusable with current kernels.
+  * Disable libaio, was only used by blktap.
+  * Drop device creation support. (closes: #583283)
+
+ -- Bastian Blank <waldi@debian.org>  Fri, 28 May 2010 11:43:18 +0200
+
+xen-3 (3.4.3~rc6-1) unstable; urgency=low
+
+  * New upstream release candidate.
+    - Relocate multiboot modules. (closes: #580045)
+    - Support grub2 in pygrub. (closes: #573311)
+
+ -- Bastian Blank <waldi@debian.org>  Sat, 08 May 2010 11:32:29 +0200
+
+xen-3 (3.4.3~rc3-2) unstable; urgency=low
+
+  * Again list the complete version in the hypervisor.
+  * Fix path detection for bootloader, document it. (closes: #481105)
+  * Rewrite README.
+
+ -- Bastian Blank <waldi@debian.org>  Thu, 08 Apr 2010 16:14:58 +0200
+
+xen-3 (3.4.3~rc3-1) unstable; urgency=low
+
+  * New upstream release candidate.
+  * Use 3.0 (quilt) source format.
+  * Always use current python version.
+
+ -- Bastian Blank <waldi@debian.org>  Mon, 01 Mar 2010 22:14:22 +0100
+
+xen-3 (3.4.2-2) unstable; urgency=low
+
+  * Remove Jeremy T. Bouse from uploaders.
+  * Export blktap lib and headers.
+  * Build amd64 hypervisor on i386. (closes: #366315)
+
+ -- Bastian Blank <waldi@debian.org>  Sun, 22 Nov 2009 16:54:47 +0100
+
+xen-3 (3.4.2-1) unstable; urgency=low
+
+  * New upstream version.
+  * Strip hvmloader by hand.
+  * Remove extra license file from libxen-dev.
+
+ -- Bastian Blank <waldi@debian.org>  Mon, 16 Nov 2009 20:57:07 +0100
+
+xen-3 (3.4.1-1) unstable; urgency=low
+
+  * New upstream version.
+
+ -- Bastian Blank <waldi@debian.org>  Fri, 21 Aug 2009 21:34:38 +0200
+
+xen-3 (3.4.0-2) unstable; urgency=low
+
+  * Add symbols file for libxenstore3.0. (closes: #536173)
+  * Document that ioemu is currently unsupported. (closes: #536175)
+  * Fix location of fsimage plugins. (closes: #536174)
+
+ -- Bastian Blank <waldi@debian.org>  Sat, 18 Jul 2009 18:05:35 +0200
+
+xen-3 (3.4.0-1) unstable; urgency=low
+
+  [ Bastian Blank ]
+  * New upstream version.
+  * Remove ioemu for now. (closes: #490409, #496367)
+  * Remove non-pae hypervisor.
+  * Use debhelper compat level 7.
+  * Make the init script start all daemons.
+
+ -- Bastian Blank <waldi@debian.org>  Tue, 30 Jun 2009 22:33:22 +0200
+
+xen-3 (3.2.1-2) unstable; urgency=low
+
+  * Use e2fslibs based ext2 support for pygrub. (closes: #476366)
+  * Fix missing checks in pvfb code.
+    See CVE-2008-1952. (closes: #487095)
+  * Add support for loading bzImage files. (closes: #474509)
+  * Enable TLS support in ioemu code.
+  * Drop libcrypto usage because of GPL-incompatibility.
+  * Remove AES code from blktap drivers. Considered broken.
+
+ -- Bastian Blank <waldi@debian.org>  Sat, 28 Jun 2008 11:30:43 +0200
+
+xen-3 (3.2.1-1) unstable; urgency=low
+
+  * New upstream version.
+  * Set rpath relative to ${ORIGIN}.
+  * Add lintian override to xen-utils package.
+
+ -- Bastian Blank <waldi@debian.org>  Thu, 22 May 2008 14:01:47 +0200
+
+xen-3 (3.2.0-5) unstable; urgency=low
+
+  * Provide correct directory to dh_pycentral.
+
+ -- Bastian Blank <waldi@debian.org>  Mon, 14 Apr 2008 21:43:49 +0200
+
+xen-3 (3.2.0-4) unstable; urgency=low
+
+  * Pull in newer xen-utils-common.
+  * Fix missing size checks in the ioemu block driver. (closes: #469654)
+    See: CVE-2008-0928
+
+ -- Bastian Blank <waldi@debian.org>  Fri, 07 Mar 2008 14:21:38 +0100
+
+xen-3 (3.2.0-3) unstable; urgency=low
+
+  * Clean environment for build.
+  * Add packages libxenstore3.0 and xenstore-utils.
+  * Move docs package in docs section to match overwrites.
+  * Make the hypervisor only recommend the utils.
+  * Cleanup installation. (closes: #462989)
+
+ -- Bastian Blank <waldi@debian.org>  Tue, 12 Feb 2008 12:40:56 +0000
+
+xen-3 (3.2.0-2) unstable; urgency=low
+
+  * Fix broken patch. (closes: #462522)
+
+ -- Bastian Blank <waldi@debian.org>  Sat, 26 Jan 2008 17:21:52 +0000
+
+xen-3 (3.2.0-1) unstable; urgency=low
+
+  * New upstream version.
+  * Add package libxen-dev. Including public headers and static libs.
+    (closes: #402249)
+  * Don't longer install xenfb, removed upstream.
+
+ -- Bastian Blank <waldi@debian.org>  Tue, 22 Jan 2008 12:51:49 +0000
+
+xen-3 (3.1.2-2) unstable; urgency=low
+
+  * Add missing rpath definitions.
+  * Fix building of pae version.
+
+ -- Bastian Blank <waldi@debian.org>  Sat, 08 Dec 2007 12:07:42 +0000
+
+xen-3 (3.1.2-1) unstable; urgency=high
+
+  * New upstream release:
+    - Move shared file into /var/run. (closes: #447795)
+      See CVE-2007-3919.
+    - x86: Fix various problems with debug-register handling. (closes: #451626)
+      See CVE-2007-5906.
+
+ -- Bastian Blank <waldi@debian.org>  Sat, 24 Nov 2007 13:24:45 +0000
+
+xen-3 (3.1.1-1) unstable; urgency=low
+
+  * New upstream release:
+    - Don't use exec with untrusted values in pygrub. (closes: #444430)
+      See CVE-2007-4993.
+
+ -- Bastian Blank <waldi@debian.org>  Fri, 19 Oct 2007 16:02:37 +0000
+
+xen-3 (3.1.0-2) unstable; urgency=low
+
+  * Switch to texlive for documentation.
+  * Drop unused transfig.
+  * Drop unused latex features from documentation.
+  * Build depend against gcc-multilib for amd64. (closes: #439662)
+
+ -- Bastian Blank <waldi@debian.org>  Fri, 31 Aug 2007 08:15:50 +0000
+
+xen-3 (3.1.0-1) unstable; urgency=low
+
+  [ Julien Danjou ]
+  * New upstream version.
+
+  [ Ralph Passgang ]
+  * Added graphviz to Build-Indeps
+
+  [ Bastian Blank ]
+  * Upstream removed one part of the version. Do it also.
+  * Merge utils packages.
+  * Install blktap support.
+  * Install pygrub.
+  * Install xenfb tools.
+  * xenconsoled startup is racy, wait a little bit.
+
+ -- Bastian Blank <waldi@debian.org>  Mon, 20 Aug 2007 15:05:08 +0000
+
+xen-3.0 (3.0.4-1-1) unstable; urgency=low
+
+  [ Bastian Blank ]
+  * New upstream version (closes: #394411)
+
+  [ Guido Trotter ]
+  * Actually try to build and release xen 3.0.4
+  * Update build dependencies
+
+ -- Guido Trotter <ultrotter@debian.org>  Wed, 23 May 2007 11:57:29 +0100
+
+xen-3.0 (3.0.3-0-2) unstable; urgency=medium
+
+  [Bastian Blank]
+  * Remove device recreate code.
+  * Remove build dependency on linux-support-X
+
+  [ Guido Trotter ]
+  * Add missing build dependency on zlib1g-dev (closes: #396557)
+  * Add missing build dependencies on libncurses5-dev and x11proto-core-dev
+    (closes: #396561, #396567)
+
+ -- Guido Trotter <ultrotter@debian.org>  Thu,  2 Nov 2006 16:38:02 +0000
+
+xen-3.0 (3.0.3-0-1) unstable; urgency=low
+
+  * New upstream version.
+
+ -- Bastian Blank <waldi@debian.org>  Fri, 20 Oct 2006 11:04:35 +0000
+
+xen-3.0 (3.0.3~rc4+hg11760-1) unstable; urgency=low
+
+  * New upstream snapshot.
+  * Ignore update-grub errors. (closes: #392534)
+
+ -- Bastian Blank <waldi@debian.org>  Sat, 14 Oct 2006 13:09:53 +0000
+
+xen-3.0 (3.0.3~rc1+hg11686-1) unstable; urgency=low
+
+  * New upstream snapshot.
+  * Rename ioemu package to include the complete version.
+  * Fix name of hypervisor. (closes: #391771)
+
+ -- Bastian Blank <waldi@debian.org>  Mon,  9 Oct 2006 12:48:13 +0000
+
+xen-3.0 (3.0.2-3+hg9762-1) unstable; urgency=low
+
+  * New upstream snapshot.
+  * Rename hypervisor and utils packages to include the complete version.
+  * Redo build environment.
+
+ -- Bastian Blank <waldi@debian.org>  Mon,  4 Sep 2006 18:43:12 +0000
+
+xen-3.0 (3.0.2+hg9697-2) unstable; urgency=low
+
+  [ Guido Trotter ]
+  * Update xen-utils' README.Debian (closes: #372524)
+
+  [ Bastian Blank ]
+  * Adopt new python policy. (closes: #380990)
+  * Add patch to make new kernels working on the hypervisor.
+
+ -- Bastian Blank <waldi@debian.org>  Tue, 15 Aug 2006 19:20:08 +0000
+
+xen-3.0 (3.0.2+hg9697-1) unstable; urgency=low
+
+  [ Guido Trotter ]
+  * Update Standards Version
+  * Merge upstream fixes trunk (upstream 3.0.2-3 + a couple of fixes)
+
+  [ Bastian Blank ]
+  * Add xen-ioemu-3.0 package to support HVM guests (closes: #368496)
+
+ -- Guido Trotter <ultrotter@debian.org>  Wed, 31 May 2006 10:50:05 +0200
+
+xen-3.0 (3.0.2+hg9681-1) unstable; urgency=low
+
+  * Update xen-hypervisor-3.0-i386 and xen-hypervisor-3.0-i386-pae
+    descriptions, specifying what the difference between the two packages is
+    (closes: #366019)
+  * Merge upstream fixes trunk
+
+ -- Guido Trotter <ultrotter@debian.org>  Thu, 18 May 2006 15:25:02 +0200
+
+xen-3.0 (3.0.2+hg9656-1) unstable; urgency=low
+
+  * Merge upstream fixes trunk
+    - This includes a fix for CVE-2006-1056
+
+ -- Guido Trotter <ultrotter@debian.org>  Thu, 27 Apr 2006 17:34:03 +0200
+
+xen-3.0 (3.0.2+hg9651-1) unstable; urgency=low
+
+  * Merge upstream fixes trunk
+  * Fix PAE disabled in pae build (Closes: #364875) 
+
+ -- Julien Danjou <acid@debian.org>  Wed, 26 Apr 2006 13:19:39 +0200
+
+xen-3.0 (3.0.2+hg9646-1) unstable; urgency=low
+
+  [ Guido Trotter ]
+  * Merge upstream fixes trunk
+
+  [ Bastian Blank ]
+  * debian/patches/libdir.dpatch: Update to make xm save work
+
+ -- Julien Danjou <acid@debian.org>  Mon, 24 Apr 2006 18:02:07 +0200
+
+xen-3.0 (3.0.2+hg9611-1) unstable; urgency=low
+
+  * Merge upstream bug fixes
+  * Fix bug with xend init.d script
+
+ -- Julien Danjou <acid@debian.org>  Wed, 12 Apr 2006 17:35:35 +0200
+
+xen-3.0 (3.0.2+hg9598-1) unstable; urgency=low
+
+  * New upstream release
+  * Fix copyright file
+
+ -- Julien Danjou <acid@debian.org>  Mon, 10 Apr 2006 17:02:55 +0200
+
+xen-3.0 (3.0.1+hg8762-1) unstable; urgency=low
+
+  * The "preserve our homes" release
+  * Now cooperatively maintained by the Debian Xen Team
+  * New upstream release (closes: #327493, #342249)
+  * Build depend on transfig (closes: #321157)
+  * Use gcc rather than gcc-3.4 to compile (closes: #323698)
+  * Split xen-hypervisor-3.0 and xen-utils-3.0
+  * Build both normal and pae hypervisor packages
+  * Change maintainer and add uploaders field
+  * Add force-reload support for init script xendomains
+  * Remove dependency against bash
+  * Bump standards version to 3.6.2.2
+  * xen-utils-3.0 conflicts and replaces xen
+  * Add dpatch structure to the package
+  * Remove build-dependency on gcc (it's build essential anyway)
+  * Make SrvServer.py not executable
+  * Create NEWS.Debian file with important upgrade notices
+  * Update copyright file
+  * Remove the linux-patch-xen package
+  * Removed useless build-dependencies: libncurses5-dev, wget
+  * Changed xendomains config path to /etc/default
+  * xen-utils-3.0 now provides xen-utils and xen-hypervisor-3.0-i386 &
+    xen-hypervisor-3.0-i386-pae & xen-hypervizor-amd64 now provide
+    xen-hypervisor
+  * Made xen-utils-3.0.postinst more fault-tolerant, so that upgrading
+    xen2 -> xen3 don't fail because of a running xen2 hypervisor
+  * Updated the "Replaces & Conflicts"
+  * Install only and correctly udev files
+  * Compile date is no more in current locale
+  * Add patch which add the debian version and maintainer in the version
+    string and removes the banner.
+  * Don't install unusable cruft in xen-utils
+  * Remove libxen packages (no stable API/ABI)
+
+ -- Julien Danjou <acid@debian.org>  Wed,  5 Apr 2006 16:05:07 +0200
+
+xen (2.0.6-1) unstable; urgency=low
+
+  * Patches applied upstream: non-xen-init-exit.patch, add-build.patch,
+    python-install.patch, disable-html-docs.patch.
+  * New upstream released.  Closes: #311336.
+  * Remove comparison to UML from xen short description.  Closes: #317066.
+  * Make packages conflicts with 1.2 doc debs.  Closes: #304285.
+  * Add iproute to xen depends, as it uses /bin/ip.  Closes: #300488,
+    #317468.
+
+ -- Adam Heath <doogie@brainfood.com>  Wed, 06 Jul 2005 12:35:50 -0500
+
+xen (2.0.5-3) experimental; urgency=low
+
+  * Change priority/section to match the overrides file.
+
+ -- Adam Heath <doogie@brainfood.com>  Fri, 18 Mar 2005 12:43:50 -0600
+
+xen (2.0.5-2) experimental; urgency=low
+
+  * Mike McCallister <mike+debian@metalogue.com>,
+    Tommi Virtanen <tv@debian.org>, Tom Hibbert <tom@nsp.co.nz>:
+    Fix missing '.' in update-rc.d call in xen.postinst.  Closes: #299384
+
+ -- Adam Heath <doogie@brainfood.com>  Fri, 18 Mar 2005 11:39:56 -0600
+
+xen (2.0.5-1) experimental; urgency=low
+
+  * New upstream.
+  * Remove pic-lib.patch, tools-misc-TARGETS.patch, and clean-mttr.patch
+    as they have been applied upstream(in various forms).
+  * xend now starts at priority 20, stops at 21, while xendomains starts
+    at 21, and stops at 20.
+
+ -- Adam Heath <doogie@brainfood.com>  Fri, 11 Mar 2005 14:33:33 -0600
+
+xen (2.0.4-4) experimental; urgency=low
+
+  * Bah, major booboo.  Add /boot to debian/xen.install, so xen.gz will
+    get shipped.  Reported by Clint Adams <schizo@debian.org>.
+
+ -- Adam Heath <doogie@brainfood.com>  Tue, 15 Feb 2005 13:00:57 -0600
+
+xen (2.0.4-3) experimental; urgency=low
+
+  * Fix file overlap(/usr/share/doc/xen/examples/*) between xen and
+    xen-docs.  Reported by Tupshin Harper <tupshin@tupshin.com>.
+
+ -- Adam Heath <doogie@brainfood.com>  Sun, 06 Feb 2005 01:22:45 -0600
+
+xen (2.0.4-2) experimental; urgency=low
+
+  * Fix kernel patch generation.  It was broken when I integrated with
+    debian's kernel source.  I used a symlink, and diff doesn't follow
+    those.
+
+ -- Adam Heath <doogie@brainfood.com>  Sat, 05 Feb 2005 18:16:35 -0600
+
+xen (2.0.4-1) experimental; urgency=low
+
+  * New upstream.
+  * xen.deb can now install on a plain kernel; that is, the init scripts
+    exit successfully if /proc/xen/privcmd doesn't exist.  This allows
+    for dual-boot setups.
+  * Manpages do not yet exist xend, xenperf, xensv, xfrd, nor xm.  xend
+    xfrd are daemons, and take little if any options.  I've not had a need
+    to use xenperf nor xensv yet.  xm has nice built in help(xm help).
+  * Upstream now requires either linux 2.4.29, or 2.6.10.  Since 2.4.29 is
+    not yet in debian, disable the 2.4 patch generation.  Closes: #271245.
+  * Not certain how the kernel-patch-xen was empty.  It's not now, with
+    the repackaging.  Closes: #272299.
+  * Xen no longer produces kernel images, so problems about missing features
+    are no longer valid.  Closes: #253924.
+  * Acknowledge nmu bugs:
+    * No longer build-depend on gcc 3.3, as the default gcc works. Closes:
+      #243048.
+
+ -- Adam Heath <doogie@brainfood.com>  Sat, 05 Feb 2005 18:04:27 -0600
+
+xen (2.0.3-0.1) unstable; urgency=low
+
+  * Changes from Tommi Virtanen:
+    * Added dh-kpatches and libcurl3-dev to Build-Depends.
+    * Add /etc/xen/sv/params.py and /etc/xen/xend/params.py.
+    * Add xmexample1 and xmexample2 to xen/doc/examples.
+
+ -- Adam Heath <doogie@brainfood.com>  Wed, 26 Jan 2005 10:55:07 -0600
+
+xen (2.0.3-0) unstable; urgency=low
+
+  * New upstream.  Closes: #280733.
+  * Repackaged from scratch.
+  * Using unreleased patch management system.  See debian/README.build.
+    * After extracting the .dsc, there are no special steps needed
+    * Those wanting to change the source, use the normal procedures for
+      any package, including using interdiff(or other tool) to send a
+      patch to me or the bts.
+  * No longer try to do anything fancy with regard to the layout of the
+    built kernels.  Now, only patches are distributed.  Please make use of
+    the xen support in kernel-package.
+  * Early preview release to #debian-devel.
+
+ -- Adam Heath <doogie@brainfood.com>  Tue, 25 Jan 2005 13:24:54 -0600
+
+xen (1.2-4.1) unstable; urgency=high
+
+  * NMU
+  * Remove gcc-3.2 from Build-Depends as isn't used during build
+    (Closes: #243048)
+
+ -- Frank Lichtenheld <djpig@debian.org>  Sat, 21 Aug 2004 17:42:28 +0200
+
+xen (1.2-4) unstable; urgency=low
+
+  * Added xen-docs.README.Debian, which explains the kernel image layout,
+    and contains references on the locations differ from what is mentioned
+    by the upstream documentation.  Closes: #230345.
+
+ -- Adam Heath <doogie@brainfood.com>  Fri, 26 Mar 2004 17:36:41 -0600
+
+xen (1.2-3) unstable; urgency=low
+
+  * Add kernel-source-2.4.25 and kernel-patch-debian-2.4.25 to
+    Build-Depends-Indep.
+
+ -- Adam Heath <doogie@brainfood.com>  Tue, 23 Mar 2004 20:14:39 -0600
+
+xen (1.2-2) unstable; urgency=low
+
+  * xen: moved /boot/xen.gz to /usr/lib/kernels/xen-i386/images/vmlinuz
+  * kernel-image, kernel-modules: swapped i386/xeno to xeno/i386 in
+    /usr/lib/kernels.
+  * Add kernel-patch-nfs-swap deb.
+  * Apply additional patches to kernel-image-xen:
+    * nfs-group
+    * nfs-swap
+
+ -- Adam Heath <doogie@brainfood.com>  Thu, 04 Mar 2004 12:47:47 -0600
+
+xen (1.2-1) unstable; urgency=low
+
+  * Initial version.
+
+ -- Adam Heath <doogie@brainfood.com>  Tue, 02 Mar 2004 13:21:52 -0600

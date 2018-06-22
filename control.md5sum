@@ -1,0 +1,17 @@
+414390ca652da67ac85ebd905500eb66  debian/changelog
+dc7b5d9f0538e3180af4e9aff9b0bd57  debian/bin/gencontrol.py
+20e336dbea44b1641802eff0dde9569b  debian/templates/control.main.in
+a15fa64ce6deead28d33c1581b14dba7  debian/templates/xen-hypervisor.postinst.in
+fe9f3e8a9c9b716f7b4c5b7d7aec3128  debian/templates/control.system.latest.in
+03f63e67cf2d915bfbb535f8c9d9e2e4  debian/templates/xen-utils.postinst.in
+63ad8a975156f7bf2327f0e1dc7fc9e2  debian/templates/control.source.in
+22492e0565a4754b5e008ca7cac871da  debian/templates/xen-hypervisor.postrm.in
+a4fad0ec66d977759a362165bf8aa31d  debian/templates/control.hypervisor.in
+df5a318ff90cd0ca3ac7f1a8976bae39  debian/templates/control.utils.in
+dcabf82578122540e0534f72750698d5  debian/templates/xen-utils.lintian-overrides.in
+b6acd21c3924e6ec6f9c547afbbc7d9e  debian/templates/xen-utils.prerm.in
+f48f31b0af755ff8b08b4575e94d6390  debian/arch/defines
+bda767ffd62b57de88b50731794f1374  debian/arch/i386/defines
+06efb201e83233c4607b13c8dad5c031  debian/arch/armhf/defines
+afd11afd204a8929340d194894572353  debian/arch/amd64/defines
+b6a35272efc8545fafab547e1cf492cb  debian/arch/arm64/defines
