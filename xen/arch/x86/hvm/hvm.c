@@ -311,10 +311,39 @@ int hvm_set_guest_pat(struct vcpu *v, u64 guest_pat)
 
 bool hvm_set_guest_bndcfgs(struct vcpu *v, u64 val)
 {
-    return hvm_funcs.set_guest_bndcfgs &&
-           is_canonical_address(val) &&
-           !(val & IA32_BNDCFGS_RESERVED) &&
-           hvm_funcs.set_guest_bndcfgs(v, val);
+    if ( !hvm_funcs.set_guest_bndcfgs ||
+         !is_canonical_address(val) ||
+         (val & IA32_BNDCFGS_RESERVED) )
+        return false;
+
+    /*
+     * While MPX instructions are supposed to be gated on XCR0.BND*, let's
+     * nevertheless force the relevant XCR0 bits on when the feature is being
+     * enabled in BNDCFGS.
+     */
+    if ( (val & IA32_BNDCFGS_ENABLE) &&
+         !(v->arch.xcr0_accum & (XSTATE_BNDREGS | XSTATE_BNDCSR)) )
+    {
+        uint64_t xcr0 = get_xcr0();
+        int rc;
+
+        if ( v != current )
+            return false;
+
+        rc = handle_xsetbv(XCR_XFEATURE_ENABLED_MASK,
+                           xcr0 | XSTATE_BNDREGS | XSTATE_BNDCSR);
+
+        if ( rc )
+        {
+            HVM_DBG_LOG(DBG_LEVEL_1, "Failed to force XCR0.BND*: %d", rc);
+            return false;
+        }
+
+        if ( handle_xsetbv(XCR_XFEATURE_ENABLED_MASK, xcr0) )
+            /* nothing, best effort only */;
+    }
+
+    return hvm_funcs.set_guest_bndcfgs(v, val);
 }
 
 /*
@@ -1399,6 +1428,7 @@ static int hvm_save_cpu_msrs(struct domain *d, hvm_domain_context_t *h)
 
     for_each_vcpu ( d, v )
     {
+        struct hvm_save_descriptor *d = _p(&h->data[h->cur]);
         struct hvm_msr *ctxt;
         unsigned int i;
 
@@ -1417,8 +1447,13 @@ static int hvm_save_cpu_msrs(struct domain *d, hvm_domain_context_t *h)
             ctxt->msr[i]._rsvd = 0;
 
         if ( ctxt->count )
+        {
+            /* Rewrite length to indicate how much space we actually used. */
+            d->length = HVM_CPU_MSR_SIZE(ctxt->count);
             h->cur += HVM_CPU_MSR_SIZE(ctxt->count);
+        }
         else
+            /* or rewind and remove the descriptor from the stream. */
             h->cur -= sizeof(struct hvm_save_descriptor);
     }
 
@@ -1585,8 +1620,6 @@ int hvm_vcpu_initialise(struct vcpu *v)
         /* Init guest TSC to start from zero. */
         hvm_set_guest_tsc(v, 0);
     }
-
-    hvm_update_guest_vendor(v);
 
     return 0;
 
@@ -2475,6 +2508,27 @@ int hvm_set_cr4(unsigned long value, bool_t may_defer)
             paging_update_nestedmode(v);
         else
             paging_update_paging_modes(v);
+    }
+
+    /*
+     * {RD,WR}PKRU are not gated on XCR0.PKRU and hence an oddly behaving
+     * guest may enable the feature in CR4 without enabling it in XCR0. We
+     * need to context switch / migrate PKRU nevertheless.
+     */
+    if ( (value & X86_CR4_PKE) && !(v->arch.xcr0_accum & XSTATE_PKRU) )
+    {
+        int rc = handle_xsetbv(XCR_XFEATURE_ENABLED_MASK,
+                               get_xcr0() | XSTATE_PKRU);
+
+        if ( rc )
+        {
+            HVM_DBG_LOG(DBG_LEVEL_1, "Failed to force XCR0.PKRU: %d", rc);
+            goto gpf;
+        }
+
+        if ( handle_xsetbv(XCR_XFEATURE_ENABLED_MASK,
+                           get_xcr0() & ~XSTATE_PKRU) )
+            /* nothing, best effort only */;
     }
 
     return X86EMUL_OKAY;
@@ -3532,6 +3586,7 @@ void hvm_cpuid(unsigned int input, unsigned int *eax, unsigned int *ebx,
                      special_features[FEATURESET_7b0]);
 
             *ecx &= hvm_featureset[FEATURESET_7c0];
+            *edx &= hvm_featureset[FEATURESET_7d0];
 
             /* Don't expose HAP-only features to non-hap guests. */
             if ( !hap_enabled(d) )
@@ -3786,7 +3841,7 @@ int hvm_msr_read_intercept(unsigned int msr, uint64_t *msr_content)
 
     switch ( msr )
     {
-        unsigned int eax, ebx, ecx, index;
+        unsigned int eax, ebx, ecx, edx, index;
 
     case MSR_EFER:
         *msr_content = v->arch.hvm_vcpu.guest_efer;
@@ -3873,6 +3928,23 @@ int hvm_msr_read_intercept(unsigned int msr, uint64_t *msr_content)
             goto gp_fault;
         break;
 
+    case MSR_AMD_PATCHLOADER:
+    case MSR_IA32_UCODE_WRITE:
+    case MSR_PRED_CMD:
+        /* Write-only */
+        goto gp_fault;
+
+    case MSR_SPEC_CTRL:
+        hvm_cpuid(7, NULL, NULL, NULL, &edx);
+        if ( !(edx & cpufeat_mask(X86_FEATURE_IBRSB)) )
+            goto gp_fault;
+        *msr_content = v->arch.spec_ctrl;
+        break;
+
+    case MSR_ARCH_CAPABILITIES:
+        /* Not implemented yet. */
+        goto gp_fault;
+
     case MSR_K8_ENABLE_C1E:
     case MSR_AMD64_NB_CFG:
          /*
@@ -3939,7 +4011,7 @@ int hvm_msr_write_intercept(unsigned int msr, uint64_t msr_content,
 
     switch ( msr )
     {
-        unsigned int eax, ebx, ecx, index;
+        unsigned int eax, ebx, ecx, edx, index;
 
     case MSR_EFER:
         if ( hvm_set_efer(msr_content) )
@@ -3958,7 +4030,7 @@ int hvm_msr_write_intercept(unsigned int msr, uint64_t msr_content,
         v->arch.hvm_vcpu.msr_tsc_aux = (uint32_t)msr_content;
         if ( cpu_has_rdtscp
              && (v->domain->arch.tsc_mode != TSC_MODE_PVRDTSCP) )
-            wrmsrl(MSR_TSC_AUX, (uint32_t)msr_content);
+            wrmsr_tsc_aux(msr_content);
         break;
 
     case MSR_IA32_APICBASE:
@@ -4023,6 +4095,26 @@ int hvm_msr_write_intercept(unsigned int msr, uint64_t msr_content,
             goto gp_fault;
         break;
 
+    case MSR_AMD_PATCHLOADER:
+        /*
+         * See note on MSR_IA32_UCODE_WRITE below, which may or may not apply
+         * to AMD CPUs as well (at least the architectural/CPUID part does).
+         */
+        if ( v->domain->arch.x86_vendor != X86_VENDOR_AMD )
+            goto gp_fault;
+        break;
+
+    case MSR_IA32_UCODE_WRITE:
+        /*
+         * Some versions of Windows at least on certain hardware try to load
+         * microcode before setting up an IDT. Therefore we must not inject #GP
+         * for such attempts. Also the MSR is architectural and not qualified
+         * by any CPUID bit.
+         */
+        if ( v->domain->arch.x86_vendor != X86_VENDOR_INTEL )
+            goto gp_fault;
+        break;
+
     case MSR_IA32_XSS:
         ecx = 1;
         hvm_cpuid(XSTATE_CPUID, &eax, NULL, &ecx, NULL);
@@ -4039,6 +4131,40 @@ int hvm_msr_write_intercept(unsigned int msr, uint64_t msr_content,
              !hvm_set_guest_bndcfgs(v, msr_content) )
             goto gp_fault;
         break;
+
+    case MSR_SPEC_CTRL:
+        hvm_cpuid(7, NULL, NULL, NULL, &edx);
+        if ( !(edx & cpufeat_mask(X86_FEATURE_IBRSB)) )
+            goto gp_fault; /* MSR available? */
+
+        /*
+         * Note: SPEC_CTRL_STIBP is specified as safe to use (i.e. ignored)
+         * when STIBP isn't enumerated in hardware.
+         */
+
+        if ( msr_content & ~(SPEC_CTRL_IBRS | SPEC_CTRL_STIBP |
+                             (edx & cpufeat_mask(X86_FEATURE_SSBD) ? SPEC_CTRL_SSBD : 0)) )
+            goto gp_fault; /* Rsvd bit set? */
+
+        v->arch.spec_ctrl = msr_content;
+        break;
+
+    case MSR_PRED_CMD:
+        hvm_cpuid(7, NULL, NULL, NULL, &edx);
+        hvm_cpuid(0x80000008, NULL, &ebx, NULL, NULL);
+        if ( !(edx & cpufeat_mask(X86_FEATURE_IBRSB)) &&
+             !(ebx & cpufeat_mask(X86_FEATURE_IBPB)) )
+            goto gp_fault; /* MSR available? */
+
+        if ( msr_content & ~PRED_CMD_IBPB )
+            goto gp_fault; /* Rsvd bit set? */
+
+        wrmsrl(MSR_PRED_CMD, msr_content);
+        break;
+
+    case MSR_ARCH_CAPABILITIES:
+        /* Read-only */
+        goto gp_fault;
 
     case MSR_AMD64_NB_CFG:
         /* ignore the write */
@@ -5028,6 +5154,7 @@ static int hvmop_set_evtchn_upcall_vector(
     printk(XENLOG_G_INFO "%pv: upcall vector %02x\n", v, op.vector);
 
     v->arch.hvm_vcpu.evtchn_upcall_vector = op.vector;
+    hvm_assert_evtchn_irq(v);
     return 0;
 }
 
@@ -5487,12 +5614,18 @@ static int do_altp2m_op(
 
         if ( a.u.enable_notify.pad || a.domain != DOMID_SELF ||
              a.u.enable_notify.vcpu_id != curr->vcpu_id )
+        {
             rc = -EINVAL;
+            break;
+        }
 
         if ( !gfn_eq(vcpu_altp2m(curr).veinfo_gfn, INVALID_GFN) ||
              mfn_eq(get_gfn_query_unlocked(curr->domain,
                     a.u.enable_notify.gfn, &p2mt), INVALID_MFN) )
-            return -EINVAL;
+        {
+            rc = -EINVAL;
+            break;
+        }
 
         vcpu_altp2m(curr).veinfo_gfn = _gfn(a.u.enable_notify.gfn);
         altp2m_vcpu_update_vmfunc_ve(curr);

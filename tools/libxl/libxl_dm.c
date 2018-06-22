@@ -669,18 +669,6 @@ static int libxl__build_device_model_args_old(libxl__gc *gc,
     return 0;
 }
 
-static const char *qemu_disk_format_string(libxl_disk_format format)
-{
-    switch (format) {
-    case LIBXL_DISK_FORMAT_QCOW: return "qcow";
-    case LIBXL_DISK_FORMAT_QCOW2: return "qcow2";
-    case LIBXL_DISK_FORMAT_VHD: return "vpc";
-    case LIBXL_DISK_FORMAT_RAW: return "raw";
-    case LIBXL_DISK_FORMAT_EMPTY: return NULL;
-    default: return NULL;
-    }
-}
-
 static char *dm_spice_options(libxl__gc *gc,
                                     const libxl_spice_info *spice)
 {
@@ -785,6 +773,8 @@ static char *qemu_disk_scsi_drive_string(libxl__gc *gc, const char *target_path,
                                          int colo_mode)
 {
     char *drive = NULL;
+    char *common = GCSPRINTF("cache=writeback,readonly=%s",
+                             disk->readwrite ? "off" : "on");
     const char *exportname = disk->colo_export;
     const char *active_disk = disk->active_disk;
     const char *hidden_disk = disk->hidden_disk;
@@ -792,8 +782,8 @@ static char *qemu_disk_scsi_drive_string(libxl__gc *gc, const char *target_path,
     switch (colo_mode) {
     case LIBXL__COLO_NONE:
         drive = libxl__sprintf
-            (gc, "file=%s,if=scsi,bus=0,unit=%d,format=%s,cache=writeback",
-             target_path, unit, format);
+            (gc, "%s,file=%s,if=scsi,bus=0,unit=%d,format=%s",
+             common, target_path, unit, format);
         break;
     case LIBXL__COLO_PRIMARY:
         /*
@@ -806,13 +796,13 @@ static char *qemu_disk_scsi_drive_string(libxl__gc *gc, const char *target_path,
          *  vote-threshold=1
          */
         drive = GCSPRINTF(
-            "if=scsi,bus=0,unit=%d,cache=writeback,driver=quorum,"
+            "%s,if=scsi,bus=0,unit=%d,,driver=quorum,"
             "id=%s,"
             "children.0.file.filename=%s,"
             "children.0.driver=%s,"
             "read-pattern=fifo,"
             "vote-threshold=1",
-            unit, exportname, target_path, format);
+            common, unit, exportname, target_path, format);
         break;
     case LIBXL__COLO_SECONDARY:
         /*
@@ -826,14 +816,14 @@ static char *qemu_disk_scsi_drive_string(libxl__gc *gc, const char *target_path,
          *  file.backing.backing=exportname,
          */
         drive = GCSPRINTF(
-            "if=scsi,bus=0,unit=%d,cache=writeback,driver=replication,"
+            "%s,if=scsi,bus=0,unit=%d,driver=replication,"
             "mode=secondary,"
             "file.driver=qcow2,"
             "file.file.filename=%s,"
             "file.backing.driver=qcow2,"
             "file.backing.file.filename=%s,"
             "file.backing.backing=%s",
-            unit, active_disk, hidden_disk, exportname);
+            common, unit, active_disk, hidden_disk, exportname);
         break;
     default:
         abort();
@@ -851,6 +841,8 @@ static char *qemu_disk_ide_drive_string(libxl__gc *gc, const char *target_path,
     const char *exportname = disk->colo_export;
     const char *active_disk = disk->active_disk;
     const char *hidden_disk = disk->hidden_disk;
+    
+    assert(disk->readwrite); /* should have been checked earlier */
 
     switch (colo_mode) {
     case LIBXL__COLO_NONE:
@@ -1342,9 +1334,9 @@ static int libxl__build_device_model_args_new(libxl__gc *gc,
              * always raw
              */
             if (disks[i].backend == LIBXL_DISK_BACKEND_QDISK)
-                format = qemu_disk_format_string(disks[i].format);
+                format = libxl__qemu_disk_format_string(disks[i].format);
             else
-                format = qemu_disk_format_string(LIBXL_DISK_FORMAT_RAW);
+                format = libxl__qemu_disk_format_string(LIBXL_DISK_FORMAT_RAW);
 
             if (disks[i].format == LIBXL_DISK_FORMAT_EMPTY) {
                 if (!disks[i].is_cdrom) {
@@ -1414,8 +1406,9 @@ static int libxl__build_device_model_args_new(libxl__gc *gc,
                 if (strncmp(disks[i].vdev, "sd", 2) == 0) {
                     if (colo_mode == LIBXL__COLO_SECONDARY) {
                         drive = libxl__sprintf
-                            (gc, "if=none,driver=%s,file=%s,id=%s",
-                             format, target_path, disks[i].colo_export);
+                            (gc, "if=none,driver=%s,file=%s,id=%s,readonly=%s",
+                             format, target_path, disks[i].colo_export,
+                             disks[i].readwrite ? "off" : "on");
 
                         flexarray_append(dm_args, "-drive");
                         flexarray_append(dm_args, drive);

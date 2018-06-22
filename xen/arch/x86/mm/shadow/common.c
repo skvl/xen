@@ -1534,7 +1534,7 @@ void shadow_free(struct domain *d, mfn_t smfn)
          * TLBs when we reuse the page.  Because the destructors leave the
          * contents of the pages in place, we can delay TLB flushes until
          * just before the allocator hands the page out again. */
-        sp->tlbflush_timestamp = tlbflush_current_time();
+        page_set_tlbflush_timestamp(sp);
         perfc_decr(shadow_alloc_count);
         page_list_add_tail(sp, &d->arch.paging.shadow.freelist);
         sp = next;
@@ -1573,32 +1573,29 @@ shadow_alloc_p2m_page(struct domain *d)
     pg = mfn_to_page(shadow_alloc(d, SH_type_p2m_table, 0));
     d->arch.paging.shadow.p2m_pages++;
     d->arch.paging.shadow.total_pages--;
+    ASSERT(!page_get_owner(pg) && !(pg->count_info & PGC_count_mask));
 
     paging_unlock(d);
 
-    /* Unlike shadow pages, mark p2m pages as owned by the domain.
-     * Marking the domain as the owner would normally allow the guest to
-     * create mappings of these pages, but these p2m pages will never be
-     * in the domain's guest-physical address space, and so that is not
-     * believed to be a concern. */
-    page_set_owner(pg, d);
-    pg->count_info |= 1;
     return pg;
 }
 
 static void
 shadow_free_p2m_page(struct domain *d, struct page_info *pg)
 {
-    ASSERT(page_get_owner(pg) == d);
-    /* Should have just the one ref we gave it in alloc_p2m_page() */
-    if ( (pg->count_info & PGC_count_mask) != 1 )
+    struct domain *owner = page_get_owner(pg);
+
+    /* Should still have no owner and count zero. */
+    if ( owner || (pg->count_info & PGC_count_mask) )
     {
-        SHADOW_ERROR("Odd p2m page count c=%#lx t=%"PRtype_info"\n",
+        SHADOW_ERROR("d%d: Odd p2m page %"PRI_mfn" d=%d c=%lx t=%"PRtype_info"\n",
+                     d->domain_id, mfn_x(page_to_mfn(pg)),
+                     owner ? owner->domain_id : DOMID_INVALID,
                      pg->count_info, pg->u.inuse.type_info);
+        pg->count_info &= ~PGC_count_mask;
+        page_set_owner(pg, NULL);
     }
-    pg->count_info &= ~PGC_count_mask;
     pg->u.sh.type = SH_type_p2m_table; /* p2m code reuses type-info */
-    page_set_owner(pg, NULL);
 
     /* This is called both from the p2m code (which never holds the
      * paging lock) and the log-dirty code (which always does). */
@@ -1703,7 +1700,10 @@ static unsigned int shadow_get_allocation(struct domain *d)
 /**************************************************************************/
 /* Handling guest writes to pagetables. */
 
-/* Translate a VA to an MFN, injecting a page-fault if we fail. */
+/*
+ * Translate a VA to an MFN, injecting a page-fault if we fail.  If the
+ * mapping succeeds, a reference will be held on the underlying page.
+ */
 #define BAD_GVA_TO_GFN (~0UL)
 #define BAD_GFN_TO_MFN (~1UL)
 #define READONLY_GFN   (~2UL)
@@ -1751,29 +1751,21 @@ static mfn_t emulate_gva_to_mfn(struct vcpu *v, unsigned long vaddr,
     ASSERT(mfn_valid(mfn));
 
     v->arch.paging.last_write_was_pt = !!sh_mfn_is_a_page_table(mfn);
-    /*
-     * Note shadow cannot page out or unshare this mfn, so the map won't
-     * disappear. Otherwise, caller must hold onto page until done.
-     */
-    put_page(page);
 
     return mfn;
 }
 
-/* Check that the user is allowed to perform this write. */
+/*
+ * Check that the user is allowed to perform this write.  If a mapping is
+ * returned, page references will be held on sh_ctxt->mfn[0] and
+ * sh_ctxt->mfn[1] iff !INVALID_MFN.
+ */
 void *sh_emulate_map_dest(struct vcpu *v, unsigned long vaddr,
                           unsigned int bytes,
                           struct sh_emulate_ctxt *sh_ctxt)
 {
     struct domain *d = v->domain;
     void *map;
-
-    sh_ctxt->mfn[0] = emulate_gva_to_mfn(v, vaddr, sh_ctxt);
-    if ( !mfn_valid(sh_ctxt->mfn[0]) )
-        return ((mfn_x(sh_ctxt->mfn[0]) == BAD_GVA_TO_GFN) ?
-                MAPPING_EXCEPTION :
-                (mfn_x(sh_ctxt->mfn[0]) == READONLY_GFN) ?
-                MAPPING_SILENT_FAIL : MAPPING_UNHANDLEABLE);
 
 #ifndef NDEBUG
     /* We don't emulate user-mode writes to page tables. */
@@ -1786,6 +1778,17 @@ void *sh_emulate_map_dest(struct vcpu *v, unsigned long vaddr,
         return MAPPING_UNHANDLEABLE;
     }
 #endif
+
+    sh_ctxt->mfn[0] = emulate_gva_to_mfn(v, vaddr, sh_ctxt);
+    if ( !mfn_valid(sh_ctxt->mfn[0]) )
+    {
+        switch ( mfn_x(sh_ctxt->mfn[0]) )
+        {
+        case BAD_GVA_TO_GFN: return MAPPING_EXCEPTION;
+        case READONLY_GFN:   return MAPPING_SILENT_FAIL;
+        default:             return MAPPING_UNHANDLEABLE;
+        }
+    }
 
     /* Unaligned writes mean probably this isn't a pagetable. */
     if ( vaddr & (bytes - 1) )
@@ -1803,6 +1806,7 @@ void *sh_emulate_map_dest(struct vcpu *v, unsigned long vaddr,
          * Cross-page emulated writes are only supported for HVM guests;
          * PV guests ought to know better.
          */
+        put_page(mfn_to_page(sh_ctxt->mfn[0]));
         return MAPPING_UNHANDLEABLE;
     }
     else
@@ -1810,17 +1814,26 @@ void *sh_emulate_map_dest(struct vcpu *v, unsigned long vaddr,
         /* This write crosses a page boundary. Translate the second page. */
         sh_ctxt->mfn[1] = emulate_gva_to_mfn(v, vaddr + bytes - 1, sh_ctxt);
         if ( !mfn_valid(sh_ctxt->mfn[1]) )
-            return ((mfn_x(sh_ctxt->mfn[1]) == BAD_GVA_TO_GFN) ?
-                    MAPPING_EXCEPTION :
-                    (mfn_x(sh_ctxt->mfn[1]) == READONLY_GFN) ?
-                    MAPPING_SILENT_FAIL : MAPPING_UNHANDLEABLE);
+        {
+            put_page(mfn_to_page(sh_ctxt->mfn[0]));
+            switch ( mfn_x(sh_ctxt->mfn[1]) )
+            {
+            case BAD_GVA_TO_GFN: return MAPPING_EXCEPTION;
+            case READONLY_GFN:   return MAPPING_SILENT_FAIL;
+            default:             return MAPPING_UNHANDLEABLE;
+            }
+        }
 
         /* Cross-page writes mean probably not a pagetable. */
         sh_remove_shadows(d, sh_ctxt->mfn[1], 0, 0 /* Slow, can fail. */ );
 
         map = vmap(sh_ctxt->mfn, 2);
         if ( !map )
+        {
+            put_page(mfn_to_page(sh_ctxt->mfn[0]));
+            put_page(mfn_to_page(sh_ctxt->mfn[1]));
             return MAPPING_UNHANDLEABLE;
+        }
         map += (vaddr & ~PAGE_MASK);
     }
 
@@ -1890,10 +1903,12 @@ void sh_emulate_unmap_dest(struct vcpu *v, void *addr, unsigned int bytes,
     }
 
     paging_mark_dirty(v->domain, mfn_x(sh_ctxt->mfn[0]));
+    put_page(mfn_to_page(sh_ctxt->mfn[0]));
 
     if ( unlikely(mfn_valid(sh_ctxt->mfn[1])) )
     {
         paging_mark_dirty(v->domain, mfn_x(sh_ctxt->mfn[1]));
+        put_page(mfn_to_page(sh_ctxt->mfn[1]));
         vunmap((void *)((unsigned long)addr & PAGE_MASK));
     }
     else
@@ -3198,7 +3213,9 @@ int shadow_enable(struct domain *d, u32 mode)
                     | _PAGE_PRESENT | _PAGE_RW | _PAGE_USER
                     | _PAGE_ACCESSED | _PAGE_DIRTY | _PAGE_PSE);
         unmap_domain_page(e);
+        pg->count_info = 1;
         pg->u.inuse.type_info = PGT_l2_page_table | 1 | PGT_validated;
+        page_set_owner(pg, d);
     }
 
     paging_lock(d);
@@ -3236,7 +3253,11 @@ int shadow_enable(struct domain *d, u32 mode)
     if ( rv != 0 && !pagetable_is_null(p2m_get_pagetable(p2m)) )
         p2m_teardown(p2m);
     if ( rv != 0 && pg != NULL )
+    {
+        pg->count_info &= ~PGC_count_mask;
+        page_set_owner(pg, NULL);
         shadow_free_p2m_page(d, pg);
+    }
     domain_unpause(d);
     return rv;
 }
@@ -3345,7 +3366,22 @@ out:
 
     /* Must be called outside the lock */
     if ( unpaged_pagetable )
+    {
+        if ( page_get_owner(unpaged_pagetable) == d &&
+             (unpaged_pagetable->count_info & PGC_count_mask) == 1 )
+        {
+            unpaged_pagetable->count_info &= ~PGC_count_mask;
+            page_set_owner(unpaged_pagetable, NULL);
+        }
+        /* Complain here in cases where shadow_free_p2m_page() won't. */
+        else if ( !page_get_owner(unpaged_pagetable) &&
+                  !(unpaged_pagetable->count_info & PGC_count_mask) )
+            SHADOW_ERROR("d%d: Odd unpaged pt %"PRI_mfn" c=%lx t=%"PRtype_info"\n",
+                         d->domain_id, mfn_x(page_to_mfn(unpaged_pagetable)),
+                         unpaged_pagetable->count_info,
+                         unpaged_pagetable->u.inuse.type_info);
         shadow_free_p2m_page(d, unpaged_pagetable);
+    }
 }
 
 void shadow_final_teardown(struct domain *d)

@@ -910,7 +910,7 @@ static int shadow_set_l4e(struct domain *d,
                           shadow_l4e_t new_sl4e,
                           mfn_t sl4mfn)
 {
-    int flags = 0, ok;
+    int flags = 0;
     shadow_l4e_t old_sl4e;
     paddr_t paddr;
     ASSERT(sl4e != NULL);
@@ -925,19 +925,22 @@ static int shadow_set_l4e(struct domain *d,
     {
         /* About to install a new reference */
         mfn_t sl3mfn = shadow_l4e_get_mfn(new_sl4e);
-        ok = sh_get_ref(d, sl3mfn, paddr);
-        /* Are we pinning l3 shadows to handle wierd linux behaviour? */
-        if ( sh_type_is_pinnable(d, SH_type_l3_64_shadow) )
-            ok |= sh_pin(d, sl3mfn);
-        if ( !ok )
+
+        if ( !sh_get_ref(d, sl3mfn, paddr) )
         {
             domain_crash(d);
             return SHADOW_SET_ERROR;
         }
+
+        /* Are we pinning l3 shadows to handle weird Linux behaviour? */
+        if ( sh_type_is_pinnable(d, SH_type_l3_64_shadow) )
+            sh_pin(d, sl3mfn);
     }
 
     /* Write the new entry */
     shadow_write_entries(sl4e, &new_sl4e, 1, sl4mfn);
+    flush_root_pgtbl_domain(d);
+
     flags |= SHADOW_SET_CHANGED;
 
     if ( shadow_l4e_get_flags(old_sl4e) & _PAGE_PRESENT )
@@ -952,6 +955,7 @@ static int shadow_set_l4e(struct domain *d,
         }
         sh_put_ref(d, osl3mfn, paddr);
     }
+
     return flags;
 }
 
@@ -1472,25 +1476,37 @@ void sh_install_xen_entries_in_l4(struct domain *d, mfn_t gl4mfn, mfn_t sl4mfn)
         sl4e[shadow_l4_table_offset(RO_MPT_VIRT_START)] = shadow_l4e_empty();
     }
 
-    /* Shadow linear mapping for 4-level shadows.  N.B. for 3-level
-     * shadows on 64-bit xen, this linear mapping is later replaced by the
-     * monitor pagetable structure, which is built in make_monitor_table
-     * and maintained by sh_update_linear_entries. */
-    sl4e[shadow_l4_table_offset(SH_LINEAR_PT_VIRT_START)] =
-        shadow_l4e_from_mfn(sl4mfn, __PAGE_HYPERVISOR);
-
-    /* Self linear mapping.  */
-    if ( shadow_mode_translate(d) && !shadow_mode_external(d) )
+    /*
+     * Linear mapping slots:
+     *
+     * Calling this function with gl4mfn == sl4mfn is used to construct a
+     * monitor table for translated domains.  In this case, gl4mfn forms the
+     * self-linear mapping (i.e. not pointing into the translated domain), and
+     * the shadow-linear slot is skipped.  The shadow-linear slot is either
+     * filled when constructing lower level monitor tables, or via
+     * sh_update_cr3() for 4-level guests.
+     *
+     * Calling this function with gl4mfn != sl4mfn is used for non-translated
+     * guests, where the shadow-linear slot is actually self-linear, and the
+     * guest-linear slot points into the guests view of its pagetables.
+     */
+    if ( shadow_mode_translate(d) )
     {
-        // linear tables may not be used with translated PV guests
-        sl4e[shadow_l4_table_offset(LINEAR_PT_VIRT_START)] =
+        ASSERT(mfn_eq(gl4mfn, sl4mfn));
+
+        sl4e[shadow_l4_table_offset(SH_LINEAR_PT_VIRT_START)] =
             shadow_l4e_empty();
     }
     else
     {
-        sl4e[shadow_l4_table_offset(LINEAR_PT_VIRT_START)] =
-            shadow_l4e_from_mfn(gl4mfn, __PAGE_HYPERVISOR);
+        ASSERT(!mfn_eq(gl4mfn, sl4mfn));
+
+        sl4e[shadow_l4_table_offset(SH_LINEAR_PT_VIRT_START)] =
+            shadow_l4e_from_mfn(sl4mfn, __PAGE_HYPERVISOR);
     }
+
+    sl4e[shadow_l4_table_offset(LINEAR_PT_VIRT_START)] =
+        shadow_l4e_from_mfn(gl4mfn, __PAGE_HYPERVISOR);
 
     unmap_domain_page(sl4e);
 }
@@ -3902,13 +3918,14 @@ sh_set_toplevel_shadow(struct vcpu *v,
 
     /* Take a ref to this page: it will be released in sh_detach_old_tables()
      * or the next call to set_toplevel_shadow() */
-    if ( !sh_get_ref(d, smfn, 0) )
+    if ( sh_get_ref(d, smfn, 0) )
+        new_entry = pagetable_from_mfn(smfn);
+    else
     {
         SHADOW_ERROR("can't install %#lx as toplevel shadow\n", mfn_x(smfn));
         domain_crash(d);
+        new_entry = pagetable_null();
     }
-
-    new_entry = pagetable_from_mfn(smfn);
 
  install_new_entry:
     /* Done.  Install it */
@@ -4287,6 +4304,18 @@ static int sh_guess_wrmap(struct vcpu *v, unsigned long vaddr, mfn_t gmfn)
 
     /* Carefully look in the shadow linear map for the l1e we expect */
 #if SHADOW_PAGING_LEVELS >= 4
+    /*
+     * Non-external guests (i.e. PV) have a SHADOW_LINEAR mapping from the
+     * moment their shadows are created.  External guests (i.e. HVM) may not,
+     * but always have a regular linear mapping, which we can use to observe
+     * whether a SHADOW_LINEAR mapping is present.
+     */
+    if ( paging_mode_external(d) )
+    {
+        sl4p =  __linear_l4_table + l4_linear_offset(SH_LINEAR_PT_VIRT_START);
+        if ( !(shadow_l4e_get_flags(*sl4p) & _PAGE_PRESENT) )
+            return 0;
+    }
     sl4p = sh_linear_l4_table(v) + shadow_l4_linear_offset(vaddr);
     if ( !(shadow_l4e_get_flags(*sl4p) & _PAGE_PRESENT) )
         return 0;

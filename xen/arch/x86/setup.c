@@ -52,6 +52,7 @@
 #include <asm/alternative.h>
 #include <asm/mc146818rtc.h>
 #include <asm/cpuid.h>
+#include <asm/spec_ctrl.h>
 
 /* opt_nosmp: If true, secondary processors are ignored. */
 static bool_t __initdata opt_nosmp;
@@ -60,6 +61,11 @@ boolean_param("nosmp", opt_nosmp);
 /* maxcpus: maximum number of CPUs to activate. */
 static unsigned int __initdata max_cpus;
 integer_param("maxcpus", max_cpus);
+
+/* opt_invpcid: If false, don't use INVPCID instruction even if available. */
+static bool __initdata opt_invpcid = true;
+boolean_param("invpcid", opt_invpcid);
+bool __read_mostly use_invpcid;
 
 unsigned long __read_mostly cr4_pv32_mask;
 
@@ -660,6 +666,7 @@ void __init noreturn __start_xen(unsigned long mbi_p)
     set_processor_id(0);
     set_current((struct vcpu *)0xfffff000); /* debug sanity. */
     idle_vcpu[0] = current;
+    init_shadow_spec_ctrl_state();
 
     percpu_init_areas();
 
@@ -1456,6 +1463,8 @@ void __init noreturn __start_xen(unsigned long mbi_p)
 
     timer_init();
 
+    early_microcode_init();
+
     identify_cpu(&boot_cpu_data);
 
     set_in_cr4(X86_CR4_OSFXSR | X86_CR4_OSXMMEXCPT);
@@ -1463,14 +1472,14 @@ void __init noreturn __start_xen(unsigned long mbi_p)
     if ( !opt_smep )
         setup_clear_cpu_cap(X86_FEATURE_SMEP);
     if ( cpu_has_smep && opt_smep != SMEP_HVM_ONLY )
-        __set_bit(X86_FEATURE_XEN_SMEP, boot_cpu_data.x86_capability);
+        setup_force_cpu_cap(X86_FEATURE_XEN_SMEP);
     if ( boot_cpu_has(X86_FEATURE_XEN_SMEP) )
         set_in_cr4(X86_CR4_SMEP);
 
     if ( !opt_smap )
         setup_clear_cpu_cap(X86_FEATURE_SMAP);
     if ( cpu_has_smap && opt_smap != SMAP_HVM_ONLY )
-        __set_bit(X86_FEATURE_XEN_SMAP, boot_cpu_data.x86_capability);
+        setup_force_cpu_cap(X86_FEATURE_XEN_SMAP);
     if ( boot_cpu_has(X86_FEATURE_XEN_SMAP) )
         set_in_cr4(X86_CR4_SMAP);
 
@@ -1478,6 +1487,11 @@ void __init noreturn __start_xen(unsigned long mbi_p)
 
     if ( cpu_has_fsgsbase )
         set_in_cr4(X86_CR4_FSGSBASE);
+
+    if ( opt_invpcid && cpu_has_invpcid )
+        use_invpcid = true;
+
+    init_speculation_mitigations();
 
     init_idle_domain();
 
@@ -1650,6 +1664,13 @@ void __init noreturn __start_xen(unsigned long mbi_p)
     dmi_end_boot();
 
     setup_io_bitmap(dom0);
+
+    if ( bsp_delay_spec_ctrl )
+    {
+        get_cpu_info()->spec_ctrl_flags &= ~SCF_use_shadow;
+        barrier();
+        wrmsrl(MSR_SPEC_CTRL, default_xen_spec_ctrl);
+    }
 
     /* Jump to the 1:1 virtual mappings of cpu0_stack. */
     asm volatile ("mov %[stk], %%rsp; jmp %c[fn]" ::

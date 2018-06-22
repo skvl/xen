@@ -1,14 +1,16 @@
 From: Bastian Blank <waldi@debian.org>
 Date: Sat, 5 Jul 2014 11:47:14 +0200
-X-Dgit-Generated: 4.8.1-1 bded2269fb168938a662711d0a632d9d644bfc30
 Subject: tools-xentrace-prefix.diff
 
 Patch-Name: tools-xentrace-prefix.diff
-
 ---
+ tools/xentrace/Makefile | 13 ++++---------
+ 1 file changed, 4 insertions(+), 9 deletions(-)
 
---- xen-4.8.1.orig/tools/xentrace/Makefile
-+++ xen-4.8.1/tools/xentrace/Makefile
+diff --git a/tools/xentrace/Makefile b/tools/xentrace/Makefile
+index c8c36a8..d39e54f 100644
+--- a/tools/xentrace/Makefile
++++ b/tools/xentrace/Makefile
 @@ -8,6 +8,7 @@ CFLAGS += $(CFLAGS_libxenctrl)
  LDLIBS += $(LDLIBS_libxenevtchn)
  LDLIBS += $(LDLIBS_libxenctrl)

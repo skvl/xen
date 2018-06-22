@@ -118,6 +118,13 @@ int domain_vgic_init(struct domain *d, unsigned int nr_spis)
 
     d->arch.vgic.ctlr = 0;
 
+    /*
+     * The vGIC relies on having a pending_irq available for every IRQ
+     * described in the ranks. As each rank describes 32 interrupts, we
+     * need to make sure the number of SPIs is a multiple of 32.
+     */
+    nr_spis = ROUNDUP(nr_spis, 32);
+
     /* Limit the number of virtual SPIs supported to (1020 - 32) = 988  */
     if ( nr_spis > (1020 - NR_LOCAL_IRQS) )
         return -EINVAL;
@@ -182,7 +189,8 @@ void domain_vgic_free(struct domain *d)
         }
     }
 
-    d->arch.vgic.handler->domain_free(d);
+    if ( d->arch.vgic.handler )
+        d->arch.vgic.handler->domain_free(d);
     xfree(d->arch.vgic.shared_irqs);
     xfree(d->arch.vgic.pending_irqs);
     xfree(d->arch.vgic.allocated_irqs);
@@ -238,18 +246,21 @@ static int vgic_get_virq_priority(struct vcpu *v, unsigned int virq)
     return priority;
 }
 
-void vgic_migrate_irq(struct vcpu *old, struct vcpu *new, unsigned int irq)
+bool vgic_migrate_irq(struct vcpu *old, struct vcpu *new, unsigned int irq)
 {
     unsigned long flags;
     struct pending_irq *p = irq_to_pending(old, irq);
 
     /* nothing to do for virtual interrupts */
     if ( p->desc == NULL )
-        return;
+        return true;
 
     /* migration already in progress, no need to do anything */
     if ( test_bit(GIC_IRQ_GUEST_MIGRATING, &p->status) )
-        return;
+    {
+        gprintk(XENLOG_WARNING, "irq %u migration failed: requested while in progress\n", irq);
+        return false;
+    }
 
     perfc_incr(vgic_irq_migrates);
 
@@ -259,7 +270,7 @@ void vgic_migrate_irq(struct vcpu *old, struct vcpu *new, unsigned int irq)
     {
         irq_set_affinity(p->desc, cpumask_of(new->processor));
         spin_unlock_irqrestore(&old->arch.vgic.lock, flags);
-        return;
+        return true;
     }
     /* If the IRQ is still lr_pending, re-inject it to the new vcpu */
     if ( !list_empty(&p->lr_queue) )
@@ -270,7 +281,7 @@ void vgic_migrate_irq(struct vcpu *old, struct vcpu *new, unsigned int irq)
         irq_set_affinity(p->desc, cpumask_of(new->processor));
         spin_unlock_irqrestore(&old->arch.vgic.lock, flags);
         vgic_vcpu_inject_irq(new, irq);
-        return;
+        return true;
     }
     /* if the IRQ is in a GICH_LR register, set GIC_IRQ_GUEST_MIGRATING
      * and wait for the EOI */
@@ -278,6 +289,7 @@ void vgic_migrate_irq(struct vcpu *old, struct vcpu *new, unsigned int irq)
         set_bit(GIC_IRQ_GUEST_MIGRATING, &p->status);
 
     spin_unlock_irqrestore(&old->arch.vgic.lock, flags);
+    return true;
 }
 
 void arch_move_irqs(struct vcpu *v)
@@ -396,7 +408,8 @@ int vgic_to_sgi(struct vcpu *v, register_t sgir, enum gic_sgi_mode irqmode, int 
         for_each_set_bit( i, &bitmap, sizeof(target->list) * 8 )
         {
             vcpuid = base + i;
-            if ( d->vcpu[vcpuid] == NULL || !is_vcpu_online(d->vcpu[vcpuid]) )
+            if ( vcpuid >= d->max_vcpus || d->vcpu[vcpuid] == NULL ||
+                 !is_vcpu_online(d->vcpu[vcpuid]) )
             {
                 gprintk(XENLOG_WARNING, "VGIC: write r=%"PRIregister" \
                         target->list=%hx, wrong CPUTargetList \n",

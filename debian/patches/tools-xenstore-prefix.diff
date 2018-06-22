@@ -1,14 +1,17 @@
 From: Bastian Blank <waldi@debian.org>
 Date: Sat, 5 Jul 2014 11:47:12 +0200
-X-Dgit-Generated: 4.8.1-1 dda6e65fe8f36391534f781ebdf0bc9f9e58192a
 Subject: tools-xenstore-prefix.diff
 
 Patch-Name: tools-xenstore-prefix.diff
-
 ---
+ tools/helpers/Makefile  |  2 +-
+ tools/xenstore/Makefile | 10 ++++++----
+ 2 files changed, 7 insertions(+), 5 deletions(-)
 
---- xen-4.8.1.orig/tools/helpers/Makefile
-+++ xen-4.8.1/tools/helpers/Makefile
+diff --git a/tools/helpers/Makefile b/tools/helpers/Makefile
+index 5017350..cb913ad 100644
+--- a/tools/helpers/Makefile
++++ b/tools/helpers/Makefile
 @@ -31,7 +31,7 @@ xen-init-dom0: $(XEN_INIT_DOM0_OBJS)
  $(INIT_XENSTORE_DOMAIN_OBJS): _paths.h
  
@@ -18,9 +21,11 @@ Patch-Name: tools-xenstore-prefix.diff
  
  .PHONY: install
  install: all
---- xen-4.8.1.orig/tools/xenstore/Makefile
-+++ xen-4.8.1/tools/xenstore/Makefile
-@@ -20,6 +20,8 @@ LDFLAGS-$(CONFIG_SYSTEMD) += $(SYSTEMD_L
+diff --git a/tools/xenstore/Makefile b/tools/xenstore/Makefile
+index 9cb54de..5968f44 100644
+--- a/tools/xenstore/Makefile
++++ b/tools/xenstore/Makefile
+@@ -20,6 +20,8 @@ LDFLAGS-$(CONFIG_SYSTEMD) += $(SYSTEMD_LIBS)
  CFLAGS  += $(CFLAGS-y)
  LDFLAGS += $(LDFLAGS-y)
  

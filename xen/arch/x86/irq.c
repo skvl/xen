@@ -1252,7 +1252,8 @@ static int prepare_domain_irq_pirq(struct domain *d, int irq, int pirq,
         return -ENOMEM;
     }
     *pinfo = info;
-    return 0;
+
+    return !!err;
 }
 
 static void set_domain_irq_pirq(struct domain *d, int irq, struct pirq *pirq)
@@ -1295,7 +1296,10 @@ int init_domain_irq_mapping(struct domain *d)
             continue;
         err = prepare_domain_irq_pirq(d, i, i, &info);
         if ( err )
+        {
+            ASSERT(err < 0);
             break;
+        }
         set_domain_irq_pirq(d, i, info);
     }
 
@@ -1487,7 +1491,7 @@ int pirq_guest_unmask(struct domain *d)
         {
             pirq = pirqs[i]->pirq;
             if ( pirqs[i]->masked &&
-                 !evtchn_port_is_masked(d, evtchn_from_port(d, pirqs[i]->evtchn)) )
+                 !evtchn_port_is_masked(d, pirqs[i]->evtchn) )
                 pirq_guest_eoi(pirqs[i]);
         }
     } while ( ++pirq < d->nr_pirqs && n == ARRAY_SIZE(pirqs) );
@@ -1903,6 +1907,8 @@ int map_domain_pirq(
     struct pirq *info;
     struct irq_desc *desc;
     unsigned long flags;
+    DECLARE_BITMAP(prepared, MAX_MSI_IRQS) = {};
+    DECLARE_BITMAP(granted, MAX_MSI_IRQS) = {};
 
     ASSERT(spin_is_locked(&d->event_lock));
 
@@ -1936,18 +1942,24 @@ int map_domain_pirq(
         return ret;
     }
 
-    ret = irq_permit_access(d, irq);
-    if ( ret )
+    if ( likely(!irq_access_permitted(d, irq)) )
     {
-        printk(XENLOG_G_ERR
-               "dom%d: could not permit access to IRQ%d (pirq %d)\n",
-               d->domain_id, irq, pirq);
-        return ret;
+        ret = irq_permit_access(d, irq);
+        if ( ret )
+        {
+            printk(XENLOG_G_ERR
+                   "dom%d: could not permit access to IRQ%d (pirq %d)\n",
+                  d->domain_id, irq, pirq);
+            return ret;
+        }
+        __set_bit(0, granted);
     }
 
     ret = prepare_domain_irq_pirq(d, irq, pirq, &info);
-    if ( ret )
+    if ( ret < 0 )
         goto revoke;
+    if ( !ret )
+        __set_bit(0, prepared);
 
     desc = irq_to_desc(irq);
 
@@ -1964,7 +1976,10 @@ int map_domain_pirq(
         if ( !cpu_has_apic )
             goto done;
 
-        pdev = pci_get_pdev(msi->seg, msi->bus, msi->devfn);
+        pdev = pci_get_pdev_by_domain(d, msi->seg, msi->bus, msi->devfn);
+        if ( !pdev )
+            goto done;
+
         ret = pci_enable_msi(msi, &msi_desc);
         if ( ret )
         {
@@ -2016,14 +2031,21 @@ int map_domain_pirq(
             irq = create_irq(NUMA_NO_NODE);
             ret = irq >= 0 ? prepare_domain_irq_pirq(d, irq, pirq + nr, &info)
                            : irq;
-            if ( ret )
+            if ( ret < 0 )
                 break;
+            if ( !ret )
+                __set_bit(nr, prepared);
             msi_desc[nr].irq = irq;
 
-            if ( irq_permit_access(d, irq) != 0 )
-                printk(XENLOG_G_WARNING
-                       "dom%d: could not permit access to IRQ%d (pirq %d)\n",
-                       d->domain_id, irq, pirq);
+            if ( likely(!irq_access_permitted(d, irq)) )
+            {
+                if ( irq_permit_access(d, irq) )
+                    printk(XENLOG_G_WARNING
+                           "dom%d: could not permit access to IRQ%d (pirq %d)\n",
+                           d->domain_id, irq, pirq);
+                else
+                    __set_bit(nr, granted);
+            }
 
             desc = irq_to_desc(irq);
             spin_lock_irqsave(&desc->lock, flags);
@@ -2050,15 +2072,16 @@ int map_domain_pirq(
                 desc->msi_desc = NULL;
                 spin_unlock_irqrestore(&desc->lock, flags);
             }
-            while ( nr-- )
+            while ( nr )
             {
-                if ( irq >= 0 && irq_deny_access(d, irq) )
+                if ( irq >= 0 && test_bit(nr, granted) &&
+                     irq_deny_access(d, irq) )
                     printk(XENLOG_G_ERR
                            "dom%d: could not revoke access to IRQ%d (pirq %d)\n",
                            d->domain_id, irq, pirq);
-                if ( info )
+                if ( info && test_bit(nr, prepared) )
                     cleanup_domain_irq_pirq(d, irq, info);
-                info = pirq_info(d, pirq + nr);
+                info = pirq_info(d, pirq + --nr);
                 irq = info->arch.irq;
             }
             msi_desc->irq = -1;
@@ -2074,14 +2097,16 @@ int map_domain_pirq(
         spin_lock_irqsave(&desc->lock, flags);
         set_domain_irq_pirq(d, irq, info);
         spin_unlock_irqrestore(&desc->lock, flags);
+        ret = 0;
     }
 
 done:
     if ( ret )
     {
-        cleanup_domain_irq_pirq(d, irq, info);
+        if ( test_bit(0, prepared) )
+            cleanup_domain_irq_pirq(d, irq, info);
  revoke:
-        if ( irq_deny_access(d, irq) )
+        if ( test_bit(0, granted) && irq_deny_access(d, irq) )
             printk(XENLOG_G_ERR
                    "dom%d: could not revoke access to IRQ%d (pirq %d)\n",
                    d->domain_id, irq, pirq);
@@ -2130,7 +2155,8 @@ int unmap_domain_pirq(struct domain *d, int pirq)
         nr = msi_desc->msi.nvec;
     }
 
-    ret = xsm_unmap_domain_irq(XSM_HOOK, d, irq, msi_desc);
+    ret = xsm_unmap_domain_irq(XSM_HOOK, d, irq,
+                               msi_desc ? msi_desc->dev : NULL);
     if ( ret )
         goto done;
 
@@ -2245,7 +2271,6 @@ static void dump_irqs(unsigned char key)
     int i, irq, pirq;
     struct irq_desc *desc;
     irq_guest_action_t *action;
-    struct evtchn *evtchn;
     struct domain *d;
     const struct pirq *info;
     unsigned long flags;
@@ -2288,11 +2313,10 @@ static void dump_irqs(unsigned char key)
                 d = action->guest[i];
                 pirq = domain_irq_to_pirq(d, irq);
                 info = pirq_info(d, pirq);
-                evtchn = evtchn_from_port(d, info->evtchn);
                 printk("%u:%3d(%c%c%c)",
                        d->domain_id, pirq,
-                       (evtchn_port_is_pending(d, evtchn) ? 'P' : '-'),
-                       (evtchn_port_is_masked(d, evtchn) ? 'M' : '-'),
+                       evtchn_port_is_pending(d, info->evtchn) ? 'P' : '-',
+                       evtchn_port_is_masked(d, info->evtchn) ? 'M' : '-',
                        (info->masked ? 'M' : '-'));
                 if ( i != action->nr_guests )
                     printk(",");

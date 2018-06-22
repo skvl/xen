@@ -1,14 +1,17 @@
 From: Bastian Blank <waldi@debian.org>
 Date: Sat, 5 Jul 2014 11:46:45 +0200
-X-Dgit-Generated: 4.8.1-1 a376dc60f2926c349685de141c3993c7d791a494
 Subject: config-prefix.diff
 
 Patch-Name: config-prefix.diff
-
 ---
+ Config.mk          | 2 +-
+ config/Paths.mk.in | 1 +
+ 2 files changed, 2 insertions(+), 1 deletion(-)
 
---- xen-4.8.1.orig/Config.mk
-+++ xen-4.8.1/Config.mk
+diff --git a/Config.mk b/Config.mk
+index 6123396..4775800 100644
+--- a/Config.mk
++++ b/Config.mk
 @@ -82,7 +82,7 @@ EXTRA_LIB += $(EXTRA_PREFIX)/lib
  endif
  
@@ -18,8 +21,10 @@ Patch-Name: config-prefix.diff
  # The above requires that prefix contains *no spaces*. This variable is here
  # to permit the user to set PYTHON_PREFIX_ARG to '' to workaround this bug:
  #  https://bugs.launchpad.net/ubuntu/+bug/362570
---- xen-4.8.1.orig/config/Paths.mk.in
-+++ xen-4.8.1/config/Paths.mk.in
+diff --git a/config/Paths.mk.in b/config/Paths.mk.in
+index a603295..263863d 100644
+--- a/config/Paths.mk.in
++++ b/config/Paths.mk.in
 @@ -13,6 +13,7 @@
  # http://wiki.xen.org/wiki/Category:Host_Configuration#System_wide_xen_configuration
  

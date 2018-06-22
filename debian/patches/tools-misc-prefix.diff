@@ -1,14 +1,16 @@
 From: Bastian Blank <waldi@debian.org>
 Date: Sat, 5 Jul 2014 11:46:59 +0200
-X-Dgit-Generated: 4.8.1-1 92bd9e6a61c01d45b42463d3097f87935167e731
 Subject: tools-misc-prefix.diff
 
 Patch-Name: tools-misc-prefix.diff
-
 ---
+ tools/misc/Makefile | 6 +-----
+ 1 file changed, 1 insertion(+), 5 deletions(-)
 
---- xen-4.8.1.orig/tools/misc/Makefile
-+++ xen-4.8.1/tools/misc/Makefile
+diff --git a/tools/misc/Makefile b/tools/misc/Makefile
+index 8152f7b..dc8443a 100644
+--- a/tools/misc/Makefile
++++ b/tools/misc/Makefile
 @@ -54,12 +54,8 @@ all build: $(TARGETS_BUILD)
  
  .PHONY: install

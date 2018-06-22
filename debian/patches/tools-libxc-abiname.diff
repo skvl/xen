@@ -1,14 +1,16 @@
 From: Bastian Blank <waldi@debian.org>
 Date: Sat, 5 Jul 2014 11:46:48 +0200
-X-Dgit-Generated: 4.8.1-1 45ad000e7e61a57a78bca482c464c78badbfeab5
 Subject: tools-libxc-abiname.diff
 
 Patch-Name: tools-libxc-abiname.diff
-
 ---
+ tools/libxc/Makefile | 35 +++++++++++++----------------------
+ 1 file changed, 13 insertions(+), 22 deletions(-)
 
---- xen-4.8.1.orig/tools/libxc/Makefile
-+++ xen-4.8.1/tools/libxc/Makefile
+diff --git a/tools/libxc/Makefile b/tools/libxc/Makefile
+index e9509d1..00fbd24 100644
+--- a/tools/libxc/Makefile
++++ b/tools/libxc/Makefile
 @@ -1,9 +1,6 @@
  XEN_ROOT = $(CURDIR)/../..
  include $(XEN_ROOT)/tools/Rules.mk
@@ -19,7 +21,7 @@ Patch-Name: tools-libxc-abiname.diff
  ifeq ($(CONFIG_LIBXC_MINIOS),y)
  # Save/restore of a domain is currently incompatible with a stubdom environment
  override CONFIG_MIGRATE := n
-@@ -132,12 +129,12 @@ $(CTRL_LIB_OBJS) $(CTRL_PIC_OBJS): CFLAG
+@@ -132,12 +129,12 @@ $(CTRL_LIB_OBJS) $(CTRL_PIC_OBJS): CFLAGS += $(CFLAGS_libxengnttab) $(CFLAGS_lib
  
  LIB := libxenctrl.a
  ifneq ($(nosharedlibs),y)

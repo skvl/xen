@@ -1,14 +1,17 @@
 From: Bastian Blank <waldi@debian.org>
 Date: Sat, 5 Jul 2014 11:46:55 +0200
-X-Dgit-Generated: 4.8.1-1 0fc6ef9d31deed6668d7f18924664cbde155ea85
 Subject: tools-libfsimage-prefix.diff
 
 Patch-Name: tools-libfsimage-prefix.diff
-
 ---
+ tools/libfsimage/Rules.mk        | 3 ++-
+ tools/libfsimage/common/Makefile | 6 ++++--
+ 2 files changed, 6 insertions(+), 3 deletions(-)
 
---- xen-4.8.1.orig/tools/libfsimage/Rules.mk
-+++ xen-4.8.1/tools/libfsimage/Rules.mk
+diff --git a/tools/libfsimage/Rules.mk b/tools/libfsimage/Rules.mk
+index a0c6504..3e35fc7 100644
+--- a/tools/libfsimage/Rules.mk
++++ b/tools/libfsimage/Rules.mk
 @@ -3,10 +3,11 @@ include $(XEN_ROOT)/tools/Rules.mk
  CFLAGS += -Wno-unknown-pragmas -I$(XEN_ROOT)/tools/libfsimage/common/ -DFSIMAGE_FSDIR=\"$(FSDIR)\"
  CFLAGS += -Werror -D_GNU_SOURCE
@@ -22,8 +25,10 @@ Patch-Name: tools-libfsimage-prefix.diff
  
  FSLIB = fsimage.so
  
---- xen-4.8.1.orig/tools/libfsimage/common/Makefile
-+++ xen-4.8.1/tools/libfsimage/common/Makefile
+diff --git a/tools/libfsimage/common/Makefile b/tools/libfsimage/common/Makefile
+index 8357b0a..2043744 100644
+--- a/tools/libfsimage/common/Makefile
++++ b/tools/libfsimage/common/Makefile
 @@ -1,6 +1,8 @@
  XEN_ROOT = $(CURDIR)/../../..
  include $(XEN_ROOT)/tools/libfsimage/Rules.mk

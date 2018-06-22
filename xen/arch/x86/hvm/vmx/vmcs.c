@@ -345,11 +345,19 @@ static int vmx_init_vmcs_config(void)
 
     /*
      * "Process posted interrupt" can be set only when "virtual-interrupt
-     * delivery" and "acknowledge interrupt on exit" is set
+     * delivery" and "acknowledge interrupt on exit" is set. For the latter
+     * is a minimal requirement, only check the former, which is optional.
      */
-    if ( !(_vmx_secondary_exec_control & SECONDARY_EXEC_VIRTUAL_INTR_DELIVERY)
-          || !(_vmx_vmexit_control & VM_EXIT_ACK_INTR_ON_EXIT) )
-        _vmx_pin_based_exec_control  &= ~ PIN_BASED_POSTED_INTERRUPT;
+    if ( !(_vmx_secondary_exec_control & SECONDARY_EXEC_VIRTUAL_INTR_DELIVERY) )
+        _vmx_pin_based_exec_control &= ~PIN_BASED_POSTED_INTERRUPT;
+
+    if ( iommu_intpost &&
+         !(_vmx_pin_based_exec_control & PIN_BASED_POSTED_INTERRUPT) )
+    {
+        printk("Intel VT-d Posted Interrupt is disabled for CPU-side Posted "
+               "Interrupt is not enabled\n");
+        iommu_intpost = 0;
+    }
 
     /* The IA32_VMX_VMFUNC MSR exists only when VMFUNC is available */
     if ( _vmx_secondary_exec_control & SECONDARY_EXEC_ENABLE_VM_FUNCTIONS )
@@ -1772,7 +1780,10 @@ void vmcs_dump_vcpu(struct vcpu *v)
     vmentry_ctl = vmr32(VM_ENTRY_CONTROLS),
     vmexit_ctl = vmr32(VM_EXIT_CONTROLS);
     cr4 = vmr(GUEST_CR4);
-    efer = vmr(GUEST_EFER);
+
+    /* EFER.LMA is read as zero, and is loaded from vmentry_ctl on entry. */
+    BUILD_BUG_ON(VM_ENTRY_IA32E_MODE << 1 != EFER_LMA);
+    efer = vmr(GUEST_EFER) | ((vmentry_ctl & VM_ENTRY_IA32E_MODE) << 1);
 
     printk("*** Guest State ***\n");
     printk("CR0: actual=0x%016lx, shadow=0x%016lx, gh_mask=%016lx\n",

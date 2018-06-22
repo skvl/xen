@@ -69,6 +69,13 @@
 #define X86_CR0_PG              0x80000000 /* Paging                   (RW) */
 
 /*
+ * Intel CPU flags in CR3
+ */
+#define X86_CR3_NOFLUSH    (_AC(1, ULL) << 63)
+#define X86_CR3_ADDR_MASK  (PAGE_MASK & PADDR_MASK)
+#define X86_CR3_PCID_MASK  _AC(0x0fff, ULL) /* Mask for PCID */
+
+/*
  * Intel CPU features in CR4
  */
 #define X86_CR4_VME        0x00000001 /* enable vm86 extensions */
@@ -235,6 +242,7 @@ extern const struct x86_cpu_id *x86_match_cpu(const struct x86_cpu_id table[]);
 
 extern void identify_cpu(struct cpuinfo_x86 *);
 extern void setup_clear_cpu_cap(unsigned int);
+extern void setup_force_cpu_cap(unsigned int);
 extern void print_cpu_info(unsigned int cpu);
 extern unsigned int init_intel_cacheinfo(struct cpuinfo_x86 *c);
 
@@ -340,6 +348,21 @@ static inline unsigned long read_cr2(void)
     return cr2;
 }
 
+static inline void write_cr3(unsigned long val)
+{
+    asm volatile ( "mov %0, %%cr3" : : "r" (val) : "memory" );
+}
+
+static inline unsigned long cr3_pa(unsigned long cr3)
+{
+    return cr3 & X86_CR3_ADDR_MASK;
+}
+
+static inline unsigned long cr3_pcid(unsigned long cr3)
+{
+    return cr3 & X86_CR3_PCID_MASK;
+}
+
 static inline unsigned long read_cr4(void)
 {
     return get_cpu_info()->cr4;
@@ -347,6 +370,9 @@ static inline unsigned long read_cr4(void)
 
 static inline void write_cr4(unsigned long val)
 {
+    /* No global pages in case of PCIDs enabled! */
+    ASSERT(!(val & X86_CR4_PGE) || !(val & X86_CR4_PCIDE));
+
     get_cpu_info()->cr4 = val;
     asm volatile ( "mov %0,%%cr4" : : "r" (val) );
 }
@@ -504,7 +530,8 @@ struct __packed __cacheline_aligned tss_struct {
 #define IST_DF   1UL
 #define IST_NMI  2UL
 #define IST_MCE  3UL
-#define IST_MAX  3UL
+#define IST_DB   4UL
+#define IST_MAX  4UL
 
 /* Set the interrupt stack table used by a particular interrupt
  * descriptor table entry. */
@@ -523,6 +550,7 @@ extern idt_entry_t idt_table[];
 extern idt_entry_t *idt_tables[];
 
 DECLARE_PER_CPU(struct tss_struct, init_tss);
+DECLARE_PER_CPU(root_pgentry_t *, root_pgt);
 
 extern void init_int80_direct_trap(struct vcpu *v);
 
@@ -620,6 +648,10 @@ int wrmsr_hypervisor_regs(uint32_t idx, uint64_t val);
 void microcode_set_module(unsigned int);
 int microcode_update(XEN_GUEST_HANDLE_PARAM(const_void), unsigned long len);
 int microcode_resume_cpu(unsigned int cpu);
+int early_microcode_update_cpu(bool start_update);
+int early_microcode_init(void);
+int microcode_init_intel(void);
+int microcode_init_amd(void);
 
 enum get_cpu_vendor {
     gcv_host,

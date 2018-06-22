@@ -19,6 +19,18 @@ XEN_CPUFEATURE(APERFMPERF,      (FSCAPINTS+0)*32+ 8) /* APERFMPERF */
 XEN_CPUFEATURE(MFENCE_RDTSC,    (FSCAPINTS+0)*32+ 9) /* MFENCE synchronizes RDTSC */
 XEN_CPUFEATURE(XEN_SMEP,        (FSCAPINTS+0)*32+ 10) /* SMEP gets used by Xen itself */
 XEN_CPUFEATURE(XEN_SMAP,        (FSCAPINTS+0)*32+ 11) /* SMAP gets used by Xen itself */
+XEN_CPUFEATURE(MSR_PLATFORM_INFO, (FSCAPINTS+0)*32+12) /* PLATFORM_INFO MSR present */
+XEN_CPUFEATURE(MSR_MISC_FEATURES, (FSCAPINTS+0)*32+13) /* MISC_FEATURES_ENABLES MSR present */
+XEN_CPUFEATURE(LFENCE_DISPATCH, (FSCAPINTS+0)*32+14) /* lfence set as Dispatch Serialising */
+XEN_CPUFEATURE(IND_THUNK_LFENCE,(FSCAPINTS+0)*32+15) /* Use IND_THUNK_LFENCE */
+XEN_CPUFEATURE(IND_THUNK_JMP,   (FSCAPINTS+0)*32+16) /* Use IND_THUNK_JMP */
+XEN_CPUFEATURE(XEN_IBPB,        (FSCAPINTS+0)*32+17) /* IBRSB || IBPB */
+XEN_CPUFEATURE(SC_MSR_PV,       (FSCAPINTS+0)*32+18) /* MSR_SPEC_CTRL used by Xen for PV */
+XEN_CPUFEATURE(SC_MSR_HVM,      (FSCAPINTS+0)*32+19) /* MSR_SPEC_CTRL used by Xen for HVM */
+XEN_CPUFEATURE(SC_RSB_PV,       (FSCAPINTS+0)*32+20) /* RSB overwrite needed for PV */
+XEN_CPUFEATURE(SC_RSB_HVM,      (FSCAPINTS+0)*32+21) /* RSB overwrite needed for HVM */
+XEN_CPUFEATURE(NO_XPTI,         (FSCAPINTS+0)*32+22) /* XPTI mitigation not in use */
+XEN_CPUFEATURE(SC_MSR_IDLE,     (FSCAPINTS+0)*32+23) /* (SC_MSR_PV || SC_MSR_HVM) && default_xen_spec_ctrl */
 
 #define NCAPINTS (FSCAPINTS + 1) /* N 32-bit words worth of info */
 
@@ -70,6 +82,7 @@ XEN_CPUFEATURE(XEN_SMAP,        (FSCAPINTS+0)*32+ 11) /* SMAP gets used by Xen i
 #define cpu_has_fsgsbase	boot_cpu_has(X86_FEATURE_FSGSBASE)
 #define cpu_has_aperfmperf	boot_cpu_has(X86_FEATURE_APERFMPERF)
 #define cpu_has_smep            boot_cpu_has(X86_FEATURE_SMEP)
+#define cpu_has_invpcid         boot_cpu_has(X86_FEATURE_INVPCID)
 #define cpu_has_smap            boot_cpu_has(X86_FEATURE_SMAP)
 #define cpu_has_fpu_sel         (!boot_cpu_has(X86_FEATURE_NO_FPU_SEL))
 #define cpu_has_ffxsr           ((boot_cpu_data.x86_vendor == X86_VENDOR_AMD) \
@@ -94,6 +107,8 @@ XEN_CPUFEATURE(XEN_SMAP,        (FSCAPINTS+0)*32+ 11) /* SMAP gets used by Xen i
 #define cpu_has_eist		boot_cpu_has(X86_FEATURE_EIST)
 #define cpu_has_hypervisor	boot_cpu_has(X86_FEATURE_HYPERVISOR)
 #define cpu_has_cmp_legacy	boot_cpu_has(X86_FEATURE_CMP_LEGACY)
+#define cpu_has_lfence_dispatch boot_cpu_has(X86_FEATURE_LFENCE_DISPATCH)
+#define cpu_has_no_xpti         boot_cpu_has(X86_FEATURE_NO_XPTI)
 
 enum _cache_type {
     CACHE_TYPE_NULL = 0,

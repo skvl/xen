@@ -189,7 +189,11 @@ PAGE_LIST_HEAD(page_broken_list);
  * BOOT-TIME ALLOCATOR
  */
 
-static unsigned long __initdata first_valid_mfn = ~0UL;
+/*
+ * first_valid_mfn is exported because it is use in ARM specific NUMA
+ * helpers. See comment in asm-arm/numa.h.
+ */
+unsigned long first_valid_mfn = ~0UL;
 
 static struct bootmem_region {
     unsigned long s, e; /* MFNs @s through @e-1 inclusive are free */
@@ -711,9 +715,13 @@ static struct page_info *alloc_heap_pages(
         if ( node >= MAX_NUMNODES )
             node = cpu_to_node(smp_processor_id());
     }
+    else if ( unlikely(node >= MAX_NUMNODES) )
+    {
+        ASSERT_UNREACHABLE();
+        return NULL;
+    }
     first_node = node;
 
-    ASSERT(node < MAX_NUMNODES);
     ASSERT(zone_lo <= zone_hi);
     ASSERT(zone_hi < NR_ZONES);
 
@@ -838,7 +846,7 @@ static struct page_info *alloc_heap_pages(
         /* Ensure cache and RAM are consistent for platforms where the
          * guest can control its own visibility of/through the cache.
          */
-        flush_page_to_ram(page_to_mfn(&pg[i]));
+        flush_page_to_ram(page_to_mfn(&pg[i]), true);
     }
 
     spin_unlock(&heap_lock);
@@ -961,7 +969,7 @@ static void free_heap_pages(
         /* If a page has no owner it will need no safety TLB flush. */
         pg[i].u.free.need_tlbflush = (page_get_owner(&pg[i]) != NULL);
         if ( pg[i].u.free.need_tlbflush )
-            pg[i].tlbflush_timestamp = tlbflush_current_time();
+            page_set_tlbflush_timestamp(&pg[i]);
 
         /* This page is not a guest frame any more. */
         page_set_owner(&pg[i], NULL); /* set_gpfn_from_mfn snoops pg owner */
@@ -1273,6 +1281,16 @@ static void init_heap_pages(
     struct page_info *pg, unsigned long nr_pages)
 {
     unsigned long i;
+
+    /*
+     * Some pages may not go through the boot allocator (e.g reserved
+     * memory at boot but released just after --- kernel, initramfs,
+     * etc.).
+     * Update first_valid_mfn to ensure those regions are covered.
+     */
+    spin_lock(&heap_lock);
+    first_valid_mfn = min_t(unsigned long, page_to_mfn(pg), first_valid_mfn);
+    spin_unlock(&heap_lock);
 
     for ( i = 0; i < nr_pages; i++ )
     {

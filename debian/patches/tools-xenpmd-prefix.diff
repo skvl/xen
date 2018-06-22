@@ -1,14 +1,16 @@
 From: Bastian Blank <waldi@debian.org>
 Date: Sat, 13 Dec 2014 19:37:02 +0100
-X-Dgit-Generated: 4.8.1-1 abbd6a5b077ff2f14d6e715c7f342f02f3b78ef8
 Subject: tools-xenpmd-prefix.diff
 
 Patch-Name: tools-xenpmd-prefix.diff
-
 ---
+ tools/xenpmd/Makefile | 4 ++--
+ 1 file changed, 2 insertions(+), 2 deletions(-)
 
---- xen-4.8.1.orig/tools/xenpmd/Makefile
-+++ xen-4.8.1/tools/xenpmd/Makefile
+diff --git a/tools/xenpmd/Makefile b/tools/xenpmd/Makefile
+index 55e8fc5..470e963 100644
+--- a/tools/xenpmd/Makefile
++++ b/tools/xenpmd/Makefile
 @@ -11,8 +11,8 @@ all: xenpmd
  
  .PHONY: install

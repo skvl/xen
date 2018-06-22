@@ -1,0 +1,23 @@
+From: Dongli Zhang <dongli.zhang@oracle.com>
+Date: Tue, 4 Jul 2017 22:35:28 +0800
+Subject: gitignore: add tools/misc/xen-diag to .gitignore
+
+Signed-off-by: Dongli Zhang <dongli.zhang@oracle.com>
+Acked-by: Wei Liu <wei.liu2@citrix.com>
+(cherry picked from commit d23afa6399a78ca7d0ed3294119632535828c9d8)
+---
+ .gitignore | 1 +
+ 1 file changed, 1 insertion(+)
+
+diff --git a/.gitignore b/.gitignore
+index c910f1e..a757e71 100644
+--- a/.gitignore
++++ b/.gitignore
+@@ -191,6 +191,7 @@ tools/misc/xc_shadow
+ tools/misc/xen_cpuperf
+ tools/misc/xen-cpuid
+ tools/misc/xen-detect
++tools/misc/xen-diag
+ tools/misc/xen-tmem-list-parse
+ tools/misc/xen-livepatch
+ tools/misc/xenperf

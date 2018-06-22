@@ -108,7 +108,7 @@ static int hvmemul_do_io(
         .count = *reps,
         .dir = dir,
         .df = df,
-        .data = data,
+        .data = data_is_addr ? data : 0,
         .data_is_ptr = data_is_addr, /* ioreq_t field name is misleading */
         .state = STATE_IOREQ_READY,
     };
@@ -192,7 +192,11 @@ static int hvmemul_do_io(
             rc = hvm_send_ioreq(s, &p, 0);
             if ( rc != X86EMUL_RETRY || curr->domain->is_shutting_down )
                 vio->io_req.state = STATE_IOREQ_NONE;
-            else if ( data_is_addr )
+            /*
+             * This effectively is !hvm_vcpu_io_need_completion(vio), slightly
+             * optimized and using local variables we have available.
+             */
+            else if ( data_is_addr || (!is_mmio && dir == IOREQ_WRITE) )
                 rc = X86EMUL_OKAY;
         }
         break;
@@ -844,7 +848,8 @@ int hvmemul_insn_fetch(
 {
     struct hvm_emulate_ctxt *hvmemul_ctxt =
         container_of(ctxt, struct hvm_emulate_ctxt, ctxt);
-    unsigned int insn_off = offset - hvmemul_ctxt->insn_buf_eip;
+    /* Careful, as offset can wrap or truncate WRT insn_buf_eip. */
+    uint8_t insn_off = offset - hvmemul_ctxt->insn_buf_eip;
 
     /*
      * Fall back if requested bytes are not in the prefetch cache.
@@ -858,7 +863,17 @@ int hvmemul_insn_fetch(
 
         if ( rc == X86EMUL_OKAY && bytes )
         {
-            ASSERT(insn_off + bytes <= sizeof(hvmemul_ctxt->insn_buf));
+            /*
+             * Will we overflow insn_buf[]?  This shouldn't be able to happen,
+             * which means something went wrong with instruction decoding...
+             */
+            if ( insn_off >= sizeof(hvmemul_ctxt->insn_buf) ||
+                 insn_off + bytes > sizeof(hvmemul_ctxt->insn_buf) )
+            {
+                ASSERT_UNREACHABLE();
+                return X86EMUL_UNHANDLEABLE;
+            }
+
             memcpy(&hvmemul_ctxt->insn_buf[insn_off], p_data, bytes);
             hvmemul_ctxt->insn_buf_bytes = insn_off + bytes;
         }
@@ -1780,10 +1795,10 @@ static int _hvm_emulate_one(struct hvm_emulate_ctxt *hvmemul_ctxt,
         hvmemul_ctxt->ctxt.swint_emulate = x86_swint_emulate_all;
 
     rc = x86_emulate(&hvmemul_ctxt->ctxt, ops);
-
     if ( rc == X86EMUL_OKAY && vio->mmio_retry )
         rc = X86EMUL_RETRY;
-    if ( rc != X86EMUL_RETRY )
+
+    if ( !hvm_vcpu_io_need_completion(vio) )
     {
         vio->mmio_cache_count = 0;
         vio->mmio_insn_bytes = 0;

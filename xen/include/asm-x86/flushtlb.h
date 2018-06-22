@@ -24,6 +24,20 @@ DECLARE_PER_CPU(u32, tlbflush_time);
 
 #define tlbflush_current_time() tlbflush_clock
 
+static inline void page_set_tlbflush_timestamp(struct page_info *page)
+{
+    /*
+     * Prevent storing a stale time stamp, which could happen if an update
+     * to tlbflush_clock plus a subsequent flush IPI happen between the
+     * reading of tlbflush_clock and the writing of the struct page_info
+     * field.
+     */
+    ASSERT(local_irq_is_enabled());
+    local_irq_disable();
+    page->tlbflush_timestamp = tlbflush_current_time();
+    local_irq_enable();
+}
+
 /*
  * @cpu_stamp is the timestamp at last TLB flush for the CPU we are testing.
  * @lastuse_stamp is a timestamp taken when the PFN we are testing was last 
@@ -70,7 +84,7 @@ static inline unsigned long read_cr3(void)
 }
 
 /* Write pagetable base and implicitly tick the tlbflush clock. */
-void write_cr3(unsigned long cr3);
+void switch_cr3_cr4(unsigned long cr3, unsigned long cr4);
 
 /* flush_* flag fields: */
  /*
@@ -87,6 +101,8 @@ void write_cr3(unsigned long cr3);
 #define FLUSH_CACHE      0x400
  /* VA for the flush has a valid mapping */
 #define FLUSH_VA_VALID   0x800
+ /* Flush the per-cpu root page table */
+#define FLUSH_ROOT_PGTBL 0x2000
 
 /* Flush local TLBs/caches. */
 unsigned int flush_area_local(const void *va, unsigned int flags);
@@ -118,7 +134,13 @@ void flush_area_mask(const cpumask_t *, const void *va, unsigned int flags);
 #define flush_tlb_one_all(v)                    \
     flush_tlb_one_mask(&cpu_online_map, v)
 
-static inline void flush_page_to_ram(unsigned long mfn) {}
+#define flush_root_pgtbl_domain(d)                                       \
+{                                                                        \
+    if ( is_pv_domain(d) && (d)->arch.pv_domain.xpti )                   \
+        flush_mask((d)->domain_dirty_cpumask, FLUSH_ROOT_PGTBL);         \
+}
+
+static inline void flush_page_to_ram(unsigned long mfn, bool sync_icache) {}
 static inline int invalidate_dcache_va_range(const void *p,
                                              unsigned long size)
 { return -EOPNOTSUPP; }

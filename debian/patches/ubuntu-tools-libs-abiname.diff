@@ -1,13 +1,19 @@
 From: Ubuntu Developers <ubuntu-devel-discuss@lists.ubuntu.com>
 Date: Thu, 6 Oct 2016 14:24:46 +0100
-X-Dgit-Generated: 4.8.1-1 a80895b1222bf96c423953a78171ca38ee847a9f
 Subject: ubuntu-tools-libs-abiname
 
-
 ---
+ tools/libs/call/Makefile          | 16 ++++++++--------
+ tools/libs/evtchn/Makefile        | 16 ++++++++--------
+ tools/libs/foreignmemory/Makefile | 16 ++++++++--------
+ tools/libs/gnttab/Makefile        | 16 ++++++++--------
+ tools/libs/toollog/Makefile       | 16 ++++++++--------
+ 5 files changed, 40 insertions(+), 40 deletions(-)
 
---- xen-4.8.1.orig/tools/libs/call/Makefile
-+++ xen-4.8.1/tools/libs/call/Makefile
+diff --git a/tools/libs/call/Makefile b/tools/libs/call/Makefile
+index 9402ea5..ad8e22a 100644
+--- a/tools/libs/call/Makefile
++++ b/tools/libs/call/Makefile
 @@ -39,22 +39,22 @@ headers.chk: $(wildcard include/*.h)
  libxencall.a: $(LIB_OBJS)
  	$(AR) rc $@ $^
@@ -47,8 +53,10 @@ Subject: ubuntu-tools-libs-abiname
  	rm -f headers.chk
  
  .PHONY: distclean
---- xen-4.8.1.orig/tools/libs/evtchn/Makefile
-+++ xen-4.8.1/tools/libs/evtchn/Makefile
+diff --git a/tools/libs/evtchn/Makefile b/tools/libs/evtchn/Makefile
+index 9917864..060fd01 100644
+--- a/tools/libs/evtchn/Makefile
++++ b/tools/libs/evtchn/Makefile
 @@ -39,22 +39,22 @@ headers.chk: $(wildcard include/*.h)
  libxenevtchn.a: $(LIB_OBJS)
  	$(AR) rc $@ $^
@@ -88,8 +96,10 @@ Subject: ubuntu-tools-libs-abiname
  	rm -f headers.chk
  
  .PHONY: distclean
---- xen-4.8.1.orig/tools/libs/foreignmemory/Makefile
-+++ xen-4.8.1/tools/libs/foreignmemory/Makefile
+diff --git a/tools/libs/foreignmemory/Makefile b/tools/libs/foreignmemory/Makefile
+index f062f45..e9a5dce 100644
+--- a/tools/libs/foreignmemory/Makefile
++++ b/tools/libs/foreignmemory/Makefile
 @@ -39,22 +39,22 @@ headers.chk: $(wildcard include/*.h)
  libxenforeignmemory.a: $(LIB_OBJS)
  	$(AR) rc $@ $^
@@ -129,8 +139,10 @@ Subject: ubuntu-tools-libs-abiname
  	rm -f headers.chk
  
  .PHONY: distclean
---- xen-4.8.1.orig/tools/libs/gnttab/Makefile
-+++ xen-4.8.1/tools/libs/gnttab/Makefile
+diff --git a/tools/libs/gnttab/Makefile b/tools/libs/gnttab/Makefile
+index 95c2cd8..2697fa1 100644
+--- a/tools/libs/gnttab/Makefile
++++ b/tools/libs/gnttab/Makefile
 @@ -41,22 +41,22 @@ headers.chk: $(wildcard include/*.h)
  libxengnttab.a: $(LIB_OBJS)
  	$(AR) rc $@ $^
@@ -170,8 +182,10 @@ Subject: ubuntu-tools-libs-abiname
  	rm -f headers.chk
  
  .PHONY: distclean
---- xen-4.8.1.orig/tools/libs/toollog/Makefile
-+++ xen-4.8.1/tools/libs/toollog/Makefile
+diff --git a/tools/libs/toollog/Makefile b/tools/libs/toollog/Makefile
+index fb701be..c98491f 100644
+--- a/tools/libs/toollog/Makefile
++++ b/tools/libs/toollog/Makefile
 @@ -34,22 +34,22 @@ headers.chk: $(wildcard include/*.h)
  libxentoollog.a: $(LIB_OBJS)
  	$(AR) rc $@ $^

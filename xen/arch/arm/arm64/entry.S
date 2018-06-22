@@ -122,9 +122,13 @@ lr      .req    x30             // link register
 
         stp     lr, x21, [sp, #UREGS_LR]
 
-        mrs     x22, elr_el2
-        mrs     x23, spsr_el2
-        stp     x22, x23, [sp, #UREGS_PC]
+        mrs     x21, elr_el2
+        str     x21, [sp, #UREGS_PC]
+
+        add     x21, sp, #UREGS_CPSR
+        mrs     x22, spsr_el2
+        mrs     x23, esr_el2
+        stp     w22, w23, [x21]
 
         .endm
 
@@ -215,7 +219,7 @@ hyp_sync:
         entry   hyp=1
         msr     daifclr, #2
         mov     x0, sp
-        bl      do_trap_hypervisor
+        bl      do_trap_hyp_sync
         exit    hyp=1
 
 hyp_irq:
@@ -234,7 +238,7 @@ guest_sync:
         cbnz    x0, 1f
         msr     daifclr, #2
         mov     x0, sp
-        bl      do_trap_hypervisor
+        bl      do_trap_guest_sync
 1:
         exit    hyp=0, compat=0
 
@@ -272,7 +276,7 @@ guest_sync_compat:
         cbnz    x0, 1f
         msr     daifclr, #2
         mov     x0, sp
-        bl      do_trap_hypervisor
+        bl      do_trap_guest_sync
 1:
         exit    hyp=0, compat=1
 
@@ -308,7 +312,8 @@ ENTRY(return_to_new_vcpu64)
 return_from_trap:
         msr     daifset, #2 /* Mask interrupts */
 
-        ldp     x21, x22, [sp, #UREGS_PC]       // load ELR, SPSR
+        ldr     x21, [sp, #UREGS_PC]            // load ELR
+        ldr     w22, [sp, #UREGS_CPSR]          // load SPSR
 
         pop     x0, x1
         pop     x2, x3

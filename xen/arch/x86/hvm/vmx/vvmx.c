@@ -591,6 +591,7 @@ void nvmx_update_secondary_exec_control(struct vcpu *v,
                     SECONDARY_EXEC_VIRTUAL_INTR_DELIVERY;
 
     host_cntrl &= ~apicv_bit;
+    host_cntrl &= ~SECONDARY_EXEC_ENABLE_VMCS_SHADOWING;
     shadow_cntrl = get_vvmcs(v, SECONDARY_VM_EXEC_CONTROL);
 
     /* No vAPIC-v support, so it shouldn't be set in vmcs12. */
@@ -2026,12 +2027,6 @@ int nvmx_msr_read_intercept(unsigned int msr, u64 *msr_content)
 
     *msr_content = data;
     return r;
-}
-
-int nvmx_msr_write_intercept(unsigned int msr, u64 msr_content)
-{
-    /* silently ignore for now */
-    return 1;
 }
 
 /* This function uses L2_gpa to walk the P2M page table in L1. If the

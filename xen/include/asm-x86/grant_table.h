@@ -18,6 +18,14 @@ int create_grant_host_mapping(uint64_t addr, unsigned long frame,
 int replace_grant_host_mapping(
     uint64_t addr, unsigned long frame, uint64_t new_addr, unsigned int flags);
 
+#define gnttab_set_frame_gfn(d, st, idx, gfn) do {} while ( 0 )
+#define gnttab_get_frame_gfn(d, st, idx) ({                              \
+    unsigned long mfn_ = (st) ? gnttab_status_mfn((d)->grant_table, idx) \
+                              : gnttab_shared_mfn((d)->grant_table, idx); \
+    unsigned long gpfn_ = get_gpfn_from_mfn(mfn_);                       \
+    VALID_M2P(gpfn_) ? _gfn(gpfn_) : INVALID_GFN;                        \
+})
+
 #define gnttab_create_shared_page(d, t, i)                               \
     do {                                                                 \
         share_xen_page_with_guest(                                       \
@@ -33,11 +41,11 @@ int replace_grant_host_mapping(
     } while ( 0 )
 
 
-#define gnttab_shared_mfn(d, t, i)                      \
+#define gnttab_shared_mfn(t, i)                         \
     ((virt_to_maddr((t)->shared_raw[i]) >> PAGE_SHIFT))
 
 #define gnttab_shared_gmfn(d, t, i)                     \
-    (mfn_to_gmfn(d, gnttab_shared_mfn(d, t, i)))
+    (mfn_to_gmfn(d, gnttab_shared_mfn(t, i)))
 
 
 #define gnttab_status_mfn(t, i)                         \
@@ -58,9 +66,8 @@ static inline void gnttab_clear_flag(unsigned int nr, uint16_t *st)
 }
 
 /* Foreign mappings of HHVM-guest pages do not modify the type count. */
-#define gnttab_host_mapping_get_page_type(op, ld, rd)   \
-    (!((op)->flags & GNTMAP_readonly) &&                \
-     (((ld) == (rd)) || !paging_mode_external(rd)))
+#define gnttab_host_mapping_get_page_type(ro, ld, rd)   \
+    (!(ro) && (((ld) == (rd)) || !paging_mode_external(rd)))
 
 /* Done implicitly when page tables are destroyed. */
 #define gnttab_release_host_mappings(domain) ( paging_mode_external(domain) )

@@ -1,14 +1,21 @@
 From: Bastian Blank <waldi@debian.org>
 Date: Sat, 5 Jul 2014 11:46:43 +0200
-X-Dgit-Generated: 4.8.1-1 adc50830f6c334569f54255310fc489d139d542f
 Subject: version
 
 Patch-Name: version.diff
-
 ---
+ xen/Makefile                 |  8 +++++---
+ xen/common/kernel.c          |  4 ++--
+ xen/common/version.c         | 22 +++++++++++-----------
+ xen/drivers/char/console.c   |  9 +++------
+ xen/include/xen/compile.h.in |  8 ++++----
+ xen/include/xen/version.h    |  7 ++++---
+ 6 files changed, 29 insertions(+), 29 deletions(-)
 
---- xen-4.8.1.orig/xen/Makefile
-+++ xen-4.8.1/xen/Makefile
+diff --git a/xen/Makefile b/xen/Makefile
+index 738ab04..5fe3929 100644
+--- a/xen/Makefile
++++ b/xen/Makefile
 @@ -160,7 +160,7 @@ delete-unfresh-files:
  	@mv -f $@.tmp $@
  
@@ -18,7 +25,7 @@ Patch-Name: version.diff
  	@sed -e 's/@@date@@/$(XEN_BUILD_DATE)/g' \
  	    -e 's/@@time@@/$(XEN_BUILD_TIME)/g' \
  	    -e 's/@@whoami@@/$(XEN_WHOAMI)/g' \
-@@ -171,9 +171,11 @@ include/xen/compile.h: include/xen/compi
+@@ -171,9 +171,11 @@ include/xen/compile.h: include/xen/compile.h.in .banner
  	    -e 's/@@subversion@@/$(XEN_SUBVERSION)/g' \
  	    -e 's/@@extraversion@@/$(XEN_EXTRAVERSION)/g' \
  	    -e 's!@@changeset@@!$(shell tools/scmversion $(XEN_ROOT) || echo "unavailable")!g' \
@@ -32,9 +39,11 @@ Patch-Name: version.diff
  	@mv -f $@.new $@
  
  include/asm-$(TARGET_ARCH)/asm-offsets.h: arch/$(TARGET_ARCH)/asm-offsets.s
---- xen-4.8.1.orig/xen/common/kernel.c
-+++ xen-4.8.1/xen/common/kernel.c
-@@ -252,8 +252,8 @@ DO(xen_version)(int cmd, XEN_GUEST_HANDL
+diff --git a/xen/common/kernel.c b/xen/common/kernel.c
+index ed49c62..58e5553 100644
+--- a/xen/common/kernel.c
++++ b/xen/common/kernel.c
+@@ -288,8 +288,8 @@ DO(xen_version)(int cmd, XEN_GUEST_HANDLE_PARAM(void) arg)
  
          memset(&info, 0, sizeof(info));
          safe_strcpy(info.compiler,       deny ? xen_deny() : xen_compiler());
@@ -45,8 +54,10 @@ Patch-Name: version.diff
          safe_strcpy(info.compile_date,   deny ? xen_deny() : xen_compile_date());
          if ( copy_to_guest(arg, &info, 1) )
              return -EFAULT;
---- xen-4.8.1.orig/xen/common/version.c
-+++ xen-4.8.1/xen/common/version.c
+diff --git a/xen/common/version.c b/xen/common/version.c
+index 0d31e38..1fff7c1 100644
+--- a/xen/common/version.c
++++ b/xen/common/version.c
 @@ -20,19 +20,24 @@ const char *xen_compile_time(void)
      return XEN_COMPILE_TIME;
  }
@@ -90,8 +101,10 @@ Patch-Name: version.diff
  const char *xen_deny(void)
  {
      return "<denied>";
---- xen-4.8.1.orig/xen/drivers/char/console.c
-+++ xen-4.8.1/xen/drivers/char/console.c
+diff --git a/xen/drivers/char/console.c b/xen/drivers/char/console.c
+index 55ae31a..2dabaaf 100644
+--- a/xen/drivers/char/console.c
++++ b/xen/drivers/char/console.c
 @@ -732,14 +732,11 @@ void __init console_init_preirq(void)
      serial_set_rx_handler(sercon_handle, serial_rx);
  
@@ -110,8 +123,10 @@ Patch-Name: version.diff
  
      if ( opt_sync_console )
      {
---- xen-4.8.1.orig/xen/include/xen/compile.h.in
-+++ xen-4.8.1/xen/include/xen/compile.h.in
+diff --git a/xen/include/xen/compile.h.in b/xen/include/xen/compile.h.in
+index 440ecb2..0c3ca58 100644
+--- a/xen/include/xen/compile.h.in
++++ b/xen/include/xen/compile.h.in
 @@ -1,8 +1,9 @@
  #define XEN_COMPILE_DATE	"@@date@@"
  #define XEN_COMPILE_TIME	"@@time@@"
@@ -130,8 +145,10 @@ Patch-Name: version.diff
  
  #define XEN_CHANGESET		"@@changeset@@"
 -#define XEN_BANNER		\
---- xen-4.8.1.orig/xen/include/xen/version.h
-+++ xen-4.8.1/xen/include/xen/version.h
+diff --git a/xen/include/xen/version.h b/xen/include/xen/version.h
+index 97c247a..a816f60 100644
+--- a/xen/include/xen/version.h
++++ b/xen/include/xen/version.h
 @@ -6,9 +6,10 @@
  
  const char *xen_compile_date(void);

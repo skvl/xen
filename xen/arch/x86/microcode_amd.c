@@ -108,6 +108,7 @@ static bool_t verify_patch_size(uint32_t patch_size)
 #define F14H_MPB_MAX_SIZE 1824
 #define F15H_MPB_MAX_SIZE 4096
 #define F16H_MPB_MAX_SIZE 3458
+#define F17H_MPB_MAX_SIZE 3200
 
     switch (boot_cpu_data.x86)
     {
@@ -119,6 +120,9 @@ static bool_t verify_patch_size(uint32_t patch_size)
         break;
     case 0x16:
         max_size = F16H_MPB_MAX_SIZE;
+        break;
+    case 0x17:
+        max_size = F17H_MPB_MAX_SIZE;
         break;
     default:
         max_size = F1XH_MPB_MAX_SIZE;
@@ -628,10 +632,9 @@ static const struct microcode_ops microcode_amd_ops = {
     .start_update                     = start_update,
 };
 
-static __init int microcode_init_amd(void)
+int __init microcode_init_amd(void)
 {
     if ( boot_cpu_data.x86_vendor == X86_VENDOR_AMD )
         microcode_ops = &microcode_amd_ops;
     return 0;
 }
-presmp_initcall(microcode_init_amd);

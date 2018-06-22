@@ -55,6 +55,7 @@ unsigned int vaddr_bits __read_mostly = VADDR_BITS;
 u64 host_pat = 0x050100070406;
 
 static unsigned int cleared_caps[NCAPINTS];
+static unsigned int forced_caps[NCAPINTS];
 
 void __init setup_clear_cpu_cap(unsigned int cap)
 {
@@ -63,6 +64,10 @@ void __init setup_clear_cpu_cap(unsigned int cap)
 
 	if (__test_and_set_bit(cap, cleared_caps))
 		return;
+
+	if (test_bit(cap, forced_caps))
+		printk("%pS clearing previously forced feature %#x\n",
+		       __builtin_return_address(0), cap);
 
 	__clear_bit(cap, boot_cpu_data.x86_capability);
 	dfs = lookup_deep_deps(cap);
@@ -73,7 +78,26 @@ void __init setup_clear_cpu_cap(unsigned int cap)
 	for (i = 0; i < FSCAPINTS; ++i) {
 		cleared_caps[i] |= dfs[i];
 		boot_cpu_data.x86_capability[i] &= ~dfs[i];
+		if (!(forced_caps[i] & dfs[i]))
+			continue;
+		printk("%pS implicitly clearing previously forced feature(s) %u:%#x\n",
+		       __builtin_return_address(0),
+		       i, forced_caps[i] & dfs[i]);
 	}
+}
+
+void __init setup_force_cpu_cap(unsigned int cap)
+{
+	if (__test_and_set_bit(cap, forced_caps))
+		return;
+
+	if (test_bit(cap, cleared_caps)) {
+		printk("%pS tries to force previously cleared feature %#x\n",
+		       __builtin_return_address(0), cap);
+		return;
+	}
+
+	__set_bit(cap, boot_cpu_data.x86_capability);
 }
 
 static void default_init(struct cpuinfo_x86 * c)
@@ -256,6 +280,8 @@ static void __init early_cpu_detect(void)
 		if (hap_paddr_bits > PADDR_BITS)
 			hap_paddr_bits = PADDR_BITS;
 	}
+
+	initialize_cpu_data(0);
 }
 
 static void generic_identify(struct cpuinfo_x86 *c)
@@ -326,7 +352,7 @@ static void generic_identify(struct cpuinfo_x86 *c)
 		cpuid_count(0x00000007, 0, &tmp,
 			    &c->x86_capability[cpufeat_word(X86_FEATURE_FSGSBASE)],
 			    &c->x86_capability[cpufeat_word(X86_FEATURE_PKU)],
-			    &tmp);
+			    &c->x86_capability[cpufeat_word(X86_FEATURE_IBRSB)]);
 }
 
 /*
@@ -383,8 +409,10 @@ void identify_cpu(struct cpuinfo_x86 *c)
 	for (i = 0; i < FSCAPINTS; ++i)
 		c->x86_capability[i] &= known_features[i];
 
-	for (i = 0 ; i < NCAPINTS ; ++i)
+	for (i = 0 ; i < NCAPINTS ; ++i) {
+		c->x86_capability[i] |= forced_caps[i];
 		c->x86_capability[i] &= ~cleared_caps[i];
+	}
 
 	/* If the model name is still unset, do table lookup. */
 	if ( !c->x86_model_id[0] ) {
@@ -461,8 +489,8 @@ void detect_extended_topology(struct cpuinfo_x86 *c)
 	initial_apicid = edx;
 
 	/* Populate HT related information from sub-leaf level 0 */
-	core_level_siblings = c->x86_num_siblings = LEVEL_MAX_SIBLINGS(ebx);
 	core_plus_mask_width = ht_mask_width = BITS_SHIFT_NEXT_LEVEL(eax);
+	core_level_siblings = c->x86_num_siblings = 1u << ht_mask_width;
 
 	sub_index = 1;
 	do {
@@ -470,8 +498,8 @@ void detect_extended_topology(struct cpuinfo_x86 *c)
 
 		/* Check for the Core type in the implemented sub leaves */
 		if ( LEAFB_SUBTYPE(ecx) == CORE_TYPE ) {
-			core_level_siblings = LEVEL_MAX_SIBLINGS(ebx);
 			core_plus_mask_width = BITS_SHIFT_NEXT_LEVEL(eax);
+			core_level_siblings = 1u << core_plus_mask_width;
 			break;
 		}
 
@@ -622,6 +650,7 @@ void __init early_cpu_init(void)
  * - Sets up TSS with stack pointers, including ISTs
  * - Inserts TSS selector into regular and compat GDTs
  * - Loads GDT, IDT, TR then null LDT
+ * - Sets up IST references in the IDT
  */
 void load_system_tables(void)
 {
@@ -652,6 +681,7 @@ void load_system_tables(void)
 	tss->ist[IST_MCE - 1] = stack_top + IST_MCE * PAGE_SIZE;
 	tss->ist[IST_DF  - 1] = stack_top + IST_DF  * PAGE_SIZE;
 	tss->ist[IST_NMI - 1] = stack_top + IST_NMI * PAGE_SIZE;
+	tss->ist[IST_DB  - 1] = stack_top + IST_DB  * PAGE_SIZE;
 
 	_set_tssldt_desc(
 		gdt + TSS_ENTRY,
@@ -668,6 +698,11 @@ void load_system_tables(void)
 	asm volatile ("lidt %0"  : : "m"  (idtr) );
 	asm volatile ("ltr  %w0" : : "rm" (TSS_ENTRY << 3) );
 	asm volatile ("lldt %w0" : : "rm" (0) );
+
+	set_ist(&idt_tables[cpu][TRAP_double_fault],  IST_DF);
+	set_ist(&idt_tables[cpu][TRAP_nmi],	      IST_NMI);
+	set_ist(&idt_tables[cpu][TRAP_machine_check], IST_MCE);
+	set_ist(&idt_tables[cpu][TRAP_debug],         IST_DB);
 
 	/*
 	 * Bottom-of-stack must be 16-byte aligned!

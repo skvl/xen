@@ -1,14 +1,16 @@
 From: Bastian Blank <waldi@debian.org>
 Date: Sat, 5 Jul 2014 11:47:08 +0200
-X-Dgit-Generated: 4.8.1-1 6b66a39ea6db832a88d94c4d8e256f77e08fe1a3
 Subject: tools-xenpaging-prefix.diff
 
 Patch-Name: tools-xenpaging-prefix.diff
-
 ---
+ tools/xenpaging/Makefile | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
 
---- xen-4.8.1.orig/tools/xenpaging/Makefile
-+++ xen-4.8.1/tools/xenpaging/Makefile
+diff --git a/tools/xenpaging/Makefile b/tools/xenpaging/Makefile
+index 64876b3..be31946 100644
+--- a/tools/xenpaging/Makefile
++++ b/tools/xenpaging/Makefile
 @@ -4,7 +4,7 @@ include $(XEN_ROOT)/tools/Rules.mk
  # xenpaging.c and file_ops.c incorrectly use libxc internals
  CFLAGS += $(CFLAGS_libxentoollog) $(CFLAGS_libxenevtchn) $(CFLAGS_libxenctrl) $(CFLAGS_libxenstore) $(PTHREAD_CFLAGS) -I$(XEN_ROOT)/tools/libxc $(CFLAGS_libxencall)

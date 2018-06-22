@@ -186,7 +186,6 @@ static struct mce_softirq_barrier mce_trap_bar;
  */
 static DEFINE_SPINLOCK(mce_logout_lock);
 
-static atomic_t severity_cpu = ATOMIC_INIT(-1);
 static atomic_t found_error = ATOMIC_INIT(0);
 static cpumask_t mce_fatal_cpus;
 
@@ -464,6 +463,7 @@ static int mce_urgent_action(const struct cpu_user_regs *regs,
 /* Shared #MC handler. */
 void mcheck_cmn_handler(const struct cpu_user_regs *regs)
 {
+    static atomic_t severity_cpu = ATOMIC_INIT(-1);
     struct mca_banks *bankmask = mca_allbanks;
     struct mca_banks *clear_bank = __get_cpu_var(mce_clear_banks);
     uint64_t gstatus;
@@ -537,6 +537,7 @@ void mcheck_cmn_handler(const struct cpu_user_regs *regs)
             mc_panic(ebuf);
         }
         atomic_set(&found_error, 0);
+        atomic_set(&severity_cpu, -1);
     }
     mce_barrier_exit(&mce_trap_bar);
 
@@ -1719,6 +1720,7 @@ static int mce_delayed_action(mctelem_cookie_t mctc)
 /* Softirq Handler for this MCE# processing */
 static void mce_softirq(void)
 {
+    static atomic_t severity_cpu;
     int cpu = smp_processor_id();
     unsigned int workcpu;
 

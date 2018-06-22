@@ -1,14 +1,16 @@
 From: Bastian Blank <waldi@debian.org>
 Date: Sat, 5 Jul 2014 11:46:47 +0200
-X-Dgit-Generated: 4.8.1-1 2a020aa59aec69c1d00f3fb8c86b188873e802ea
 Subject: tools-libfsimage-abiname.diff
 
 Patch-Name: tools-libfsimage-abiname.diff
-
 ---
+ tools/libfsimage/common/Makefile | 18 ++++--------------
+ 1 file changed, 4 insertions(+), 14 deletions(-)
 
---- xen-4.8.1.orig/tools/libfsimage/common/Makefile
-+++ xen-4.8.1/tools/libfsimage/common/Makefile
+diff --git a/tools/libfsimage/common/Makefile b/tools/libfsimage/common/Makefile
+index 4840bc2..8357b0a 100644
+--- a/tools/libfsimage/common/Makefile
++++ b/tools/libfsimage/common/Makefile
 @@ -1,9 +1,6 @@
  XEN_ROOT = $(CURDIR)/../../..
  include $(XEN_ROOT)/tools/libfsimage/Rules.mk
@@ -19,7 +21,7 @@ Patch-Name: tools-libfsimage-abiname.diff
  LDFLAGS-$(CONFIG_SunOS) = -Wl,-M -Wl,mapfile-SunOS
  LDFLAGS-$(CONFIG_Linux) = -Wl,mapfile-GNU
  LDFLAGS = $(LDFLAGS-y)
-@@ -15,7 +12,7 @@ LIB_SRCS-y = fsimage.c fsimage_plugin.c
+@@ -15,7 +12,7 @@ LIB_SRCS-y = fsimage.c fsimage_plugin.c fsimage_grub.c
  
  PIC_OBJS := $(patsubst %.c,%.opic,$(LIB_SRCS-y))
  

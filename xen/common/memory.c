@@ -123,7 +123,8 @@ static void increase_reservation(struct memop_args *a)
         }
 
         /* Inform the domain of the new page's machine address. */ 
-        if ( !guest_handle_is_null(a->extent_list) )
+        if ( !paging_mode_translate(d) &&
+             !guest_handle_is_null(a->extent_list) )
         {
             mfn = page_to_mfn(page);
             if ( unlikely(__copy_to_guest_offset(a->extent_list, i, &mfn, 1)) )
@@ -264,13 +265,18 @@ int guest_remove_page(struct domain *d, unsigned long gmfn)
     p2m_type_t p2mt;
 #endif
     mfn_t mfn;
+    int rc;
 
 #ifdef CONFIG_X86
     mfn = get_gfn_query(d, gmfn, &p2mt);
     if ( unlikely(p2m_is_paging(p2mt)) )
     {
-        guest_physmap_remove_page(d, _gfn(gmfn), mfn, 0);
+        rc = guest_physmap_remove_page(d, _gfn(gmfn), mfn, 0);
         put_gfn(d, gmfn);
+
+        if ( rc )
+            return rc;
+
         /* If the page hasn't yet been paged out, there is an
          * actual page that needs to be released. */
         if ( p2mt == p2m_ram_paging_out )
@@ -281,13 +287,15 @@ int guest_remove_page(struct domain *d, unsigned long gmfn)
                 put_page(page);
         }
         p2m_mem_paging_drop_page(d, gmfn, p2mt);
-        return 1;
+
+        return 0;
     }
     if ( p2mt == p2m_mmio_direct )
     {
-        clear_mmio_p2m_entry(d, gmfn, mfn, 0);
+        rc = clear_mmio_p2m_entry(d, gmfn, mfn, PAGE_ORDER_4K);
         put_gfn(d, gmfn);
-        return 1;
+
+        return rc;
     }
 #else
     mfn = gfn_to_mfn(d, _gfn(gmfn));
@@ -297,21 +305,25 @@ int guest_remove_page(struct domain *d, unsigned long gmfn)
         put_gfn(d, gmfn);
         gdprintk(XENLOG_INFO, "Domain %u page number %lx invalid\n",
                 d->domain_id, gmfn);
-        return 0;
+
+        return -EINVAL;
     }
             
 #ifdef CONFIG_X86
     if ( p2m_is_shared(p2mt) )
     {
-        /* Unshare the page, bail out on error. We unshare because 
-         * we might be the only one using this shared page, and we
-         * need to trigger proper cleanup. Once done, this is 
-         * like any other page. */
-        if ( mem_sharing_unshare_page(d, gmfn, 0) )
+        /*
+         * Unshare the page, bail out on error. We unshare because we
+         * might be the only one using this shared page, and we need to
+         * trigger proper cleanup. Once done, this is like any other page.
+         */
+        rc = mem_sharing_unshare_page(d, gmfn, 0);
+        if ( rc )
         {
             put_gfn(d, gmfn);
             (void)mem_sharing_notify_enomem(d, gmfn, 0);
-            return 0;
+
+            return rc;
         }
         /* Maybe the mfn changed */
         mfn = get_gfn_query_unlocked(d, gmfn, &p2mt);
@@ -324,11 +336,11 @@ int guest_remove_page(struct domain *d, unsigned long gmfn)
     {
         put_gfn(d, gmfn);
         gdprintk(XENLOG_INFO, "Bad page free for domain %u\n", d->domain_id);
-        return 0;
+
+        return -ENXIO;
     }
 
-    if ( test_and_clear_bit(_PGT_pinned, &page->u.inuse.type_info) )
-        put_page_and_type(page);
+    rc = guest_physmap_remove_page(d, _gfn(gmfn), mfn, 0);
 
     /*
      * With the lack of an IOMMU on some platforms, domains with DMA-capable
@@ -338,16 +350,14 @@ int guest_remove_page(struct domain *d, unsigned long gmfn)
      * For this purpose (and to match populate_physmap() behavior), the page
      * is kept allocated.
      */
-    if ( !is_domain_direct_mapped(d) &&
+    if ( !rc && !is_domain_direct_mapped(d) &&
          test_and_clear_bit(_PGC_allocated, &page->count_info) )
         put_page(page);
-
-    guest_physmap_remove_page(d, _gfn(gmfn), mfn, 0);
 
     put_page(page);
     put_gfn(d, gmfn);
 
-    return 1;
+    return rc;
 }
 
 static void decrease_reservation(struct memop_args *a)
@@ -391,12 +401,37 @@ static void decrease_reservation(struct memop_args *a)
             continue;
 
         for ( j = 0; j < (1 << a->extent_order); j++ )
-            if ( !guest_remove_page(a->domain, gmfn + j) )
+            if ( guest_remove_page(a->domain, gmfn + j) )
                 goto out;
     }
 
  out:
     a->nr_done = i;
+}
+
+static bool propagate_node(unsigned int xmf, unsigned int *memflags)
+{
+    const struct domain *currd = current->domain;
+
+    BUILD_BUG_ON(XENMEMF_get_node(0) != NUMA_NO_NODE);
+    BUILD_BUG_ON(MEMF_get_node(0) != NUMA_NO_NODE);
+
+    if ( XENMEMF_get_node(xmf) == NUMA_NO_NODE )
+        return true;
+
+    if ( is_hardware_domain(currd) || is_control_domain(currd) )
+    {
+        if ( XENMEMF_get_node(xmf) >= MAX_NUMNODES )
+            return false;
+
+        *memflags |= MEMF_node(XENMEMF_get_node(xmf));
+        if ( xmf & XENMEMF_exact_node_request )
+            *memflags |= MEMF_exact_node;
+    }
+    else if ( xmf & XENMEMF_exact_node_request )
+        return false;
+
+    return true;
 }
 
 static long memory_exchange(XEN_GUEST_HANDLE_PARAM(xen_memory_exchange_t) arg)
@@ -471,6 +506,12 @@ static long memory_exchange(XEN_GUEST_HANDLE_PARAM(xen_memory_exchange_t) arg)
         }
     }
 
+    if ( unlikely(!propagate_node(exch.out.mem_flags, &memflags)) )
+    {
+        rc = -EINVAL;
+        goto fail_early;
+    }
+
     d = rcu_lock_domain_by_any_id(exch.in.domid);
     if ( d == NULL )
     {
@@ -489,7 +530,6 @@ static long memory_exchange(XEN_GUEST_HANDLE_PARAM(xen_memory_exchange_t) arg)
         d,
         XENMEMF_get_address_bits(exch.out.mem_flags) ? :
         (BITS_PER_LONG+PAGE_SHIFT)));
-    memflags |= MEMF_node(XENMEMF_get_node(exch.out.mem_flags));
 
     for ( i = (exch.nr_exchanged >> in_chunk_order);
           i < (exch.in.nr_extents >> in_chunk_order);
@@ -582,7 +622,8 @@ static long memory_exchange(XEN_GUEST_HANDLE_PARAM(xen_memory_exchange_t) arg)
             gfn = mfn_to_gmfn(d, mfn);
             /* Pages were unshared above */
             BUG_ON(SHARED_M2P(gfn));
-            guest_physmap_remove_page(d, _gfn(gfn), _mfn(mfn), 0);
+            if ( guest_physmap_remove_page(d, _gfn(gfn), _mfn(mfn), 0) )
+                domain_crash(d);
             put_page(page);
         }
 
@@ -640,6 +681,9 @@ static long memory_exchange(XEN_GUEST_HANDLE_PARAM(xen_memory_exchange_t) arg)
             }
         }
         BUG_ON( !(d->is_dying) && (j != (1UL << out_chunk_order)) );
+
+        if ( rc )
+            goto fail;
     }
 
     exch.nr_exchanged = exch.in.nr_extents;
@@ -758,6 +802,11 @@ static int xenmem_add_to_physmap_batch(struct domain *d,
     guest_handle_add_offset(xatpb->errs, start);
     xatpb->size -= start;
 
+    if ( !guest_handle_okay(xatpb->idxs, xatpb->size) ||
+         !guest_handle_okay(xatpb->gpfns, xatpb->size) ||
+         !guest_handle_okay(xatpb->errs, xatpb->size) )
+        return -EFAULT;
+
     while ( xatpb->size > done )
     {
         xen_ulong_t idx;
@@ -848,12 +897,8 @@ static int construct_memop_from_reservation(
         }
         read_unlock(&d->vnuma_rwlock);
     }
-    else
-    {
-        a->memflags |= MEMF_node(XENMEMF_get_node(r->mem_flags));
-        if ( r->mem_flags & XENMEMF_exact_node_request )
-            a->memflags |= MEMF_exact_node;
-    }
+    else if ( unlikely(!propagate_node(r->mem_flags, &a->memflags)) )
+        return -EINVAL;
 
     return 0;
 }
@@ -1080,10 +1125,7 @@ long do_memory_op(unsigned long cmd, XEN_GUEST_HANDLE_PARAM(void) arg)
         if ( start_extent != (typeof(xatpb.size))start_extent )
             return -EDOM;
 
-        if ( copy_from_guest(&xatpb, arg, 1) ||
-             !guest_handle_okay(xatpb.idxs, xatpb.size) ||
-             !guest_handle_okay(xatpb.gpfns, xatpb.size) ||
-             !guest_handle_okay(xatpb.errs, xatpb.size) )
+        if ( copy_from_guest(&xatpb, arg, 1) )
             return -EFAULT;
 
         /* This mapspace is unsupported for this hypercall. */
@@ -1138,8 +1180,8 @@ long do_memory_op(unsigned long cmd, XEN_GUEST_HANDLE_PARAM(void) arg)
         page = get_page_from_gfn(d, xrfp.gpfn, NULL, P2M_ALLOC);
         if ( page )
         {
-            guest_physmap_remove_page(d, _gfn(xrfp.gpfn),
-                                      _mfn(page_to_mfn(page)), 0);
+            rc = guest_physmap_remove_page(d, _gfn(xrfp.gpfn),
+                                           _mfn(page_to_mfn(page)), 0);
             put_page(page);
         }
         else

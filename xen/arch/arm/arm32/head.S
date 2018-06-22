@@ -349,6 +349,13 @@ virtphys_clash:
 1:
         PRINT("- Turning on paging -\r\n")
 
+        /*
+         * The state of the TLBs is unknown before turning on the MMU.
+         * Flush them to avoid stale one.
+         */
+        mcr   CP32(r0, TLBIALLH)     /* Flush hypervisor TLBs */
+        dsb   nsh
+
         ldr   r1, =paging            /* Explicit vaddr, not RIP-relative */
         mrc   CP32(r0, HSCTLR)
         orr   r0, r0, #(SCTLR_M|SCTLR_C) /* Enable MMU and D-cache */
@@ -390,20 +397,6 @@ paging:
         /* Use a virtual address to access the UART. */
         ldr   r11, =EARLY_UART_VIRTUAL_ADDRESS
 #endif
-        /* Map the DTB in the boot misc slot */
-        teq   r12, #0                /* Only on boot CPU */
-        bne   1f
-
-        ldr   r1, =boot_second
-        mov   r3, #0x0
-        lsr   r2, r8, #SECOND_SHIFT
-        lsl   r2, r2, #SECOND_SHIFT  /* r2: 2MB-aligned paddr of DTB */
-        orr   r2, r2, #PT_UPPER(MEM)
-        orr   r2, r2, #PT_LOWER(MEM) /* r2:r3 := 2MB RAM incl. DTB */
-        ldr   r4, =BOOT_FDT_VIRT_START
-        mov   r4, r4, lsr #(SECOND_SHIFT - 3)   /* Slot for BOOT_FDT_VIRT_START */
-        strd  r2, r3, [r1, r4]       /* Map it in the early fdt slot */
-1:
 
         /*
          * Flush the TLB in case the 1:1 mapping happens to clash with

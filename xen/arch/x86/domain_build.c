@@ -427,7 +427,9 @@ static __init void pvh_add_mem_mapping(struct domain *d, unsigned long gfn,
         if ( !iomem_access_permitted(d, mfn + i, mfn + i) )
         {
             omfn = get_gfn_query_unlocked(d, gfn + i, &t);
-            guest_physmap_remove_page(d, _gfn(gfn + i), omfn, PAGE_ORDER_4K);
+            if ( guest_physmap_remove_page(d, _gfn(gfn + i), omfn,
+                                           PAGE_ORDER_4K) )
+                /* nothing, best effort only */;
             continue;
         }
 
@@ -999,6 +1001,8 @@ int __init construct_dom0(
     if ( compat32 )
     {
         d->arch.is_32bit_pv = d->arch.has_32bit_shinfo = 1;
+        d->arch.pv_domain.xpti = false;
+        d->arch.pv_domain.pcid = false;
         v->vcpu_info = (void *)&d->shared_info->compat.vcpu_info[0];
         if ( setup_compat_arg_xlat(v) != 0 )
             BUG();
@@ -1324,7 +1328,7 @@ int __init construct_dom0(
         update_cr3(v);
 
     /* We run on dom0's page tables for the final part of the build process. */
-    write_ptbase(v);
+    switch_cr3_cr4(cr3_pa(v->arch.cr3), read_cr4());
     mapcache_override_current(v);
 
     /* Copy the OS image and free temporary buffer. */
@@ -1344,7 +1348,7 @@ int __init construct_dom0(
              (parms.virt_hypercall >= v_end) )
         {
             mapcache_override_current(NULL);
-            write_ptbase(current);
+            switch_cr3_cr4(current->arch.cr3, read_cr4());
             printk("Invalid HYPERCALL_PAGE field in ELF notes.\n");
             rc = -1;
             goto out;
@@ -1483,7 +1487,7 @@ int __init construct_dom0(
 
     /* Return to idle domain's page tables. */
     mapcache_override_current(NULL);
-    write_ptbase(current);
+    switch_cr3_cr4(current->arch.cr3, read_cr4());
 
     update_domain_wallclock_time(d);
 
@@ -1509,6 +1513,13 @@ int __init construct_dom0(
     regs->esp = vstack_end;
     regs->esi = vstartinfo_start;
     regs->eflags = X86_EFLAGS_IF;
+
+    /*
+     * We don't call arch_set_info_guest(), so some initialisation needs doing
+     * by hand:
+     *  - Reset the GDT to reference zero_page
+     */
+    destroy_gdt(v);
 
 #ifdef CONFIG_SHADOW_PAGING
     if ( opt_dom0_shadow )

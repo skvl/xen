@@ -1,14 +1,16 @@
 From: Bastian Blank <waldi@debian.org>
 Date: Sat, 5 Jul 2014 11:46:49 +0200
-X-Dgit-Generated: 4.8.1-1 b6860f8b5e4980eedd3e75e5e81be73343d92558
 Subject: tools-libxl-abiname.diff
 
 Patch-Name: tools-libxl-abiname.diff
-
 ---
+ tools/libxl/Makefile | 38 ++++++++++++--------------------------
+ 1 file changed, 12 insertions(+), 26 deletions(-)
 
---- xen-4.8.1.orig/tools/libxl/Makefile
-+++ xen-4.8.1/tools/libxl/Makefile
+diff --git a/tools/libxl/Makefile b/tools/libxl/Makefile
+index ef01785..7cb0bac 100644
+--- a/tools/libxl/Makefile
++++ b/tools/libxl/Makefile
 @@ -5,12 +5,6 @@
  XEN_ROOT = $(CURDIR)/../..
  include $(XEN_ROOT)/tools/Rules.mk
@@ -22,7 +24,7 @@ Patch-Name: tools-libxl-abiname.diff
  CFLAGS += -Werror -Wno-format-zero-length -Wmissing-declarations \
  	-Wno-declaration-after-statement -Wformat-nonliteral
  CFLAGS += -I. -fPIC
-@@ -258,29 +252,23 @@ _libxl_type%.h _libxl_type%_json.h _libx
+@@ -258,29 +252,23 @@ _libxl_type%.h _libxl_type%_json.h _libxl_type%_private.h _libxl_type%.c: libxl_
  	$(call move-if-changed,__libxl_type$*_json.h,_libxl_type$*_json.h)
  	$(call move-if-changed,__libxl_type$*.c,_libxl_type$*.c)
  
@@ -59,7 +61,7 @@ Patch-Name: tools-libxl-abiname.diff
  
  libxlutil.a: $(LIBXLU_OBJS)
  	$(AR) rcs libxlutil.a $^
-@@ -298,7 +286,7 @@ testidl: testidl.o libxlutil.so libxenli
+@@ -298,7 +286,7 @@ testidl: testidl.o libxlutil.so libxenlight.so
  	$(CC) $(LDFLAGS) -o $@ testidl.o libxlutil.so $(LDLIBS_libxenlight) $(LDLIBS_libxentoollog) $(APPEND_LDFLAGS)
  
  $(PKG_CONFIG): % : %.in Makefile

@@ -1085,12 +1085,18 @@ int p2m_set_entry(struct p2m_domain *p2m,
 
     while ( nr )
     {
+        unsigned long mask;
+        unsigned long order;
+
         /*
+         * Don't take into account the MFN when removing mapping (i.e
+         * MFN_INVALID) to calculate the correct target order.
+         *
          * XXX: Support superpage mappings if nr is not aligned to a
          * superpage size.
          */
-        unsigned long mask = gfn_x(sgfn) | mfn_x(smfn) | nr;
-        unsigned long order;
+        mask = !mfn_eq(smfn, INVALID_MFN) ? mfn_x(smfn) : 0;
+        mask |= gfn_x(sgfn) | nr;
 
         /* Always map 4k by 4k when memaccess is enabled */
         if ( unlikely(p2m->mem_access_enabled) )
@@ -1211,11 +1217,10 @@ int guest_physmap_add_entry(struct domain *d,
     return p2m_insert_mapping(d, gfn, (1 << page_order), mfn, t);
 }
 
-void guest_physmap_remove_page(struct domain *d,
-                               gfn_t gfn,
-                               mfn_t mfn, unsigned int page_order)
+int guest_physmap_remove_page(struct domain *d, gfn_t gfn, mfn_t mfn,
+                              unsigned int page_order)
 {
-    p2m_remove_mapping(d, gfn, (1 << page_order), mfn);
+    return p2m_remove_mapping(d, gfn, (1 << page_order), mfn);
 }
 
 static int p2m_alloc_table(struct domain *d)
@@ -1306,6 +1311,10 @@ void p2m_teardown(struct domain *d)
     struct p2m_domain *p2m = &d->arch.p2m;
     struct page_info *pg;
 
+    /* p2m not actually initialized */
+    if ( !p2m->domain )
+        return;
+
     while ( (pg = page_list_remove_head(&p2m->pages)) )
         free_domheap_page(pg);
 
@@ -1317,6 +1326,8 @@ void p2m_teardown(struct domain *d)
     p2m_free_vmid(d);
 
     radix_tree_destroy(&p2m->mem_access_settings, NULL);
+
+    p2m->domain = NULL;
 }
 
 int p2m_init(struct domain *d)
@@ -1334,7 +1345,6 @@ int p2m_init(struct domain *d)
     if ( rc != 0 )
         return rc;
 
-    p2m->domain = d;
     p2m->max_mapped_gfn = _gfn(0);
     p2m->lowest_mapped_gfn = _gfn(ULONG_MAX);
 
@@ -1363,6 +1373,13 @@ int p2m_init(struct domain *d)
     for_each_possible_cpu(cpu)
        p2m->last_vcpu_ran[cpu] = INVALID_VCPU_ID;
 
+    /*
+     * Besides getting a domain when we only have the p2m in hand,
+     * the back pointer to domain is also used in p2m_teardown()
+     * as an end-of-initialization indicator.
+     */
+    p2m->domain = d;
+
     return rc;
 }
 
@@ -1379,12 +1396,12 @@ int relinquish_p2m_mapping(struct domain *d)
     p2m_type_t t;
     int rc = 0;
     unsigned int order;
-
-    /* Convenience alias */
-    gfn_t start = p2m->lowest_mapped_gfn;
-    gfn_t end = p2m->max_mapped_gfn;
+    gfn_t start, end;
 
     p2m_write_lock(p2m);
+
+    start = p2m->lowest_mapped_gfn;
+    end = p2m->max_mapped_gfn;
 
     for ( ; gfn_x(start) < gfn_x(end);
           start = gfn_next_boundary(start, order) )
@@ -1440,9 +1457,6 @@ int p2m_cache_flush(struct domain *d, gfn_t start, unsigned long nr)
     p2m_type_t t;
     unsigned int order;
 
-    start = gfn_max(start, p2m->lowest_mapped_gfn);
-    end = gfn_min(end, p2m->max_mapped_gfn);
-
     /*
      * The operation cache flush will invalidate the RAM assigned to the
      * guest in a given range. It will not modify the page table and
@@ -1450,6 +1464,9 @@ int p2m_cache_flush(struct domain *d, gfn_t start, unsigned long nr)
      * fine. So using read-lock is fine here.
      */
     p2m_read_lock(p2m);
+
+    start = gfn_max(start, p2m->lowest_mapped_gfn);
+    end = gfn_min(end, p2m->max_mapped_gfn);
 
     for ( ; gfn_x(start) < gfn_x(end); start = next_gfn )
     {
@@ -1464,12 +1481,14 @@ int p2m_cache_flush(struct domain *d, gfn_t start, unsigned long nr)
         /* XXX: Implement preemption */
         while ( gfn_x(start) < gfn_x(next_gfn) )
         {
-            flush_page_to_ram(mfn_x(mfn));
+            flush_page_to_ram(mfn_x(mfn), false);
 
             start = gfn_add(start, 1);
             mfn = mfn_add(mfn, 1);
         }
     }
+
+    invalidate_icache();
 
     p2m_read_unlock(p2m);
 

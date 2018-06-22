@@ -570,6 +570,24 @@ void svm_update_guest_cr(struct vcpu *v, unsigned int cr)
         if ( paging_mode_hap(v->domain) )
             value &= ~X86_CR4_PAE;
         value |= v->arch.hvm_vcpu.guest_cr[4];
+
+        if ( !hvm_paging_enabled(v) )
+        {
+            /*
+             * When the guest thinks paging is disabled, Xen may need to hide
+             * the effects of shadow paging, as hardware runs with the host
+             * paging settings, rather than the guests settings.
+             *
+             * Without CR0.PG, all memory accesses are user mode, so
+             * _PAGE_USER must be set in the shadow pagetables for guest
+             * userspace to function.  This in turn trips up guest supervisor
+             * mode if SMEP/SMAP are left active in context.  They wouldn't
+             * have any effect if paging was actually disabled, so hide them
+             * behind the back of the guest.
+             */
+            value &= ~(X86_CR4_SMEP | X86_CR4_SMAP);
+        }
+
         vmcb_set_cr4(vmcb, value);
         break;
     default:
@@ -589,11 +607,12 @@ static void svm_update_guest_efer(struct vcpu *v)
     vmcb_set_efer(vmcb, new_efer);
 }
 
-static void svm_update_guest_vendor(struct vcpu *v)
+static void svm_cpuid_policy_changed(struct vcpu *v)
 {
     struct arch_svm_struct *arch_svm = &v->arch.hvm_svm;
     struct vmcb_struct *vmcb = arch_svm->vmcb;
     u32 bitmap = vmcb_get_exception_intercepts(vmcb);
+    uint32_t ebx, dummy;
 
     if ( opt_hvm_fep ||
          (v->domain->arch.x86_vendor != boot_cpu_data.x86_vendor) )
@@ -602,6 +621,12 @@ static void svm_update_guest_vendor(struct vcpu *v)
         bitmap &= ~(1U << TRAP_invalid_op);
 
     vmcb_set_exception_intercepts(vmcb, bitmap);
+
+    /* Give access to MSR_PRED_CMD if the guest has been told about it. */
+    domain_cpuid(v->domain, 0x80000008, 0, &dummy, &ebx, &dummy, &dummy);
+    svm_intercept_msr(v, MSR_PRED_CMD,
+                      ebx & cpufeat_mask(X86_FEATURE_IBPB) ? MSR_INTERCEPT_NONE
+                                                           : MSR_INTERCEPT_RW);
 }
 
 static void svm_sync_vmcb(struct vcpu *v)
@@ -1017,6 +1042,7 @@ static void svm_ctxt_switch_from(struct vcpu *v)
     set_ist(&idt_tables[cpu][TRAP_double_fault],  IST_DF);
     set_ist(&idt_tables[cpu][TRAP_nmi],           IST_NMI);
     set_ist(&idt_tables[cpu][TRAP_machine_check], IST_MCE);
+    set_ist(&idt_tables[cpu][TRAP_debug],         IST_DB);
 }
 
 static void svm_ctxt_switch_to(struct vcpu *v)
@@ -1038,6 +1064,7 @@ static void svm_ctxt_switch_to(struct vcpu *v)
     set_ist(&idt_tables[cpu][TRAP_double_fault],  IST_NONE);
     set_ist(&idt_tables[cpu][TRAP_nmi],           IST_NONE);
     set_ist(&idt_tables[cpu][TRAP_machine_check], IST_NONE);
+    set_ist(&idt_tables[cpu][TRAP_debug],         IST_NONE);
 
     svm_restore_dr(v);
 
@@ -1048,7 +1075,7 @@ static void svm_ctxt_switch_to(struct vcpu *v)
     svm_tsc_ratio_load(v);
 
     if ( cpu_has_rdtscp )
-        wrmsrl(MSR_TSC_AUX, hvm_msr_tsc_aux(v));
+        wrmsr_tsc_aux(hvm_msr_tsc_aux(v));
 }
 
 static void noreturn svm_do_resume(struct vcpu *v)
@@ -1652,6 +1679,25 @@ static int svm_msr_read_intercept(unsigned int msr, uint64_t *msr_content)
 
     switch ( msr )
     {
+        /*
+         * Sync not needed while the cross-vendor logic is in unilateral effect.
+    case MSR_IA32_SYSENTER_CS:
+    case MSR_IA32_SYSENTER_ESP:
+    case MSR_IA32_SYSENTER_EIP:
+         */
+    case MSR_STAR:
+    case MSR_LSTAR:
+    case MSR_CSTAR:
+    case MSR_SYSCALL_MASK:
+    case MSR_FS_BASE:
+    case MSR_GS_BASE:
+    case MSR_SHADOW_GS_BASE:
+        svm_sync_vmcb(v);
+        break;
+    }
+
+    switch ( msr )
+    {
         unsigned int ecx;
 
     case MSR_IA32_SYSENTER_CS:
@@ -1662,6 +1708,34 @@ static int svm_msr_read_intercept(unsigned int msr, uint64_t *msr_content)
         break;
     case MSR_IA32_SYSENTER_EIP:
         *msr_content = v->arch.hvm_svm.guest_sysenter_eip;
+        break;
+
+    case MSR_STAR:
+        *msr_content = vmcb->star;
+        break;
+
+    case MSR_LSTAR:
+        *msr_content = vmcb->lstar;
+        break;
+
+    case MSR_CSTAR:
+        *msr_content = vmcb->cstar;
+        break;
+
+    case MSR_SYSCALL_MASK:
+        *msr_content = vmcb->sfmask;
+        break;
+
+    case MSR_FS_BASE:
+        *msr_content = vmcb->fs.base;
+        break;
+
+    case MSR_GS_BASE:
+        *msr_content = vmcb->gs.base;
+        break;
+
+    case MSR_SHADOW_GS_BASE:
+        *msr_content = vmcb->kerngsbase;
         break;
 
     case MSR_IA32_MCx_MISC(4): /* Threshold register */
@@ -1795,34 +1869,83 @@ static int svm_msr_write_intercept(unsigned int msr, uint64_t msr_content)
     int ret, result = X86EMUL_OKAY;
     struct vcpu *v = current;
     struct vmcb_struct *vmcb = v->arch.hvm_svm.vmcb;
-    int sync = 0;
+    bool sync = false;
 
     switch ( msr )
     {
     case MSR_IA32_SYSENTER_CS:
     case MSR_IA32_SYSENTER_ESP:
     case MSR_IA32_SYSENTER_EIP:
-        sync = 1;
-        break;
-    default:
+    case MSR_STAR:
+    case MSR_LSTAR:
+    case MSR_CSTAR:
+    case MSR_SYSCALL_MASK:
+    case MSR_FS_BASE:
+    case MSR_GS_BASE:
+    case MSR_SHADOW_GS_BASE:
+        sync = true;
         break;
     }
 
     if ( sync )
-        svm_sync_vmcb(v);    
+        svm_sync_vmcb(v);
 
     switch ( msr )
     {
         unsigned int ecx;
 
+    case MSR_IA32_SYSENTER_ESP:
+    case MSR_IA32_SYSENTER_EIP:
+    case MSR_LSTAR:
+    case MSR_CSTAR:
+    case MSR_FS_BASE:
+    case MSR_GS_BASE:
+    case MSR_SHADOW_GS_BASE:
+        if ( !is_canonical_address(msr_content) )
+            goto gpf;
+
+        switch ( msr )
+        {
+        case MSR_IA32_SYSENTER_ESP:
+            vmcb->sysenter_esp = v->arch.hvm_svm.guest_sysenter_esp = msr_content;
+            break;
+
+        case MSR_IA32_SYSENTER_EIP:
+            vmcb->sysenter_eip = v->arch.hvm_svm.guest_sysenter_eip = msr_content;
+            break;
+
+        case MSR_LSTAR:
+            vmcb->lstar = msr_content;
+            break;
+
+        case MSR_CSTAR:
+            vmcb->cstar = msr_content;
+            break;
+
+        case MSR_FS_BASE:
+            vmcb->fs.base = msr_content;
+            break;
+
+        case MSR_GS_BASE:
+            vmcb->gs.base = msr_content;
+            break;
+
+        case MSR_SHADOW_GS_BASE:
+            vmcb->kerngsbase = msr_content;
+            break;
+        }
+        break;
+
     case MSR_IA32_SYSENTER_CS:
         vmcb->sysenter_cs = v->arch.hvm_svm.guest_sysenter_cs = msr_content;
         break;
-    case MSR_IA32_SYSENTER_ESP:
-        vmcb->sysenter_esp = v->arch.hvm_svm.guest_sysenter_esp = msr_content;
+
+    case MSR_STAR:
+        vmcb->star = msr_content;
         break;
-    case MSR_IA32_SYSENTER_EIP:
-        vmcb->sysenter_eip = v->arch.hvm_svm.guest_sysenter_eip = msr_content;
+
+    case MSR_SYSCALL_MASK:
+        vmcb->sfmask = msr_content;
         break;
 
     case MSR_IA32_DEBUGCTLMSR:
@@ -1929,6 +2052,13 @@ static int svm_msr_write_intercept(unsigned int msr, uint64_t msr_content)
             result = X86EMUL_RETRY;
             break;
         case 0:
+            /*
+             * Match up with the RDMSR side for now; ultimately this entire
+             * case block should go away.
+             */
+            if ( rdmsr_safe(msr, msr_content) == 0 )
+                break;
+            goto gpf;
         case 1:
             break;
         default:
@@ -2234,7 +2364,7 @@ static struct hvm_function_table __initdata svm_function_table = {
     .get_shadow_gs_base   = svm_get_shadow_gs_base,
     .update_guest_cr      = svm_update_guest_cr,
     .update_guest_efer    = svm_update_guest_efer,
-    .update_guest_vendor  = svm_update_guest_vendor,
+    .cpuid_policy_changed = svm_cpuid_policy_changed,
     .set_guest_pat        = svm_set_guest_pat,
     .get_guest_pat        = svm_get_guest_pat,
     .set_tsc_offset       = svm_set_tsc_offset,

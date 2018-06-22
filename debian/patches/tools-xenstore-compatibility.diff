@@ -1,14 +1,18 @@
 From: Bastian Blank <waldi@debian.org>
 Date: Sat, 5 Jul 2014 11:47:36 +0200
-X-Dgit-Generated: 4.8.1-1 e0deca5e873be2aeb99ad58aed95eaa9c7c8ce35
 Subject: tools-xenstore-compatibility.diff
 
 Patch-Name: tools-xenstore-compatibility.diff
-
 ---
+ tools/xenstore/include/xenstore.h | 1 +
+ tools/xenstore/xenstore_client.c  | 2 +-
+ tools/xenstore/xs.c               | 4 +++-
+ 3 files changed, 5 insertions(+), 2 deletions(-)
 
---- xen-4.8.1.orig/tools/xenstore/include/xenstore.h
-+++ xen-4.8.1/tools/xenstore/include/xenstore.h
+diff --git a/tools/xenstore/include/xenstore.h b/tools/xenstore/include/xenstore.h
+index 42c0dc7..8a9c5c2 100644
+--- a/tools/xenstore/include/xenstore.h
++++ b/tools/xenstore/include/xenstore.h
 @@ -25,6 +25,7 @@
  
  #define XS_OPEN_READONLY	1UL<<0
@@ -17,8 +21,10 @@ Patch-Name: tools-xenstore-compatibility.diff
  
  /*
   * Setting XS_UNWATCH_FILTER arranges that after xs_unwatch, no
---- xen-4.8.1.orig/tools/xenstore/xenstore_client.c
-+++ xen-4.8.1/tools/xenstore/xenstore_client.c
+diff --git a/tools/xenstore/xenstore_client.c b/tools/xenstore/xenstore_client.c
+index 3d14d37..d7ae1ec 100644
+--- a/tools/xenstore/xenstore_client.c
++++ b/tools/xenstore/xenstore_client.c
 @@ -636,7 +636,7 @@ main(int argc, char **argv)
  	    max_width = ws.ws_col - 2;
      }
@@ -28,9 +34,11 @@ Patch-Name: tools-xenstore-compatibility.diff
      if (xsh == NULL) err(1, "xs_open");
  
  again:
---- xen-4.8.1.orig/tools/xenstore/xs.c
-+++ xen-4.8.1/tools/xenstore/xs.c
-@@ -281,17 +281,19 @@ struct xs_handle *xs_daemon_open_readonl
+diff --git a/tools/xenstore/xs.c b/tools/xenstore/xs.c
+index d1e01ba..be82927 100644
+--- a/tools/xenstore/xs.c
++++ b/tools/xenstore/xs.c
+@@ -281,17 +281,19 @@ struct xs_handle *xs_daemon_open_readonly(void)
  
  struct xs_handle *xs_domain_open(void)
  {
