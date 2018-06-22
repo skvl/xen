@@ -1,0 +1,56 @@
+From: Ian Jackson <ian.jackson@eu.citrix.com>
+Date: Wed, 13 Jun 2018 15:54:53 +0100
+X-Dgit-Generated: 4.8.3+xsa267+shim4.10.1+xsa267-1+deb9u9~ dd62ea3cc75bec744f07b4eae24d8ed5bd417294
+Subject: libxl: restore passing "readonly=" to qemu for SCSI disks
+
+A read-only check was introduced for XSA-142, commit ef6cb76026 ("libxl:
+relax readonly check introduced by XSA-142 fix") added the passing of
+the extra setting, but commit dab0539568 ("Introduce COLO mode and
+refactor relevant function") dropped the passing of the setting again,
+quite likely due to improper re-basing.
+
+Restore the readonly= parameter to SCSI disks.  For IDE disks this is
+supposed to be rejected; add an assert.  And there is a bare ad-hoc
+disk drive string in libxl__build_device_model_args_new, which we also
+update.
+
+This is XSA-266.
+
+Signed-off-by: Jan Beulich <jbeulich@suse.com>
+Signed-off-by: Ian Jackson <Ian.Jackson@eu.citrix.com>
+
+---
+
+--- xen-4.8.3+xsa267+shim4.10.1+xsa267.orig/tools/libxl/libxl_dm.c
++++ xen-4.8.3+xsa267+shim4.10.1+xsa267/tools/libxl/libxl_dm.c
+@@ -773,7 +773,8 @@ static char *qemu_disk_scsi_drive_string
+                                          int colo_mode)
+ {
+     char *drive = NULL;
+-    char *common = GCSPRINTF("cache=writeback");
++    char *common = GCSPRINTF("cache=writeback,readonly=%s",
++                             disk->readwrite ? "off" : "on");
+     const char *exportname = disk->colo_export;
+     const char *active_disk = disk->active_disk;
+     const char *hidden_disk = disk->hidden_disk;
+@@ -840,6 +841,8 @@ static char *qemu_disk_ide_drive_string(
+     const char *exportname = disk->colo_export;
+     const char *active_disk = disk->active_disk;
+     const char *hidden_disk = disk->hidden_disk;
++    
++    assert(disk->readwrite); /* should have been checked earlier */
+ 
+     switch (colo_mode) {
+     case LIBXL__COLO_NONE:
+@@ -1403,8 +1406,9 @@ static int libxl__build_device_model_arg
+                 if (strncmp(disks[i].vdev, "sd", 2) == 0) {
+                     if (colo_mode == LIBXL__COLO_SECONDARY) {
+                         drive = libxl__sprintf
+-                            (gc, "if=none,driver=%s,file=%s,id=%s",
+-                             format, target_path, disks[i].colo_export);
++                            (gc, "if=none,driver=%s,file=%s,id=%s,readonly=%s",
++                             format, target_path, disks[i].colo_export,
++                             disks[i].readwrite ? "off" : "on");
+ 
+                         flexarray_append(dm_args, "-drive");
+                         flexarray_append(dm_args, drive);
