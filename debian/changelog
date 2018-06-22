@@ -1,11 +1,11 @@
-xen (4.8.3+xsa267+shim4.10.1+xsa267-1+deb9u9~) UNRELEASED; urgency=medium
+xen (4.8.3+xsa267+shim4.10.1+xsa267-1+deb9u9) stretch-security; urgency=high
 
-  * Security upload
-    XSA-264
-    XSA-265
-    XSA-266
+  * Security upload [thanks to Wolodja Wentland]:
+       XSA-264 (no CVE yet)
+       XSA-265 (no CVE yet)
+       XSA-266 (no CVE yet)
 
- -- Wolodja Wentland <debian@babilen5.org>  Tue, 19 Jun 2018 16:41:03 +0100
+ -- Ian Jackson <ijackson@chiark.greenend.org.uk>  Fri, 22 Jun 2018 16:38:39 +0100
 
 xen (4.8.3+xsa267+shim4.10.1+xsa267-1+deb9u8) stretch-security; urgency=high
 
