@@ -1,7 +1,7 @@
-xen (4.10.1~pre+4.0f92968bcf-1~) UNRELEASED; urgency=medium
+xen (4.10.2~pre+3.b5e9f1e674-1~) UNRELEASED; urgency=medium
 
   [ Hans van Kranenburg ]
-  * Update to 4.10.1-pre, which also contains:
+  * Update to 4.10.2-pre commit b5e9f1e674, which also contains:
     - Additional fix for: Unlimited recursion in linear pagetable de-typing
       XSA-240 CVE-2017-15595 (listed as xsa240-4.8/0004)
     - Fix x86 PV guests may gain access to internally used pages
@@ -20,7 +20,7 @@ xen (4.10.1~pre+4.0f92968bcf-1~) UNRELEASED; urgency=medium
       Information leak via side effects of speculative execution
       XSA-254 CVE-2017-5753 CVE-2017-5715 CVE-2017-5754
       - XPTI stage 1 a.k.a. 'Meltdown band-aid', XPTI-S1 or XPTI-lite
-      - Branch predictor hardening for affected Cortex-A CPUs (ARM)
+      - Branch predictor hardening for ARM CPUs
       - Support compiling with indirect branch thunks (e.g. retpoline)
       - Report details of speculative mitigations in boot logging
     - Fix: grant table v2 -> v1 transition may crash Xen
@@ -29,6 +29,26 @@ xen (4.10.1~pre+4.0f92968bcf-1~) UNRELEASED; urgency=medium
       XSA-256 CVE-2018-7542
     - The "Comet" shim, which can be used as a mitigation for Meltdown to
       shield the hypervisor against 64-bit PV guests.
+    - Fix: Information leak via crafted user-supplied CDROM
+      XSA-258 CVE-2018-10472
+    - Fix: x86: PV guest may crash Xen with XPTI
+      XSA-259 CVE-2018-10471
+    - Fix: x86: mishandling of debug exceptions
+      XSA-260 CVE-2018-8897
+    - Fix: x86 vHPET interrupt injection errors
+      XSA-261 CVE-2018-10982
+    - Fix: qemu may drive Xen into unbounded loop
+      XSA-262 CVE-2018-10981
+    - Fix: Speculative Store Bypass
+      XSA-263 CVE-2018-3639
+    - Fix: preemption checks bypassed in x86 PV MM handling
+      XSA-264 CVE-2018-12891
+    - Fix: x86: #DB exception safety check can be triggered by a guest
+      XSA-265 CVE-2018-12893
+    - Fix: libxl fails to honour readonly flag on HVM emulated SCSI disks
+      XSA-266 CVE-2018-12892
+    - Fix: Speculative register leakage from lazy FPU context switching
+      XSA-267 CVE-2018-3665
   * Merge changes for 4.9 from the ubuntu packaging (thanks, Stefan Bader):
     - Rebase patches against upstream source (line numbers etc).
     - debian/rules.real:
@@ -52,7 +72,7 @@ xen (4.10.1~pre+4.0f92968bcf-1~) UNRELEASED; urgency=medium
   [ John Keates ]
   * Enable OVMF (Closes: #858962)
 
- -- Hans van Kranenburg <hans@knorrie.org>  Sun, 25 Feb 2018 01:21:20 +0100
+ -- Hans van Kranenburg <hans@knorrie.org>  Sun, 08 Jul 2018 14:30:32 +0200
 
 xen (4.8.2+xsa245-0+deb9u1) stretch-security; urgency=high
 
