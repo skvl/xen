@@ -35,17 +35,13 @@ class Main(object):
 
     def __call__(self):
         out = "../orig/%s" % self.orig_tar
-        self.log("Generate tarball %s\n" % out)
 
         if self.options.tag:
             treeish = self.options.tag
         else:
-            if self.changelog_entry.version.pre_commit:
-                treeish = self.changelog_entry.version.pre_commit
-            elif self.changelog_entry.version.rc_commit:
-                treeish = self.changelog_entry.version.rc_commit
-            else:
-                treeish = 'RELEASE-%s' % self.version.upstream
+            treeish = self.changelog_entry.version.treeish
+
+        self.log("Generate tarball %s from treeish %s\n" % (out, treeish))
 
         try:
             os.stat(out)
