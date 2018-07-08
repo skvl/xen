@@ -1,0 +1,19 @@
+From: Bastian Blank <waldi@debian.org>
+Date: Sat, 5 Jul 2014 11:46:51 +0200
+Subject: tools-rpath.diff
+
+Patch-Name: tools-rpath.diff
+
+---
+
+--- a/tools/Rules.mk
++++ b/tools/Rules.mk
+@@ -9,6 +9,8 @@ include $(XEN_ROOT)/Config.mk
+ export _INSTALL := $(INSTALL)
+ INSTALL = $(XEN_ROOT)/tools/cross-install
+ 
++LDFLAGS_RPATH = -Wl,-rpath,'$${ORIGIN}$(if $(1),/$(1))'
++
+ XEN_INCLUDE        = $(XEN_ROOT)/tools/include
+ XEN_LIBXENTOOLCORE  = $(XEN_ROOT)/tools/libs/toolcore
+ XEN_LIBXENTOOLLOG  = $(XEN_ROOT)/tools/libs/toollog

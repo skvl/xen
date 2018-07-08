@@ -1,0 +1,51 @@
+From: Bastian Blank <waldi@debian.org>
+Date: Sat, 5 Jul 2014 11:46:57 +0200
+Subject: tools-libxl-prefix.diff
+
+Patch-Name: tools-libxl-prefix.diff
+
+Note: SMB: Added change for LIBEXEC_BIN for tools/xl/Makefile
+---
+
+--- a/tools/libxl/Makefile
++++ b/tools/libxl/Makefile
+@@ -13,6 +13,9 @@ ifeq ($(CONFIG_Linux),y)
+ LIBUUID_LIBS += -luuid
+ endif
+ 
++LDFLAGS_XL = $(call LDFLAGS_RPATH,../lib)
++LDFLAGS_LIBXL = $(call LDFLAGS_RPATH)
++
+ LIBXL_LIBS =
+ LIBXL_LIBS = $(LDLIBS_libxentoollog) $(LDLIBS_libxenevtchn) $(LDLIBS_libxenctrl) $(LDLIBS_libxenguest) $(LDLIBS_libxenstore) $(LDLIBS_libblktapctl) $(LDLIBS_libxentoolcore) $(PTYFUNCS_LIBS) $(LIBUUID_LIBS)
+ ifeq ($(CONFIG_LIBNL),y)
+@@ -272,7 +275,7 @@ libxenlight.so: libxenlight-$(PACKAGE_VE
+ 	$(SYMLINK_SHLIB) $< $@
+ 
+ libxenlight-$(PACKAGE_VERSION).so: $(LIBXL_OBJS)
+-	$(CC) $(LDFLAGS) -Wl,$(SONAME_LDFLAG),$@ $(SHLIB_LDFLAGS) -o $@ $^ $(LIBXL_LIBS) $(APPEND_LDFLAGS)
++	$(CC) $(LDFLAGS) -Wl,$(SONAME_LDFLAG),$@ $(LDFLAGS_LIBXL) $(SHLIB_LDFLAGS) -o $@ $^ $(LIBXL_LIBS) $(APPEND_LDFLAGS)
+ 
+ libxenlight_test.so: $(LIBXL_OBJS) $(LIBXL_TEST_OBJS)
+ 	$(CC) $(LDFLAGS) -Wl,$(SONAME_LDFLAG),$@ $(SHLIB_LDFLAGS) -o $@ $^ $(LIBXL_LIBS) $(APPEND_LDFLAGS)
+--- a/tools/xl/Makefile
++++ b/tools/xl/Makefile
+@@ -41,15 +41,15 @@ xl: $(XL_OBJS)
+ 
+ .PHONY: install
+ install: all
+-	$(INSTALL_DIR) $(DESTDIR)$(sbindir)
++	$(INSTALL_DIR) $(DESTDIR)$(LIBEXEC_BIN)
+ 	$(INSTALL_DIR) $(DESTDIR)$(BASH_COMPLETION_DIR)
+-	$(INSTALL_PROG) xl $(DESTDIR)$(sbindir)
++	$(INSTALL_PROG) xl $(DESTDIR)$(LIBEXEC_BIN)
+ 	$(INSTALL_DATA) bash-completion $(DESTDIR)$(BASH_COMPLETION_DIR)/xl.sh
+ 
+ .PHONY: uninstall
+ uninstall:
+ 	rm -f $(DESTDIR)$(BASH_COMPLETION_DIR)/xl.sh
+-	rm -f $(DESTDIR)$(sbindir)/xl
++	rm -f $(DESTDIR)$(LIBEXEC_BIN)/xl
+ 
+ .PHONY: clean
+ clean:
