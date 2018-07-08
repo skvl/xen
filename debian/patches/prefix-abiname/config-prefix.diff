@@ -1,0 +1,29 @@
+From: Bastian Blank <waldi@debian.org>
+Date: Sat, 5 Jul 2014 11:46:45 +0200
+Subject: config-prefix.diff
+
+Patch-Name: config-prefix.diff
+
+---
+
+--- a/Config.mk
++++ b/Config.mk
+@@ -83,7 +83,7 @@ EXTRA_LIB += $(EXTRA_PREFIX)/lib
+ endif
+ 
+ PYTHON      ?= python
+-PYTHON_PREFIX_ARG ?= --prefix="$(prefix)"
++PYTHON_PREFIX_ARG ?= --home="$(LIBEXEC)"
+ # The above requires that prefix contains *no spaces*. This variable is here
+ # to permit the user to set PYTHON_PREFIX_ARG to '' to workaround this bug:
+ #  https://bugs.launchpad.net/ubuntu/+bug/362570
+--- a/config/Paths.mk.in
++++ b/config/Paths.mk.in
+@@ -13,6 +13,7 @@
+ # http://wiki.xen.org/wiki/Category:Host_Configuration#System_wide_xen_configuration
+ 
+ PACKAGE_TARNAME          := @PACKAGE_TARNAME@
++PACKAGE_VERSION          := @PACKAGE_VERSION@
+ prefix                   := @prefix@
+ bindir                   := @bindir@
+ sbindir                  := @sbindir@
