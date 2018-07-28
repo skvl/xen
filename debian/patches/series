@@ -35,3 +35,5 @@ misc/toolstestsx86_emulator-pass--no-pie--fno.patch
 
 xenstore/tools-xenstore-compatibility.diff
 xenstore/tools-fake-xs-restrict.patch
+
+misc/tools-xentop-replace-use-of-deprecated-vwprintw.patch
