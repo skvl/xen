@@ -22,7 +22,7 @@ Forwarded: No
   */
 --- a/tools/xenstore/xs.c
 +++ b/tools/xenstore/xs.c
-@@ -792,6 +792,12 @@ unwind:
+@@ -798,6 +798,12 @@ unwind:
  	return false;
  }
  

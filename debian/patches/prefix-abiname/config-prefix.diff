@@ -8,7 +8,7 @@ Patch-Name: config-prefix.diff
 
 --- a/Config.mk
 +++ b/Config.mk
-@@ -82,7 +82,7 @@ EXTRA_LIB += $(EXTRA_PREFIX)/lib
+@@ -83,7 +83,7 @@ EXTRA_LIB += $(EXTRA_PREFIX)/lib
  endif
  
  PYTHON      ?= python

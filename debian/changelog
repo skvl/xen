@@ -1,7 +1,7 @@
-xen (4.10.2~pre+3.b5e9f1e674-1~) UNRELEASED; urgency=medium
+xen (4.11.0-1~) UNRELEASED; urgency=medium
 
   [ Hans van Kranenburg ]
-  * Update to 4.10.2-pre commit b5e9f1e674, which also contains:
+  * Update to 4.11.0, which also contains:
     - Additional fix for: Unlimited recursion in linear pagetable de-typing
       XSA-240 CVE-2017-15595 (listed as xsa240-4.8/0004)
     - Fix x86 PV guests may gain access to internally used pages
@@ -61,6 +61,7 @@ xen (4.10.2~pre+3.b5e9f1e674-1~) UNRELEASED; urgency=medium
         3.0 for now.
     - debian/libxenstore3.0.symbols: add xs_control_command
   * Rebase patches against 4.10 upstream source.
+  * Rebase patches against 4.11 upstream source.
   * Add README.source.md to document how the packaging works.
   * This package builds correctly with gcc 7. (Closes: #853710)
   * Fix grub config file conflict when upgrading from Stretch. (Closes: #852545)
