@@ -29,8 +29,14 @@ from the RELEASE-4.10.0 tag in upstream git:
     -$ debian/bin/genorig.py /path/to/xen.git
     Generate tarball ../orig/xen_4.10.0.orig.tar.xz
 
-For now, see commit 55129e390c in this repository, "debian/lib/python:
-Recognize pre / rc versions" for additional information about package versions.
+| **Recognized patterns**  | example | uses treeish |
+|--------|------|------|
+| Regular release | 4.10.2 | RELEASE-4.10.2 |
+| Pre version in between stable releases with explicit commit | 4.10.2~pre+1.25e0657e00-1 | 25e0657e00 |
+| Explicit commit while in rc | 4.11.0~rc6+1.35fcb982ea-1~exp1 | 35fcb982ea |
+| Release candidate | 4.11.0~rc7-1~exp1 | 4.11.0-rc7 |
+
+When a version contains an explicit commit hash, it has to be 10 characters long. Since commit ids do not sort, the +1 serves that purpose, and is incremented to +2 etc when switching to another commit.
 
 Step 2: Combine the upstream source and packaging
 -------------------------------------------------
