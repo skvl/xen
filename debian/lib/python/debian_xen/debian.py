@@ -25,6 +25,7 @@ class VersionXen(Version):
         d = match.groupdict()
         self.major = d['major']
         self.minor = d['minor']
+        self.xen_version = '%s.%s' % (self.major, self.minor)
         self.patch = d['patch']
         self.pre_commit = d['pre_commit']
         self.rc_commit = d['rc_commit']
