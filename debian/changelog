@@ -1,8 +1,15 @@
 xen (4.8.4+xsa273+shim4.10.1+xsa273-1+deb9u10~) UNRELEASED; urgency=medium
 
   * Update to new upstream version 4.8.4+xsa273+shim4.10.1+xsa273.
+      XSA-273 (CVE-2018-3620,CVE-2018-3646)
+      XSA-272 (no CVE yet)
+      XSA-269 (no CVE yet)
+      XSA-268 (no CVE yet)
 
- -- Wolodja Wentland <w@babilen5.org>  Wed, 15 Aug 2018 11:53:44 +0100
+    This version is, again, a combination of staging-4.8 and staging-4.10
+    for Xen and shim respectively as in previous versions.
+
+ -- Wolodja Wentland <debian@babilen5.org>  Wed, 15 Aug 2018 11:53:44 +0100
 
 xen (4.8.3+xsa267+shim4.10.1+xsa267-1+deb9u9) stretch-security; urgency=high
 
