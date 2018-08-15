@@ -193,10 +193,18 @@ struct arch_vmx_struct {
     unsigned long        cstar;
 
     unsigned long       *msr_bitmap;
-    unsigned int         msr_count;
+
+    /*
+     * Most accesses to the MSR host/guest load/save lists are in current
+     * context.  However, the data can be modified by toolstack/migration
+     * actions.  Remote access is only permitted for paused vcpus, and is
+     * protected under the domctl lock.
+     */
     struct vmx_msr_entry *msr_area;
-    unsigned int         host_msr_count;
     struct vmx_msr_entry *host_msr_area;
+    unsigned int         msr_load_count;
+    unsigned int         msr_save_count;
+    unsigned int         host_msr_count;
 
     unsigned long        eoi_exitmap_changed;
     DECLARE_BITMAP(eoi_exit_bitmap, NR_VECTORS);
@@ -211,6 +219,9 @@ struct arch_vmx_struct {
     uint8_t              vmx_realmode;
     /* Are we emulating rather than VMENTERing? */
     uint8_t              vmx_emulate;
+
+    uint8_t              lbr_flags;
+
     /* Bitmask of segments that we can't safely use in virtual 8086 mode */
     uint16_t             vm86_segment_mask;
     /* Shadow CS, SS, DS, ES, FS, GS, TR while in virtual 8086 mode */
@@ -568,18 +579,71 @@ enum vmcs_field {
 #define MSR_TYPE_R 1
 #define MSR_TYPE_W 2
 
-#define VMX_GUEST_MSR 0
-#define VMX_HOST_MSR  1
-
 /* VM Instruction error numbers. */
 #define VMX_INSN_INVALID_CONTROL_STATE       7
 #define VMX_INSN_INVALID_HOST_STATE          8
 
+/* MSR load/save list infrastructure. */
+enum vmx_msr_list_type {
+    VMX_MSR_HOST,           /* MSRs loaded on VMExit.                   */
+    VMX_MSR_GUEST,          /* MSRs saved on VMExit, loaded on VMEntry. */
+    VMX_MSR_GUEST_LOADONLY, /* MSRs loaded on VMEntry only.             */
+};
+
+/**
+ * Add an MSR to an MSR list (inserting space for the entry if necessary), and
+ * set the MSRs value.
+ *
+ * It is undefined behaviour to try and insert the same MSR into both the
+ * GUEST and GUEST_LOADONLY list.
+ *
+ * May fail if unable to allocate memory for the list, or the total number of
+ * entries exceeds the memory allocated.
+ */
+int vmx_add_msr(struct vcpu *v, uint32_t msr, uint64_t val,
+                enum vmx_msr_list_type type);
+
+static inline int vmx_add_guest_msr(struct vcpu *v, uint32_t msr, uint64_t val)
+{
+    return vmx_add_msr(v, msr, val, VMX_MSR_GUEST);
+}
+static inline int vmx_add_host_load_msr(struct vcpu *v, uint32_t msr,
+                                        uint64_t val)
+{
+    return vmx_add_msr(v, msr, val, VMX_MSR_HOST);
+}
+
+struct vmx_msr_entry *vmx_find_msr(const struct vcpu *v, uint32_t msr,
+                                   enum vmx_msr_list_type type);
+
+static inline int vmx_read_guest_msr(const struct vcpu *v, uint32_t msr,
+                                     uint64_t *val)
+{
+    const struct vmx_msr_entry *ent = vmx_find_msr(v, msr, VMX_MSR_GUEST);
+
+    if ( !ent )
+        return -ESRCH;
+
+    *val = ent->data;
+
+    return 0;
+}
+
+static inline int vmx_write_guest_msr(struct vcpu *v, uint32_t msr,
+                                      uint64_t val)
+{
+    struct vmx_msr_entry *ent = vmx_find_msr(v, msr, VMX_MSR_GUEST);
+
+    if ( !ent )
+        return -ESRCH;
+
+    ent->data = val;
+
+    return 0;
+}
+
 void vmx_disable_intercept_for_msr(struct vcpu *v, u32 msr, int type);
 void vmx_enable_intercept_for_msr(struct vcpu *v, u32 msr, int type);
-int vmx_read_guest_msr(u32 msr, u64 *val);
-int vmx_write_guest_msr(u32 msr, u64 val);
-int vmx_add_msr(u32 msr, int type);
 void vmx_vmcs_switch(paddr_t from, paddr_t to);
 void vmx_set_eoi_exit_bitmap(struct vcpu *v, u8 vector);
 void vmx_clear_eoi_exit_bitmap(struct vcpu *v, u8 vector);
@@ -588,15 +652,6 @@ void virtual_vmcs_enter(const struct vcpu *);
 void virtual_vmcs_exit(const struct vcpu *);
 u64 virtual_vmcs_vmread(const struct vcpu *, u32 encoding);
 void virtual_vmcs_vmwrite(const struct vcpu *, u32 encoding, u64 val);
-
-static inline int vmx_add_guest_msr(u32 msr)
-{
-    return vmx_add_msr(msr, VMX_GUEST_MSR);
-}
-static inline int vmx_add_host_load_msr(u32 msr)
-{
-    return vmx_add_msr(msr, VMX_HOST_MSR);
-}
 
 DECLARE_PER_CPU(bool_t, vmxon);
 

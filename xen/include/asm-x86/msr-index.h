@@ -31,6 +31,9 @@
 #define EFER_LMSLE		(1<<_EFER_LMSLE)
 #define EFER_FFXSE		(1<<_EFER_FFXSE)
 
+#define EFER_KNOWN_MASK		(EFER_SCE | EFER_LME | EFER_LMA | EFER_NX | \
+				 EFER_SVME | EFER_LMSLE | EFER_FFXSE)
+
 /* Speculation Controls. */
 #define MSR_SPEC_CTRL			0x00000048
 #define SPEC_CTRL_IBRS			(_AC(1, ULL) << 0)
@@ -44,7 +47,11 @@
 #define ARCH_CAPABILITIES_RDCL_NO	(_AC(1, ULL) << 0)
 #define ARCH_CAPABILITIES_IBRS_ALL	(_AC(1, ULL) << 1)
 #define ARCH_CAPS_RSBA			(_AC(1, ULL) << 2)
+#define ARCH_CAPS_SKIP_L1DFL		(_AC(1, ULL) << 3)
 #define ARCH_CAPS_SSB_NO		(_AC(1, ULL) << 4)
+
+#define MSR_FLUSH_CMD			0x0000010b
+#define FLUSH_CMD_L1D			(_AC(1, ULL) << 0)
 
 /* Intel MSRs. Some also available on other CPUs */
 #define MSR_IA32_PERFCTR0		0x000000c1
