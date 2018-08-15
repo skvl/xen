@@ -43,6 +43,11 @@ static int __init parse_xen_cpuid(const char *s)
             if ( !val )
                 setup_clear_cpu_cap(X86_FEATURE_STIBP);
         }
+        else if ( (val = parse_boolean("l1d-flush", s, ss)) >= 0 )
+        {
+            if ( !val )
+                setup_clear_cpu_cap(X86_FEATURE_L1D_FLUSH);
+        }
         else if ( (val = parse_boolean("ssbd", s, ss)) >= 0 )
         {
             if ( !val )
@@ -619,14 +624,6 @@ void recalculate_cpuid_policy(struct domain *d)
 
     recalculate_xstate(p);
     recalculate_misc(p);
-
-    /*
-     * Override STIBP to match IBRS.  Guests can safely use STIBP
-     * functionality on non-HT hardware, but can't necesserily protect
-     * themselves from SP2/Spectre/Branch Target Injection if STIBP is hidden
-     * on HT-capable hardware.
-     */
-    p->feat.stibp = p->feat.ibrsb;
 
     for ( i = 0; i < ARRAY_SIZE(p->cache.raw); ++i )
     {

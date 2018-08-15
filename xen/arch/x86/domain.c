@@ -67,6 +67,7 @@
 #include <compat/vcpu.h>
 #include <asm/psr.h>
 #include <asm/spec_ctrl.h>
+#include <asm/shadow.h>
 
 static __read_mostly enum {
     PCID_OFF,
@@ -153,10 +154,11 @@ static void play_dead(void)
     local_irq_disable();
 
     /*
-     * NOTE: After cpu_exit_clear, per-cpu variables are no longer accessible,
-     * as they may be freed at any time. In this case, heap corruption or
-     * #PF can occur (when heap debugging is enabled). For example, even
-     * printk() can involve tasklet scheduling, which touches per-cpu vars.
+     * NOTE: After cpu_exit_clear, per-cpu variables may no longer accessible,
+     * as they may be freed at any time if offline CPUs don't get parked. In
+     * this case, heap corruption or #PF can occur (when heap debugging is
+     * enabled). For example, even printk() can involve tasklet scheduling,
+     * which touches per-cpu vars.
      * 
      * Consider very carefully when adding code to *dead_idle. Most hypervisor
      * subsystems are unsafe to call.
@@ -679,6 +681,8 @@ int arch_domain_create(struct domain *d, unsigned int domcr_flags,
         rc = 0;
     else
     {
+        pv_l1tf_domain_init(d);
+
         d->arch.pv_domain.gdt_ldt_l1tab =
             alloc_xenheap_pages(0, MEMF_node(domain_to_node(d)));
         if ( !d->arch.pv_domain.gdt_ldt_l1tab )
@@ -793,6 +797,8 @@ int arch_domain_create(struct domain *d, unsigned int domcr_flags,
     free_perdomain_mappings(d);
     if ( is_pv_domain(d) )
     {
+        pv_l1tf_domain_destroy(d);
+
         xfree(d->arch.pv_domain.cpuidmasks);
         free_xenheap_page(d->arch.pv_domain.gdt_ldt_l1tab);
     }
@@ -816,6 +822,8 @@ void arch_domain_destroy(struct domain *d)
     free_perdomain_mappings(d);
     if ( is_pv_domain(d) )
     {
+        pv_l1tf_domain_destroy(d);
+
         free_xenheap_page(d->arch.pv_domain.gdt_ldt_l1tab);
         xfree(d->arch.pv_domain.cpuidmasks);
     }
@@ -2168,7 +2176,7 @@ static void __context_switch(void)
             if ( cpu_has_xsaves && has_hvm_container_vcpu(n) )
                 set_msr_xss(n->arch.hvm_vcpu.msr_xss);
         }
-        vcpu_restore_fpu_eager(n);
+        vcpu_restore_fpu_nonlazy(n, false);
         n->arch.ctxt_switch_to(n);
     }
 

@@ -747,6 +747,8 @@ static int get_page_from_pagenr(unsigned long page_nr, struct domain *d)
     return 1;
 }
 
+static int __get_page_type(struct page_info *page, unsigned long type,
+                           int preemptible);
 
 static int get_page_and_type_from_pagenr(unsigned long page_nr, 
                                          unsigned long type,
@@ -761,9 +763,7 @@ static int get_page_and_type_from_pagenr(unsigned long page_nr,
          unlikely(!get_page_from_pagenr(page_nr, d)) )
         return -EINVAL;
 
-    rc = (preemptible ?
-          get_page_type_preemptible(page, type) :
-          (get_page_type(page, type) ? 0 : -EINVAL));
+    rc = __get_page_type(page, type, preemptible);
 
     if ( unlikely(rc) && partial >= 0 &&
          (!preemptible || page != current->arch.old_guest_table) )
@@ -1230,7 +1230,7 @@ get_page_from_l2e(
     int rc;
 
     if ( !(l2e_get_flags(l2e) & _PAGE_PRESENT) )
-        return 1;
+        return pv_l1tf_check_l2e(d, l2e) ? -ERESTART : 1;
 
     if ( unlikely((l2e_get_flags(l2e) & L2_DISALLOW_MASK)) )
     {
@@ -1271,7 +1271,7 @@ get_page_from_l3e(
     int rc;
 
     if ( !(l3e_get_flags(l3e) & _PAGE_PRESENT) )
-        return 1;
+        return pv_l1tf_check_l3e(d, l3e) ? -ERESTART : 1;
 
     if ( unlikely((l3e_get_flags(l3e) & l3_disallow_mask(d))) )
     {
@@ -1297,7 +1297,7 @@ get_page_from_l4e(
     int rc;
 
     if ( !(l4e_get_flags(l4e) & _PAGE_PRESENT) )
-        return 1;
+        return pv_l1tf_check_l4e(d, l4e) ? -ERESTART : 1;
 
     if ( unlikely((l4e_get_flags(l4e) & L4_DISALLOW_MASK)) )
     {
@@ -1541,6 +1541,13 @@ static int alloc_l1_table(struct page_info *page)
 
     for ( i = 0; i < L1_PAGETABLE_ENTRIES; i++ )
     {
+        if ( !(l1e_get_flags(pl1e[i]) & _PAGE_PRESENT) )
+        {
+            ret = pv_l1tf_check_l1e(d, pl1e[i]) ? -ERESTART : 0;
+            if ( ret )
+                goto out;
+        }
+
         if ( is_guest_l1_slot(i) )
             switch ( ret = get_page_from_l1e(pl1e[i], d, d) )
             {
@@ -1562,6 +1569,7 @@ static int alloc_l1_table(struct page_info *page)
 
  fail:
     MEM_LOG("Failure in alloc_l1_table: entry %d", i);
+ out:
     while ( i-- > 0 )
         if ( is_guest_l1_slot(i) )
             put_page_from_l1e(pl1e[i], d);
@@ -1610,8 +1618,7 @@ static int create_pae_xen_mappings(struct domain *d, l3_pgentry_t *pl3e)
     return 1;
 }
 
-static int alloc_l2_table(struct page_info *page, unsigned long type,
-                          int preemptible)
+static int alloc_l2_table(struct page_info *page, unsigned long type)
 {
     struct domain *d = page_get_owner(page);
     unsigned long  pfn = page_to_mfn(page);
@@ -1623,8 +1630,7 @@ static int alloc_l2_table(struct page_info *page, unsigned long type,
 
     for ( i = page->nr_validated_ptes; i < L2_PAGETABLE_ENTRIES; i++ )
     {
-        if ( preemptible && i > page->nr_validated_ptes
-             && hypercall_preempt_check() )
+        if ( i > page->nr_validated_ptes && hypercall_preempt_check() )
         {
             page->nr_validated_ptes = i;
             rc = -ERESTART;
@@ -1634,6 +1640,12 @@ static int alloc_l2_table(struct page_info *page, unsigned long type,
         if ( !is_guest_l2_slot(d, type, i) ||
              (rc = get_page_from_l2e(pl2e[i], pfn, d)) > 0 )
             continue;
+
+        if ( unlikely(rc == -ERESTART) )
+        {
+            page->nr_validated_ptes = i;
+            break;
+        }
 
         if ( rc < 0 )
         {
@@ -1859,7 +1871,7 @@ static void free_l1_table(struct page_info *page)
 }
 
 
-static int free_l2_table(struct page_info *page, int preemptible)
+static int free_l2_table(struct page_info *page)
 {
     struct domain *d = page_get_owner(page);
     unsigned long pfn = page_to_mfn(page);
@@ -1873,7 +1885,7 @@ static int free_l2_table(struct page_info *page, int preemptible)
     do {
         if ( is_guest_l2_slot(d, page->u.inuse.type_info, i) &&
              put_page_from_l2e(pl2e[i], pfn) == 0 &&
-             preemptible && i && hypercall_preempt_check() )
+             i && hypercall_preempt_check() )
         {
            page->nr_validated_ptes = i;
            err = -ERESTART;
@@ -2157,6 +2169,8 @@ static int mod_l1_entry(l1_pgentry_t *pl1e, l1_pgentry_t nl1e,
             rc = -EBUSY;
         }
     }
+    else if ( pv_l1tf_check_l1e(pt_dom, nl1e) )
+        return -ERESTART;
     else if ( unlikely(!UPDATE_ENTRY(l1, pl1e, ol1e, nl1e, gl1mfn, pt_vcpu,
                                      preserve_ad)) )
     {
@@ -2219,6 +2233,8 @@ static int mod_l2_entry(l2_pgentry_t *pl2e,
             rc = -EBUSY;
         }
     }
+    else if ( pv_l1tf_check_l2e(d, nl2e) )
+        return -ERESTART;
     else if ( unlikely(!UPDATE_ENTRY(l2, pl2e, ol2e, nl2e, pfn, vcpu,
                                      preserve_ad)) )
     {
@@ -2286,6 +2302,8 @@ static int mod_l3_entry(l3_pgentry_t *pl3e,
             rc = -EFAULT;
         }
     }
+    else if ( pv_l1tf_check_l3e(d, nl3e) )
+        return -ERESTART;
     else if ( unlikely(!UPDATE_ENTRY(l3, pl3e, ol3e, nl3e, pfn, vcpu,
                                      preserve_ad)) )
     {
@@ -2350,6 +2368,8 @@ static int mod_l4_entry(l4_pgentry_t *pl4e,
             rc = -EFAULT;
         }
     }
+    else if ( pv_l1tf_check_l4e(d, nl4e) )
+        return -ERESTART;
     else if ( unlikely(!UPDATE_ENTRY(l4, pl4e, ol4e, nl4e, pfn, vcpu,
                                      preserve_ad)) )
     {
@@ -2478,7 +2498,8 @@ static int alloc_page_type(struct page_info *page, unsigned long type,
         rc = alloc_l1_table(page);
         break;
     case PGT_l2_page_table:
-        rc = alloc_l2_table(page, type, preemptible);
+        ASSERT(preemptible);
+        rc = alloc_l2_table(page, type);
         break;
     case PGT_l3_page_table:
         ASSERT(preemptible);
@@ -2569,7 +2590,8 @@ int free_page_type(struct page_info *page, unsigned long type,
         rc = 0;
         break;
     case PGT_l2_page_table:
-        rc = free_l2_table(page, preemptible);
+        ASSERT(preemptible);
+        rc = free_l2_table(page);
         break;
     case PGT_l3_page_table:
         ASSERT(preemptible);
@@ -2661,7 +2683,7 @@ static int _put_page_type(struct page_info *page, bool preemptible,
                 nx = x & ~(PGT_validated|PGT_partial);
                 if ( unlikely((y = cmpxchg(&page->u.inuse.type_info,
                                            x, nx)) != x) )
-                    continue;
+                    goto maybe_preempt;
                 /* We cleared the 'valid bit' so we do the clean up. */
                 rc = _put_final_page_type(page, x, preemptible, ptpg);
                 ptpg = NULL;
@@ -2697,12 +2719,13 @@ static int _put_page_type(struct page_info *page, bool preemptible,
              */
             cpu_relax();
             y = page->u.inuse.type_info;
-            continue;
+            goto maybe_preempt;
         }
 
         if ( likely((y = cmpxchg(&page->u.inuse.type_info, x, nx)) == x) )
             break;
 
+    maybe_preempt:
         if ( preemptible && hypercall_preempt_check() )
             return -EINTR;
     }
@@ -2806,12 +2829,11 @@ static int __get_page_type(struct page_info *page, unsigned long type,
             if ( !(x & PGT_partial) )
             {
                 /* Someone else is updating validation of this page. Wait... */
-                while ( (y = page->u.inuse.type_info) == x )
-                {
+                do {
                     if ( preemptible && hypercall_preempt_check() )
                         return -EINTR;
                     cpu_relax();
-                }
+                } while ( (y = page->u.inuse.type_info) == x );
                 continue;
             }
             /* Type ref count was left at 1 when PGT_partial got set. */
@@ -3859,12 +3881,9 @@ long do_mmuext_op(
     }
 
     if ( rc == -ERESTART )
-    {
-        ASSERT(i < count);
         rc = hypercall_create_continuation(
             __HYPERVISOR_mmuext_op, "hihi",
             uops, (count - i) | MMU_UPDATE_PREEMPTED, pdone, foreigndom);
-    }
     else if ( curr->arch.old_guest_table )
     {
         XEN_GUEST_HANDLE_PARAM(void) null;
@@ -4155,12 +4174,9 @@ long do_mmu_update(
     }
 
     if ( rc == -ERESTART )
-    {
-        ASSERT(i < count);
         rc = hypercall_create_continuation(
             __HYPERVISOR_mmu_update, "hihi",
             ureqs, (count - i) | MMU_UPDATE_PREEMPTED, pdone, foreigndom);
-    }
     else if ( curr->arch.old_guest_table )
     {
         XEN_GUEST_HANDLE_PARAM(void) null;
@@ -4869,7 +4885,13 @@ static int __do_update_va_mapping(
 long do_update_va_mapping(unsigned long va, u64 val64,
                           unsigned long flags)
 {
-    return __do_update_va_mapping(va, val64, flags, current->domain);
+    int rc = __do_update_va_mapping(va, val64, flags, current->domain);
+
+    if ( rc == -ERESTART )
+        rc = hypercall_create_continuation(
+            __HYPERVISOR_update_va_mapping, "lll", va, val64, flags);
+
+    return rc;
 }
 
 long do_update_va_mapping_otherdomain(unsigned long va, u64 val64,
@@ -4886,10 +4908,48 @@ long do_update_va_mapping_otherdomain(unsigned long va, u64 val64,
 
     put_pg_owner(pg_owner);
 
+    if ( rc == -ERESTART )
+        rc = hypercall_create_continuation(
+            __HYPERVISOR_update_va_mapping_otherdomain,
+            "llli", va, val64, flags, domid);
+
     return rc;
 }
 
+int compat_update_va_mapping(unsigned int va, uint32_t lo, uint32_t hi,
+                             unsigned int flags)
+{
+    int rc = __do_update_va_mapping(va, ((uint64_t)hi << 32) | lo,
+                                    flags, current->domain);
 
+    if ( rc == -ERESTART )
+        rc = hypercall_create_continuation(
+            __HYPERVISOR_update_va_mapping, "iiii", va, lo, hi, flags);
+
+    return rc;
+}
+
+int compat_update_va_mapping_otherdomain(unsigned int va,
+                                         uint32_t lo, uint32_t hi,
+                                         unsigned int flags, domid_t domid)
+{
+    struct domain *pg_owner;
+    int rc;
+
+    if ( (pg_owner = get_pg_owner(domid)) == NULL )
+        return -ESRCH;
+
+    rc = __do_update_va_mapping(va, ((uint64_t)hi << 32) | lo, flags, pg_owner);
+
+    put_pg_owner(pg_owner);
+
+    if ( rc == -ERESTART )
+        rc = hypercall_create_continuation(
+            __HYPERVISOR_update_va_mapping_otherdomain,
+            "iiiii", va, lo, hi, flags, domid);
+
+    return rc;
+}
 
 /*************************
  * Descriptor Tables
@@ -5546,6 +5606,10 @@ static int ptwr_emulated_update(
 
     /* Check the new PTE. */
     nl1e = l1e_from_intpte(val);
+
+    if ( !(l1e_get_flags(nl1e) & _PAGE_PRESENT) && pv_l1tf_check_l1e(d, nl1e) )
+        return X86EMUL_RETRY;
+
     switch ( ret = get_page_from_l1e(nl1e, d, d) )
     {
     default:

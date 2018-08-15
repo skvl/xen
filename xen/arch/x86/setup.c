@@ -62,6 +62,9 @@ boolean_param("nosmp", opt_nosmp);
 static unsigned int __initdata max_cpus;
 integer_param("maxcpus", max_cpus);
 
+int8_t __read_mostly opt_smt = -1;
+boolean_param("smt", opt_smt);
+
 /* opt_invpcid: If false, don't use INVPCID instruction even if available. */
 static bool __initdata opt_invpcid = true;
 boolean_param("invpcid", opt_invpcid);
@@ -647,7 +650,7 @@ void __init noreturn __start_xen(unsigned long mbi_p)
 {
     char *memmap_type = NULL;
     char *cmdline, *kextra, *loader;
-    unsigned int initrdidx, domcr_flags = DOMCRF_s3_integrity;
+    unsigned int initrdidx, num_parked = 0, domcr_flags = DOMCRF_s3_integrity;
     multiboot_info_t *mbi = __va(mbi_p);
     module_t *mod = (module_t *)__va(mbi->mods_addr);
     unsigned long nr_pages, raw_max_page, modules_headroom, *module_map;
@@ -860,6 +863,18 @@ void __init noreturn __start_xen(unsigned long mbi_p)
 
     /* Sanitise the raw E820 map to produce a final clean version. */
     max_page = raw_max_page = init_e820(memmap_type, e820_raw, &e820_raw_nr);
+
+    if ( !efi_enabled )
+    {
+        /*
+         * Supplement the heuristics in l1tf_calculations() by assuming that
+         * anything referenced in the E820 may be cacheable.
+         */
+        l1tf_safe_maddr =
+            max(l1tf_safe_maddr,
+                ROUNDUP(e820_raw[e820_raw_nr - 1].addr +
+                        e820_raw[e820_raw_nr - 1].size, PAGE_SIZE));
+    }
 
     /* Create a temporary copy of the E820 map. */
     memcpy(&boot_e820, &e820, sizeof(e820));
@@ -1434,7 +1449,8 @@ void __init noreturn __start_xen(unsigned long mbi_p)
     else
     {
         set_nr_cpu_ids(max_cpus);
-        max_cpus = nr_cpu_ids;
+        if ( !max_cpus )
+            max_cpus = nr_cpu_ids;
     }
 
     /* Low mappings were only needed for some BIOS table parsing. */
@@ -1547,15 +1563,29 @@ void __init noreturn __start_xen(unsigned long mbi_p)
         /* Set up node_to_cpumask based on cpu_to_node[]. */
         numa_add_cpu(i);        
 
-        if ( (num_online_cpus() < max_cpus) && !cpu_online(i) )
+        if ( (park_offline_cpus || num_online_cpus() < max_cpus) &&
+             !cpu_online(i) )
         {
             int ret = cpu_up(i);
             if ( ret != 0 )
                 printk("Failed to bring up CPU %u (error %d)\n", i, ret);
+            else if ( num_online_cpus() > max_cpus ||
+                      (!opt_smt &&
+                       cpu_data[i].compute_unit_id == INVALID_CUID &&
+                       cpumask_weight(per_cpu(cpu_sibling_mask, i)) > 1) )
+            {
+                ret = cpu_down(i);
+                if ( !ret )
+                    ++num_parked;
+                else
+                    printk("Could not re-offline CPU%u (%d)\n", i, ret);
+            }
         }
     }
 
     printk("Brought up %ld CPUs\n", (long)num_online_cpus());
+    if ( num_parked )
+        printk(XENLOG_INFO "Parked %u CPUs\n", num_parked);
     smp_cpus_done();
 
     do_initcalls();
