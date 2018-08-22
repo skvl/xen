@@ -1,4 +1,4 @@
-xen (4.11.1~pre+1.733450b39b-1~) UNRELEASED; urgency=medium
+xen (4.11.1~pre+1.733450b39b-1~exp1) experimental; urgency=medium
 
   [ Hans van Kranenburg ]
   * Update to 4.11.1-pre commit 733450b39b, which also contains:
