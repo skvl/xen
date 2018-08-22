@@ -1,7 +1,7 @@
-xen (4.11.0-1~) UNRELEASED; urgency=medium
+xen (4.11.1~pre+1.733450b39b-1~) UNRELEASED; urgency=medium
 
   [ Hans van Kranenburg ]
-  * Update to 4.11.0, which also contains:
+  * Update to 4.11.1-pre commit 733450b39b, which also contains:
     - Additional fix for: Unlimited recursion in linear pagetable de-typing
       XSA-240 CVE-2017-15595 (listed as xsa240-4.8/0004)
     - Fix x86 PV guests may gain access to internally used pages
@@ -49,6 +49,14 @@ xen (4.11.0-1~) UNRELEASED; urgency=medium
       XSA-266 CVE-2018-12892
     - Fix: Speculative register leakage from lazy FPU context switching
       XSA-267 CVE-2018-3665
+    - Fix: Use of v2 grant tables may cause crash on ARM
+      XSA-268 CVE-2018-15469
+    - Fix: x86: Incorrect MSR_DEBUGCTL handling lets guests enable BTS
+      XSA-269 CVE-2018-15468
+    - Fix: oxenstored does not apply quota-maxentity
+      XSA-272 CVE-2018-15470
+    - Fix: L1 Terminal Fault speculative side channel
+      XSA-273 CVE-2018-3620
   * Merge changes for 4.9 from the ubuntu packaging (thanks, Stefan Bader):
     - Rebase patches against upstream source (line numbers etc).
     - debian/rules.real:
