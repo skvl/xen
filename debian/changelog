@@ -74,6 +74,7 @@ xen (4.11.1~pre+1.733450b39b-1~) UNRELEASED; urgency=medium
   * This package builds correctly with gcc 7. (Closes: #853710)
   * Fix grub config file conflict when upgrading from Stretch. (Closes: #852545)
   * Init scripts: Do not kill per-domain qemu processes. (Closes: #879751)
+  * debian/patches: Fix "'vwprintw' is deprecated" gcc 8 compilation error
 
   [ Mark Pryor ]
   * Fix shared library build dependencies for the new xentoolcore library.
