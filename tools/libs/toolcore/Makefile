@@ -59,22 +59,22 @@ include/_xentoolcore_list.h: $(XEN_INCLUDE)/xen-external/bsd-sys-queue-h-seddery
 libxentoolcore.a: $(LIB_OBJS)
 	$(AR) rc $@ $^
 
-libxentoolcore.so: libxentoolcore.so.$(MAJOR)
+libxentoolcore.so: libxentoolcore-$(PACKAGE_VERSION).so.$(MAJOR)
 	$(SYMLINK_SHLIB) $< $@
-libxentoolcore.so.$(MAJOR): libxentoolcore.so.$(MAJOR).$(MINOR)
+libxentoolcore-$(PACKAGE_VERSION).so.$(MAJOR): libxentoolcore-$(PACKAGE_VERSION).so.$(MAJOR).$(MINOR)
 	$(SYMLINK_SHLIB) $< $@
 
-libxentoolcore.so.$(MAJOR).$(MINOR): $(PIC_OBJS) libxentoolcore.map
-	$(CC) $(LDFLAGS) -Wl,$(SONAME_LDFLAG) -Wl,libxentoolcore.so.$(MAJOR) $(SHLIB_LDFLAGS) -o $@ $(PIC_OBJS) $(APPEND_LDFLAGS)
+libxentoolcore-$(PACKAGE_VERSION).so.$(MAJOR).$(MINOR): $(PIC_OBJS) libxentoolcore.map
+	$(CC) $(LDFLAGS) -Wl,$(SONAME_LDFLAG) -Wl,libxentoolcore-$(PACKAGE_VERSION).so.$(MAJOR) $(SHLIB_LDFLAGS) -o $@ $(PIC_OBJS) $(APPEND_LDFLAGS)
 
 .PHONY: install
 install: build
 	$(INSTALL_DIR) $(DESTDIR)$(libdir)
 	$(INSTALL_DIR) $(DESTDIR)$(includedir)
-	$(INSTALL_SHLIB) libxentoolcore.so.$(MAJOR).$(MINOR) $(DESTDIR)$(libdir)
+	$(INSTALL_SHLIB) libxentoolcore-$(PACKAGE_VERSION).so.$(MAJOR).$(MINOR) $(DESTDIR)$(libdir)
 	$(INSTALL_DATA) libxentoolcore.a $(DESTDIR)$(libdir)
-	$(SYMLINK_SHLIB) libxentoolcore.so.$(MAJOR).$(MINOR) $(DESTDIR)$(libdir)/libxentoolcore.so.$(MAJOR)
-	$(SYMLINK_SHLIB) libxentoolcore.so.$(MAJOR) $(DESTDIR)$(libdir)/libxentoolcore.so
+	$(SYMLINK_SHLIB) libxentoolcore-$(PACKAGE_VERSION).so.$(MAJOR).$(MINOR) $(DESTDIR)$(libdir)/libxentoolcore-$(PACKAGE_VERSION).so.$(MAJOR)
+	$(SYMLINK_SHLIB) libxentoolcore-$(PACKAGE_VERSION).so.$(MAJOR) $(DESTDIR)$(libdir)/libxentoolcore.so
 	$(INSTALL_DATA) include/xentoolcore.h $(DESTDIR)$(includedir)
 	$(INSTALL_DATA) xentoolcore.pc $(DESTDIR)$(PKG_INSTALLDIR)
 
@@ -83,8 +83,8 @@ uninstall:
 	rm -f $(DESTDIR)$(PKG_INSTALLDIR)/xentoolcore.pc
 	rm -f $(DESTDIR)$(includedir)/xentoolcore.h
 	rm -f $(DESTDIR)$(libdir)/libxentoolcore.so
-	rm -f $(DESTDIR)$(libdir)/libxentoolcore.so.$(MAJOR)
-	rm -f $(DESTDIR)$(libdir)/libxentoolcore.so.$(MAJOR).$(MINOR)
+	rm -f $(DESTDIR)$(libdir)/libxentoolcore-$(PACKAGE_VERSION).so.$(MAJOR)
+	rm -f $(DESTDIR)$(libdir)/libxentoolcore-$(PACKAGE_VERSION).so.$(MAJOR).$(MINOR)
 	rm -f $(DESTDIR)$(libdir)/libxentoolcore.a
 
 .PHONY: TAGS
@@ -94,7 +94,7 @@ TAGS:
 .PHONY: clean
 clean:
 	rm -rf *.rpm $(LIB) *~ $(DEPS_RM) $(LIB_OBJS) $(PIC_OBJS)
-	rm -f libxentoolcore.so.$(MAJOR).$(MINOR) libxentoolcore.so.$(MAJOR)
+	rm -f libxentoolcore-$(PACKAGE_VERSION).so.$(MAJOR).$(MINOR) libxentoolcore-$(PACKAGE_VERSION).so.$(MAJOR)
 	rm -f headers.chk
 	rm -f xentoolcore.pc
 
