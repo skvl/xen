@@ -1,0 +1,42 @@
+From: Debian Xen Team <pkg-xen-devel@lists.alioth.debian.org>
+Date: Fri, 24 Aug 2018 18:45:17 +0100
+Subject: tools-fake-xs-restrict
+
+---
+ tools/xenstore/include/xenstore.h | 5 +++++
+ tools/xenstore/xs.c               | 6 ++++++
+ 2 files changed, 11 insertions(+)
+
+diff --git a/tools/xenstore/include/xenstore.h b/tools/xenstore/include/xenstore.h
+index de59110..edf6271 100644
+--- a/tools/xenstore/include/xenstore.h
++++ b/tools/xenstore/include/xenstore.h
+@@ -133,6 +133,11 @@ bool xs_mkdir(struct xs_handle *h, xs_transaction_t t,
+ bool xs_rm(struct xs_handle *h, xs_transaction_t t,
+ 	   const char *path);
+ 
++/* Fake function which will always return false (required to let
++ * libxenstore remain at 3.0 version.
++ */
++bool xs_restrict(struct xs_handle *h, unsigned domid);
++
+ /* Get permissions of node (first element is owner, first perms is "other").
+  * Returns malloced array, or NULL: call free() after use.
+  */
+diff --git a/tools/xenstore/xs.c b/tools/xenstore/xs.c
+index 0355d3d..4e99bf8 100644
+--- a/tools/xenstore/xs.c
++++ b/tools/xenstore/xs.c
+@@ -798,6 +798,12 @@ unwind:
+ 	return false;
+ }
+ 
++/* Always return false a functionality has been removed in Xen 4.9 */
++bool xs_restrict(struct xs_handle *h, unsigned domid)
++{
++	return false;
++}
++
+ /* Watch a node for changes (poll on fd to detect, or call read_watch()).
+  * When the node (or any child) changes, fd will become readable.
+  * Token is returned when watch is read, to allow matching.
