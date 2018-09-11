@@ -7,18 +7,32 @@ include /usr/share/dpkg/default.mk
 
 SHELL    := sh -e
 SOURCE := $(shell dpkg-parsechangelog -SSource)
+
+
+
 VERSION := $(shell dpkg-parsechangelog -SVersion)
 VERSION_UPSTREAM := $(shell echo "$(VERSION)" | sed -e 's,-[^-]*$$,,')
 VERSION_BINNMU := $(shell echo "$(VERSION)" | sed -rne 's,.*\+b([0-9]+)$$,\1,p')
 
 export WGET=/bin/false
 
+XENARCH_amd64=x86_64
+XENARCH_amd64=x86_64
+
+XEN_ARCH_amd64 = x86_64
+XEN_ARCH_i386 = x86_64 # yes, really
+XEN_ARCH_armhf = arm32
+XEN_ARCH_arm64 = arm64
+
+ifneq ($(filter i386 amd64,$(ARCH)),)
+	# hvmloader
+	strip --remove-section=.comment --remove-section=.note $(INSTALL_DIR)/usr/lib/xen*/boot/*
+endif
+
 %:
 	dh $@
 
-setup:
-	dh_testdir
-	: xxx config.sub etc.
+dh_override_auto_configure:
 	./configure \
 		--disable-stubdom \
 		--prefix=/usr \
@@ -37,26 +51,24 @@ setup:
 		--enable-ovmf --with-system-ovmf=/usr/share/ovmf/OVMF.fd \
 		--with-system-seabios=/usr/share/seabios/bios-256k.bin
 
-CONFIG = \
-		debug=n \
-		XEN_COMPILE_ARCH=$(XEN_ARCH) \
-		XEN_TARGET_ARCH=$(XEN_ARCH) \
-		EXTRA_CFLAGS_XEN_TOOLS="$(CFLAGS)" \
-		APPEND_CPPFLAGS="$(CPPFLAGS)" \
-		APPEND_LDFLAGS="$(LDFLAGS)" \
-		OCAMLDESTDIR=$(CURDIR)/$(BUILD_DIR)/install-utils_$(ARCH)/$(OCAML_STDLIB_DIR) \
-		PYTHON=$(shell pyversions -r) \
-		LANG=C.UTF-8
+make_args= \
+	debug=n \
+	EXTRA_CFLAGS_XEN_TOOLS="$(CFLAGS)" \
+	APPEND_CPPFLAGS="$(CPPFLAGS)" \
+	APPEND_LDFLAGS="$(LDFLAGS)" \
+	OCAMLDESTDIR=$(CURDIR)/$(BUILD_DIR)/install-utils_$(ARCH)/$(OCAML_STDLIB_DIR) \
+	PYTHON=$(shell pyversions -r)
 
-build: build-arch build-indep
+make_args_xen= $(make_args) \
+	XEN_COMPILE_ARCH=$(XEN_ARCH_$(DEB_BUILD_ARCH)) \
+	XEN_TARGET_ARCH=$(XEN_ARCH_$(DEB_BUILD_ARCH))
 
-build-arch: setup
-	dh_testdir
-	$(MAKE_CLEAN) -C $(DIR)/xen \
-		XEN_COMPILE_ARCH=$(XEN_ARCH) \
-		XEN_TARGET_ARCH=$(XEN_ARCH) \
-	+$(MAKE_CLEAN) -C $(DIR) $(CONFIG) build-tools-public-headers
-	+$(MAKE_CLEAN) -C $(DIR)/tools $(CONFIG)
+dh_override_auto_build:
+	$(MAKE) $(make_args_xen) xen
+	$(MAKE) $(make_args) tools docs
+
+dh_override_auto_install:
+	$(MAKE) 
 
 build-indep: setup
 	dh_testdir
@@ -178,46 +190,5 @@ endif
 	dh_builddeb
 
 binary:	binary-indep binary-arch
-
-DIR_ORIG = ../orig/$(SOURCE)-$(VERSION_UPSTREAM)
-TAR_ORIG_NAME = $(SOURCE)_$(VERSION_UPSTREAM).orig.tar.xz
-TAR_ORIG = $(firstword $(wildcard ../$(TAR_ORIG_NAME)) $(wildcard ../orig/$(TAR_ORIG_NAME)))
-
-orig: $(DIR_ORIG)
-	rsync --delete --exclude /debian --exclude .git -a $(DIR_ORIG)/ .
-	QUILT_PATCHES='$(CURDIR)/debian/patches' QUILT_PC=.pc quilt push --quiltrc - -a -q --fuzz=0
-
-$(DIR_ORIG):
-ifeq ($(TAR_ORIG),)
-	$(error Cannot find orig tarball $(TAR_ORIG_NAME))
-else
-	mkdir -p ../orig
-	tar -C ../orig -xaf $(TAR_ORIG)
-endif
-
-CONTROL_FILES += debian/changelog debian/bin/gencontrol.py $(wildcard debian/templates/*.in) 
-CONTROL_FILES += $(wildcard debian/arch/defines) $(wildcard debian/arch/*/defines)
-GENCONTROL = $(__MODULES_DIR)gencontrol.py
-debian/control debian/rules.gen: $(CONTROL_FILES)
-ifeq ($(wildcard debian/control.md5sum),)
-	$(MAKE) -f debian/rules debian/control-real
-else ifeq ($(VERSION_BINNMU),)
-	md5sum --check debian/control.md5sum --status || \
-		$(MAKE) -f debian/rules debian/control-real
-else
-	grep -v debian/changelog debian/control.md5sum | md5sum --check - --status || \
-		$(MAKE) -f debian/rules debian/control-real
-endif
-
-debian/control-real: $(CONTROL_FILES)
-	debian/bin/gencontrol.py
-	md5sum $^ > debian/control.md5sum
-	@echo
-	@echo This target is made to fail intentionally, to make sure
-	@echo that it is NEVER run during the automated build. Please
-	@echo ignore the following error, the debian/control file has
-	@echo been generated SUCCESSFULLY.
-	@echo
-	exit 1
 
 .PHONY: clean build binary-indep binary-arch binary
