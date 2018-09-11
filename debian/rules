@@ -3,88 +3,273 @@
 # Uncomment this to turn on verbose mode.
 #export DH_VERBOSE=1
 
-include /usr/share/dpkg/default.mk
+SHELL    := bash -e
 
-SHELL    := sh -e
-SOURCE := $(shell dpkg-parsechangelog -SSource)
-VERSION := $(shell dpkg-parsechangelog -SVersion)
-VERSION_UPSTREAM := $(shell echo "$(VERSION)" | sed -e 's,-[^-]*$$,,')
-VERSION_BINNMU := $(shell echo "$(VERSION)" | sed -rne 's,.*\+b([0-9]+)$$,\1,p')
+# This influences dpkg-buildflags to specify better linker
+# options.  See https://wiki.debian.org/Hardening
+# TBH it is not clear to me (Diziet, 2018) why this is not the
+# default but it is definitely appropriate for Xen, many of whose
+# users will care significantly about security.x
+#
+# Note that we don't use the dpkg-buildflags output for the
+# hypervisor build.  This because I haven't investigated which
+# of them are sane to use in the hypervisor context, rather than
+# simply in userland binaries.
+#
+export DEB_BUILD_MAINT_OPTIONS = hardening=+all
 
-include debian/rules.defs
+# Architecture handling.
+#
+# We need to explicitly specify the architecture because the Xen
+# upstream build system likes to use `uname' which can produce wrong
+# answers it other-bitness chroots, and because we need to build a
+# 64-bit hypervisor even on i386 (since there is no 32-bit hypervisor
+# anymore).
 
-setup: debian/control
-	dh_testdir
-	$(MAKE) -f debian/rules.gen setup_$(DEB_HOST_ARCH)
+include /usr/share/dpkg/architecture.mk
 
-build: build-arch build-indep
+# Xen has its own different architecture names, which are nither
+# Debian nor GNU names.
 
-build-arch: setup
-	dh_testdir
-	$(MAKE) -f debian/rules.gen build-arch_$(DEB_HOST_ARCH)
+flavour_amd64 = amd64
+flavour_i386  = amd64
+flavour_armhf = armhf
+flavour_arm64 = arm64
 
-build-indep: setup
-	dh_testdir
-	$(MAKE) -f debian/rules.gen build-indep
+xen_arch_amd64 = x86_64
+xen_arch_i386  = x86_32
+xen_arch_armhf = arm32
+xen_arch_arm64 = arm64
 
-maintainerclean:
-	rm -f debian/control* debian/rules.gen debian/xen-hypervisor-* debian/xen-utils-[0-9]*
+flavour=$(flavour_$(DEB_BUILD_ARCH))
 
-clean: debian/control
-	dh_testdir
-	rm -rf $(BUILD_DIR) $(STAMPS_DIR) debian/lib/python/debian_xen/__pycache__
-	rm -rf $(BUILD_DIR) $(STAMPS_DIR) debian/lib/python/debian_linux/__pycache__
-	dh_clean
+# Much of the work here is to make different upstream versions of Xen
+# coinstallable, and arrange to run which ever version of the tools
+# corresponds to the running hypervisor.
+#
+# This packaging produces one version.  The nominal upstream version
+# represents the control ABI used by hypervisor management utilities.
+#
+# In this package that version number appears in (i) debian/control
+# and (ii) the first two numbers in the package version in
+# debian/changelog.  These must both be updated when a new major
+# upstream version is packaged (eg 4.10 -> 4.11).
+# (Everywhere else, it is handled dynamically.)
+#
+upstream_version := \
+ $(shell dpkg-parsechangelog -SVersion | sed 's/\(\.[0-9]*\)\..*/\1/' )
 
-binary-indep:
-	dh_testdir
-	$(MAKE) -f debian/rules.gen binary-indep
+# Many of the debhelper files are most conveniently provided as
+# templates which depend on the flavour and the upstream version.
+# Since even some package names depend on the version, so do some
+# dh input filenames.  We support this as follows:
+#
+# These runes take all files named   debian/*.vsn-in
+# and do these three things:
+#  1. in the file contents
+#    (a) substitute @version@ @flavour@
+#    (b) interpret lines like
+#		? flavour = <value> [ | <other-value> ...]
+#		? flavour != <value> [ | <other-value> ...]
+#     as conditional output lasting until the next ? on is own.
+#  2. replace any V in the file *name* with that same version
+#     and any F with the flavour
+#  3. strip .vsn-in from the end
+# The resulting files are then consumed by dh.
+#
+# (debhelper has a shell script control file facility, but that cannot
+# handle the need to vary the actual filename seen by debhelper.)
 
-binary-arch:
-	dh_testdir
-	$(MAKE) -f debian/rules.gen binary-arch_$(DEB_HOST_ARCH)
+TEMPLATE_FILES := $(wildcard debian/*.vsn-in)
 
-binary:	binary-indep binary-arch
+define template_rule_template =
+ TEMPLATED_FILES += $(2)
+ $(2): $(1) debian/rules debian/changelog debian/template-subst
+	debian/template-subst $(upstream_version) $(flavour) <$$< >$$@.tmp \
+	&& mv -f $$@{.tmp,}
+endef
 
-DIR_ORIG = ../orig/$(SOURCE)-$(VERSION_UPSTREAM)
-TAR_ORIG_NAME = $(SOURCE)_$(VERSION_UPSTREAM).orig.tar.xz
-TAR_ORIG = $(firstword $(wildcard ../$(TAR_ORIG_NAME)) $(wildcard ../orig/$(TAR_ORIG_NAME)))
+$(foreach t,$(TEMPLATE_FILES), $(eval 					\
+	$(call 								\
+		template_rule_template, $t, 				\
+		$(subst F,$(flavour),					\
+		 $(subst V,$(upstream_version),				\
+		  $(basename $t)					\
+		 ))							\
+	)))
 
-orig: $(DIR_ORIG)
-	rsync --delete --exclude /debian --exclude .git -a $(DIR_ORIG)/ .
-	QUILT_PATCHES='$(CURDIR)/debian/patches' QUILT_PC=.pc quilt push --quiltrc - -a -q --fuzz=0
+templated-files: $(TEMPLATED_FILES)
+	:
 
-$(DIR_ORIG):
-ifeq ($(TAR_ORIG),)
-	$(error Cannot find orig tarball $(TAR_ORIG_NAME))
-else
-	mkdir -p ../orig
-	tar -C ../orig -xaf $(TAR_ORIG)
-endif
+# Work around bug in dpkg-buildpackage: between dpkg 1.14.17 and 1.16.1
+# it exports these.  This is a problem because we need to pass different
+# options to the hypervisor build - the default options from dpkg
+# et al are suitable for dom0 binaries but not for the hypervisor.
+undefine CFLAGS
+undefine CXXFLAGS
+undefine FFLAGS
+undefine CPPFLAGS
+undefine LDFLAGS
 
-CONTROL_FILES += debian/changelog debian/bin/gencontrol.py $(wildcard debian/templates/*.in) 
-CONTROL_FILES += $(wildcard debian/arch/defines) $(wildcard debian/arch/*/defines)
-GENCONTROL = $(__MODULES_DIR)gencontrol.py
-debian/control debian/rules.gen: $(CONTROL_FILES)
-ifeq ($(wildcard debian/control.md5sum),)
-	$(MAKE) -f debian/rules debian/control-real
-else ifeq ($(VERSION_BINNMU),)
-	md5sum --check debian/control.md5sum --status || \
-		$(MAKE) -f debian/rules debian/control-real
-else
-	grep -v debian/changelog debian/control.md5sum | md5sum --check - --status || \
-		$(MAKE) -f debian/rules debian/control-real
-endif
+# The Xen build system likes to download things at build-time.  We
+# think we have disabled all of that with appropriate configure
+# options.  But, set these too, so we spot if we miss any.
+export WGET=/bin/false GIT=/bin/false
 
-debian/control-real: $(CONTROL_FILES)
-	debian/bin/gencontrol.py
-	md5sum $^ > debian/control.md5sum
-	@echo
-	@echo This target is made to fail intentionally, to make sure
-	@echo that it is NEVER run during the automated build. Please
-	@echo ignore the following error, the debian/control file has
-	@echo been generated SUCCESSFULLY.
-	@echo
-	exit 1
+# Other build flags etc.
 
-.PHONY: clean build binary-indep binary-arch binary
+t=$(PWD)/debian/tmp
+
+dpkg_CFLAGS   := $(shell dpkg-buildflags --get CFLAGS)
+dpkg_CPPFLAGS := $(shell dpkg-buildflags --get CPPFLAGS)
+dpkg_LDFLAGS  := $(shell dpkg-buildflags --get LDFLAGS)
+
+make_args_xen= $(make_args_common) \
+	XEN_COMPILE_ARCH=$(xen_arch_$(flavour)) \
+	XEN_TARGET_ARCH=$(xen_arch_$(flavour)) \
+# (Xen upstream does not offer a separate CPPFLAGS,
+# so we pass those in CFLAGS.)
+
+make_args_tools= $(make_args_common) \
+	XEN_COMPILE_ARCH=$(xen_arch_$(DEB_BUILD_ARCH)) \
+	XEN_TARGET_ARCH=$(xen_arch_$(DEB_BUILD_ARCH)) \
+	EXTRA_CFLAGS_XEN_TOOLS='$(dpkg_CFLAGS) $(dpkg_CPPFLAGS)' \
+	PREPEND_LDFLAGS_XEN_TOOLS='$(dpkg_LDFLAGS)'
+
+%:
+	dh $@ --with=python2
+
+# Without this, something on stretch passes CFLAGS in the environment
+# to the Xen build system, which then (with 4.11) chokes printing
+#   /bin/sh: 1: Syntax error: Unterminated quoted string
+# probably because the CFLAGS value contains multiple options and
+# therefore spaces.  See also the note by `undefine CFLAGS', above.
+override_dh_auto_clean:
+	rm -f debian/xen-tools-built.stamp
+	$(MAKE) -j1 distclean
+
+# Upstream has both a kconfig style configure for the hypervisor
+# and autoconfery for the tools (what we call the `utils').
+override_dh_auto_configure:
+	dh_update_autotools_config
+	:
+	cp debian/xen-kconfig xen/.config
+	make -C xen olddefconfig $(make_args_xen)
+	:
+	$(make_args_tools) ./configure \
+		--disable-stubdom \
+		--prefix=/usr \
+		--includedir=/usr/include \
+		--libdir=/usr/lib/$(DEB_HOST_MULTIARCH) \
+		--with-libexec-libdir-suffix=/$(DEB_HOST_MULTIARCH) \
+		--mandir=/usr/share/man \
+		--infodir=/usr/share/info \
+		--sysconfdir=/etc \
+		--localstatedir=/var \
+		--with-libexec-leaf-dir=xen-$(upstream_version) \
+		--disable-blktap1 \
+		--disable-blktap2 \
+		--disable-ocamltools \
+		--disable-qemu-traditional --disable-rombios \
+		--with-system-qemu=/usr/bin/qemu-system-i386 \
+		--enable-ovmf --with-system-ovmf=/usr/share/ovmf/OVMF.fd \
+		--with-system-seabios=/usr/share/seabios/bios-256k.bin
+
+override_dh_auto_build:
+	$(MAKE) $(make_args_xen) xen
+	$(MAKE) $(make_args_tools) tools docs
+	touch debian/xen-tools-built.stamp
+
+# We keep the amount of fixup and messing about with debian/tmp/
+# to a minimum, because when working it is easier to rerun the
+# later parts of the build than the whole of the two upstream make installs.
+# However, there are two sets of fixes we must make:
+override_dh_auto_install: $(TEMPLATED_FILES)
+	$(MAKE) $(make_args_xen) DESTDIR=$t install-xen
+	$(MAKE) $(make_args_tools) DESTDIR=$t install-{tools,docs}
+	:
+	@# pkgconfig files contain arch-specific paths so must
+	@# be in /usr/lib/<triplet>, not /usr/share.
+	mv $t/usr/share/pkgconfig $t/usr/lib/$(DEB_HOST_MULTIARCH)/
+	:
+	@# Inexplicably, upstream pots the efi binares in usr/lib64
+	mv $t/usr/lib64/efi/* $t/boot/.
+
+# libfsimage not only has an unstable ABI, but also a very poor name.
+# Our makefile patch puts it in a different directory and fixes up the
+# rpath; this rules code excludes the header files.
+dh_install_excludes += -Xinclude/fsimage
+
+# The upstream build produces these.
+dh_install_excludes += -X'*.pyc'
+
+# The upstream docs build erroneously ships .deps into the html output.
+dh_install_excludes += -X/.deps
+
+# Upstream puts pygrub in its lib directory which is in our per-version
+# package, and leaves a symlink in /usr/bin.  Exclude the symlink.
+# We don't want this in /usr/bin anyway.
+dh_install_excludes += -Xbin/pygrub
+
+# We want the xenstore utilities in their own package.  The general
+# install does everything from /usr/bin and /usr/share/man, so we
+# need to exclude them.  debhelpers's -X option is ... odd.  Not
+# suitable, anyway.  So we rm them after running dh_install.
+# The installation is done separately via xenstore-utils.install.
+xenstore_rm = $(addprefix debian/xen-utils-common/,		\
+		$(foreach utility, xenstore xenstore-*,		\
+			usr/bin/$(utility)			\
+			usr/share/man/man1/$(utility).1		\
+		))
+
+override_dh_install:
+	debian/shuffle-binaries $(upstream_version) $(flavour)
+	:
+	debian/shuffle-boot-files $(upstream_version) $(flavour)
+	:
+	dh_install $(dh_install_excludes)
+	rm $(xenstore_rm)
+	:
+	debian/installsharedlibs
+
+# dh_python2 does not know to look in the funny directory where
+# we put the versioned /usr/lib files including some python scripts.
+override_dh_python2:
+	dh_python2
+	dh_python2 -pxen-utils-$(upstream_version) \
+		usr/lib/xen-$(upstream_version)/bin
+
+# We have two init scripts.  (There used to be xend too.)
+override_dh_installinit:
+	dh_installinit --name xen -- defaults 20 21
+	dh_installinit --name xendomains --no-start -- defaults 21 20
+
+# dh_strip in dh compat 10 and earlier (which we are at so this
+# package builds on stretch) looks at filenames and modes to decide
+# what to process.  hvmloader doesn't match, so we must trick it.
+# It is sufficient to make it executable.  And we have to undo
+# that again, then.  This all happens after dh_install so we operate
+# on the package-specific file.
+override_dh_strip:
+	chmod +x debian/xen-utils-*/usr/lib/xen-*/boot/hvmloader
+	dh_strip
+	chmod -x debian/xen-utils-*/usr/lib/xen-*/boot/hvmloader
+
+# The debug files are fairly large, fairly rarely used,
+# and not compressed by the upstream build system.
+override_dh_compress:
+	dh_compress
+	find debian/xen-hypervisor-*/usr/lib/debug -type f -print0 \
+		| xargs -0r gzip -9v
+
+# By default, files in debian/tmp which are not handled by anything
+# in rules are ignored.  This makes them into errors.
+override_dh_missing:
+	dh_missing --fail-missing
+
+
+# We are dropping the config file /etc/default/xen which appeared in
+# earlier versions.  See ./ucf-remove-fixup for more details.
+override_dh_ucf:
+	dh_ucf
+	debian/ucf-remove-fixup xen-utils-common /etc/default/xen

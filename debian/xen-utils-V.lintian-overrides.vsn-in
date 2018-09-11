@@ -1,0 +1,6 @@
+statically-linked-binary usr/lib/xen-@version@/boot/hvmloader
+statically-linked-binary usr/lib/xen-@version@/boot/xen-shim
+
+binary-has-unneeded-section usr/lib/xen-4.11/boot/xen-shim .note
+# ^ that section is certainly needed for the tools etc. to be able
+#   to load it!

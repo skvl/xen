@@ -1,3 +1,64 @@
+xen (4.11.1~pre+1.733450b39b-1~exp1+rework) UNRELEASED; urgency=medium
+
+  * Completely overhauled the packaging.  In the source package, things
+    are very much simpler now with only a few hundred loc of templating
+    and scriptery.  In the binary packages the resulting changes are:
+     - We now provide -dbgsym packages in the standard way
+      - Shared libraries with unstable ABI upstream (ie, whose
+        ABI changes with the Xen version) are now in
+        libxen<version>-misc rather than libxen<version> and
+        have more conventional-looking filenames.
+     - Shared libraries with a stable ABI upstream are now each in their
+       own package, named after the soname (ABI version), as is
+       conventional.  The sonames and minor versions of these are
+       no longer mangled.
+     - xs.h, replaced upstream by xenstore.h, is now in
+       /usr/include/xenstore-compat (as shipped upstream), with
+       symlinks left behind.
+     - fsimage*.h is no longer shipped (it's namespace-grabbish).
+     - libxenvchan.h is in /usr/include as it is in upstream,
+       not buried in /usr/include/xen/io
+     - /etc/xen/cpupool, a not very interesting example config file,
+       has been moved into /usr/share/doc/.
+     - There is a new xen-doc package, in which the upstream HTML
+       documentation, and various other bits, is now provided.  This
+       replaces the text format documentation previously provided in
+       xen-utils-common (but the manpages are still there).
+     - Utilities which use on libraries with stable ABIs upstream
+       are no longer subjected to the Xen version wrapper.
+     - Several utilities are now provided in /usr/bin which were
+       previously only available buried in /usr/lib/xen-<version>:
+          xen-detect xenalyze xencons xencov_split xen-cpuid
+       (version-wrapped, where necessary).
+     - Likewise very many utilities and daemons in /usr/sbin:
+          gdbsx xen-bugtool xen-ringwatch xen-tmem-list-parse
+          xenmon xenpmd flask-* xen-kdd xen-diag xen-hptool
+          xen-hvmcrash xen-hvmctx xen-livepatch xen-lowmemd
+          xen-mfndump xenbaked xenconsoled xencov xenlockprof
+          xenstored xenwatchdogd
+     - xend and xm are long gone, so remove the support for the
+       TOOLSTACK setting in /etc/default/xen.  /usr/sbin/xen just
+       runs xl now.  Remove mentions of xend-config.sxp and all
+       *.sxp files.  Drop the xend init script.
+     - There is no longer any Built-Using.  This is no longer true for
+       seabios, which is depended on and used at runtime, rather than
+       being embedded into hvmloader.  (The source package also previously
+       tried to mention ipxe-qemu in Built-Using but that's (i) dependent
+       upstream on CONFIG_ROMBIOS which we disable, and not a
+       build-dependency either.)
+     - The hvmloader and xen-shim binaries no longer have their .note
+       and .comment section(s) stripped.  .note is needed for xen-shim
+       to work properly and to find the corresponding debug files.
+       And .comment is tiny and harmless AFAICT.
+     - Hypervisor debug map files are installed in /usr/lib/debug.
+     - The xl bash_completion file from upstream is installed.
+     - libxenvchan.h is installed.
+     - We install xen-*.efi in /boot.
+     - Sections of some packages have been rationalised.
+     - We install a doc-base control file.
+
+ -- Ian Jackson <ijackson@chiark.greenend.org.uk>  Wed, 03 Oct 2018 18:45:02 +0100
+
 xen (4.11.1~pre+1.733450b39b-1~exp1) experimental; urgency=medium
 
   [ Hans van Kranenburg ]

@@ -1,49 +1,30 @@
 Source: xen
-Section: kernel
 Priority: optional
 Maintainer: Debian Xen Team <pkg-xen-devel@lists.alioth.debian.org>
 Uploaders: Guido Trotter <ultrotter@debian.org>, Bastian Blank <waldi@debian.org>, Ian Jackson <ian.jackson@eu.citrix.com>
 Standards-Version: 3.9.4
-Build-Depends: autotools-dev, debhelper (>> 9), dpkg-dev (>= 1.16.0~), lsb-release, python-dev, bcc [i386 amd64], gcc-multilib [i386 amd64], e2fslibs-dev, iasl, seabios (>= 1.7.4-2~) [i386 amd64], libaio-dev, libfdt-dev [armhf arm64], libglib2.0-dev, liblzma-dev, libncurses5-dev, libpixman-1-dev, libyajl-dev, pkg-config, uuid-dev, zlib1g-dev
+Build-Depends:
+   debhelper (>> 9),
+   autotools-dev,
+   dpkg-dev (>= 1.16.0~),
+   lsb-release,
+   python-dev,
+   bcc [i386 amd64],
+   gcc-multilib [i386 amd64],
+   e2fslibs-dev,
+   iasl,
+   seabios (>= 1.7.4-2~) [i386 amd64],
+   libaio-dev,
+   libfdt-dev [armhf arm64],
+   libglib2.0-dev,
+   liblzma-dev,
+   libncurses5-dev,
+   libpixman-1-dev,
+   libyajl-dev,
+   pkg-config,
+   uuid-dev,
+   zlib1g-dev
 XS-Python-Version: current
-
-Package: libxen-4.11
-Architecture: amd64 arm64 armhf i386
-Section: libs
-Depends: ${shlibs:Depends}, ${misc:Depends}
-Description: Public libs for Xen
- This package contains the shared toolstack libraries for Xen.
-Multi-Arch: same
-
-Package: libxenstore3.0
-Architecture: amd64 arm64 armhf i386
-Section: libs
-Depends: ${shlibs:Depends}, ${misc:Depends}
-Description: Xenstore communications library for Xen
- This package contains the client library interface to XenStore.
-Multi-Arch: same
-
-Package: libxen-dev
-Architecture: amd64 arm64 armhf i386
-Section: libdevel
-Depends: libxen-4.11 (= ${binary:Version}), libxenstore3.0 (= ${binary:Version}), ${misc:Depends}
-Description: Public headers and libs for Xen
- This package contains the public headers and static libraries for Xen.
- .
- The libxenlight library is intended as a common base for all Xen toolstack
- developers.  The libxlutil library contains additional helpers which may
- be useful to toolstack developers.
- .
- The libxenstore library allows userspace processes to interact with the
- XenStore database.  XenStore is a shared database used for interdomain
- communication of configuration and status information.  It is accessible
- to all domains running on the same Xen host.  See
- http://wiki.xen.org/wiki/XenStore for more information.
- .
- The libxenctrl, libxenguest and other remaining included libraries are
- internal libraries intended for use by the Xen toolstack and are not
- intended to be used directly.  Toolstack authors should use libxenlight.
-Multi-Arch: same
 
 Package: xenstore-utils
 Architecture: amd64 arm64 armhf i386
@@ -51,6 +32,7 @@ Section: admin
 Depends: ${shlibs:Depends}, ${misc:Depends}
 Replaces: xen-utils-common (<= 3.1.0-1)
 Conflicts: xen-utils-common (<= 3.1.0-1)
+Suggests: xen-doc
 Description: Xenstore command line utilities for Xen
  This package contains command line utilities for interacting with
  XenStore.
@@ -65,8 +47,10 @@ Description: Xenstore command line utilities for Xen
  domain to support local scripting which wants to communicate via XenStore.
 
 Package: xen-utils-common
-Architecture: all
-Depends: lsb-base, python, udev, xenstore-utils, ${misc:Depends}
+Section: admin
+Architecture: amd64 i386 armhf arm64
+Depends: lsb-base, udev, xenstore-utils,
+    ${shlibs:Depends}, ${python:Depends}, ${misc:Depends}
 Description: Xen administrative tools - common files
  The userspace tools to manage a system virtualized through the Xen virtual
  machine monitor.
@@ -75,6 +59,7 @@ Description: Xen administrative tools - common files
  virtual guest systems (Domain U).
 
 Package: xen-hypervisor-common
+Section: kernel
 Architecture: all
 Depends: ${misc:Depends}
 Replaces: xen-hypervisor-4.8-amd64, xen-hypervisor-4.8-arm64, xen-hypervisor-4.8-armhf
@@ -86,7 +71,20 @@ Description: Xen Hypervisor - common files
  This package is only required on the host system (Domain 0) and not on the
  virtual guest systems (Domain U).
 
+Package: xen-doc
+Section: doc
+Architecture: amd64 i386 armhf arm64
+Description: XEN documentation
+ Documentation for the Xen hypervisor and surrounding software,
+ including descriptions of the hypercall interfaces and of some
+ of the library APIs.
+ .
+ You do not need this package for the primary manpages for the
+ Xen control utilities, as those are in the xen-utils-common package.
+# Yes, arch-specific.  See xen-doc.lintian-overrides.
+
 Package: xen-utils-4.11
+Section: admin
 Architecture: amd64 arm64 armhf i386
 Provides: xen-utils
 Depends: ${shlibs:Depends}, ${misc:Depends}, ${python:Depends}, xen-utils-common (>= ${source:Version})
@@ -100,6 +98,7 @@ Description: XEN administrative tools
 Built-Using: ${misc:Built-Using}
 
 Package: xen-hypervisor-4.11-amd64
+Section: kernel
 Architecture: amd64 i386
 Provides: xen-hypervisor, xen-hypervisor-4.11, xen-hypervisor-amd64
 Depends: ${misc:Depends}
@@ -114,14 +113,16 @@ Description: Xen Hypervisor on AMD64
  access for XEN itself.
 
 Package: xen-system-amd64
+Section: admin
 Architecture: amd64 i386
 Provides: xen-system
 Depends: xen-hypervisor-4.11-amd64, xen-hypervisor-common, xen-utils-4.11, ${misc:Depends}
-Description: Xen System on AMD64 (meta-package)
+Description: Xen System on AMD64 (metapackage)
  This package depends on the latest Xen hypervisor for use on AMD64 and the
  Xen utils.
 
 Package: xen-hypervisor-4.11-arm64
+Section: kernel
 Architecture: arm64
 Provides: xen-hypervisor, xen-hypervisor-4.11, xen-hypervisor-arm64
 Depends: ${misc:Depends}
@@ -136,14 +137,16 @@ Description: Xen Hypervisor on ARM64
  access for XEN itself.
 
 Package: xen-system-arm64
+Section: admin
 Architecture: arm64
 Provides: xen-system
 Depends: xen-hypervisor-4.11-arm64, xen-hypervisor-common, xen-utils-4.11, ${misc:Depends}
-Description: Xen System on ARM64 (meta-package)
+Description: Xen System on ARM64 (metapackage)
  This package depends on the latest Xen hypervisor for use on ARM64 and the
  Xen utils.
 
 Package: xen-hypervisor-4.11-armhf
+Section: kernel
 Architecture: armhf
 Provides: xen-hypervisor, xen-hypervisor-4.11, xen-hypervisor-armhf
 Depends: ${misc:Depends}
@@ -158,10 +161,112 @@ Description: Xen Hypervisor on ARMHF
  access for XEN itself.
 
 Package: xen-system-armhf
+Section: admin
 Architecture: armhf
 Provides: xen-system
 Depends: xen-hypervisor-4.11-armhf, xen-hypervisor-common, xen-utils-4.11, ${misc:Depends}
-Description: Xen System on ARMHF (meta-package)
+Description: Xen System on ARMHF (metapackage)
  This package depends on the latest Xen hypervisor for use on ARMHF and the
  Xen utils.
 
+Package: libxen-dev
+Section: libdevel
+Architecture: amd64 arm64 armhf i386
+Depends: ${shlibs:Depends}, ${misc:Depends},
+	 libxenmisc4.11 (= ${binary:Version}),
+	 libxencall1 (= ${binary:Version}),
+	 libxendevicemodel1 (= ${binary:Version}),
+	 libxenevtchn1 (= ${binary:Version}),
+	 libxenforeignmemory1 (= ${binary:Version}),
+	 libxengnttab1 (= ${binary:Version}),
+	 libxenstore3.0 (= ${binary:Version}),
+	 libxentoolcore1 (= ${binary:Version}),
+	 libxentoollog1 (= ${binary:Version})
+Description: Public headers and libs for Xen
+ This package contains the public headers and static libraries for Xen.
+ .
+ The libxenlight library is intended as a common base for all Xen toolstack
+ developers.  The libxlutil library contains additional helpers which may
+ be useful to toolstack developers.
+ .
+ The libxenstore library allows userspace processes to interact with
+ the XenStore database.  Command line tools for accessing xenstore are
+ provided is via the xenstore-utils package.
+ .
+ Most of the other included libraries are internal, and intended for
+ use by the Xen toolstack, rather than directly.
+
+Package: libxenmisc4.11
+Section: libs
+Architecture: amd64 arm64 armhf i386
+Depends: ${shlibs:Depends}, ${misc:Depends}
+Description: Xen runtime libraries - miscellaneous, versioned ABI
+ Shared libraries for Xen utilities.
+ This package contains libraries whose ABI changes with each
+ new upstream Xen release, which include ones which embed
+ knowledge of hypervisor-version-specific hypercall ABIs.
+Multi-Arch: same
+
+Package: libxencall1
+Section: libs
+Architecture: amd64 arm64 armhf i386
+Depends: ${shlibs:Depends}, ${misc:Depends}
+Description: Xen runtime library - libxencall
+ Shared library for Xen utilities.
+Multi-Arch: same
+
+Package: libxendevicemodel1
+Section: libs
+Architecture: amd64 arm64 armhf i386
+Depends: ${shlibs:Depends}, ${misc:Depends}
+Description: Xen runtime libraries - libxendevicemodel
+ Shared library for Xen utilities.
+Multi-Arch: same
+
+Package: libxenevtchn1
+Section: libs
+Architecture: amd64 arm64 armhf i386
+Depends: ${shlibs:Depends}, ${misc:Depends}
+Description: Xen runtime libraries - libxenevtchn
+ Shared library for Xen utilities.
+Multi-Arch: same
+
+Package: libxenforeignmemory1
+Section: libs
+Architecture: amd64 arm64 armhf i386
+Depends: ${shlibs:Depends}, ${misc:Depends}
+Description: Xen runtime libraries - libxenforeignmemory
+ Shared library for Xen utilities.
+Multi-Arch: same
+
+Package: libxengnttab1
+Section: libs
+Architecture: amd64 arm64 armhf i386
+Depends: ${shlibs:Depends}, ${misc:Depends}
+Description: Xen runtime libraries - libxengnttab
+ Shared library for Xen utilities.
+Multi-Arch: same
+
+Package: libxenstore3.0
+Section: libs
+Architecture: amd64 arm64 armhf i386
+Depends: ${shlibs:Depends}, ${misc:Depends}
+Description: Xen runtime libraries - libxenstore
+ Shared library for Xen utilities.
+Multi-Arch: same
+
+Package: libxentoolcore1
+Section: libs
+Architecture: amd64 arm64 armhf i386
+Depends: ${shlibs:Depends}, ${misc:Depends}
+Description: Xen runtime libraries - libxentoolcore
+ Shared library for Xen utilities.
+Multi-Arch: same
+
+Package: libxentoollog1
+Section: libs
+Architecture: amd64 arm64 armhf i386
+Depends: ${shlibs:Depends}, ${misc:Depends}
+Description: Xen runtime libraries - libxentoollog
+ Shared library for Xen utilities.
+Multi-Arch: same

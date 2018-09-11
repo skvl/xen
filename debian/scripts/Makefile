@@ -21,15 +21,6 @@ GLOBAL_UTILS_LINKS = \
 
 GLOBAL_UTILS_WRAPPER = xen-utils-wrapper
 
-PRIVATE_SCRIPTS = \
-	xen-dir \
-	xen-init-list \
-	xen-init-name \
-	xen-toolstack \
-	xen-version \
-	$(GLOBAL_TOOLSTACK_WRAPPER) \
-	$(GLOBAL_UTILS_WRAPPER)
-
 ETC_SCRIPTS_DIR = /etc/xen/scripts
 GLOBAL_SCRIPTS_DIR = /usr/sbin
 PRIVATE_SCRIPTS_DIR = /usr/lib/xen-common/bin
@@ -48,5 +39,3 @@ install:
 	    ln -s $(PRIVATE_SCRIPTS_DIR)/$(GLOBAL_UTILS_WRAPPER) $(DESTDIR)$(GLOBAL_SCRIPTS_DIR)/$$i || exit 1; \
 	done
 	install -d $(DESTDIR)$(PRIVATE_SCRIPTS_DIR)
-	install $(PRIVATE_SCRIPTS) $(DESTDIR)$(PRIVATE_SCRIPTS_DIR)
-
