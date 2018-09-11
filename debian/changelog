@@ -1,3 +1,9 @@
+xen (4.11.1~pre.20180911.5acdd26fdc+dfsg-1) UNRELEASED; urgency=medium
+
+  * Update to new upstream version 4.11.1~pre.20180911.5acdd26fdc+dfsg.
+
+ -- Hans van Kranenburg <hans@knorrie.org>  Tue, 11 Sep 2018 15:34:34 +0200
+
 xen (4.11.1~pre+1.733450b39b-1~exp1) experimental; urgency=medium
 
   [ Hans van Kranenburg ]
