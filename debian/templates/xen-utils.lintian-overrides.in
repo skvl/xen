@@ -1,1 +1,2 @@
 statically-linked-binary usr/lib/xen-@version@/boot/hvmloader
+statically-linked-binary usr/lib/xen-@version@/boot/xen-shim
