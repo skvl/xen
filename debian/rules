@@ -5,7 +5,7 @@
 
 include /usr/share/dpkg/default.mk
 
-SHELL    := sh -e
+SHELL    := bash -e
 SOURCE := $(shell dpkg-parsechangelog -SSource)
 
 
@@ -24,9 +24,11 @@ XEN_ARCH_i386 = x86_64 # yes, really
 XEN_ARCH_armhf = arm32
 XEN_ARCH_arm64 = arm64
 
+t=$(PWD)/debian/tmp
+
 ifneq ($(filter i386 amd64,$(ARCH)),)
 	# hvmloader
-	strip --remove-section=.comment --remove-section=.note $(INSTALL_DIR)/usr/lib/xen*/boot/*
+	strip --remove-section=.comment --remove-section=.note $t/usr/lib/xen*/boot/*
 endif
 
 %:
@@ -68,127 +70,23 @@ dh_override_auto_build:
 	$(MAKE) $(make_args) tools docs
 
 dh_override_auto_install:
-	$(MAKE) 
-
-build-indep: setup
-	dh_testdir
-	$(MAKE_CLEAN) -C $(DIR)/docs
-
-clean: debian/control
-	dh_testdir
-	rm -rf $(BUILD_DIR) $(STAMPS_DIR) debian/lib/python/debian_xen/__pycache__
-	rm -rf $(BUILD_DIR) $(STAMPS_DIR) debian/lib/python/debian_linux/__pycache__
-	dh_clean
-
-binary-indep:
-	dh_testdir
-	dh_testdir
-	dh_testroot
-	dh_prep
-	dh_install -X .svn --sourcedir=$(DIR)
-	dh_installinit --name xen -- defaults 20 21
-	dh_installinit --name xend
-	dh_installinit --name xendomains --no-start -- defaults 21 20
-	dh_installman \
-		$(SOURCE_DIR)/docs/man1/* \
-		$(SOURCE_DIR)/docs/man5/* \
-		$(SOURCE_DIR)/docs/man8/*
-	dh_installdocs $(SOURCE_DIR)/docs/txt/misc
-	dh_link
-	dh_ucf
-	+$(MAKE_SELF) install-base
-
-
-binary-arch:
-	dh_testdir
-	$(MAKE) -f debian/rules.gen binary-arch_$(DEB_HOST_ARCH)
-	+$(MAKE_CLEAN) -C $(DIR) install-tools-public-headers \
-			DESTDIR=$(CURDIR)/$(INSTALL_DIR) $(CONFIG)
-	+$(MAKE_CLEAN) -C $(DIR)/tools install DESTDIR=$(CURDIR)/$(INSTALL_DIR) $(CONFIG)
+	$(MAKE) $(make_args_xen) DESTDIR=$t install-xen
+	$(MAKE) $(make_args) DESTDIR=$t install-{tools,docs}
 ifneq ($(filter i386 amd64,$(ARCH)),)
 	# hvmloader
 	strip --remove-section=.comment --remove-section=.note $(INSTALL_DIR)/usr/lib/xen*/boot/*
 endif
-	@rm -rf $(INSTALL_DIR)
-	+$(MAKE_CLEAN) -C $(SOURCE_DIR)/tools/examples install-configs
-	+$(MAKE_CLEAN) -C $(SOURCE_DIR)/tools/hotplug/common install-scripts
-	+$(MAKE_CLEAN) -C $(SOURCE_DIR)/tools/hotplug/Linux install-scripts
-	+$(MAKE_CLEAN) -C debian/scripts install
-	dh_testdir
-	dh_testroot
-	dh_prep
-	dh_installdirs boot
-	dh_install debian/templates/xen-hypervisor.bug/* usr/share/bug/$(PACKAGE_NAME)
-	cp $(DIR)/xen/xen$(IMAGE_SUFFIX) debian/$(PACKAGE_NAME)/boot/xen-$(VERSION)-$(FLAVOUR)$(IMAGE_SUFFIX)
+	# fixme dh_install debian/templates/xen-hypervisor.bug/* usr/share/bug/$(PACKAGE_NAME)
+	# fixme check cp $(DIR)/xen/xen$(IMAGE_SUFFIX) debian/$(PACKAGE_NAME)/boot/xen-$(VERSION)-$(FLAVOUR)$(IMAGE_SUFFIX)
 ifeq ($(ARCH),amd64)
-	cp $(DIR)/xen/xen.efi debian/$(PACKAGE_NAME)/boot/xen-$(VERSION)-$(FLAVOUR).efi
+	# fixme check cp $(DIR)/xen/xen.efi debian/$(PACKAGE_NAME)/boot/xen-$(VERSION)-$(FLAVOUR).efi
 endif
-	+$(MAKE_SELF) install-base
-	dh_testdir
-	dh_testroot
-	dh_prep
-	dh_install -Xtoolcore --sourcedir=$(DIR) usr/lib/*/lib*-$(VERSION).so*
-	dh_install debian/templates/libxen.bug/* usr/share/bug/$(PACKAGE_NAME)
-	dh_strip
-	dh_makeshlibs -V
-	dh_shlibdeps
-	+$(MAKE_SELF) install-base
-	dh_testdir
-	dh_testroot
-	dh_prep
+	# fixme dh_install debian/templates/libxen.bug/* usr/share/bug/$(PACKAGE_NAME)
 	# Move pkgconfig into a multiarch compliant place
-	mv $(DIR)/usr/share/pkgconfig $(DIR)/usr/lib/$(DEB_HOST_MULTIARCH)/
-	dh_install --sourcedir=$(DIR)
-	dh_strip
-	dh_shlibdeps
-	+$(MAKE_SELF) install-base
-	dh_testdir
-	dh_testroot
-	dh_prep
-	dh_install --sourcedir=$(DIR)
-	dh_strip
-	dh_makeshlibs -V
-	dh_shlibdeps
-	+$(MAKE_SELF) install-base
-	dh_testdir
-	dh_testroot
-	dh_prep
-	install -D -m644 debian/xen-utils.NEWS $(PACKAGE_DIR)/usr/share/doc/$(PACKAGE_NAME)/NEWS
-	install -D -m644 debian/xen-utils.README.Debian $(PACKAGE_DIR)/usr/share/doc/$(PACKAGE_NAME)/README.Debian
-	cp $(DIR)/usr/sbin/* $(DIR)/usr/lib/xen-$(VERSION)/bin/
-	dh_install --sourcedir=$(DIR) usr/lib/xen-$(VERSION)
-	dh_install debian/templates/xen-utils.bug/* usr/share/bug/$(PACKAGE_NAME)
-	dh_lintian
-	( echo -n "misc:Built-Using="; dpkg-query -f='$${source:Package} (= $${source:Version}), ' -W ipxe-qemu seabios; echo ) >> debian/$(PACKAGE_NAME).substvars
-	dh_python2 -V$(shell pyversions -rv) /usr/lib/xen-$(VERSION)
-	dh_strip
-	dh_makeshlibs -V
-	dh_shlibdeps
-	+$(MAKE_SELF) install-base
-	dh_testdir
-	dh_testroot
-	dh_prep
-	dh_install --sourcedir=$(DIR)
-	dh_ucf
-	+$(MAKE_SELF) install-base
-	dh_testdir
-	dh_testroot
-	dh_prep
-	dh_install --sourcedir=$(DIR)
-	dh_strip
-	dh_shlibdeps
-	+$(MAKE_SELF) install-base
-	dh_installchangelogs -XChangelog
-	dh_installdirs
-	dh_installdocs
-	dh_installexamples
-	dh_compress
-	dh_fixperms
-	dh_installdeb
-	dh_gencontrol -- $(GENCONTROL_ARGS)
-	dh_md5sums
-	dh_builddeb
-
-binary:	binary-indep binary-arch
-
-.PHONY: clean build binary-indep binary-arch binary
+	# fixme mv $(DIR)/usr/share/pkgconfig $(DIR)/usr/lib/$(DEB_HOST_MULTIARCH)/
+	# fixme install -D -m644 debian/xen-utils.NEWS $(PACKAGE_DIR)/usr/share/doc/$(PACKAGE_NAME)/NEWS
+	# fixme install -D -m644 debian/xen-utils.README.Debian $(PACKAGE_DIR)/usr/share/doc/$(PACKAGE_NAME)/README.Debian
+	# fixme cp $(DIR)/usr/sbin/* $(DIR)/usr/lib/xen-$(VERSION)/bin/
+	# fixme dh_install debian/templates/xen-utils.bug/* usr/share/bug/$(PACKAGE_NAME)
+	#ndh_lintian
+	# fixme ( echo -n "misc:Built-Using="; dpkg-query -f='$${source:Package} (= $${source:Version}), ' -W ipxe-qemu seabios; echo ) >> debian/$(PACKAGE_NAME).substvars

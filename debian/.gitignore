@@ -6,6 +6,7 @@ __pycache__
 /libxen-dev/
 /libxenstore3.0/
 /stamps/
+/xen-hypervisor-*.*-*/
 /xenstore-utils/
 /xen-system-*/
 /xen-utils-*.*/
