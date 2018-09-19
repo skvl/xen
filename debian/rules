@@ -38,7 +38,7 @@ dh_override_auto_configure:
 	./configure \
 		--disable-stubdom \
 		--prefix=/usr \
-		--includedir=/usr/include \
+		--includedir=/ousr/include \
 		--libdir=/usr/lib/$(DEB_HOST_MULTIARCH) \
 		--mandir=/usr/share/man \
 		--infodir=/usr/share/info \
@@ -65,11 +65,11 @@ make_args_xen= $(make_args) \
 	XEN_COMPILE_ARCH=$(XEN_ARCH_$(DEB_BUILD_ARCH)) \
 	XEN_TARGET_ARCH=$(XEN_ARCH_$(DEB_BUILD_ARCH))
 
-dh_override_auto_build:
+override_dh_auto_build:
 	$(MAKE) $(make_args_xen) xen
 	$(MAKE) $(make_args) tools docs
 
-dh_override_auto_install:
+override_dh_auto_install:
 	$(MAKE) $(make_args_xen) DESTDIR=$t install-xen
 	$(MAKE) $(make_args) DESTDIR=$t install-{tools,docs}
 ifneq ($(filter i386 amd64,$(ARCH)),)
