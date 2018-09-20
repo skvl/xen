@@ -3,12 +3,8 @@
 # Uncomment this to turn on verbose mode.
 #export DH_VERBOSE=1
 
-include /usr/share/dpkg/default.mk
-
 SHELL    := bash -e
 SOURCE := $(shell dpkg-parsechangelog -SSource)
-
-
 
 VERSION := $(shell dpkg-parsechangelog -SVersion)
 VERSION_UPSTREAM := $(shell echo "$(VERSION)" | sed -e 's,-[^-]*$$,,')
@@ -26,16 +22,14 @@ XEN_ARCH_arm64 = arm64
 
 t=$(PWD)/debian/tmp
 
-ifneq ($(filter i386 amd64,$(ARCH)),)
-	# hvmloader
-	strip --remove-section=.comment --remove-section=.note $t/usr/lib/xen*/boot/*
-endif
+dpkg_CFLAGS   := $(shell dpkg-buildflags --get CFLAGS)
+dpkg_CPPFLAGS := $(shell dpkg-buildflags --get CPPFLAGS)
+dpkg_LDFLAGS  := $(shell dpkg-buildflags --get CPPFLAGS)
 
 %:
 	dh $@
 
 override_dh_auto_clean:
-	printenv | sort
 	make -j1 distclean
 
 override_auto_configure:
@@ -57,25 +51,29 @@ override_auto_configure:
 		--enable-ovmf --with-system-ovmf=/usr/share/ovmf/OVMF.fd \
 		--with-system-seabios=/usr/share/seabios/bios-256k.bin
 
-make_args= \
-	debug=n \
-	EXTRA_CFLAGS_XEN_TOOLS="$(CFLAGS)" \
-	APPEND_CPPFLAGS="$(CPPFLAGS)" \
-	APPEND_LDFLAGS="$(LDFLAGS)" \
-	OCAMLDESTDIR=$(CURDIR)/$(BUILD_DIR)/install-utils_$(ARCH)/$(OCAML_STDLIB_DIR) \
-	PYTHON=$(shell pyversions -r)
+make_args_common= \
+	debug=n
 
-make_args_xen= $(make_args) \
+make_args_xen= $(make_args_common) \
 	XEN_COMPILE_ARCH=$(XEN_ARCH_$(DEB_BUILD_ARCH)) \
 	XEN_TARGET_ARCH=$(XEN_ARCH_$(DEB_BUILD_ARCH))
 
+make_args_tools= $(make_args_common) \
+	EXTRA_CFLAGS_XEN_TOOLS='$(dpkg_CFLAGS) $(dpkg_CPPFLAGS)' \
+	LDFLAGS='$(dpkg_LDFLAGS)'
+	OCAMLDESTDIR=$(CURDIR)/$(BUILD_DIR)/install-utils_$(ARCH)/$(OCAML_STDLIB_DIR) \
+	PYTHON=$(shell pyversions -r)
+
+override_dh_auto_clean:
+	$(MAKE) distclean
+
 override_dh_auto_build:
 	$(MAKE) $(make_args_xen) xen
-	$(MAKE) $(make_args) tools docs
+	$(MAKE) $(make_args_tools) tools docs
 
 override_dh_auto_install:
 	$(MAKE) $(make_args_xen) DESTDIR=$t install-xen
-	$(MAKE) $(make_args) DESTDIR=$t install-{tools,docs}
+	$(MAKE) $(make_args_tools) DESTDIR=$t install-{tools,docs}
 ifneq ($(filter i386 amd64,$(ARCH)),)
 	# hvmloader
 	strip --remove-section=.comment --remove-section=.note $(INSTALL_DIR)/usr/lib/xen*/boot/*
