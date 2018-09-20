@@ -61,6 +61,7 @@ override_dh_auto_configure:
 
 make_args_common= \
 	debug=n
+# fixme ^ "you must use make menuconfig"
 
 make_args_xen= $(make_args_common) \
 	XEN_COMPILE_ARCH=$(XEN_ARCH_$(DEB_BUILD_ARCH)) \
