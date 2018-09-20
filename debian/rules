@@ -30,9 +30,9 @@ dpkg_LDFLAGS  := $(shell dpkg-buildflags --get CPPFLAGS)
 	dh $@
 
 override_dh_auto_clean:
-	make -j1 distclean
+	$(MAKE) -j1 distclean
 
-override_auto_configure:
+override_dh_auto_configure:
 	./configure \
 		--disable-stubdom \
 		--prefix=/usr \
@@ -63,9 +63,6 @@ make_args_tools= $(make_args_common) \
 	LDFLAGS='$(dpkg_LDFLAGS)'
 	OCAMLDESTDIR=$(CURDIR)/$(BUILD_DIR)/install-utils_$(ARCH)/$(OCAML_STDLIB_DIR) \
 	PYTHON=$(shell pyversions -r)
-
-override_dh_auto_clean:
-	$(MAKE) distclean
 
 override_dh_auto_build:
 	$(MAKE) $(make_args_xen) xen
