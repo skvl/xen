@@ -34,7 +34,11 @@ endif
 %:
 	dh $@
 
-dh_override_auto_configure:
+override_dh_auto_clean:
+	printenv | sort
+	make -j1 distclean
+
+override_auto_configure:
 	./configure \
 		--disable-stubdom \
 		--prefix=/usr \
