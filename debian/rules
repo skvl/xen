@@ -37,9 +37,10 @@ dpkg_LDFLAGS  := $(shell dpkg-buildflags --get CPPFLAGS)
 	dh $@
 
 override_dh_auto_clean:
-	$(MAKE) -j1 distclean
+	: $(MAKE) -j1 distclean
 
 override_dh_auto_configure:
+	dh_update_autotools_config
 	./configure \
 		--disable-stubdom \
 		--prefix=/usr \
