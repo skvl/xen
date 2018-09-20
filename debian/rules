@@ -31,7 +31,7 @@ t=$(PWD)/debian/tmp
 
 dpkg_CFLAGS   := $(shell dpkg-buildflags --get CFLAGS)
 dpkg_CPPFLAGS := $(shell dpkg-buildflags --get CPPFLAGS)
-dpkg_LDFLAGS  := $(shell dpkg-buildflags --get CPPFLAGS)
+dpkg_LDFLAGS  := $(shell dpkg-buildflags --get LDLAGS)
 
 %:
 	dh $@
