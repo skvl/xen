@@ -69,7 +69,7 @@ make_args_xen= $(make_args_common) \
 
 make_args_tools= $(make_args_common) \
 	EXTRA_CFLAGS_XEN_TOOLS='$(dpkg_CFLAGS) $(dpkg_CPPFLAGS)' \
-	LDFLAGS='$(dpkg_LDFLAGS)'
+	PREPEND_LDFLAGS_XEN_TOOLS='$(dpkg_LDFLAGS)'
 	OCAMLDESTDIR=$(CURDIR)/$(BUILD_DIR)/install-utils_$(ARCH)/$(OCAML_STDLIB_DIR) \
 	PYTHON=$(shell pyversions -r)
 
