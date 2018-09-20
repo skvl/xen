@@ -10,6 +10,13 @@ VERSION := $(shell dpkg-parsechangelog -SVersion)
 VERSION_UPSTREAM := $(shell echo "$(VERSION)" | sed -e 's,-[^-]*$$,,')
 VERSION_BINNMU := $(shell echo "$(VERSION)" | sed -rne 's,.*\+b([0-9]+)$$,\1,p')
 
+# work around bug in dpkg-buildpackage between dpkg 1.14.17 and 1.16.1
+undefine CFLAGS
+undefine CXXFLAGS
+undefine FFLAGS
+undefine CPPFLAGS
+undefine LDFLAGS
+
 export WGET=/bin/false
 
 XENARCH_amd64=x86_64
