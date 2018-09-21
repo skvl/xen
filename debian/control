@@ -7,6 +7,62 @@ Standards-Version: 3.9.4
 Build-Depends: autotools-dev, debhelper (>> 9), dpkg-dev (>= 1.16.0~), lsb-release, python-dev, bcc [i386 amd64], gcc-multilib [i386 amd64], e2fslibs-dev, iasl, seabios (>= 1.7.4-2~) [i386 amd64], libaio-dev, libfdt-dev [armhf arm64], libglib2.0-dev, liblzma-dev, libncurses5-dev, libpixman-1-dev, libyajl-dev, pkg-config, uuid-dev, zlib1g-dev
 XS-Python-Version: current
 
+Package: libxenstore3.0
+Architecture: amd64 arm64 armhf i386
+Section: libs
+Depends: ${shlibs:Depends}, ${misc:Depends}
+Description: Xen runtime libraries - libxenstore
+ Shared library which is part of the the Xen toolstack infrastructure.
+Multi-Arch: same
+
+Package: libxenforeignmemory4.12
+Architecture: amd64 arm64 armhf i386
+Section: libs
+Depends: ${shlibs:Depends}, ${misc:Depends}
+Description: Xen runtime libraries - libxenforeignmemory
+ Shared library which is part of the the Xen toolstack infrastructure.
+Multi-Arch: same
+
+Package: libxencall4.12
+Architecture: amd64 arm64 armhf i386
+Section: libs
+Depends: ${shlibs:Depends}, ${misc:Depends}
+Description: Xen runtime libraries - libxencall
+ Shared library which is part of the the Xen toolstack infrastructure.
+     debian/tmp/usr/lib/x86_64-linux-gnu/libxendevicemodel-4.12.so.1.2
+     debian/tmp/usr/lib/x86_64-linux-gnu/libxenctrl-4.12.so
+     debian/tmp/usr/lib/x86_64-linux-gnu/libxencall-4.12.so.1
+     debian/tmp/usr/lib/x86_64-linux-gnu/libxenstore.so.3.0.3
+     debian/tmp/usr/lib/x86_64-linux-gnu/libxenvchan.so.4.11
+     debian/tmp/usr/lib/x86_64-linux-gnu/libxentoolcore.so
+     debian/tmp/usr/lib/x86_64-linux-gnu/libxenguest.so
+     debian/tmp/usr/lib/x86_64-linux-gnu/libxenctrl.so
+     debian/tmp/usr/lib/x86_64-linux-gnu/libxenforeignmemory-4.12.so.1.3
+     debian/tmp/usr/lib/x86_64-linux-gnu/libxentoolcore-4.12.so.1.0
+     debian/tmp/usr/lib/x86_64-linux-gnu/libxentoollog-4.12.so.1.0
+     debian/tmp/usr/lib/x86_64-linux-gnu/libxentoollog-4.12.so.1
+     debian/tmp/usr/lib/x86_64-linux-gnu/libxenvchan.so
+     debian/tmp/usr/lib/x86_64-linux-gnu/libxentoollog.so
+     debian/tmp/usr/lib/x86_64-linux-gnu/libxenlight.so
+     debian/tmp/usr/lib/x86_64-linux-gnu/libxengnttab-4.12.so.1
+     debian/tmp/usr/lib/x86_64-linux-gnu/libxenguest-4.12.so
+     debian/tmp/usr/lib/x86_64-linux-gnu/libxenforeignmemory.so
+     debian/tmp/usr/lib/x86_64-linux-gnu/libxengnttab.so
+     debian/tmp/usr/lib/x86_64-linux-gnu/libxenvchan.so.4.11.0
+     debian/tmp/usr/lib/x86_64-linux-gnu/libxendevicemodel-4.12.so.1
+     debian/tmp/usr/lib/x86_64-linux-gnu/libxendevicemodel.so
+     debian/tmp/usr/lib/x86_64-linux-gnu/libxenlight-4.12.so
+     debian/tmp/usr/lib/x86_64-linux-gnu/libxenevtchn.so
+     debian/tmp/usr/lib/x86_64-linux-gnu/libxlutil-4.12.so
+     debian/tmp/usr/lib/x86_64-linux-gnu/libxengnttab-4.12.so.1.1
+     debian/tmp/usr/lib/x86_64-linux-gnu/libxenevtchn-4.12.so.1
+     debian/tmp/usr/lib/x86_64-linux-gnu/libxencall.so
+     debian/tmp/usr/lib/x86_64-linux-gnu/libxenstore.so.3.0
+     debian/tmp/usr/lib/x86_64-linux-gnu/libxentoolcore-4.12.so.1
+     debian/tmp/usr/lib/x86_64-linux-gnu/libxlutil.so
+     debian/tmp/usr/lib/x86_64-linux-gnu/libxenevtchn-4.12.so.1.1
+Multi-Arch: same
+
 Package: libxen-4.11
 Architecture: amd64 arm64 armhf i386
 Section: libs
@@ -16,7 +72,6 @@ Description: Public libs for Xen
 Multi-Arch: same
 
 Package: libxenstore3.0
-Architecture: amd64 arm64 armhf i386
 Section: libs
 Depends: ${shlibs:Depends}, ${misc:Depends}
 Description: Xenstore communications library for Xen
