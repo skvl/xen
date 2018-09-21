@@ -17,15 +17,16 @@ SHELL    := bash -e
 # be updated when a new major upstream version is packaged (eg 4.10 ->
 # 4.11).
 #
-# Only debian/control needs this update; all other files are made
-# from simple templates, at package build time.
+# Only debian/control needs this update; all other files are made from
+# simple templates, at package build time, by the rules generated
+# from template_rule_template, below.
 #
 upstream_version := \
  $(shell dpkg-parsechangelog -SVersion | sed 's/\(\.[0-9]*\)\..*/\1/' )
 
 TEMPLATE_FILES := $(wildcard debian/*.vsn-in)
 
-define template_template =
+define template_rule_template =
  TEMPLATED_FILES += $(2)
  $(2): $(1) debian/rules debian/changelog
 	sed 's/@version@/$(upstream_version)/g' <$$< >$$@.tmp \
@@ -34,7 +35,7 @@ endef
 
 $(foreach t,$(TEMPLATE_FILES), $(eval 					\
 	$(call 								\
-		template_template, $t, 					\
+		template_rule_template, $t, 				\
 		$(subst V,$(upstream_version), $(basename $t)) 		\
 	)))
 
