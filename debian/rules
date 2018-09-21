@@ -20,7 +20,8 @@ SHELL    := bash -e
 # Only debian/control needs this update; all other files are made
 # from simple templates, at package build time.
 #
-upstream_version := $(shell dpkg-parsechangelog -SVersion | sed 's/\(\.[0-9]*\)\..*/\1/')
+upstream_version := \
+ $(shell dpkg-parsechangelog -SVersion | sed 's/\(\.[0-9]*\)\..*/\1/' )
 
 TEMPLATE_FILES := $(wildcard debian/*.vsn-in)
 
@@ -31,15 +32,14 @@ define template_template =
 	&& mv -f $$@{.tmp,}
 endef
 
-$(foreach t,$(TEMPLATE_FILES), $(eval $(call \
-	template_template, $t, \
-	$(subst V,$(upstream_version), $(basename $t)) \
+$(foreach t,$(TEMPLATE_FILES), $(eval 					\
+	$(call 								\
+		template_template, $t, 					\
+		$(subst V,$(upstream_version), $(basename $t)) 		\
 	)))
 
 templated-files: $(TEMPLATED_FILES)
 	:
-
-$(shell echo >&2 $(TEMPLATE_FILES) X $(TEMPLATED_FILES))
 
 # Work around bug in dpkg-buildpackage: between dpkg 1.14.17 and 1.16.1
 # it exports these.  This is a problem because we need to pass different
