@@ -1,2 +1,6 @@
 .debhelper
 *.debhelper.*
+tmp
+*-[0-9]*.bug-control
+*-[0-9]*.postinst
+*-[0-9]*.postrm
