@@ -131,7 +131,7 @@ override_dh_auto_configure:
 	$(make_args_tools) ./configure \
 		--disable-stubdom \
 		--prefix=/usr \
-		--includedir=/ousr/include \
+		--includedir=/usr/include \
 		--libdir=/usr/lib/$(DEB_HOST_MULTIARCH) \
 		--mandir=/usr/share/man \
 		--infodir=/usr/share/info \
