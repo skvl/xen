@@ -4,11 +4,23 @@
 #export DH_VERBOSE=1
 
 SHELL    := bash -e
-SOURCE := $(shell dpkg-parsechangelog -SSource)
 
-VERSION := $(shell dpkg-parsechangelog -SVersion)
-VERSION_UPSTREAM := $(shell echo "$(VERSION)" | sed -e 's,-[^-]*$$,,')
-VERSION_BINNMU := $(shell echo "$(VERSION)" | sed -rne 's,.*\+b([0-9]+)$$,\1,p')
+# Much of the work here is to make different upstream versions of Xen
+# coinstallable, and arrange to run which ever version of the tools
+# corresponds to the running hypervisor.
+#
+# This packaging produces one version.  The nominal upstream version
+# represents the control ABI used by hypervisor management utilities.
+#
+# In this package that is in (i) debian/control and (ii) the first two
+# numbers in the package version in debian/changelog.  These must both
+# be updated when a new major upstream version is packaged (eg 4.10 ->
+# 4.11).
+#
+# Only debian/control needs this update; all other files are made
+# from simple templates, at package build time.
+#
+upstream_version := $(shell dpkg-parsechangelog -SVersion | sed sed 's/\(\.[0-9]*\)\..*/\1/')
 
 # work around bug in dpkg-buildpackage between dpkg 1.14.17 and 1.16.1
 undefine CFLAGS
@@ -17,7 +29,23 @@ undefine FFLAGS
 undefine CPPFLAGS
 undefine LDFLAGS
 
-export WGET=/bin/false
+# The Xen build system likes to download things at build-time.  We
+# think we have disabled all of that with appropriate configure
+# options.  Set these too, so we spot if we miss any.
+export WGET=/bin/false GIT=/bin/false
+
+# Architecture handling.
+#
+# We need to explicitly specify the architecture because the Xen
+# upstream build system likes to use `uname' which can produce wrong
+# answers it other-bitness chroots, and because we need to build a
+# 64-bit hypervisor even on i386 (since there is no 32-bit hypervisor
+# anymore).
+#
+# Xen has its own different architecture names, which are nither
+# Debian nor GNU names.
+
+include /usr/share/dpkg/architecture.mk
 
 XENARCH_amd64=x86_64
 XENARCH_amd64=x86_64
@@ -27,33 +55,36 @@ XEN_ARCH_i386 = x86_64 # yes, really
 XEN_ARCH_armhf = arm32
 XEN_ARCH_arm64 = arm64
 
+make_args_common= \
+	XEN_COMPILE_ARCH=$(XEN_ARCH_$(DEB_BUILD_ARCH)) \
+	XEN_TARGET_ARCH=$(XEN_ARCH_$(DEB_BUILD_ARCH)) \
+
+# Other build flags etc.
+
 t=$(PWD)/debian/tmp
 
 dpkg_CFLAGS   := $(shell dpkg-buildflags --get CFLAGS)
 dpkg_CPPFLAGS := $(shell dpkg-buildflags --get CPPFLAGS)
 dpkg_LDFLAGS  := $(shell dpkg-buildflags --get LDLAGS)
 
-include /usr/share/dpkg/architecture.mk
-
-make_args_common= \
-	XEN_COMPILE_ARCH=$(XEN_ARCH_$(DEB_BUILD_ARCH)) \
-	XEN_TARGET_ARCH=$(XEN_ARCH_$(DEB_BUILD_ARCH)) \
-
-# fixme ^ "you must use make menuconfig"
-
 make_args_xen= $(make_args_common) \
+
+# Xen upstream does not offer a separate CPPFLAGS, so we pass those in
+# CFLAGS.
 
 make_args_tools= $(make_args_common) \
 	EXTRA_CFLAGS_XEN_TOOLS='$(dpkg_CFLAGS) $(dpkg_CPPFLAGS)' \
 	PREPEND_LDFLAGS_XEN_TOOLS='$(dpkg_LDFLAGS)'
-	OCAMLDESTDIR=$(CURDIR)/$(BUILD_DIR)/install-utils_$(ARCH)/$(OCAML_STDLIB_DIR) \
-	PYTHON=$(shell pyversions -r)
+
+# fixme do we need these ?
+#	OCAMLDESTDIR=$(CURDIR)/$(BUILD_DIR)/install-utils_$(ARCH)/$(OCAML_STDLIB_DIR) \
+#	PYTHON=$(shell pyversions -r)
 
 %:
 	dh $@
 
-override_dh_auto_clean:
-	$(MAKE) -j1 distclean
+#override_dh_auto_clean:
+#	$(MAKE) -j1 distclean
 
 override_dh_auto_configure:
 	dh_update_autotools_config
