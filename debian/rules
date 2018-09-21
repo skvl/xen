@@ -24,6 +24,14 @@ SHELL    := bash -e
 upstream_version := \
  $(shell dpkg-parsechangelog -SVersion | sed 's/\(\.[0-9]*\)\..*/\1/' )
 
+# We take all files named   debian/*.vsn-in
+# and do these three things to them:
+#  1. substitute @version@ in the file contents with the version
+#     number (the one from $(upstream_version))
+#  2. replace any V in the file *name* with that same version
+#  3. strip .vsn-in from the end
+# The resulting files are mainly consumed by dh.
+
 TEMPLATE_FILES := $(wildcard debian/*.vsn-in)
 
 define template_rule_template =
