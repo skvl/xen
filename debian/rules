@@ -127,7 +127,6 @@ override_dh_auto_configure:
 	:
 	cp debian/xen-kconfig xen/.config
 	make -C xen olddefconfig $(make_args_xen)
-	false
 	:
 	$(make_args_tools) ./configure \
 		--disable-stubdom \
