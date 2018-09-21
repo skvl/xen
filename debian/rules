@@ -33,6 +33,22 @@ dpkg_CFLAGS   := $(shell dpkg-buildflags --get CFLAGS)
 dpkg_CPPFLAGS := $(shell dpkg-buildflags --get CPPFLAGS)
 dpkg_LDFLAGS  := $(shell dpkg-buildflags --get LDLAGS)
 
+include /usr/share/dpkg/architecture.mk
+
+make_args_common= \
+	XEN_COMPILE_ARCH=$(XEN_ARCH_$(DEB_BUILD_ARCH)) \
+	XEN_TARGET_ARCH=$(XEN_ARCH_$(DEB_BUILD_ARCH)) \
+
+# fixme ^ "you must use make menuconfig"
+
+make_args_xen= $(make_args_common) \
+
+make_args_tools= $(make_args_common) \
+	EXTRA_CFLAGS_XEN_TOOLS='$(dpkg_CFLAGS) $(dpkg_CPPFLAGS)' \
+	PREPEND_LDFLAGS_XEN_TOOLS='$(dpkg_LDFLAGS)'
+	OCAMLDESTDIR=$(CURDIR)/$(BUILD_DIR)/install-utils_$(ARCH)/$(OCAML_STDLIB_DIR) \
+	PYTHON=$(shell pyversions -r)
+
 %:
 	dh $@
 
@@ -41,7 +57,12 @@ override_dh_auto_clean:
 
 override_dh_auto_configure:
 	dh_update_autotools_config
-	./configure \
+	:
+	cp debian/xen-kconfig xen/.config
+	make -C xen olddefconfig $(make_args_xen)
+	false
+	:
+	$(make_args_tools) ./configure \
 		--disable-stubdom \
 		--prefix=/usr \
 		--includedir=/ousr/include \
@@ -58,21 +79,6 @@ override_dh_auto_configure:
 		--with-system-qemu=/usr/bin/qemu-system-i386 \
 		--enable-ovmf --with-system-ovmf=/usr/share/ovmf/OVMF.fd \
 		--with-system-seabios=/usr/share/seabios/bios-256k.bin
-
-make_args_common= \
-	debug=n
-	XEN_COMPILE_ARCH=$(XEN_ARCH_$(DEB_BUILD_ARCH)) \
-	XEN_TARGET_ARCH=$(XEN_ARCH_$(DEB_BUILD_ARCH)) \
-
-# fixme ^ "you must use make menuconfig"
-
-make_args_xen= $(make_args_common) \
-
-make_args_tools= $(make_args_common) \
-	EXTRA_CFLAGS_XEN_TOOLS='$(dpkg_CFLAGS) $(dpkg_CPPFLAGS)' \
-	PREPEND_LDFLAGS_XEN_TOOLS='$(dpkg_LDFLAGS)'
-	OCAMLDESTDIR=$(CURDIR)/$(BUILD_DIR)/install-utils_$(ARCH)/$(OCAML_STDLIB_DIR) \
-	PYTHON=$(shell pyversions -r)
 
 override_dh_auto_build:
 	$(MAKE) $(make_args_xen) xen
