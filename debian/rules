@@ -20,9 +20,31 @@ SHELL    := bash -e
 # Only debian/control needs this update; all other files are made
 # from simple templates, at package build time.
 #
-upstream_version := $(shell dpkg-parsechangelog -SVersion | sed sed 's/\(\.[0-9]*\)\..*/\1/')
+upstream_version := $(shell dpkg-parsechangelog -SVersion | sed 's/\(\.[0-9]*\)\..*/\1/')
 
-# work around bug in dpkg-buildpackage between dpkg 1.14.17 and 1.16.1
+TEMPLATE_FILES := $(wildcard debian/*.vsn-in)
+
+define template_template =
+ TEMPLATED_FILES += $(2)
+ $(2): $(1) debian/rules debian/changelog
+	sed 's/@version@/$(upstream_version)/g' <$$< >$$@.tmp \
+	&& mv -f $$@{.tmp,}
+endef
+
+$(foreach t,$(TEMPLATE_FILES), $(eval $(call \
+	template_template, $t, \
+	$(subst V,$(upstream_version), $(basename $t)) \
+	)))
+
+templated-files: $(TEMPLATED_FILES)
+	:
+
+$(shell echo >&2 $(TEMPLATE_FILES) X $(TEMPLATED_FILES))
+
+# Work around bug in dpkg-buildpackage: between dpkg 1.14.17 and 1.16.1
+# it exports these.  This is a problem because we need to pass different
+# options to the hypervisor build - the default options from dpkg
+# et al are suitable for dom0 binaries but not for the hypervisor.
 undefine CFLAGS
 undefine CXXFLAGS
 undefine FFLAGS
@@ -83,8 +105,13 @@ make_args_tools= $(make_args_common) \
 %:
 	dh $@
 
-#override_dh_auto_clean:
-#	$(MAKE) -j1 distclean
+# Without this, something on stretch passes CFLAGS in the environment
+# to the Xen build system, which then (with 4.11) chokes printing
+#   /bin/sh: 1: Syntax error: Unterminated quoted string
+# probably because the CFLAGS value contains multiple options and
+# therefore spaces.  See also the note by `undefine CFLAGS', above.
+override_dh_auto_clean:
+	$(MAKE) -j1 distclean
 
 override_dh_auto_configure:
 	dh_update_autotools_config
@@ -115,7 +142,7 @@ override_dh_auto_build:
 	$(MAKE) $(make_args_xen) xen
 	$(MAKE) $(make_args_tools) tools docs
 
-override_dh_auto_install:
+override_dh_auto_install: $(TEMPLATED_FILES)
 	$(MAKE) $(make_args_xen) DESTDIR=$t install-xen
 	$(MAKE) $(make_args_tools) DESTDIR=$t install-{tools,docs}
 ifneq ($(filter i386 amd64,$(ARCH)),)
