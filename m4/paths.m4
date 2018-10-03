@@ -70,6 +70,13 @@ AC_ARG_WITH([libexec-leaf-dir],
     [libexec_subdir=$withval],
     [libexec_subdir=$PACKAGE_TARNAME])
 
+dnl Allows .../libexec/lib (used for libfsimage) to have a multiarch path
+AC_ARG_WITH([libexec-libdir-suffix],
+    AS_HELP_STRING([--with-libexec-libdir-suffix=/SUFFIX],
+    [Name of subdirectory or suffix to use after ...LIBEXEC/lib.]),
+    [libexec_libdir_suffix=$withval],
+    [libexec_libdir_suffix=''])
+
 AC_ARG_WITH([xen-dumpdir],
     AS_HELP_STRING([--with-xen-dumpdir=DIR],
     [Path to directory for domU crash dumps. [LOCALSTATEDIR/lib/xen/dump]]),
@@ -103,7 +110,7 @@ AC_SUBST(LIBEXEC)
 dnl These variables will be substituted in various .in files
 LIBEXEC_BIN=${LIBEXEC}/bin
 AC_SUBST(LIBEXEC_BIN)
-LIBEXEC_LIB=${LIBEXEC}/lib
+LIBEXEC_LIB=${LIBEXEC}/lib${libexec_libdir_suffix}
 AC_SUBST(LIBEXEC_LIB)
 LIBEXEC_INC=${LIBEXEC}/include
 AC_SUBST(LIBEXEC_INC)
