@@ -627,7 +627,7 @@ void noreturn __domain_crash_synchronous(void);
 
 /*
  * Called from assembly code, with an optional address to help indicate why
- * the crash occured.  If addr is 0, look up address from last extable
+ * the crash occurred.  If addr is 0, look up address from last extable
  * redirection.
  */
 void noreturn asm_domain_crash_synchronous(unsigned long addr);
