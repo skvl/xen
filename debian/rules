@@ -255,9 +255,16 @@ override_dh_strip:
 	dh_strip
 	chmod -x debian/xen-utils-*/usr/lib/xen-*/boot/hvmloader
 
+# Hardlink the various xenstore-* programs together.  This is an
+# argv[0]-using binary of which we can have only one copy.  We need to
+# do this late, because dh_strip breaks hardlinks.
+#
 # The debug files are fairly large, fairly rarely used,
 # and not compressed by the upstream build system.
 override_dh_compress:
+	rdfind -makehardlinks true -makeresultsfile false \
+		debian/xenstore-utils/usr/bin
+	:
 	dh_compress
 	find debian/xen-hypervisor-*/usr/lib/debug -type f -print0 \
 		| xargs -0r gzip -9v
