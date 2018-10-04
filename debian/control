@@ -40,7 +40,7 @@ Description: Xenstore command line utilities for Xen
  .
  XenStore is a shared database used for interdomain communication of
  configuration and status information.  It is accessible to all domains
- running on the same Xen host.  See http://wiki.xen.org/wiki/XenStore for
+ running on the same Xen host.  See https://wiki.xen.org/wiki/XenStore for
  more information.
  .
  In the common case these tools are used by the Xen toolstack running in
