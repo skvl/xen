@@ -1,3 +1,9 @@
+xen (4.11.1~pre.20180911.5acdd26fdc+dfsg-1) UNRELEASED; urgency=medium
+
+  * Update to new upstream version 4.11.1~pre.20180911.5acdd26fdc+dfsg.
+
+ -- Ian Jackson <ian.jackson@citrix.com>  Fri, 05 Oct 2018 18:39:58 +0100
+
 xen (4.11.1~pre+1.733450b39b-1) unstable; urgency=medium
 
   * Completely overhauled the packaging.  In the source package, things
