@@ -424,3 +424,9 @@ tools/xl/xl
 docs/txt/misc/*.txt
 docs/txt/man/*.txt
 docs/figs/*.png
+
+configure
+docs/configure
+tools/configure
+config.sub
+config.guess
