@@ -1,6 +1,8 @@
 XEN_ROOT = $(CURDIR)/../../..
 include $(XEN_ROOT)/tools/libfsimage/Rules.mk
 
+CFLAGS += -DFSDIR="\"$(LIBEXEC_LIB)/fs\""
+
 LDFLAGS-$(CONFIG_SunOS) = -Wl,-M -Wl,mapfile-SunOS
 LDFLAGS-$(CONFIG_Linux) = -Wl,mapfile-GNU
 LDFLAGS += $(LDFLAGS-y)
@@ -19,9 +21,9 @@ all: $(LIB)
 
 .PHONY: install
 install: all
-	$(INSTALL_DIR) $(DESTDIR)$(libdir)
+	$(INSTALL_DIR) $(DESTDIR)$(LIBEXEC_LIB)
 	$(INSTALL_DIR) $(DESTDIR)$(includedir)
-	$(INSTALL_PROG) libfsimage.so $(DESTDIR)$(libdir)
+	$(INSTALL_PROG) libfsimage.so $(DESTDIR)$(LIBEXEC_LIB)
 	$(INSTALL_DATA) fsimage.h $(DESTDIR)$(includedir)
 	$(INSTALL_DATA) fsimage_plugin.h $(DESTDIR)$(includedir)
 	$(INSTALL_DATA) fsimage_grub.h $(DESTDIR)$(includedir)
@@ -31,7 +33,7 @@ uninstall:
 	rm -f $(DESTDIR)$(includedir)/fsimage_grub.h
 	rm -f $(DESTDIR)$(includedir)/fsimage_plugin.h
 	rm -f $(DESTDIR)$(includedir)/fsimage.h
-	rm -f $(DESTDIR)$(libdir)/libfsimage.so
+	rm -f $(DESTDIR)$(LIBEXEC_LIB)/libfsimage.so
 
 clean distclean::
 	rm -f $(LIB)
