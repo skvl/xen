@@ -148,11 +148,17 @@ override_dh_auto_clean:
 	rm -f debian/xen-tools-built.stamp
 	$(MAKE) -j1 distclean
 
+# To avoid that the build dirties the tree, our delta queue deletes
+# config.sub and config.guess.  dh_update_autotools_config can get
+# us fresh ones for each build, but it expects to find some there
+# already with some weird properties.  Instead, just copy them
+# from /usr/share/misc (which is where it gets them anyway)
+override_dh_update_autotools_config:
+	cp /usr/share/misc/{config.sub,config.guess} .
+
 # Upstream has both a kconfig style configure for the hypervisor
 # and autoconfery for the tools (what we call the `utils').
 override_dh_auto_configure:
-	dh_update_autotools_config
-	:
 	cp debian/xen-kconfig xen/.config
 	make -C xen olddefconfig $(make_args_xen)
 	:
