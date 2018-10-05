@@ -1,6 +1,7 @@
-xen (4.11.1~pre.20180911.5acdd26fdc+dfsg-1) UNRELEASED; urgency=medium
+xen (4.11.1~pre.20180911.5acdd26fdc+dfsg-1) unstable; urgency=medium
 
-  * Update to new upstream version 4.11.1~pre.20180911.5acdd26fdc+dfsg.
+  * Update to new upstream version 4.11.1~pre.20180911.5acdd26fdc+dfsg;
+    merging in 4.11.1~pre.20180911.5acdd26fdc+dfsg-1~exp1.
 
  -- Ian Jackson <ian.jackson@citrix.com>  Fri, 05 Oct 2018 18:39:58 +0100
 
@@ -64,6 +65,16 @@ xen (4.11.1~pre+1.733450b39b-1) unstable; urgency=medium
      - We install a doc-base control file.
 
  -- Ian Jackson <ijackson@chiark.greenend.org.uk>  Wed, 03 Oct 2018 18:45:02 +0100
+
+xen (4.11.1~pre.20180911.5acdd26fdc+dfsg-1~exp1) experimental; urgency=medium
+
+  * Update to new upstream version 4.11.1~pre.20180911.5acdd26fdc+dfsg.
+  * Remove stubdom/grub.patches/00cvs from the upstream source because it's
+    not DFSG compliant. (license-problem-gfdl-invariants)
+  * Override statically-linked-binary lintian error about
+    usr/lib/xen-4.11/boot/xen-shim
+
+ -- Hans van Kranenburg <hans@knorrie.org>  Tue, 11 Sep 2018 15:34:34 +0200
 
 xen (4.11.1~pre+1.733450b39b-1~exp1) experimental; urgency=medium
 
