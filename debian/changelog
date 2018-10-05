@@ -1,4 +1,4 @@
-xen (4.11.1~pre+1.733450b39b-1~exp1+rework) UNRELEASED; urgency=medium
+xen (4.11.1~pre+1.733450b39b-1) unstable; urgency=medium
 
   * Completely overhauled the packaging.  In the source package, things
     are very much simpler now with only a few hundred loc of templating
