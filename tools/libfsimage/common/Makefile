@@ -1,6 +1,8 @@
 XEN_ROOT = $(CURDIR)/../../..
 include $(XEN_ROOT)/tools/libfsimage/Rules.mk
 
+CFLAGS += -DFSDIR="\"$(LIBEXEC_LIB)/fs\""
+
 MAJOR = 4.12
 MINOR = 0
 
@@ -22,11 +24,11 @@ all: $(LIB)
 
 .PHONY: install
 install: all
-	$(INSTALL_DIR) $(DESTDIR)$(libdir)
+	$(INSTALL_DIR) $(DESTDIR)$(LIBEXEC_LIB)
 	$(INSTALL_DIR) $(DESTDIR)$(includedir)
-	$(INSTALL_PROG) libxenfsimage.so.$(MAJOR).$(MINOR) $(DESTDIR)$(libdir)
-	ln -sf libxenfsimage.so.$(MAJOR).$(MINOR) $(DESTDIR)$(libdir)/libxenfsimage.so.$(MAJOR)
-	ln -sf libxenfsimage.so.$(MAJOR) $(DESTDIR)$(libdir)/libxenfsimage.so
+	$(INSTALL_PROG) libxenfsimage.so $(DESTDIR)$(LIBEXEC_LIB)
+	ln -sf libxenfsimage.so.$(MAJOR).$(MINOR) $(DESTDIR)$(LIBEXEC_LIB)/libxenfsimage.so.$(MAJOR)
+	ln -sf libxenfsimage.so.$(MAJOR) $(DESTDIR)$(LIBEXEC_LIB)/libxenfsimage.so
 	$(INSTALL_DATA) xenfsimage.h $(DESTDIR)$(includedir)
 	$(INSTALL_DATA) xenfsimage_plugin.h $(DESTDIR)$(includedir)
 	$(INSTALL_DATA) xenfsimage_grub.h $(DESTDIR)$(includedir)
