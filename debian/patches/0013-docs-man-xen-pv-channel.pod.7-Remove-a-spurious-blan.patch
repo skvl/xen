@@ -1,0 +1,22 @@
+From: Ian Jackson <ian.jackson@citrix.com>
+Date: Wed, 3 Oct 2018 18:43:55 +0100
+Subject: docs/man/xen-pv-channel.pod.7: Remove a spurious blank line
+
+No functional change.
+
+Signed-off-by: Ian Jackson <ian.jackson@citrix.com>
+---
+ docs/man/xen-pv-channel.pod.7 | 1 -
+ 1 file changed, 1 deletion(-)
+
+diff --git a/docs/man/xen-pv-channel.pod.7 b/docs/man/xen-pv-channel.pod.7
+index f9f0108..07898f6 100644
+--- a/docs/man/xen-pv-channel.pod.7
++++ b/docs/man/xen-pv-channel.pod.7
+@@ -1,6 +1,5 @@
+ =encoding utf8
+ 
+-
+ =head1 NAME
+ 
+ xen-pv-channel - Xen PV Channels

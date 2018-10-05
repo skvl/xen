@@ -1,0 +1,26 @@
+From: Ian Jackson <ian.jackson@citrix.com>
+Date: Fri, 28 Sep 2018 15:30:54 +0100
+Subject: tools/debugger/kdd: Install as `xen-kdd', not just `kdd'
+
+`kdd' is an unfortunate namespace landgrab.
+
+Signed-off-by: Ian Jackson <ian.jackson@citrix.com>
+---
+ tools/debugger/kdd/Makefile | 4 ++--
+ 1 file changed, 2 insertions(+), 2 deletions(-)
+
+diff --git a/tools/debugger/kdd/Makefile b/tools/debugger/kdd/Makefile
+index 5509eee..2611694 100644
+--- a/tools/debugger/kdd/Makefile
++++ b/tools/debugger/kdd/Makefile
+@@ -24,8 +24,8 @@ distclean: clean
+ .PHONY: install
+ install: all
+ 	[ -d $(DESTDIR)$(sbindir) ] || $(INSTALL_DIR) $(DESTDIR)$(sbindir)
+-	$(INSTALL_PROG) kdd $(DESTDIR)$(sbindir)/kdd
++	$(INSTALL_PROG) kdd $(DESTDIR)$(sbindir)/xen-kdd
+ 
+ .PHONY: uninstall
+ uninstall:
+-	rm -f $(DESTDIR)$(sbindir)/kdd
++	rm -f $(DESTDIR)$(sbindir)/xen-kdd

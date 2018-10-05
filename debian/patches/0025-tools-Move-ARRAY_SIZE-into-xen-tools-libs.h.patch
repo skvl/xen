@@ -1,0 +1,319 @@
+From: Andrew Cooper <andrew.cooper3@citrix.com>
+Date: Wed, 4 Jul 2018 14:32:31 +0100
+Subject: tools: Move ARRAY_SIZE() into xen-tools/libs.h
+
+xen-tools/libs.h currently contains a shared BUILD_BUG_ON() implementation and
+is used by some tools.  Extend this to include ARRAY_SIZE and clean up all the
+opencoding.
+
+Signed-off-by: Andrew Cooper <andrew.cooper3@citrix.com>
+Acked-by: Ian Jackson <ian.jackson@eu.citrix.com>
+Acked-by: Jan Beulich <jbeulich@suse.com>
+(cherry picked from commit e1b7eb92d3ec6ce3ca68cffb36a148eb59f59613)
+---
+ tools/include/xen-tools/libs.h         |  4 ++++
+ tools/libxc/xc_private.h               |  7 ++-----
+ tools/libxl/libxl_internal.h           |  4 ++--
+ tools/misc/xen-cpuid.c                 |  3 ++-
+ tools/misc/xen-diag.c                  |  2 --
+ tools/misc/xen-hptool.c                |  3 ---
+ tools/misc/xen-livepatch.c             |  2 --
+ tools/misc/xen-mfndump.c               |  3 ---
+ tools/misc/xenpm.c                     |  4 ++--
+ tools/python/xen/lowlevel/xc/xc.c      |  2 +-
+ tools/tests/vhpet/emul.h               |  6 ++----
+ tools/tests/x86_emulator/x86-emulate.h | 14 ++------------
+ tools/tests/xen-access/xen-access.c    |  6 ++----
+ tools/tests/xenstore/xs-test.c         |  3 ++-
+ tools/xenstore/utils.h                 |  6 ++----
+ tools/xentrace/analyze.h               |  2 +-
+ 16 files changed, 24 insertions(+), 47 deletions(-)
+
+diff --git a/tools/include/xen-tools/libs.h b/tools/include/xen-tools/libs.h
+index e874fb8..63e3507 100644
+--- a/tools/include/xen-tools/libs.h
++++ b/tools/include/xen-tools/libs.h
+@@ -9,4 +9,8 @@
+ #endif
+ #endif
+ 
++#ifndef ARRAY_SIZE
++#define ARRAY_SIZE(a) (sizeof(a) / sizeof(*a))
++#endif
++
+ #endif	/* __XEN_TOOLS_LIBS__ */
+diff --git a/tools/libxc/xc_private.h b/tools/libxc/xc_private.h
+index 03bdfca..a0b203e 100644
+--- a/tools/libxc/xc_private.h
++++ b/tools/libxc/xc_private.h
+@@ -40,6 +40,8 @@
+ 
+ #include <xen/sys/privcmd.h>
+ 
++#include <xen-tools/libs.h>
++
+ #if defined(HAVE_VALGRIND_MEMCHECK_H) && !defined(NDEBUG) && !defined(__MINIOS__)
+ /* Compile in Valgrind client requests? */
+ #include <valgrind/memcheck.h>
+@@ -73,11 +75,6 @@ struct iovec {
+ #define PAGE_SIZE               XC_PAGE_SIZE
+ #define PAGE_MASK               XC_PAGE_MASK
+ 
+-#ifndef ARRAY_SIZE /* MiniOS leaks ARRAY_SIZE into our namespace as part of a
+-                    * stubdom build.  It shouldn't... */
+-#define ARRAY_SIZE(a) (sizeof(a) / sizeof(a[0]))
+-#endif
+-
+ /*
+ ** Define max dirty page cache to permit during save/restore -- need to balance 
+ ** keeping cache usage down with CPU impact of invalidating too often.
+diff --git a/tools/libxl/libxl_internal.h b/tools/libxl/libxl_internal.h
+index f80c85f..dfb39cd 100644
+--- a/tools/libxl/libxl_internal.h
++++ b/tools/libxl/libxl_internal.h
+@@ -57,6 +57,8 @@
+ #include <xenguest.h>
+ #include <xc_dom.h>
+ 
++#include <xen-tools/libs.h>
++
+ #include "xentoollog.h"
+ 
+ #include <xen/io/xenbus.h>
+@@ -127,8 +129,6 @@
+ #define MB(_mb)     (_AC(_mb, ULL) << 20)
+ #define GB(_gb)     (_AC(_gb, ULL) << 30)
+ 
+-#define ARRAY_SIZE(a) (sizeof(a) / sizeof(a[0]))
+-
+ #define ROUNDUP(_val, _order)                                           \
+     (((unsigned long)(_val)+(1UL<<(_order))-1) & ~((1UL<<(_order))-1))
+ 
+diff --git a/tools/misc/xen-cpuid.c b/tools/misc/xen-cpuid.c
+index 3888b4e..f5ad85f 100644
+--- a/tools/misc/xen-cpuid.c
++++ b/tools/misc/xen-cpuid.c
+@@ -6,7 +6,8 @@
+ 
+ #include <xenctrl.h>
+ 
+-#define ARRAY_SIZE(a) (sizeof a / sizeof *a)
++#include <xen-tools/libs.h>
++
+ static uint32_t nr_features;
+ 
+ static const char *str_1d[32] =
+diff --git a/tools/misc/xen-diag.c b/tools/misc/xen-diag.c
+index 1da50e1..4778914 100644
+--- a/tools/misc/xen-diag.c
++++ b/tools/misc/xen-diag.c
+@@ -15,8 +15,6 @@
+ 
+ static xc_interface *xch;
+ 
+-#define ARRAY_SIZE(a) (sizeof (a) / sizeof ((a)[0]))
+-
+ void show_help(void)
+ {
+     fprintf(stderr,
+diff --git a/tools/misc/xen-hptool.c b/tools/misc/xen-hptool.c
+index ebcc9e8..40cd966 100644
+--- a/tools/misc/xen-hptool.c
++++ b/tools/misc/xen-hptool.c
+@@ -5,9 +5,6 @@
+ #include <xenstore.h>
+ #include <unistd.h>
+ 
+-#undef ARRAY_SIZE /* We shouldn't be including xc_private.h */
+-#define ARRAY_SIZE(a) (sizeof (a) / sizeof ((a)[0]))
+-
+ static xc_interface *xch;
+ 
+ void show_help(void)
+diff --git a/tools/misc/xen-livepatch.c b/tools/misc/xen-livepatch.c
+index af9fcd6..3233472 100644
+--- a/tools/misc/xen-livepatch.c
++++ b/tools/misc/xen-livepatch.c
+@@ -45,8 +45,6 @@ static int help_func(int argc, char *argv[])
+     return 0;
+ }
+ 
+-#define ARRAY_SIZE(a) (sizeof (a) / sizeof ((a)[0]))
+-
+ static const char *state2str(unsigned int state)
+ {
+ #define STATE(x) [LIVEPATCH_STATE_##x] = #x
+diff --git a/tools/misc/xen-mfndump.c b/tools/misc/xen-mfndump.c
+index 1b22ad7..858bd0e 100644
+--- a/tools/misc/xen-mfndump.c
++++ b/tools/misc/xen-mfndump.c
+@@ -7,9 +7,6 @@
+ 
+ #include "xg_save_restore.h"
+ 
+-#undef ARRAY_SIZE /* We shouldn't be including xc_private.h */
+-#define ARRAY_SIZE(a) (sizeof (a) / sizeof ((a)[0]))
+-
+ static xc_interface *xch;
+ 
+ int help_func(int argc, char *argv[])
+diff --git a/tools/misc/xenpm.c b/tools/misc/xenpm.c
+index 0e1968a..86c12ea 100644
+--- a/tools/misc/xenpm.c
++++ b/tools/misc/xenpm.c
+@@ -28,11 +28,11 @@
+ #include <inttypes.h>
+ #include <sys/time.h>
+ 
++#include <xen-tools/libs.h>
++
+ #define MAX_PKG_RESIDENCIES 12
+ #define MAX_CORE_RESIDENCIES 8
+ 
+-#define ARRAY_SIZE(a) (sizeof (a) / sizeof ((a)[0]))
+-
+ static xc_interface *xc_handle;
+ static unsigned int max_cpu_nr;
+ 
+diff --git a/tools/python/xen/lowlevel/xc/xc.c b/tools/python/xen/lowlevel/xc/xc.c
+index f0878b7..caf8cc5 100644
+--- a/tools/python/xen/lowlevel/xc/xc.c
++++ b/tools/python/xen/lowlevel/xc/xc.c
+@@ -22,7 +22,7 @@
+ #include <xen/hvm/hvm_info_table.h>
+ #include <xen/hvm/params.h>
+ 
+-#define ARRAY_SIZE(x) (sizeof(x) / sizeof((x)[0]))
++#include <xen-tools/libs.h>
+ 
+ /* Needed for Python versions earlier than 2.3. */
+ #ifndef PyMODINIT_FUNC
+diff --git a/tools/tests/vhpet/emul.h b/tools/tests/vhpet/emul.h
+index 383acff..b022cc0 100644
+--- a/tools/tests/vhpet/emul.h
++++ b/tools/tests/vhpet/emul.h
+@@ -24,6 +24,8 @@
+ 
+ #include "hpet.h"
+ 
++#include <xen-tools/libs.h>
++
+ #define NR_CPUS 8
+ 
+ typedef int64_t s_time_t;
+@@ -61,10 +63,6 @@ struct msi_msg
+     u32     dest32;         /* used when Interrupt Remapping with EIM is enabled */
+ };
+ 
+-#ifndef ARRAY_SIZE
+-#define ARRAY_SIZE(arr) (sizeof(arr) / sizeof((arr)[0]))
+-#endif
+-
+ #define X86EMUL_OKAY 100
+ #define EINVAL 101
+ 
+diff --git a/tools/tests/x86_emulator/x86-emulate.h b/tools/tests/x86_emulator/x86-emulate.h
+index c5e85de..fd1ba52 100644
+--- a/tools/tests/x86_emulator/x86-emulate.h
++++ b/tools/tests/x86_emulator/x86-emulate.h
+@@ -15,22 +15,12 @@
+ #include <asm/x86-defns.h>
+ #include <asm/x86-vendors.h>
+ 
++#include <xen-tools/libs.h>
++
+ #define BUG() abort()
+ #define ASSERT assert
+ #define ASSERT_UNREACHABLE() assert(!__LINE__)
+ 
+-#define ARRAY_SIZE(a) (sizeof(a) / sizeof(*(a)))
+-
+-#if __GNUC__ > 4 || (__GNUC__ == 4 && __GNUC_MINOR__ >= 6)
+-/* Force a compilation error if condition is true */
+-#define BUILD_BUG_ON(cond) ({ _Static_assert(!(cond), "!(" #cond ")"); })
+-#define BUILD_BUG_ON_ZERO(cond) \
+-    sizeof(struct { _Static_assert(!(cond), "!(" #cond ")"); })
+-#else
+-#define BUILD_BUG_ON_ZERO(cond) sizeof(struct { int:-!!(cond); })
+-#define BUILD_BUG_ON(cond) ((void)BUILD_BUG_ON_ZERO(cond))
+-#endif
+-
+ #define MASK_EXTR(v, m) (((v) & (m)) / ((m) & -(m)))
+ #define MASK_INSR(v, m) (((v) * ((m) & -(m))) & (m))
+ 
+diff --git a/tools/tests/xen-access/xen-access.c b/tools/tests/xen-access/xen-access.c
+index a081168..8c32bfb 100644
+--- a/tools/tests/xen-access/xen-access.c
++++ b/tools/tests/xen-access/xen-access.c
+@@ -42,6 +42,8 @@
+ #include <xenevtchn.h>
+ #include <xen/vm_event.h>
+ 
++#include <xen-tools/libs.h>
++
+ #if defined(__arm__) || defined(__aarch64__)
+ #include <xen/arch-arm.h>
+ #define START_PFN (GUEST_RAM0_BASE >> 12)
+@@ -60,10 +62,6 @@
+ /* From xen/include/asm-x86/x86-defns.h */
+ #define X86_CR4_PGE        0x00000080 /* enable global pages */
+ 
+-#ifndef ARRAY_SIZE
+-#define ARRAY_SIZE(arr) (sizeof(arr) / sizeof((arr)[0]))
+-#endif
+-
+ typedef struct vm_event {
+     domid_t domain_id;
+     xenevtchn_handle *xce_handle;
+diff --git a/tools/tests/xenstore/xs-test.c b/tools/tests/xenstore/xs-test.c
+index eb5fe55..ec0e47a 100644
+--- a/tools/tests/xenstore/xs-test.c
++++ b/tools/tests/xenstore/xs-test.c
+@@ -30,8 +30,9 @@
+ #include <time.h>
+ #include <xenstore.h>
+ 
++#include <xen-tools/libs.h>
++
+ #define TEST_PATH "xenstore-test"
+-#define ARRAY_SIZE(a) (sizeof(a) / sizeof(a[0]))
+ #define WRITE_BUFFERS_N    10
+ #define WRITE_BUFFERS_SIZE 4000
+ #define MAX_TA_LOOPS       100
+diff --git a/tools/xenstore/utils.h b/tools/xenstore/utils.h
+index 2effd17..dc3a0a0 100644
+--- a/tools/xenstore/utils.h
++++ b/tools/xenstore/utils.h
+@@ -4,6 +4,8 @@
+ #include <string.h>
+ #include <stdint.h>
+ 
++#include <xen-tools/libs.h>
++
+ /* Is A == B ? */
+ #define streq(a,b) (strcmp((a),(b)) == 0)
+ 
+@@ -19,10 +21,6 @@ static inline bool strends(const char *a, const char *b)
+ 	return streq(a + strlen(a) - strlen(b), b);
+ }
+ 
+-#ifndef ARRAY_SIZE
+-#define ARRAY_SIZE(arr) (sizeof(arr) / sizeof((arr)[0]))
+-#endif
+-
+ void barf(const char *fmt, ...) __attribute__((noreturn));
+ void barf_perror(const char *fmt, ...) __attribute__((noreturn));
+ 
+diff --git a/tools/xentrace/analyze.h b/tools/xentrace/analyze.h
+index 40ee551..f9d98d8 100644
+--- a/tools/xentrace/analyze.h
++++ b/tools/xentrace/analyze.h
+@@ -3,7 +3,7 @@
+ 
+ #include <stdint.h>
+ 
+-#define ARRAY_SIZE(arr) (sizeof(arr) / sizeof((arr)[0]))
++#include <xen-tools/libs.h>
+ 
+ #define TRC_GEN_MAIN     0
+ #define TRC_SCHED_MAIN   1
