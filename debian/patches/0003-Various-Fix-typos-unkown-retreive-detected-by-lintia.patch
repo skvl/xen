@@ -1,0 +1,92 @@
+From: Ian Jackson <ian.jackson@citrix.com>
+Date: Wed, 3 Oct 2018 18:51:50 +0100
+Subject: Various: Fix typos `unkown', `retreive' (detected by lintian)
+
+Signed-off-by: Ian Jackson <ian.jackson@citrix.com>
+---
+ tools/hotplug/Linux/block-drbd-probe | 2 +-
+ tools/libxc/xc_dom_elfloader.c       | 2 +-
+ tools/libxl/libxl_dm.c               | 2 +-
+ tools/libxl/libxl_event.h            | 2 +-
+ tools/libxl/libxl_qmp.c              | 2 +-
+ xen/include/xen/libfdt/libfdt.h      | 2 +-
+ 6 files changed, 6 insertions(+), 6 deletions(-)
+
+diff --git a/tools/hotplug/Linux/block-drbd-probe b/tools/hotplug/Linux/block-drbd-probe
+index 635d9f9..7b2968b 100755
+--- a/tools/hotplug/Linux/block-drbd-probe
++++ b/tools/hotplug/Linux/block-drbd-probe
+@@ -20,7 +20,7 @@
+ # Return value:
+ #     0: the device is drbd device
+ #     1: the device is not drbd device
+-#     2: unkown error
++#     2: unknown error
+ #     3: the drbd device does not use protocol D
+ #     4: the drbd device is not ready
+ 
+diff --git a/tools/libxc/xc_dom_elfloader.c b/tools/libxc/xc_dom_elfloader.c
+index 26b2846..82b5f2e 100644
+--- a/tools/libxc/xc_dom_elfloader.c
++++ b/tools/libxc/xc_dom_elfloader.c
+@@ -87,7 +87,7 @@ static char *xc_dom_guest_type(struct xc_dom_image *dom,
+         return "xen-3.0-x86_64";
+     default:
+         xc_dom_panic(dom->xch, XC_INVALID_KERNEL,
+-                     "%s: unkown image type %"PRIu64,
++                     "%s: unknown image type %"PRIu64,
+                      __FUNCTION__, machine);
+         return NULL;
+     }
+diff --git a/tools/libxl/libxl_dm.c b/tools/libxl/libxl_dm.c
+index b00afe1..651c0b4 100644
+--- a/tools/libxl/libxl_dm.c
++++ b/tools/libxl/libxl_dm.c
+@@ -992,7 +992,7 @@ static int libxl__build_device_model_args_new(libxl__gc *gc,
+ 
+     /*
+      * Do not use any of the user-provided config files in sysconfdir,
+-     * avoiding unkown and uncontrolled configuration.
++     * avoiding unknown and uncontrolled configuration.
+      */
+     flexarray_append(dm_args, "-no-user-config");
+ 
+diff --git a/tools/libxl/libxl_event.h b/tools/libxl/libxl_event.h
+index 1ea789e..d1517f7 100644
+--- a/tools/libxl/libxl_event.h
++++ b/tools/libxl/libxl_event.h
+@@ -169,7 +169,7 @@ void libxl_event_register_callbacks(libxl_ctx *ctx,
+  *
+  * Applications should ensure that they eventually retrieve every
+  * event using libxl_event_check or libxl_event_wait, since events
+- * which occur but are not retreived by the application will be queued
++ * which occur but are not retrieved by the application will be queued
+  * inside libxl indefinitely.  libxl_event_check/_wait may be O(n)
+  * where n is the number of queued events which do not match the
+  * criteria specified in the arguments to check/wait.
+diff --git a/tools/libxl/libxl_qmp.c b/tools/libxl/libxl_qmp.c
+index be1fda1..b8fcebc 100644
+--- a/tools/libxl/libxl_qmp.c
++++ b/tools/libxl/libxl_qmp.c
+@@ -195,7 +195,7 @@ static int qmp_register_vnc_callback(libxl__qmp_handler *qmp,
+     port = libxl__json_object_get_string(obj);
+ 
+     if (!addr || !port) {
+-        LOGD(ERROR, qmp->domid, "Failed to retreive VNC connect information.");
++        LOGD(ERROR, qmp->domid, "Failed to retrieve VNC connect information.");
+         goto out;
+     }
+ 
+diff --git a/xen/include/xen/libfdt/libfdt.h b/xen/include/xen/libfdt/libfdt.h
+index d6b94a1..7c75688 100644
+--- a/xen/include/xen/libfdt/libfdt.h
++++ b/xen/include/xen/libfdt/libfdt.h
+@@ -594,7 +594,7 @@ const char *fdt_get_alias_namelen(const void *fdt,
+ 				  const char *name, int namelen);
+ 
+ /**
+- * fdt_get_alias - retreive the path referenced by a given alias
++ * fdt_get_alias - retrieve the path referenced by a given alias
+  * @fdt: pointer to the device tree blob
+  * @name: name of the alias th look up
+  *

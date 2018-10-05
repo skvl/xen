@@ -1,0 +1,24 @@
+From: Ian Jackson <ian.jackson@citrix.com>
+Date: Thu, 4 Oct 2018 12:30:37 +0100
+Subject: gdbsx: Honour LDFLAGS when linking
+
+This command does the link, so it needs LDFLAGS.
+
+Signed-off-by: Ian Jackson <ian.jackson@citrix.com>
+---
+ tools/debugger/gdbsx/Makefile | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/tools/debugger/gdbsx/Makefile b/tools/debugger/gdbsx/Makefile
+index 723a274..8d7cd94 100644
+--- a/tools/debugger/gdbsx/Makefile
++++ b/tools/debugger/gdbsx/Makefile
+@@ -26,7 +26,7 @@ uninstall:
+ 	rm -f $(DESTDIR)$(sbindir)/gdbsx
+ 
+ gdbsx: gx/gx_all.a xg/xg_all.a 
+-	$(CC) -o $@ $^
++	$(CC) $(LDFLAGS) -o $@ $^
+ 
+ xg/xg_all.a:
+ 	$(MAKE) -C xg
