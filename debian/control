@@ -2,6 +2,7 @@ Source: xen
 Priority: optional
 Maintainer: Debian Xen Team <pkg-xen-devel@lists.alioth.debian.org>
 Uploaders: Guido Trotter <ultrotter@debian.org>, Bastian Blank <waldi@debian.org>, Ian Jackson <ian.jackson@eu.citrix.com>
+Section: admin
 Standards-Version: 3.9.4
 Build-Depends:
    debhelper (>> 9),
