@@ -207,10 +207,19 @@ override_dh_auto_build:
 # We keep the amount of fixup and messing about with debian/tmp/
 # to a minimum, because when working it is easier to rerun the
 # later parts of the build than the whole of the two upstream make installs.
-# However, there are two sets of fixes we must make:
+# However, there are three sets of fixes we must make:
 override_dh_auto_install: $(TEMPLATED_FILES)
 	$(MAKE) $(make_args_xen) DESTDIR=$t install-xen
-	$(MAKE) $(make_args_tools) DESTDIR=$t install-{tools,docs}
+	$(MAKE) $(make_args_tools) DESTDIR=$t \
+		install-{tools,docs} CONFIG_PV_SHIM=n
+	:
+	@# shim install target needs to be run separately because we
+	@# need to pass it the make_args_xen settings, in particular
+	@# on i386 bwe need to pass x86_64 here to actually build it.
+	@# Luckily this target, unlike the build, is a noop on
+	@# shimless arches, so it does not need to be conditional.
+	$(MAKE) $(make_args_xen) DESTDIR=$t $(make_args_xen) \
+		-C tools/firmware install-shim
 	:
 	@# pkgconfig files contain arch-specific paths so must
 	@# be in /usr/lib/<triplet>, not /usr/share.
