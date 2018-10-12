@@ -43,6 +43,13 @@ ifeq ($(CONFIG_ROMBIOS),y)
 endif
 	$(MAKE) CC=$(CC) PYTHON=$(PYTHON) subdirs-$@
 
+.PHONY: install-shim
+install-shim:
+ifeq ($(CONFIG_PV_SHIM),y)
+	$(INSTALL_DATA) xen-dir/xen-shim $(INST_DIR)/xen-shim
+	$(INSTALL_DATA) xen-dir/xen-shim-syms $(DEBG_DIR)/xen-shim-syms
+endif
+
 .PHONY: install
 install: all
 	[ -d $(INST_DIR) ] || $(INSTALL_DIR) $(INST_DIR)
@@ -57,10 +64,7 @@ endif
 ifeq ($(CONFIG_IPXE),y)
 	$(INSTALL_DATA) etherboot/ipxe/src/bin/ipxe.bin $(INST_DIR)/ipxe.bin
 endif
-ifeq ($(CONFIG_PV_SHIM),y)
-	$(INSTALL_DATA) xen-dir/xen-shim $(INST_DIR)/xen-shim
-	$(INSTALL_DATA) xen-dir/xen-shim-syms $(DEBG_DIR)/xen-shim-syms
-endif
+	$(MAKE) install-shim
 
 .PHONY: uninstall
 uninstall:
