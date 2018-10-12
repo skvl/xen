@@ -43,6 +43,12 @@ ifeq ($(CONFIG_ROMBIOS),y)
 endif
 	$(MAKE) $(LD32BIT-y) CC=$(CC) PYTHON=$(PYTHON) subdirs-$@
 
+.PHONY: install-shim
+install-shim:
+ifeq ($(CONFIG_PV_SHIM),y)
+	$(INSTALL_DATA) xen-dir/xen-shim $(INST_DIR)/xen-shim
+	$(INSTALL_DATA) xen-dir/xen-shim-syms $(DEBG_DIR)/xen-shim-syms
+endif
 
 .PHONY: install
 install: all
@@ -55,10 +61,7 @@ endif
 ifeq ($(CONFIG_OVMF),y)
 	$(INSTALL_DATA) ovmf-dir/ovmf.bin $(INST_DIR)/ovmf.bin
 endif
-ifeq ($(CONFIG_PV_SHIM),y)
-	$(INSTALL_DATA) xen-dir/xen-shim $(INST_DIR)/xen-shim
-	$(INSTALL_DATA) xen-dir/xen-shim-syms $(DEBG_DIR)/xen-shim-syms
-endif
+	$(MAKE) install-shim
 
 .PHONY: uninstall
 uninstall:
