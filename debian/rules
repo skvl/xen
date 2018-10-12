@@ -284,9 +284,9 @@ override_dh_installinit:
 # that again, then.  This all happens after dh_install so we operate
 # on the package-specific file.
 override_dh_strip:
-	chmod +x debian/xen-utils-*/usr/lib/xen-*/boot/hvmloader
+	find debian/xen-utils-* -name hvmloader | xargs -r chmod -v +x
 	dh_strip
-	chmod -x debian/xen-utils-*/usr/lib/xen-*/boot/hvmloader
+	find debian/xen-utils-* -name hvmloader | xargs -r chmod -v -x
 
 # Hardlink the various xenstore-* programs together.  This is an
 # argv[0]-using binary of which we can have only one copy.  We need to
