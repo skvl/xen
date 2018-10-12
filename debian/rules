@@ -273,7 +273,7 @@ override_dh_compress:
 	:
 	dh_compress
 	find debian/xen-hypervisor-*/usr/lib/debug -type f -print0 \
-		| xargs -0r gzip -9v
+		| xargs -0r gzip -9vn
 
 # By default, files in debian/tmp which are not handled by anything
 # in rules are ignored.  This makes them into errors.
