@@ -2,7 +2,7 @@ XEN_ROOT = $(CURDIR)/../..
 include $(XEN_ROOT)/tools/Rules.mk
 
 ifneq ($(XEN_TARGET_ARCH),x86_32)
-CONFIG_PV_SHIM := y
+CONFIG_PV_SHIM ?= y
 endif
 
 # hvmloader is a 32-bit protected mode binary.
