@@ -25,7 +25,9 @@ Build-Depends:
    libyajl-dev,
    pkg-config,
    uuid-dev,
-   zlib1g-dev
+   zlib1g-dev,
+   pandoc,
+   markdown
 XS-Python-Version: current
 
 Package: xenstore-utils
