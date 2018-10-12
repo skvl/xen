@@ -1,7 +1,7 @@
 XEN_ROOT = $(CURDIR)/../..
 include $(XEN_ROOT)/tools/Rules.mk
 
-ifneq ($(XEN_TARGET_ARCH),x86_32)
+ifeq ($(XEN_TARGET_ARCH),x86_64)
 CONFIG_PV_SHIM ?= y
 endif
 
