@@ -26,6 +26,13 @@ export DEB_BUILD_MAINT_OPTIONS = hardening=+all
 # 64-bit hypervisor even on i386 (since there is no 32-bit hypervisor
 # anymore).
 
+# Also there is terminological confusion.  The DEB_* variables follow
+# GNU GCC terminology:
+#
+# dpkg / GNU    Xen         Meaning
+#  BUILD         COMPILE     Host: where this build is running
+#  HOST          TARGET      Target: where the binaries we build now will run
+
 include /usr/share/dpkg/architecture.mk
 
 # Xen has its own different architecture names, which are nither
@@ -41,7 +48,7 @@ xen_arch_i386  = x86_32
 xen_arch_armhf = arm32
 xen_arch_arm64 = arm64
 
-flavour=$(flavour_$(DEB_BUILD_ARCH))
+flavour=$(flavour_$(DEB_HOST_ARCH))
 
 # Much of the work here is to make different upstream versions of Xen
 # coinstallable, and arrange to run which ever version of the tools
@@ -125,14 +132,14 @@ dpkg_CPPFLAGS := $(shell dpkg-buildflags --get CPPFLAGS)
 dpkg_LDFLAGS  := $(shell dpkg-buildflags --get LDFLAGS)
 
 make_args_xen= $(make_args_common) \
-	XEN_COMPILE_ARCH=$(xen_arch_$(flavour)) \
+	XEN_COMPILE_ARCH=$(xen_arch_$(DEB_BUILD_ARCH)) \
 	XEN_TARGET_ARCH=$(xen_arch_$(flavour)) \
 # (Xen upstream does not offer a separate CPPFLAGS,
 # so we pass those in CFLAGS.)
 
 make_args_tools= $(make_args_common) \
 	XEN_COMPILE_ARCH=$(xen_arch_$(DEB_BUILD_ARCH)) \
-	XEN_TARGET_ARCH=$(xen_arch_$(DEB_BUILD_ARCH)) \
+	XEN_TARGET_ARCH=$(xen_arch_$(DEB_HOST_ARCH)) \
 	EXTRA_CFLAGS_XEN_TOOLS='$(dpkg_CFLAGS) $(dpkg_CPPFLAGS)' \
 	PREPEND_LDFLAGS_XEN_TOOLS='$(dpkg_LDFLAGS)'
 
