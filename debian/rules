@@ -188,9 +188,20 @@ override_dh_auto_configure:
 		--enable-ovmf --with-system-ovmf=/usr/share/ovmf/OVMF.fd \
 		--with-system-seabios=/usr/share/seabios/bios-256k.bin
 
+# tools/firmware/xen-dir is the `shim' used for booting PV guests
+# in an HVM container, for security (particularly, for meltdown/spectre
+# mitigation).  It's actually a hypervisor.  On i386 it is not built
+# by `make tools' because run that with XEN_COMPILE_ARCH=x86_32 which
+# is no longer a supported hypervisor architecture.  And we want to
+# build it with $(make_args_xen) not $(make_args_tools).  So do it
+# separately.
 override_dh_auto_build:
 	$(MAKE) $(make_args_xen) xen
-	$(MAKE) $(make_args_tools) tools docs
+	$(MAKE) $(make_args_tools) tools docs CONFIG_PV_SHIM=n
+	case $(flavour) in \
+	amd64|i386) \
+		$(MAKE) $(make_args_xen) -C tools/firmware/xen-dir ;; \
+	esac
 	touch debian/xen-tools-built.stamp
 
 # We keep the amount of fixup and messing about with debian/tmp/
