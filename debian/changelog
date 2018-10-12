@@ -1,3 +1,13 @@
+xen (4.11.1~pre.20180911.5acdd26fdc+dfsg-3) unstable; urgency=medium
+
+  * hypervisor package postinst: Actually install (avoids need to
+    run update-grub by hand).
+  * debian/control: Adding Section to source stanza
+  * debian/control: Add missing Replaces on old xen-utils-common
+  * debian/rules: Add a -n to a gzip rune to improve reproducibility
+
+ -- Ian Jackson <ijackson@chiark.greenend.org.uk>  Fri, 12 Oct 2018 16:55:48 +0100
+
 xen (4.11.1~pre.20180911.5acdd26fdc+dfsg-2) unstable; urgency=medium
 
   * Redo as an upload with binaries, because source-only uploads to NEW
