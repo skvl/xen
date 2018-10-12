@@ -226,7 +226,10 @@ override_dh_auto_install: $(TEMPLATED_FILES)
 	mv $t/usr/share/pkgconfig $t/usr/lib/$(DEB_HOST_MULTIARCH)/
 	:
 	@# Inexplicably, upstream pots the efi binares in usr/lib64
-	mv $t/usr/lib64/efi/* $t/boot/.
+	case $(flavour) in \
+		armhf) ;; \
+		*) mv $t/usr/lib64/efi/* $t/boot/. ;; \
+	esac
 
 # libfsimage not only has an unstable ABI, but also a very poor name.
 # Our makefile patch puts it in a different directory and fixes up the
