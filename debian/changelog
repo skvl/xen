@@ -1,3 +1,13 @@
+xen (4.11.1~pre.20180911.5acdd26fdc+dfsg-4) unstable; urgency=medium
+
+  * Many packaging fixes to fix FTBFS on all arches other than amd64.
+  * xen-vbd-interface(7): Provide properly-formatted NAME section
+  * Add pandoc and markdown to Build-Depends - fixes missing docs.
+  * Revert "tools-xenstore-compatibility.diff" apropos of discussion
+    https://lists.xenproject.org/archives/html/xen-devel/2018-10/msg00838.html
+
+ -- Ian Jackson <ijackson@chiark.greenend.org.uk>  Mon, 15 Oct 2018 12:15:36 +0100
+
 xen (4.11.1~pre.20180911.5acdd26fdc+dfsg-3) unstable; urgency=medium
 
   * hypervisor package postinst: Actually install (avoids need to
