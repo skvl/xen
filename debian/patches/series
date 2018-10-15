@@ -36,3 +36,8 @@ prefix-abiname/tools-libfsimage-abiname.diff
 prefix-abiname/tools-libfsimage-prefix.diff
 0037-autoconf-Provide-libexec_libdir_suffix.patch
 0038-.gitignore-Add-configure-output-which-we-always-dele.patch
+0039-tools-firmware-Makfile-Respect-caller-s-CONFIG_PV_SH.patch
+0040-shim-Provide-separate-install-shim-target.patch
+0041-tools-firmware-Makefile-CONFIG_PV_SHIM-enable-only-o.patch
+0042-docs-man-xen-vbd-interface.7-Provide-properly-format.patch
+0043-Revert-tools-xenstore-compatibility.diff.patch
