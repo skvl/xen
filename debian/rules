@@ -264,7 +264,7 @@ override_dh_install:
 	debian/shuffle-boot-files $(upstream_version) $(flavour)
 	:
 	dh_install $(dh_install_excludes)
-	rm -v $(xenstore_rm)
+	if test -d debian/xen-utils-common; then rm -v $(xenstore_rm); fi
 	:
 	debian/installsharedlibs
 
