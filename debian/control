@@ -29,6 +29,9 @@ Build-Depends:
    pandoc,
    markdown
 XS-Python-Version: current
+Homepage: https://xenproject.org/
+Vcs-Browser: https://salsa.debian.org/xen-team/debian-xen
+Vcs-Git: https://salsa.debian.org/xen-team/debian-xen.git
 
 Package: xenstore-utils
 Architecture: amd64 arm64 armhf i386
