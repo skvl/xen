@@ -245,7 +245,7 @@ dh_install_excludes += -X/.deps
 # Upstream puts pygrub in its lib directory which is in our per-version
 # package, and leaves a symlink in /usr/bin.  Exclude the symlink.
 # We don't want this in /usr/bin anyway.
-dh_install_excludes += -Xbin/pygrub
+dh_install_excludes += -Xusr/bin/pygrub
 
 # We want the xenstore utilities in their own package.  The general
 # install does everything from /usr/bin and /usr/share/man, so we
