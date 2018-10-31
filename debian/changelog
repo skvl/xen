@@ -3,6 +3,8 @@ xen (4.11.1~pre.20180911.5acdd26fdc+dfsg-6~) UNRELEASED; urgency=medium
   * debian/control: Add Homepage, Vcs-Browser and Vcs-Git.
     (Closes: #911457)
   * grub.d/xen.cfg: fix default entry when using l10n (Closes: #865086)
+  * debian/rules: Don't exclude the actual pygrub script
+    (Closes: #912381, #912441)
 
  -- Hans van Kranenburg <hans@knorrie.org>  Sat, 20 Oct 2018 17:41:06 +0200
 
