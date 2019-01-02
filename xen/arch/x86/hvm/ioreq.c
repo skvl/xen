@@ -327,6 +327,7 @@ static int hvm_map_ioreq_gfn(struct hvm_ioreq_server *s, bool buf)
 static int hvm_alloc_ioreq_mfn(struct hvm_ioreq_server *s, bool buf)
 {
     struct hvm_ioreq_page *iorp = buf ? &s->bufioreq : &s->ioreq;
+    struct page_info *page;
 
     if ( iorp->page )
     {
@@ -341,35 +342,33 @@ static int hvm_alloc_ioreq_mfn(struct hvm_ioreq_server *s, bool buf)
         return 0;
     }
 
-    /*
-     * Allocated IOREQ server pages are assigned to the emulating
-     * domain, not the target domain. This is safe because the emulating
-     * domain cannot be destroyed until the ioreq server is destroyed.
-     * Also we must use MEMF_no_refcount otherwise page allocation
-     * could fail if the emulating domain has already reached its
-     * maximum allocation.
-     */
-    iorp->page = alloc_domheap_page(s->emulator, MEMF_no_refcount);
+    page = alloc_domheap_page(s->target, 0);
 
-    if ( !iorp->page )
+    if ( !page )
         return -ENOMEM;
 
-    if ( !get_page_type(iorp->page, PGT_writable_page) )
-        goto fail1;
+    if ( !get_page_and_type(page, s->target, PGT_writable_page) )
+    {
+        /*
+         * The domain can't possibly know about this page yet, so failure
+         * here is a clear indication of something fishy going on.
+         */
+        domain_crash(s->emulator);
+        return -ENODATA;
+    }
 
-    iorp->va = __map_domain_page_global(iorp->page);
+    iorp->va = __map_domain_page_global(page);
     if ( !iorp->va )
-        goto fail2;
+        goto fail;
 
+    iorp->page = page;
     clear_page(iorp->va);
     return 0;
 
- fail2:
-    put_page_type(iorp->page);
-
- fail1:
-    put_page(iorp->page);
-    iorp->page = NULL;
+ fail:
+    if ( test_and_clear_bit(_PGC_allocated, &page->count_info) )
+        put_page(page);
+    put_page_and_type(page);
 
     return -ENOMEM;
 }
@@ -377,15 +376,24 @@ static int hvm_alloc_ioreq_mfn(struct hvm_ioreq_server *s, bool buf)
 static void hvm_free_ioreq_mfn(struct hvm_ioreq_server *s, bool buf)
 {
     struct hvm_ioreq_page *iorp = buf ? &s->bufioreq : &s->ioreq;
+    struct page_info *page = iorp->page;
 
-    if ( !iorp->page )
+    if ( !page )
         return;
+
+    iorp->page = NULL;
 
     unmap_domain_page_global(iorp->va);
     iorp->va = NULL;
 
-    put_page_and_type(iorp->page);
-    iorp->page = NULL;
+    /*
+     * Check whether we need to clear the allocation reference before
+     * dropping the explicit references taken by get_page_and_type().
+     */
+    if ( test_and_clear_bit(_PGC_allocated, &page->count_info) )
+        put_page(page);
+
+    put_page_and_type(page);
 }
 
 bool is_ioreq_server_page(struct domain *d, const struct page_info *page)
@@ -1353,20 +1361,25 @@ struct hvm_ioreq_server *hvm_select_ioreq_server(struct domain *d,
 
         switch ( type )
         {
-            unsigned long end;
+            unsigned long start, end;
 
         case XEN_DMOP_IO_RANGE_PORT:
-            end = addr + p->size - 1;
-            if ( rangeset_contains_range(r, addr, end) )
+            start = addr;
+            end = start + p->size - 1;
+            if ( rangeset_contains_range(r, start, end) )
                 return s;
 
             break;
+
         case XEN_DMOP_IO_RANGE_MEMORY:
-            end = addr + (p->size * p->count) - 1;
-            if ( rangeset_contains_range(r, addr, end) )
+            start = hvm_mmio_first_byte(p);
+            end = hvm_mmio_last_byte(p);
+
+            if ( rangeset_contains_range(r, start, end) )
                 return s;
 
             break;
+
         case XEN_DMOP_IO_RANGE_PCI:
             if ( rangeset_contains_singleton(r, addr >> 32) )
             {

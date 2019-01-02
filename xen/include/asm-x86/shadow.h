@@ -81,6 +81,10 @@ void shadow_final_teardown(struct domain *d);
 
 void sh_remove_shadows(struct domain *d, mfn_t gmfn, int fast, int all);
 
+/* Adjust shadows ready for a guest page to change its type. */
+void shadow_prepare_page_type_change(struct domain *d, struct page_info *page,
+                                     unsigned long new_type);
+
 /* Discard _all_ mappings from the domain's shadows. */
 void shadow_blow_tables_per_domain(struct domain *d);
 
@@ -104,6 +108,10 @@ int shadow_set_allocation(struct domain *d, unsigned int pages,
 
 static inline void sh_remove_shadows(struct domain *d, mfn_t gmfn,
                                      int fast, int all) {}
+
+static inline void shadow_prepare_page_type_change(struct domain *d,
+                                                   struct page_info *page,
+                                                   unsigned long new_type) {}
 
 static inline void shadow_blow_tables_per_domain(struct domain *d) {}
 
@@ -224,9 +232,8 @@ void pv_l1tf_tasklet(unsigned long data);
 
 static inline void pv_l1tf_domain_init(struct domain *d)
 {
-    d->arch.pv_domain.check_l1tf =
-        opt_pv_l1tf & (is_hardware_domain(d)
-                       ? OPT_PV_L1TF_DOM0 : OPT_PV_L1TF_DOMU);
+    d->arch.pv_domain.check_l1tf = is_hardware_domain(d) ? opt_pv_l1tf_hwdom
+                                                         : opt_pv_l1tf_domu;
 
 #if defined(CONFIG_SHADOW_PAGING) && defined(CONFIG_PV)
     tasklet_init(&d->arch.paging.shadow.pv_l1tf_tasklet,
