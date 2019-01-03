@@ -4,7 +4,23 @@ xen (4.11.1-1) UNRELEASED; urgency=medium
     (Closes: #911457)
   * grub.d/xen.cfg: fix default entry when using l10n (Closes: #865086)
   * debian/rules: Don't exclude the actual pygrub script.
-  * Update to new upstream version 4.11.1.
+  * Update to new upstream version 4.11.1, which also contains:
+    - Fix: insufficient TLB flushing / improper large page mappings with AMD
+      IOMMUs
+      XSA-275 (no CVE yet)
+    - Fix: resource accounting issues in x86 IOREQ server handling
+      XSA-276 (no CVE yet)
+    - Fix: x86: incorrect error handling for guest p2m page removals
+      XSA-277 (no CVE yet)
+    - Fix: x86: Nested VT-x usable even when disabled
+      XSA-278 CVE-2018-18883
+    - Fix: x86: DoS from attempting to use INVPCID with a non-canonical
+      addresses
+      XSA-279 (no CVE yet)
+    - Fix for XSA-240 conflicts with shadow paging
+      XSA-280 (no CVE yet)
+    - Fix: guest use of HLE constructs may lock up host
+      XSA-282 (no CVE yet)
 
  -- Hans van Kranenburg <hans@knorrie.org>  Wed, 02 Jan 2019 20:59:40 +0100
 
