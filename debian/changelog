@@ -1,4 +1,4 @@
-xen (4.11.1-1) UNRELEASED; urgency=medium
+xen (4.11.1-1~) UNRELEASED; urgency=medium
 
   * debian/control: Add Homepage, Vcs-Browser and Vcs-Git.
     (Closes: #911457)
