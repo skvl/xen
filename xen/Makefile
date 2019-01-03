@@ -173,9 +173,9 @@ include/xen/compile.h: include/xen/compile.h.in
 	    -e 's/@@extraversion@@/$(XEN_EXTRAVERSION)/g' \
 	    -e 's!@@changeset@@!$(shell tools/scmversion $(XEN_ROOT) || echo "unavailable")!g' \
 	    -e 's/@@system_distribution@@/$(shell lsb_release -is)/g' \
-	    -e 's/@@system_maintainer_domain@@/$(shell cd ../../../..; dpkg-parsechangelog | sed -ne 's,^Maintainer: .[^<]*<[^@>]*@\([^>]*\)>,\1,p')/g' \
-	    -e 's/@@system_maintainer_local@@/$(shell cd ../../../..; dpkg-parsechangelog | sed -ne 's,^Maintainer: .[^<]*<\([^@>]*\)@.*>,\1,p')/g' \
-	    -e 's/@@system_version@@/$(shell cd ../../../..; dpkg-parsechangelog | awk '/^Version:/ {print $$2}')/g' \
+	    -e 's/@@system_maintainer_domain@@/$(shell grep Maintainer ../debian/control | sed -ne 's,^Maintainer: .[^<]*<[^@>]*@\([^>]*\)>,\1,p')/g' \
+	    -e 's/@@system_maintainer_local@@/$(shell grep Maintainer ../debian/control | sed -ne 's,^Maintainer: .[^<]*<\([^@>]*\)@.*>,\1,p')/g' \
+	    -e 's/@@system_version@@/$(shell cd ..; dpkg-parsechangelog | awk '/^Version:/ {print $$2}')/g' \
 	    < include/xen/compile.h.in > $@.new
 	@mv -f $@.new $@
 
