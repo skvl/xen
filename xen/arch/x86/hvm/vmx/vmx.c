@@ -874,7 +874,8 @@ static int vmx_load_msr(struct vcpu *v, struct hvm_msr *ctxt)
              * ignored) when STIBP isn't enumerated in hardware.
              */
             else if ( ctxt->msr[i].val &
-                      ~(SPEC_CTRL_IBRS | SPEC_CTRL_STIBP) )
+                      ~(SPEC_CTRL_IBRS | SPEC_CTRL_STIBP |
+                        (boot_cpu_has(X86_FEATURE_SSBD) ? SPEC_CTRL_SSBD : 0)) )
                 err = -ENXIO;
             else
                 v->arch.spec_ctrl = ctxt->msr[i].val;
@@ -3534,6 +3535,8 @@ void vmx_vmexit_handler(struct cpu_user_regs *regs)
             {
                 gdprintk(XENLOG_ERR, "EPTP not found in alternate p2m list\n");
                 domain_crash(v->domain);
+
+                return;
             }
         }
 

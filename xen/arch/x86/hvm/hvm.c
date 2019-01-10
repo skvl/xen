@@ -30,6 +30,7 @@
 #include <xen/domain_page.h>
 #include <xen/hypercall.h>
 #include <xen/guest_access.h>
+#include <xen/nospec.h>
 #include <xen/event.h>
 #include <xen/cpu.h>
 #include <xen/wait.h>
@@ -4474,8 +4475,15 @@ int hvm_do_hypercall(struct cpu_user_regs *regs)
     BUILD_BUG_ON(ARRAY_SIZE(hvm_hypercall_table) >
                  ARRAY_SIZE(hypercall_args_table));
 
-    if ( (eax >= ARRAY_SIZE(hvm_hypercall_table)) ||
-         !hvm_hypercall_table[eax].native )
+    if ( eax >= ARRAY_SIZE(hvm_hypercall_table) )
+    {
+        regs->eax = -ENOSYS;
+        return HVM_HCALL_completed;
+    }
+
+    eax = array_index_nospec(eax, ARRAY_SIZE(hvm_hypercall_table));
+
+    if ( !hvm_hypercall_table[eax].native )
     {
         regs->eax = -ENOSYS;
         return HVM_HCALL_completed;
@@ -4695,11 +4703,9 @@ void hvm_vcpu_reset_state(struct vcpu *v, uint16_t cs, uint16_t ip)
     }
 
     v->arch.vgc_flags = VGCF_online;
-    memset(&v->arch.user_regs, 0, sizeof(v->arch.user_regs));
-    v->arch.user_regs.eflags = X86_EFLAGS_MBS;
-    v->arch.user_regs.edx = 0x00000f00;
+
+    arch_vcpu_regs_init(v);
     v->arch.user_regs.eip = ip;
-    memset(&v->arch.debugreg, 0, sizeof(v->arch.debugreg));
 
     v->arch.hvm_vcpu.guest_cr[0] = X86_CR0_ET;
     hvm_update_guest_cr(v, 0);
@@ -5766,6 +5772,7 @@ static int hvmop_set_mem_type(
     unsigned long start_iter = *iter;
     struct xen_hvm_set_mem_type a;
     struct domain *d;
+    unsigned int mem_type;
     int rc;
 
     /* Interface types to internal p2m types */
@@ -5798,8 +5805,9 @@ static int hvmop_set_mem_type(
          ((a.first_pfn + a.nr - 1) > domain_get_maximum_gpfn(d)) )
         goto out;
 
-    if ( a.hvmmem_type >= ARRAY_SIZE(memtype) ||
-         unlikely(a.hvmmem_type == HVMMEM_unused) )
+    mem_type = array_index_nospec(a.hvmmem_type, ARRAY_SIZE(memtype));
+    if ( mem_type >= ARRAY_SIZE(memtype) ||
+         unlikely(mem_type == HVMMEM_unused) )
         goto out;
 
     while ( a.nr > start_iter )
@@ -5821,13 +5829,13 @@ static int hvmop_set_mem_type(
             rc = -EAGAIN;
             goto out;
         }
-        if ( !hvm_allow_p2m_type_change(t, memtype[a.hvmmem_type]) )
+        if ( !hvm_allow_p2m_type_change(t, memtype[mem_type]) )
         {
             put_gfn(d, pfn);
             goto out;
         }
 
-        rc = p2m_change_type_one(d, pfn, t, memtype[a.hvmmem_type]);
+        rc = p2m_change_type_one(d, pfn, t, memtype[mem_type]);
         put_gfn(d, pfn);
 
         if ( rc )

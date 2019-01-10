@@ -281,7 +281,9 @@ SECTIONS
   } :text
 #endif
 
-  efi = DEFINED(efi) ? efi : .;
+#ifndef XEN_BUILD_EFI
+  efi = .;
+#endif
 
   /* Sections to be discarded */
   /DISCARD/ : {

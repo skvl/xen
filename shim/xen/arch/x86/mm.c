@@ -2627,17 +2627,8 @@ static int __get_page_type(struct page_info *page, unsigned long type,
         {
             struct domain *d = page_get_owner(page);
 
-            /*
-             * Normally we should never let a page go from type count 0
-             * to type count 1 when it is shadowed. One exception:
-             * out-of-sync shadowed pages are allowed to become
-             * writeable.
-             */
-            if ( d && shadow_mode_enabled(d)
-                 && (page->count_info & PGC_page_table)
-                 && !((page->shadow_flags & (1u<<29))
-                      && type == PGT_writable_page) )
-               shadow_remove_all_shadows(d, page_to_mfn(page));
+            if ( d && shadow_mode_enabled(d) )
+               shadow_prepare_page_type_change(d, page, type);
 
             ASSERT(!(x & PGT_pae_xen_l2));
             if ( (x & PGT_type_mask) != type )
@@ -4045,6 +4036,14 @@ static int __do_update_va_mapping(
  out:
     if ( pl1e )
         unmap_domain_page(pl1e);
+
+    /*
+     * Any error at this point means that we haven't change the L1e.  Skip the
+     * flush, as it won't do anything useful.  Furthermore, va is guest
+     * controlled and not necesserily audited by this point.
+     */
+    if ( rc )
+        return rc;
 
     switch ( flags & UVMF_FLUSHTYPE_MASK )
     {
@@ -5680,23 +5679,39 @@ void arch_dump_shared_mem_info(void)
             mem_sharing_get_nr_saved_mfns());
 }
 
-const unsigned long *__init get_platform_badpages(unsigned int *array_size)
+const struct platform_bad_page *__init get_platform_badpages(unsigned int *array_size)
 {
     u32 igd_id;
-    static unsigned long __initdata bad_pages[] = {
-        0x20050000,
-        0x20110000,
-        0x20130000,
-        0x20138000,
-        0x40004000,
+    static const struct platform_bad_page __initconst snb_bad_pages[] = {
+        { .mfn = 0x20050000 >> PAGE_SHIFT },
+        { .mfn = 0x20110000 >> PAGE_SHIFT },
+        { .mfn = 0x20130000 >> PAGE_SHIFT },
+        { .mfn = 0x20138000 >> PAGE_SHIFT },
+        { .mfn = 0x40004000 >> PAGE_SHIFT },
+    };
+    static const struct platform_bad_page __initconst hle_bad_page = {
+        .mfn = 0x40000000 >> PAGE_SHIFT, .order = 10
     };
 
-    *array_size = ARRAY_SIZE(bad_pages);
-    igd_id = pci_conf_read32(0, 0, 2, 0, 0);
-    if ( !IS_SNB_GFX(igd_id) )
-        return NULL;
+    switch ( cpuid_eax(1) & 0x000f3ff0 )
+    {
+    case 0x000406e0: /* erratum SKL167 */
+    case 0x00050650: /* erratum SKZ63 */
+    case 0x000506e0: /* errata SKL167 / SKW159 */
+    case 0x000806e0: /* erratum KBL??? */
+    case 0x000906e0: /* errata KBL??? / KBW114 / CFW103 */
+        *array_size = (cpuid_eax(0) >= 7 &&
+                       !(cpuid_ecx(1) & cpufeat_mask(X86_FEATURE_HYPERVISOR)) &&
+                       (cpuid_count_ebx(7, 0) & cpufeat_mask(X86_FEATURE_HLE)));
+        return &hle_bad_page;
+    }
 
-    return bad_pages;
+    *array_size = ARRAY_SIZE(snb_bad_pages);
+    igd_id = pci_conf_read32(0, 0, 2, 0, 0);
+    if ( IS_SNB_GFX(igd_id) )
+        return snb_bad_pages;
+
+    return NULL;
 }
 
 void paging_invlpg(struct vcpu *v, unsigned long va)

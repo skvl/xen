@@ -386,8 +386,8 @@ static void set_domain_xpti(struct domain *d)
     }
     else
     {
-        d->arch.pv_domain.xpti = opt_xpti & (is_hardware_domain(d)
-                                             ? OPT_XPTI_DOM0 : OPT_XPTI_DOMU);
+        d->arch.pv_domain.xpti = is_hardware_domain(d) ? opt_xpti_hwdom
+                                                       : opt_xpti_domu;
 
         if ( use_invpcid && cpu_has_pcid )
             switch ( opt_pcid )
@@ -499,6 +499,17 @@ int switch_compat(struct domain *d)
     return rc;
 }
 
+/* Initialise various registers to their architectural INIT/RESET state. */
+void arch_vcpu_regs_init(struct vcpu *v)
+{
+    memset(&v->arch.user_regs, 0, sizeof(v->arch.user_regs));
+    v->arch.user_regs.eflags = X86_EFLAGS_MBS;
+
+    memset(v->arch.debugreg, 0, sizeof(v->arch.debugreg));
+    v->arch.debugreg[6] = X86_DR6_DEFAULT;
+    v->arch.debugreg[7] = X86_DR7_DEFAULT;
+}
+
 int vcpu_initialise(struct vcpu *v)
 {
     struct domain *d = v->domain;
@@ -518,6 +529,8 @@ int vcpu_initialise(struct vcpu *v)
             return rc;
 
         vmce_init_vcpu(v);
+
+        arch_vcpu_regs_init(v);
     }
 
     spin_lock_init(&v->arch.vpmu.vpmu_lock);

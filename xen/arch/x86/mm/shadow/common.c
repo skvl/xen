@@ -987,6 +987,9 @@ int sh_unsync(struct vcpu *v, mfn_t gmfn)
          || !v->domain->arch.paging.shadow.oos_active )
         return 0;
 
+    BUILD_BUG_ON(!(typeof(pg->shadow_flags))SHF_out_of_sync);
+    BUILD_BUG_ON(!(typeof(pg->shadow_flags))SHF_oos_may_write);
+
     pg->shadow_flags |= SHF_out_of_sync|SHF_oos_may_write;
     oos_hash_add(v, gmfn);
     perfc_incr(shadow_unsync);
@@ -1022,10 +1025,14 @@ void shadow_promote(struct domain *d, mfn_t gmfn, unsigned int type)
 
     /* Is the page already shadowed? */
     if ( !test_and_set_bit(_PGC_page_table, &page->count_info) )
+    {
         page->shadow_flags = 0;
+        if ( is_hvm_domain(d) )
+            page->pagetable_dying = false;
+    }
 
-    ASSERT(!test_bit(type, &page->shadow_flags));
-    set_bit(type, &page->shadow_flags);
+    ASSERT(!(page->shadow_flags & (1u << type)));
+    page->shadow_flags |= 1u << type;
     TRACE_SHADOW_PATH_FLAG(TRCE_SFLAG_PROMOTE);
 }
 
@@ -1034,9 +1041,9 @@ void shadow_demote(struct domain *d, mfn_t gmfn, u32 type)
     struct page_info *page = mfn_to_page(gmfn);
 
     ASSERT(test_bit(_PGC_page_table, &page->count_info));
-    ASSERT(test_bit(type, &page->shadow_flags));
+    ASSERT(page->shadow_flags & (1u << type));
 
-    clear_bit(type, &page->shadow_flags);
+    page->shadow_flags &= ~(1u << type);
 
     if ( (page->shadow_flags & SHF_page_type_mask) == 0 )
     {
@@ -2874,7 +2881,7 @@ void sh_remove_shadows(struct domain *d, mfn_t gmfn, int fast, int all)
     if ( !fast && all && (pg->count_info & PGC_page_table) )
     {
         SHADOW_ERROR("can't find all shadows of mfn %"PRI_mfn" "
-                     "(shadow_flags=%08x)\n",
+                     "(shadow_flags=%04x)\n",
                       mfn_x(gmfn), pg->shadow_flags);
         domain_crash(d);
     }
@@ -2884,6 +2891,26 @@ void sh_remove_shadows(struct domain *d, mfn_t gmfn, int fast, int all)
     flush_tlb_mask(d->domain_dirty_cpumask);
 
     paging_unlock(d);
+}
+
+void shadow_prepare_page_type_change(struct domain *d, struct page_info *page,
+                                     unsigned long new_type)
+{
+    if ( !(page->count_info & PGC_page_table) )
+        return;
+
+#if (SHADOW_OPTIMIZATIONS & SHOPT_OUT_OF_SYNC)
+    /*
+     * Normally we should never let a page go from type count 0 to type
+     * count 1 when it is shadowed. One exception: out-of-sync shadowed
+     * pages are allowed to become writeable.
+     */
+    if ( (page->shadow_flags & SHF_oos_may_write) &&
+         new_type == PGT_writable_page )
+        return;
+#endif
+
+    shadow_remove_all_shadows(d, page_to_mfn(page));
 }
 
 static void

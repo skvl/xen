@@ -683,6 +683,9 @@ void __init noreturn __start_xen(unsigned long mbi_p)
 
     /* Full exception support from here on in. */
 
+    /* Enable NMIs.  Our loader (e.g. Tboot) may have left them disabled. */
+    enable_nmis();
+
     loader = (mbi->flags & MBI_LOADERNAME)
         ? (char *)__va(mbi->boot_loader_name) : "unknown";
 
@@ -864,7 +867,7 @@ void __init noreturn __start_xen(unsigned long mbi_p)
     /* Sanitise the raw E820 map to produce a final clean version. */
     max_page = raw_max_page = init_e820(memmap_type, e820_raw, &e820_raw_nr);
 
-    if ( !efi_enabled )
+    if ( !efi_enabled && e820_raw_nr >= 1 )
     {
         /*
          * Supplement the heuristics in l1tf_calculations() by assuming that
