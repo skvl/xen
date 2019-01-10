@@ -1,3 +1,9 @@
+xen (4.8.5+shim4.10.2+xsa280-1+deb9u11) UNRELEASED; urgency=medium
+
+  * Update to new upstream version 4.8.5+shim4.10.2+xsa280.
+
+ -- Ian Jackson <ian.jackson@citrix.com>  Thu, 10 Jan 2019 17:48:31 +0000
+
 xen (4.8.4+xsa273+shim4.10.1+xsa273-1+deb9u10) stretch-security; urgency=medium
 
   * Update to new upstream version 4.8.4+xsa273+shim4.10.1+xsa273.
