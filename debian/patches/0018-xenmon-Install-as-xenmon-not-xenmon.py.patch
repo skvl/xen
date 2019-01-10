@@ -1,0 +1,32 @@
+From: Ian Jackson <ian.jackson@citrix.com>
+Date: Fri, 28 Sep 2018 15:27:21 +0100
+Subject: xenmon: Install as xenmon, not xenmon.py
+
+Adding the implementation language as a suffix to a program name is
+poor practice.
+
+Signed-off-by: Ian Jackson <ian.jackson@citrix.com>
+---
+ tools/xenmon/Makefile | 4 ++--
+ 1 file changed, 2 insertions(+), 2 deletions(-)
+
+diff --git a/tools/xenmon/Makefile b/tools/xenmon/Makefile
+index e45c5b8..e171230 100644
+--- a/tools/xenmon/Makefile
++++ b/tools/xenmon/Makefile
+@@ -32,13 +32,13 @@ install: build
+ 	$(INSTALL_DIR) $(DESTDIR)$(sbindir)
+ 	$(INSTALL_PROG) xenbaked $(DESTDIR)$(sbindir)/xenbaked
+ 	$(INSTALL_PROG) xentrace_setmask  $(DESTDIR)$(sbindir)/xentrace_setmask
+-	$(INSTALL_PROG) xenmon.py  $(DESTDIR)$(sbindir)/xenmon.py
++	$(INSTALL_PROG) xenmon.py  $(DESTDIR)$(sbindir)/xenmon
+ 
+ .PHONY: uninstall
+ uninstall:
+ 	rm -f $(DESTDIR)$(sbindir)/xenbaked
+ 	rm -f $(DESTDIR)$(sbindir)/xentrace_setmask
+-	rm -f $(DESTDIR)$(sbindir)/xenmon.py
++	rm -f $(DESTDIR)$(sbindir)/xenmon
+ 
+ .PHONY: clean
+ clean:

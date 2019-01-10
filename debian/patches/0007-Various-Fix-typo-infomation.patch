@@ -1,0 +1,92 @@
+From: Ian Jackson <ian.jackson@citrix.com>
+Date: Wed, 3 Oct 2018 18:59:18 +0100
+Subject: Various: Fix typo `infomation'
+
+Signed-off-by: Ian Jackson <ian.jackson@citrix.com>
+---
+ tools/libxl/libxl_internal.h               | 2 +-
+ tools/python/xen/lowlevel/xc/xc.c          | 2 +-
+ tools/xenstat/libxenstat/src/xenstat_qmp.c | 2 +-
+ xen/common/sched_rt.c                      | 2 +-
+ xen/drivers/acpi/apei/erst.c               | 2 +-
+ xen/include/public/domctl.h                | 2 +-
+ 6 files changed, 6 insertions(+), 6 deletions(-)
+
+diff --git a/tools/libxl/libxl_internal.h b/tools/libxl/libxl_internal.h
+index c582894..f80c85f 100644
+--- a/tools/libxl/libxl_internal.h
++++ b/tools/libxl/libxl_internal.h
+@@ -2599,7 +2599,7 @@ struct libxl__multidev {
+  * Once finished, aodev->callback will be executed.
+  */
+ /*
+- * As of Xen 4.5 we maintain various infomation, including hotplug
++ * As of Xen 4.5 we maintain various information, including hotplug
+  * device information, in JSON files, so that we can use this JSON
+  * file as a template to reconstruct domain configuration.
+  *
+diff --git a/tools/python/xen/lowlevel/xc/xc.c b/tools/python/xen/lowlevel/xc/xc.c
+index 2877283..efb3729 100644
+--- a/tools/python/xen/lowlevel/xc/xc.c
++++ b/tools/python/xen/lowlevel/xc/xc.c
+@@ -2182,7 +2182,7 @@ static PyMethodDef pyxc_methods[] = {
+     { "get_device_group",
+       (PyCFunction)pyxc_get_device_group,
+       METH_VARARGS, "\n"
+-      "get sibling devices infomation.\n"
++      "get sibling devices information.\n"
+       " dom     [int]:      Domain to assign device to.\n"
+       " seg     [int]:      PCI segment.\n"
+       " bus     [int]:      PCI bus.\n"
+diff --git a/tools/xenstat/libxenstat/src/xenstat_qmp.c b/tools/xenstat/libxenstat/src/xenstat_qmp.c
+index 3fda487..19b236e 100644
+--- a/tools/xenstat/libxenstat/src/xenstat_qmp.c
++++ b/tools/xenstat/libxenstat/src/xenstat_qmp.c
+@@ -59,7 +59,7 @@ enum query_block {
+ 
+ 
+ /* Given the qmp device name, get the image filename associated with it
+-   QMP Syntax for querying block infomation:
++   QMP Syntax for querying block information:
+      In: { "execute": "query-block" }
+      Out: {"return": [{
+             "device": 'str, "locked": 'bool', "removable": bool,
+diff --git a/xen/common/sched_rt.c b/xen/common/sched_rt.c
+index ac79f15..59fbfa6 100644
+--- a/xen/common/sched_rt.c
++++ b/xen/common/sched_rt.c
+@@ -203,7 +203,7 @@ struct rt_vcpu {
+     s_time_t period;
+     s_time_t budget;
+ 
+-    /* VCPU current infomation in nanosecond */
++    /* VCPU current information in nanosecond */
+     s_time_t cur_budget;         /* current budget */
+     s_time_t last_start;         /* last start time */
+     s_time_t cur_deadline;       /* current deadline for EDF */
+diff --git a/xen/drivers/acpi/apei/erst.c b/xen/drivers/acpi/apei/erst.c
+index 7fc4de5..3a2e403 100644
+--- a/xen/drivers/acpi/apei/erst.c
++++ b/xen/drivers/acpi/apei/erst.c
+@@ -2,7 +2,7 @@
+  * APEI Error Record Serialization Table support
+  *
+  * ERST is a way provided by APEI to save and retrieve hardware error
+- * infomation to and from a persistent store.
++ * information to and from a persistent store.
+  *
+  * For more information about ERST, please refer to ACPI Specification
+  * version 4.0, section 17.4.
+diff --git a/xen/include/public/domctl.h b/xen/include/public/domctl.h
+index 0535da8..175baa5 100644
+--- a/xen/include/public/domctl.h
++++ b/xen/include/public/domctl.h
+@@ -491,7 +491,7 @@ struct xen_domctl_assign_device {
+     } u;
+ };
+ 
+-/* Retrieve sibling devices infomation of machine_sbdf */
++/* Retrieve sibling devices information of machine_sbdf */
+ /* XEN_DOMCTL_get_device_group */
+ struct xen_domctl_get_device_group {
+     uint32_t  machine_sbdf;     /* IN */

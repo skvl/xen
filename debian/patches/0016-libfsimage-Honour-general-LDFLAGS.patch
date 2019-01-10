@@ -1,0 +1,25 @@
+From: Ian Jackson <ian.jackson@citrix.com>
+Date: Thu, 4 Oct 2018 12:31:25 +0100
+Subject: libfsimage: Honour general LDFLAGS
+
+Do not reset LDFLAGS to empty.  Instead, append the fsimage-special
+LDFLAGS.
+
+Signed-off-by: Ian Jackson <ian.jackson@citrix.com>
+---
+ tools/libfsimage/common/Makefile | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/tools/libfsimage/common/Makefile b/tools/libfsimage/common/Makefile
+index 0791fc9..a4655c4 100644
+--- a/tools/libfsimage/common/Makefile
++++ b/tools/libfsimage/common/Makefile
+@@ -6,7 +6,7 @@ MINOR = 0
+ 
+ LDFLAGS-$(CONFIG_SunOS) = -Wl,-M -Wl,mapfile-SunOS
+ LDFLAGS-$(CONFIG_Linux) = -Wl,mapfile-GNU
+-LDFLAGS = $(LDFLAGS-y)
++LDFLAGS += $(LDFLAGS-y)
+ 
+ CFLAGS += $(PTHREAD_CFLAGS)
+ LDFLAGS += $(PTHREAD_LDFLAGS)
