@@ -21,6 +21,10 @@ xen (4.11.1-1~) UNRELEASED; urgency=medium
       XSA-280 CVE-2018-19966
     - Fix: guest use of HLE constructs may lock up host
       XSA-282 CVE-2018-19967
+  * Update version handling patching to put the team mailing list address in
+    the first hypervisor log line and fix broken other substitutions.
+  * Disable handle_iptable hook in vif-common script. See #894013 for more
+    information.
 
  -- Hans van Kranenburg <hans@knorrie.org>  Wed, 02 Jan 2019 20:59:40 +0100
 
