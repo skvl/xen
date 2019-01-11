@@ -1,8 +1,23 @@
-xen (4.8.5+shim4.10.2+xsa280-1+deb9u11) UNRELEASED; urgency=medium
+xen (4.8.5+shim4.10.2+xsa280-1+deb9u11~) UNRELEASED; urgency=medium
 
-  * Update to new upstream version 4.8.5+shim4.10.2+xsa280.
+  * Update to new upstream versions:
+     * Main tree updated to Xen 4.8.5
+     * Shim updated to current upstream stable-4.10 branch, to
+       avoid errors trying to cherry-pick security patches.
+  * This includes fixes to:
+       XSA-282 	CVE-2018-19967                 Xen 4.8 and 4.10 shim
+       XSA-280 	CVE-2018-19966                 Xen 4.8 and 4.10 shim
+       XSA-279 	CVE-2018-19965                 Xen 4.8 and 4.10 shim
+       XSA-275 	CVE-2018-19961 CVE-2018-19962  Xen 4.8 and 4.10 shim
+       XSA-278 	CVE-2018-18883                 Xen 4.10 shim only
+  * For completeness, the following fixes are not applicable:
+       XSA-274 	CVE-2018-14678        Bug is in Linux
+       XSA-270 	CVE-2018-15471        Bug is in Linux
+       XSA-271 	CVE-2018-14007        Bug is in XAPI (not in Debian)
+       XSA-277 	CVE-2018-19964        Bug not in either 4.8 or 4.10
+       XSA-276 	CVE-2018-19963        Bug not in either 4.8 or 4.10
 
- -- Ian Jackson <ian.jackson@citrix.com>  Thu, 10 Jan 2019 17:48:31 +0000
+ -- Ian Jackson <ijackson@chiark.greenend.org.uk>  Fri, 11 Jan 2019 16:35:40 +0000
 
 xen (4.8.4+xsa273+shim4.10.1+xsa273-1+deb9u10) stretch-security; urgency=medium
 
