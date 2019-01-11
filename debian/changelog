@@ -16,16 +16,19 @@ xen (4.8.5+shim4.10.2+xsa282-1+deb9u11~) UNRELEASED; urgency=medium
        XSA-271 	CVE-2018-14007        Bug is in XAPI (not in Debian)
        XSA-277 	CVE-2018-19964        Bug not in either 4.8 or 4.10
        XSA-276 	CVE-2018-19963        Bug not in either 4.8 or 4.10
+  * Added CVEs to previous changelog entries:
+       4.8.4+xsa273+shim4.10.1+xsa273-1+deb9u10
+       4.8.3+xsa267+shim4.10.1+xsa267-1+deb9u9
 
  -- Ian Jackson <ijackson@chiark.greenend.org.uk>  Fri, 11 Jan 2019 16:35:40 +0000
 
 xen (4.8.4+xsa273+shim4.10.1+xsa273-1+deb9u10) stretch-security; urgency=medium
 
   * Update to new upstream version 4.8.4+xsa273+shim4.10.1+xsa273.
-      XSA-273 (CVE-2018-3620,CVE-2018-3646)
-      XSA-272 (no CVE yet)
-      XSA-269 (no CVE yet)
-      XSA-268 (no CVE yet)
+      XSA-273  CVE-2018-3620 CVE-2018-3646)
+      XSA-272  CVE-2018-15470
+      XSA-269  CVE-2018-15468
+      XSA-268  CVE-2018-15469
 
     This version is, again, a combination of staging-4.8 and staging-4.10
     for Xen and shim respectively as in previous versions.
@@ -35,9 +38,9 @@ xen (4.8.4+xsa273+shim4.10.1+xsa273-1+deb9u10) stretch-security; urgency=medium
 xen (4.8.3+xsa267+shim4.10.1+xsa267-1+deb9u9) stretch-security; urgency=high
 
   * Security upload [thanks to Wolodja Wentland]:
-       XSA-264 (no CVE yet)
-       XSA-265 (no CVE yet)
-       XSA-266 (no CVE yet)
+       XSA-264  CVE-2018-12891
+       XSA-265  CVE-2018-12893
+       XSA-266  CVE-2018-12892
 
  -- Ian Jackson <ijackson@chiark.greenend.org.uk>  Fri, 22 Jun 2018 16:38:39 +0100
 
