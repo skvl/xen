@@ -1,4 +1,4 @@
-xen (4.8.5+shim4.10.2+xsa282-1+deb9u11~) UNRELEASED; urgency=medium
+xen (4.8.5+shim4.10.2+xsa282-1+deb9u11) stretch-security; urgency=medium
 
   * Update to new upstream versions:
      * Main tree updated to Xen 4.8.5
@@ -20,7 +20,7 @@ xen (4.8.5+shim4.10.2+xsa282-1+deb9u11~) UNRELEASED; urgency=medium
        4.8.4+xsa273+shim4.10.1+xsa273-1+deb9u10
        4.8.3+xsa267+shim4.10.1+xsa267-1+deb9u9
 
- -- Ian Jackson <ijackson@chiark.greenend.org.uk>  Fri, 11 Jan 2019 16:35:40 +0000
+ -- Ian Jackson <ijackson@chiark.greenend.org.uk>  Fri, 11 Jan 2019 18:01:30 +0000
 
 xen (4.8.4+xsa273+shim4.10.1+xsa273-1+deb9u10) stretch-security; urgency=medium
 
