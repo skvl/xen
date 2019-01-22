@@ -23,15 +23,6 @@ then
 	exit 0;
 fi
 
-TOOLSTACK=$(/usr/lib/xen-common/bin/xen-toolstack 2>/dev/null)
-if [ $? -ne 0 ]; then
-        log_warning_msg "No usable Xen toolstack selected"
-        exit 0
-fi
-if [ "$(basename "$TOOLSTACK")" != xm ] && [ "$(basename "$TOOLSTACK")" != xl ]; then
-	exit 0
-fi
-
 if ! [ -e /proc/xen/privcmd ]; then
 	exit 0
 fi

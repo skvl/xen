@@ -15,9 +15,6 @@ abort-upgrade)
 	;;
 esac
 
-dpkg-maintscript-helper mv_conffile /etc/init.d/xend /etc/init.d/xen 4.1.2-4~ -- "$@"
-update-rc.d -f xend remove >/dev/null
-
 #DEBHELPER#
 
 exit 0
