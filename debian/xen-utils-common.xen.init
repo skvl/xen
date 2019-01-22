@@ -1,6 +1,6 @@
 #!/bin/sh
 ### BEGIN INIT INFO
-# Provides:          xen xend
+# Provides:          xen
 # Required-Start:    $syslog $remote_fs
 # Required-Stop:     $syslog $remote_fs
 # Default-Start:     2 3 4 5
@@ -16,7 +16,6 @@
 XENSTORED_DIR="/var/run/xenstored"
 
 [ -r /etc/default/xen ] && . /etc/default/xen
-[ -r /etc/default/xend ] && . /etc/default/xend
 
 PATH=/sbin:/bin:/usr/sbin:/usr/bin
 DESC="Xen daemons"
@@ -26,13 +25,7 @@ if [ $? -ne 0 ]; then
 	log_warning_msg "Not running within Xen or no compatible utils"
 	exit 0
 fi
-TOOLSTACK=$(/usr/lib/xen-common/bin/xen-toolstack 2>/dev/null)
-if [ $? -ne 0 ]; then
-	log_warning_msg "No usable Xen toolstack selected"
-	exit 0
-fi
 
-[ -e "$ROOT"/bin/xend ] && XEND="$ROOT"/bin/xend
 XENCONSOLED="$ROOT"/bin/xenconsoled
 XENCONSOLED_PIDFILE="/var/run/xenconsoled.pid"
 XENSTORED="$ROOT"/bin/xenstored
@@ -70,70 +63,6 @@ env_setup()
 
 	mkdir -m 700 /run/xen
 	[ -x /sbin/restorecon ] && /sbin/restorecon /run/xen
-}
-
-xend_start()
-{
-	if [ -z "$XEND" ] || [ "$(basename "$TOOLSTACK")" != xm ]; then
-		return 0
-	fi
-
-	log_progress_msg "xend"
-	xend_start_real
-	return $?
-}
-
-xend_stop()
-{
-	if [ -z "$XEND" ] || [ "$(basename "$TOOLSTACK")" != xm ]; then
-		return 0
-	fi
-
-	log_progress_msg "xend"
-	xend_stop_real
-	return $?
-}
-
-xend_restart()
-{
-	if [ -z "$XEND" ] || [ "$(basename "$TOOLSTACK")" != xm ]; then
-		return 0
-	fi
-
-	log_progress_msg "xend"
-	xend_stop_real
-	case "$?" in
-		0|1)
-		xend_start_real
-		case "$?" in
-			0) ;;
-			*) return 2 ;;
-		esac
-		;;
-		*) return 2 ;;
-	esac
-	return 0
-}
-
-xend_start_real()
-{
-	$XEND status && return 1
-	$XEND start || return 2
-
-	i=0
-	while [ $i -lt 10 ]; do
-		$XEND status && return 0 || true
-		i=$(($i + 1))
-		sleep 1
-	done
-	return 2
-}
-
-xend_stop_real()
-{
-	log_progress_msg "xend"
-	$XEND status || return 0
-	$XEND stop || return 1
 }
 
 xenconsoled_start()
@@ -302,11 +231,6 @@ case "$1" in
 		0|1) ;;
 		*) log_end_msg 1; exit ;;
 	esac
-	xend_start
-	case "$?" in
-		0|1) ;;
-		*) log_end_msg 1; exit ;;
-	esac
 	init_dom0
 	case "$?" in
 		0|1) ;;
@@ -332,11 +256,6 @@ case "$1" in
 		0|1) ;;
 		*) ret=1 ;;
 	esac
-	xend_stop
-	case "$?" in
-		0|1) ;;
-		*) ret=1 ;;
-	esac
 	xenconsoled_stop
 	case "$?" in
 		0|1) ;;
@@ -353,11 +272,6 @@ case "$1" in
 	log_daemon_msg "Restarting $DESC"
 	ret=0
 	qemu_restart
-	case "$?" in
-		0|1) ;;
-		*) ret=1 ;;
-	esac
-	xend_restart
 	case "$?" in
 		0|1) ;;
 		*) ret=1 ;;
