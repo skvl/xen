@@ -83,14 +83,3 @@ Usage instructions
 - Add the following two lines:
   type="pvh"
   pvshim=1
-
-* Converting a PV config to a PVH config
-
-If you have a kernel capable of booting PVH, then PVH mode is both
-faster and more secure than PV or PVH-shim mode.
-
-- Remove any reference to 'builder' (e.g., `builder="generic"`)
-- Add the following line:
-  type="pvh"
-
-* There is no need to reboot the host.

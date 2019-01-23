@@ -1,3 +1,9 @@
+xen (4.8.5+shim4.10.2+xsa282-1+deb9u12~) UNRELEASED; urgency=medium
+
+  * README.comet: remove alinea about PVH support (Closes: #908453)
+
+ -- Hans van Kranenburg <hans@knorrie.org>  Wed, 23 Jan 2019 22:23:46 +0100
+
 xen (4.8.5+shim4.10.2+xsa282-1+deb9u11) stretch-security; urgency=medium
 
   * Update to new upstream versions:
