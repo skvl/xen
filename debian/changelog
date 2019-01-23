@@ -2,6 +2,8 @@ xen (4.11.1-2~) UNRELEASED; urgency=medium
 
   * Refresh hypervisor and dom0 command line options documentation.
     (Closes: #919758)
+  * Have xen-utils-common suggest xen-doc, because it contains a broken
+    symlink to it. (Closes: #911046)
 
  -- Hans van Kranenburg <hans@knorrie.org>  Sun, 20 Jan 2019 00:46:00 +0100
 
