@@ -3,6 +3,7 @@ etc/xen/xl*
 etc/bash_completion.d/xl.sh	usr/share/bash-completion/completions/
 
 etc/default/xendomains
+etc/xen/oxenstored.conf
 
 usr/bin
 usr/sbin

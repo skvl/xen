@@ -28,7 +28,9 @@ Build-Depends:
    uuid-dev,
    zlib1g-dev,
    pandoc,
-   markdown
+   markdown,
+   ocaml-native-compilers | ocaml-nox,
+   ocaml-findlib,
 XS-Python-Version: current
 Homepage: https://xenproject.org/
 Vcs-Browser: https://salsa.debian.org/xen-team/debian-xen
