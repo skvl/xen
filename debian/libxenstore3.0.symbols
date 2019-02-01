@@ -45,9 +45,3 @@ libxenstore.so.3.0 libxenstore3.0 #MINVER#
  xs_watch@Base 3.2.0
  xs_write@Base 3.2.0
  xs_write_all@Base 3.2.0
-libxentoolcore-4.10.so.1 libxenstore3.0 #MINVER#
- VERS_1.0@VERS_1.0 4.10.0
- xentoolcore__deregister_active_handle@VERS_1.0 4.10.0
- xentoolcore__register_active_handle@VERS_1.0 4.10.0
- xentoolcore__restrict_by_dup2_null@VERS_1.0 4.10.0
- xentoolcore_restrict_all@VERS_1.0 4.10.0
