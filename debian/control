@@ -11,6 +11,7 @@ Build-Depends:
    rdfind,
    lsb-release,
    python-dev,
+   dh-python,
    bcc [i386 amd64],
    gcc-multilib [i386 amd64],
    e2fslibs-dev,
