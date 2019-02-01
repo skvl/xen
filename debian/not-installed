@@ -23,3 +23,8 @@ etc/xen/README
 # some of the code in the upstream init scripts.
 etc/xen/README.incompatibilities
 
+# When we build with ocaml support, do not try to ship development
+# libraries which we don't understand and are of limited use.
+# If someone wants this, suggestions from ocaml experts on what
+# to ship where would be welcome.
+usr/local/lib/ocaml

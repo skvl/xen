@@ -182,7 +182,6 @@ override_dh_auto_configure:
 		--with-libexec-leaf-dir=xen-$(upstream_version) \
 		--disable-blktap1 \
 		--disable-blktap2 \
-		--disable-ocamltools \
 		--disable-qemu-traditional --disable-rombios \
 		--with-system-qemu=/usr/bin/qemu-system-i386 \
 		--enable-ovmf --with-system-ovmf=/usr/share/ovmf/OVMF.fd \
