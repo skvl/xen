@@ -1,6 +1,8 @@
 .debhelper
 *.debhelper.*
+*.preinst.debhelper
 *.postinst.debhelper
+*.prerm.debhelper
 *.postrm.debhelper
 *.substvars
 *.stamp
