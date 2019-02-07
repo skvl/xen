@@ -24,6 +24,35 @@ case "$(cat /sys/hypervisor/type 2>/dev/null)" in
 xen)		;;
 *)	exit 0	;; # not running under Xen
 esac
+
+VERSION=$(/usr/lib/xen-common/bin/xen-version)
+
+# The arrangements for the `xen' init script are a bit odd.
+# This script is part of xen-utils-common, of which there is one
+# version installed regardless of the Xen version.
+#
+# But it is called by the prerm and postinsts of xen-utils-VERSION.
+# The idea is that (for example) if xen-utils-VERSION is upgraded, the
+# daemons are restarted.
+#
+# However, this means that this script may be called by the
+# maintscript of a xen-utils-V package for a different V to the
+# running version of Xen (X, say).  Such a xen-utils-V package does
+# not actually want to start or stop its daemons.  Indeed, the version
+# selection machinery would redirect its efforts to the xen-utils-X
+# utilities.  But this is not right: we don't actually want to (for
+# example) stop xenconsoled from xen-utils-X just because some
+# not-currently-relevant xen-utils-V is installed/removed/whatever.
+#
+# So we use DPKG_MAINTSCRIPT_PACKAGE to detect this situation, and
+# turn these extraneous calls into no-ops.
+
+case $DPKG_MAINTSCRIPT_PACKAGE in
+xen-utils-$VERSION)	;;	# xen-utils-V maintscript, under Xen X=V
+xen-utils-*)		exit 0;; # xen-utils-V maintscript, but under Xen X!=V
+*)			;;	# maybe not under dpkg, etc.
+esac
+
 ROOT=$(/usr/lib/xen-common/bin/xen-dir 2>/dev/null)
 if [ $? -ne 0 ]; then
 	log_warning_msg "Not running within Xen or no compatible utils"
