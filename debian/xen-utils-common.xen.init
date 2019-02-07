@@ -53,10 +53,10 @@ xen-utils-*)		exit 0;; # xen-utils-V maintscript, but under Xen X!=V
 *)			;;	# maybe not under dpkg, etc.
 esac
 
-ROOT=$(/usr/lib/xen-common/bin/xen-dir 2>/dev/null)
+ROOT=$(/usr/lib/xen-common/bin/xen-dir)
 if [ $? -ne 0 ]; then
-	log_warning_msg "Not running within Xen or no compatible utils"
-	exit 0
+	log_warning_msg "No compatible Xen utils for Xen $VERSION"
+	exit 1
 fi
 
 XENCONSOLED="$ROOT"/bin/xenconsoled
