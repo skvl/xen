@@ -20,6 +20,10 @@ XENSTORED_DIR="/var/run/xenstored"
 PATH=/sbin:/bin:/usr/sbin:/usr/bin
 DESC="Xen daemons"
 
+case "$(cat /sys/hypervisor/type 2>/dev/null)" in
+xen)		;;
+*)	exit 0	;; # not running under Xen
+esac
 ROOT=$(/usr/lib/xen-common/bin/xen-dir 2>/dev/null)
 if [ $? -ne 0 ]; then
 	log_warning_msg "Not running within Xen or no compatible utils"
