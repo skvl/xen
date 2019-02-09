@@ -61,7 +61,8 @@ fi
 
 XENCONSOLED="$ROOT"/bin/xenconsoled
 XENCONSOLED_PIDFILE="/var/run/xenconsoled.pid"
-XENSTORED="$ROOT"/bin/xenstored
+CXENSTORED="$ROOT"/bin/xenstored
+OXENSTORED="$ROOT"/bin/oxenstored
 XENSTORED_PIDFILE="/var/run/xenstore.pid"
 QEMU=/usr/bin/qemu-system-i386
 QEMU_PIDFILE="/var/run/qemu-dom0.pid"
@@ -204,15 +205,44 @@ qemu_stop_real()
 
 xenstored_start()
 {
+	# First, we check if any of xenstored or oxenstored is already running. If
+	# so, we abort and leave it alone.
+	for try_xenstored in "$OXENSTORED" "$CXENSTORED"; do
+		if [ -x $try_xenstored ]; then
+			start-stop-daemon --start --quiet --pidfile "$XENSTORED_PIDFILE" \
+				--exec "$try_xenstored" --test > /dev/null
+			# s-s-d code 1 here means: "We found a matching live process!"
+			if [ $? -eq 1 ]; then
+				return 0
+			fi
+		fi
+	done
 	log_progress_msg "xenstored"
-	start-stop-daemon --start --quiet --pidfile "$XENSTORED_PIDFILE" --exec "$XENSTORED" --test > /dev/null \
-		|| return 1
 	[ -d "$XENSTORED_DIR" ] || mkdir -p "$XENSTORED_DIR"
 	[ -x /sbin/restorecon ] && /sbin/restorecon "$XENSTORED_DIR"
 	export XENSTORED_ROOTDIR="$XENSTORED_DIR"
-	start-stop-daemon --start --quiet --pidfile "$XENSTORED_PIDFILE" --exec "$XENSTORED" -- \
-		$XENSTORED_ARGS --pid-file="$XENSTORED_PIDFILE" \
-		|| return 2
+	# If none of them are running, then try starting one. If the user made an
+	# explicit choice, then run that. Else try the different xenstored
+	# implementations we know about in order of preference.
+	case "$XENSTORED" in
+	?*) try_xenstoreds='XENSTORED' ;;
+	'') try_xenstoreds='OXENSTORED CXENSTORED' ;;
+	esac
+	for try_xenstored_var in $try_xenstoreds; do
+		eval "try_xenstored=\$$try_xenstored_var"
+		if [ -x $try_xenstored ]; then
+			if start-stop-daemon --start --quiet \
+				--pidfile "$XENSTORED_PIDFILE" --exec "$try_xenstored" -- \
+				$XENSTORED_ARGS --pid-file="$XENSTORED_PIDFILE"; then
+					started_xenstored=$try_xenstored
+					break
+			fi
+		fi
+	done
+	if [ -z "$started_xenstored" ]; then
+		log_failure_msg "No suitable xenstored binary found to start."
+		return 1
+	fi
 
 	# Wait for xenstored to actually come up, timing out after 30 seconds
 	local time=0
@@ -256,7 +286,7 @@ case "$1" in
 	env_setup
 	xenstored_start
 	case "$?" in
-		0|1) ;;
+		0) ;;
 		*) log_end_msg 1; exit ;;
 	esac
 	xenconsoled_start
