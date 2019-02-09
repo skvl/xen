@@ -6,6 +6,7 @@ Section: admin
 Standards-Version: 3.9.4
 Build-Depends:
    debhelper (>= 10),
+   dh-exec,
    autotools-dev,
    dpkg-dev (>= 1.16.0~),
    rdfind,
