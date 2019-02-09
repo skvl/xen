@@ -1,8 +1,11 @@
+#! /usr/bin/dh-exec --with=install
+
 etc/xen/scripts
 etc/xen/xl*
 etc/bash_completion.d/xl.sh	usr/share/bash-completion/completions/
 
 etc/default/xendomains
+etc/default/xencommons => /etc/default/xen
 etc/xen/oxenstored.conf
 
 usr/bin
