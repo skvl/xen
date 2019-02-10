@@ -256,14 +256,13 @@ xenstored_start()
 	if ! [ $time -lt $timeout ] ; then
 	    return 2
 	fi
-}
 
-init_dom0()
-{
-	log_progress_msg "init-dom0"
+	# Add some extra entries about dom0 into xenstore
 	if [ -e $ROOT/bin/xen-init-dom0 ] ; then
 	    $ROOT/bin/xen-init-dom0 > /dev/null
 	else
+	    # xen-init-dom0 has been present since Stretch.
+	    # Remove this compatibility section in Buster+1
 	    xenstore-write "/local/domain/0/name" "Domain-0"
 	    xenstore-write "/local/domain/0/domid" "0"
 	fi
@@ -290,11 +289,6 @@ case "$1" in
 		*) log_end_msg 1; exit ;;
 	esac
 	xenconsoled_start
-	case "$?" in
-		0|1) ;;
-		*) log_end_msg 1; exit ;;
-	esac
-	init_dom0
 	case "$?" in
 		0|1) ;;
 		*) log_end_msg 1; exit ;;
