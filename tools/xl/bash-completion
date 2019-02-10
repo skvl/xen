@@ -17,4 +17,4 @@ _xl()
 	return 0
 }
 
-complete -F _xl -o nospace -o default xl
+complete -F _xl -o nospace -o default xl xen
