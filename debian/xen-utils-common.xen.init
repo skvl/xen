@@ -280,7 +280,7 @@ case "$1" in
 	capability_check
 	case "$?" in
 		0) ;;
-		*) log_end_msg 255; exit ;;
+		*) log_end_msg 0; exit ;; # not a dom0, skip the rest
 	esac
 	env_setup
 	xenstored_start
