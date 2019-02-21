@@ -3,8 +3,8 @@
 # Provides:          xendomains
 # Required-Start:    $syslog $network $remote_fs xen
 # Required-Stop:     $syslog $network $remote_fs xen
-# Should-Start:      drbd iscsi openvswitch-switch
-# Should-Stop:       drbd iscsi openvswitch-switch
+# Should-Start:      drbd iscsi openvswitch-switch nfs-kernel-server
+# Should-Stop:       drbd iscsi openvswitch-switch nfs-kernel-server
 # X-Start-Before:    corosync heartbeat libvirtd
 # X-Stop-After:      corosync heartbeat libvirtd
 # Default-Start:     2 3 4 5
