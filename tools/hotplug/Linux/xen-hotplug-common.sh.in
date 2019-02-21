@@ -23,7 +23,6 @@ dir=$(dirname "$0")
 exec 2>>@XEN_LOG_DIR@/xen-hotplug.log
 
 export PATH="${bindir}:${sbindir}:${LIBEXEC_BIN}:/sbin:/bin:/usr/bin:/usr/sbin:$PATH"
-export LD_LIBRARY_PATH="${libdir}${LD_LIBRARY_PATH+:}$LD_LIBRARY_PATH"
 export LANG="POSIX"
 unset $(set | grep ^LC_ | cut -d= -f1)
 
