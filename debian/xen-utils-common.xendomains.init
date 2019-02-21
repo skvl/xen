@@ -1,8 +1,8 @@
 #!/bin/bash
 ### BEGIN INIT INFO
 # Provides:          xendomains
-# Required-Start:    $syslog $remote_fs xen
-# Required-Stop:     $syslog $remote_fs xen
+# Required-Start:    $syslog $network $remote_fs xen
+# Required-Stop:     $syslog $network $remote_fs xen
 # Should-Start:      drbd iscsi openvswitch-switch
 # Should-Stop:       drbd iscsi openvswitch-switch
 # X-Start-Before:    corosync heartbeat libvirtd
