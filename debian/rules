@@ -229,6 +229,12 @@ override_dh_auto_install: $(TEMPLATED_FILES)
 		armhf) ;; \
 		*) mv $t/usr/lib64/efi/* $t/boot/. ;; \
 	esac
+	:
+	@# This file contains an arch-specific path and we put it
+	@# in xen-utils-common, an arch-all package.  But the
+	@# path is only used to put the libdir on LD_LIBRARY_PATH
+	@# in the hotplug scripts.  We have a patch to drop that.
+	sed -i '/^libdir=/d' $t/etc/xen/scripts/hotplugpath.sh
 
 # libfsimage not only has an unstable ABI, but also a very poor name.
 # Our makefile patch puts it in a different directory and fixes up the
