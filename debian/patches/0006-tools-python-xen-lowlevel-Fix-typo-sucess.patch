@@ -1,0 +1,22 @@
+From: Ian Jackson <ian.jackson@citrix.com>
+Date: Wed, 3 Oct 2018 18:57:13 +0100
+Subject: tools/python/xen/lowlevel: Fix typo `sucess'
+
+Signed-off-by: Ian Jackson <ian.jackson@citrix.com>
+---
+ tools/python/xen/lowlevel/xc/xc.c | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/tools/python/xen/lowlevel/xc/xc.c b/tools/python/xen/lowlevel/xc/xc.c
+index 694bfa0..2877283 100644
+--- a/tools/python/xen/lowlevel/xc/xc.c
++++ b/tools/python/xen/lowlevel/xc/xc.c
+@@ -2160,7 +2160,7 @@ static PyMethodDef pyxc_methods[] = {
+       " xenstore_gmfn [int]: \n"
+       " console_domid [int]: \n"
+       " xenstore_domid [int]: \n"
+-      "Returns: None on sucess. Raises exception on error.\n" },
++      "Returns: None on success. Raises exception on error.\n" },
+ 
+     { "hvm_get_param", 
+       (PyCFunction)pyxc_hvm_param_get,

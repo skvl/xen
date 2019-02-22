@@ -1,0 +1,26 @@
+From: Ian Jackson <ian.jackson@citrix.com>
+Date: Thu, 4 Oct 2018 12:32:00 +0100
+Subject: pygrub fsimage.so: Honour LDFLAGS when building
+
+This seems to have been simply omitted.  Obviously this is needed when
+building and not just when installing.  Passing only when installing
+is ineffective.
+
+Signed-off-by: Ian Jackson <ian.jackson@citrix.com>
+---
+ tools/pygrub/Makefile | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/tools/pygrub/Makefile b/tools/pygrub/Makefile
+index 536af07..3063c49 100644
+--- a/tools/pygrub/Makefile
++++ b/tools/pygrub/Makefile
+@@ -10,7 +10,7 @@ INSTALL_LOG = build/installed_files.txt
+ all: build
+ .PHONY: build
+ build:
+-	CC="$(CC)" CFLAGS="$(PY_CFLAGS)" $(PYTHON) setup.py build
++	CC="$(CC)" CFLAGS="$(PY_CFLAGS)" LDFLAGS="$(PY_LDFLAGS)" $(PYTHON) setup.py build
+ 
+ .PHONY: install
+ install: all
