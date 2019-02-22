@@ -1,5 +1,8 @@
 xen (4.11.1+26-g87f51bf366-1) UNRELEASED; urgency=medium
 
+  [ Ian Jackson ]
+  * Update to new upstream version 4.11.1+26-g87f51bf366.
+
   [ Hans van Kranenburg ]
   * Refresh hypervisor and dom0 command line options documentation.
     (Closes: #919758)
@@ -7,11 +10,48 @@ xen (4.11.1+26-g87f51bf366-1) UNRELEASED; urgency=medium
     symlink to it. (Closes: #911046)
   * Have xenstore-utils declare Breaks on xen-utils-common to make
     piuparts happy. (Closes: #911045)
+  * debian/xen-utils-common.*: remove xend cruft
+  * debian/libxenstore3.0.symbols: revert ea2334dfe0
+  * debian/control: add dh-python build-dep
+  * d/xen-utils-V...: override xen-shim-syms lintian
+  * debian/control: bump debhelper builddep to 10
+  * debian/xen-utils-common.*: remove more xend cruft
+  * debian/.gitignore: ignore more debhelper snippets
 
   [ Ian Jackson ]
-  * Update to new upstream version 4.11.1+26-g87f51bf366.
+  * xen version/upgrade handling: Improve an error message
+  * xen init script: silently exit status 0 if not running under xen
+  * xen init script: Do nothing if running for wrong Xen package
+    (Closes: #851654)
+  * xen init script: Tidy up wrong/missing Xen version error handling
+  * oxenstored: Build it
 
- -- Ian Jackson <ian.jackson@citrix.com>  Fri, 22 Feb 2019 14:00:19 +0000
+  [ Hans van Kranenburg ]
+  * sysconfig.xencommons.in: Strip and debianize
+  * d/xen-utils-common.install: ship /etc/default/xen
+  * xen init script: rewrite xenstored start logic
+  * xen init script: move init_dom0 into xenstored start
+  * d/x-u-common.install: install completion as as xl
+  * d/[..]/grub.d/xen.cfg: improve docs even more
+  * xen init script: don't fail when being run in domU
+
+  [ Ian Jackson ]
+  * debian/rules: Fix tiny typo
+  * hotplug-common: Do not adjust LD_LIBRARY_PATH
+  * hotplug-common: Strip arch-specific libdir from config file
+    (Closes: #862236)
+  * xendomains init script; Add dependency on $network (Closes: #798510)
+  * xendomains init script; Add should-dependency on nfs-kernel-server
+    (Closes: #826871)
+
+  [ Bastian Blank ]
+  * pygrub: Set sys.path
+
+  [ Ian Jackson ]
+  * pygrub: Specify -rpath LIBEXEC_LIB when building fsimage.so
+  * xencommons xenstored startup: Use --pid-file $F not --pid-file=$F
+
+ -- Ian Jackson <ian@zealot.relativity.greenend.org.uk>  Fri, 22 Feb 2019 14:15:38 +0000
 
 xen (4.11.1-1) unstable; urgency=medium
 
