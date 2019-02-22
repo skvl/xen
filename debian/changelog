@@ -50,7 +50,7 @@ xen (4.11.1+26-g87f51bf366-1) UNRELEASED; urgency=medium
   * xen version/upgrade handling: Improve an error message
   * xen init script: silently exit status 0 if not running under xen
   * xen init script: Tidy up wrong/missing Xen version error handling
-  * debian/rules: Fix tiny typos 
+  * debian/rules: Fix tiny typos
   * hotplug-common: Do not adjust LD_LIBRARY_PATH
 
  -- Ian Jackson <ijackson@chiark.greenend.org.uk>  Fri, 22 Feb 2019 14:39:34 +0000
