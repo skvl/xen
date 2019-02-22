@@ -1,9 +1,9 @@
-xen (4.11.1+26-g87f51bf366-2~) unstable; urgency=medium
+xen (4.11.1+26-g87f51bf366-2) unstable; urgency=medium
 
   * Packaging change: override spurious lintian warning about
     fsimage.so rpath.
 
- -- Ian Jackson <ijackson@chiark.greenend.org.uk>  Fri, 22 Feb 2019 15:49:52 +0000
+ -- Ian Jackson <ijackson@chiark.greenend.org.uk>  Fri, 22 Feb 2019 16:07:37 +0000
 
 xen (4.11.1+26-g87f51bf366-1) unstable; urgency=medium
 
