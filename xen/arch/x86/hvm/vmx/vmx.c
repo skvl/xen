@@ -1915,17 +1915,14 @@ static int vmx_virtual_intr_delivery_enabled(void)
     return cpu_has_vmx_virtual_intr_delivery;
 }
 
-static void vmx_process_isr(int isr, struct vcpu *v)
+static u8 set_svi(int isr)
 {
     unsigned long status;
     u8 old;
-    unsigned int i;
-    const struct vlapic *vlapic = vcpu_vlapic(v);
 
     if ( isr < 0 )
         isr = 0;
 
-    vmx_vmcs_enter(v);
     __vmread(GUEST_INTR_STATUS, &status);
     old = status >> VMX_GUEST_INTR_STATUS_SVI_OFFSET;
     if ( isr != old )
@@ -1934,6 +1931,18 @@ static void vmx_process_isr(int isr, struct vcpu *v)
         status |= isr << VMX_GUEST_INTR_STATUS_SVI_OFFSET;
         __vmwrite(GUEST_INTR_STATUS, status);
     }
+
+    return old;
+}
+
+static void vmx_process_isr(int isr, struct vcpu *v)
+{
+    unsigned int i;
+    const struct vlapic *vlapic = vcpu_vlapic(v);
+
+    vmx_vmcs_enter(v);
+
+    set_svi(isr);
 
     /*
      * Theoretically, only level triggered interrupts can have their
@@ -2085,14 +2094,13 @@ static bool vmx_test_pir(const struct vcpu *v, uint8_t vec)
     return pi_test_pir(vec, &v->arch.hvm_vmx.pi_desc);
 }
 
-static void vmx_handle_eoi(u8 vector)
+static void vmx_handle_eoi(uint8_t vector, int isr)
 {
-    unsigned long status;
+    uint8_t old_svi = set_svi(isr);
+    static bool warned;
 
-    /* We need to clear the SVI field. */
-    __vmread(GUEST_INTR_STATUS, &status);
-    status &= VMX_GUEST_INTR_STATUS_SUBFIELD_BITMASK;
-    __vmwrite(GUEST_INTR_STATUS, status);
+    if ( vector != old_svi && !test_and_set_bool(warned) )
+        printk(XENLOG_WARNING "EOI for %02x but SVI=%02x\n", vector, old_svi);
 }
 
 static void vmx_enable_msr_interception(struct domain *d, uint32_t msr)
@@ -3558,6 +3566,7 @@ void vmx_vmexit_handler(struct cpu_user_regs *regs)
     unsigned long exit_qualification, exit_reason, idtv_info, intr_info = 0;
     unsigned int vector = 0, mode;
     struct vcpu *v = current;
+    struct domain *currd = v->domain;
 
     __vmread(GUEST_RIP,    &regs->rip);
     __vmread(GUEST_RSP,    &regs->rsp);
@@ -3925,6 +3934,13 @@ void vmx_vmexit_handler(struct cpu_user_regs *regs)
         vmx_invlpg_intercept(exit_qualification);
         break;
     case EXIT_REASON_RDTSCP:
+        if ( !currd->arch.cpuid->extd.rdtscp &&
+             currd->arch.tsc_mode != TSC_MODE_PVRDTSCP )
+        {
+            hvm_inject_hw_exception(TRAP_invalid_op, X86_EVENT_NO_EC);
+            break;
+        }
+
         regs->rcx = hvm_msr_tsc_aux(v);
         /* fall through */
     case EXIT_REASON_RDTSC:
