@@ -10,12 +10,13 @@ INSTALL_LOG = build/installed_files.txt
 all: build
 .PHONY: build
 build:
-	CC="$(CC)" CFLAGS="$(PY_CFLAGS)" LDFLAGS="$(PY_LDFLAGS)" $(PYTHON) setup.py build
+	CC="$(CC)" CFLAGS="$(PY_CFLAGS)" LDFLAGS="$(PY_LDFLAGS)" LIBEXEC_LIB=$(LIBEXEC_LIB) $(PYTHON) setup.py build
 
 .PHONY: install
 install: all
 	$(INSTALL_DIR) $(DESTDIR)/$(bindir)
-	CC="$(CC)" CFLAGS="$(PY_CFLAGS)" LDFLAGS="$(PY_LDFLAGS)" $(PYTHON) \
+	CC="$(CC)" CFLAGS="$(PY_CFLAGS)" LDFLAGS="$(PY_LDFLAGS)" \
+		LIBEXEC_LIB=$(LIBEXEC_LIB) $(PYTHON) \
 		setup.py install --record $(INSTALL_LOG) $(PYTHON_PREFIX_ARG) \
 		 --root="$(DESTDIR)" --install-scripts=$(LIBEXEC_BIN) --force
 	set -e; if [ $(bindir) != $(LIBEXEC_BIN) -a \
