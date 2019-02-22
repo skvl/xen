@@ -1,4 +1,4 @@
-xen (4.11.1+26-g87f51bf366-1) UNRELEASED; urgency=medium
+xen (4.11.1+26-g87f51bf366-1) unstable; urgency=medium
 
   Significant changes:
   * Update to new upstream version 4.11.1+26-g87f51bf366.
@@ -53,7 +53,7 @@ xen (4.11.1+26-g87f51bf366-1) UNRELEASED; urgency=medium
   * debian/rules: Fix tiny typos
   * hotplug-common: Do not adjust LD_LIBRARY_PATH
 
- -- Ian Jackson <ijackson@chiark.greenend.org.uk>  Fri, 22 Feb 2019 14:39:34 +0000
+ -- Ian Jackson <ijackson@chiark.greenend.org.uk>  Fri, 22 Feb 2019 15:11:45 +0000
 
 xen (4.11.1-1) unstable; urgency=medium
 
