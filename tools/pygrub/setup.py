@@ -5,10 +5,15 @@ import sys
 
 extra_compile_args  = [ "-fno-strict-aliasing", "-Werror" ]
 
+extra_link_args = []
+try: extra_link_args += [ "-Wl,-rpath," + os.environ['LIBEXEC_LIB'] ]
+except KeyError: pass
+
 XEN_ROOT = "../.."
 
 fsimage = Extension("fsimage",
     extra_compile_args = extra_compile_args,
+    extra_link_args = extra_link_args,
     include_dirs = [ XEN_ROOT + "/tools/libfsimage/common/" ],
     library_dirs = [ XEN_ROOT + "/tools/libfsimage/common/" ],
     libraries = ["fsimage"],
