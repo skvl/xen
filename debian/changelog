@@ -1,5 +1,6 @@
-xen (4.11.1-2~) UNRELEASED; urgency=medium
+xen (4.11.1+26-g87f51bf366-1) UNRELEASED; urgency=medium
 
+  [ Hans van Kranenburg ]
   * Refresh hypervisor and dom0 command line options documentation.
     (Closes: #919758)
   * Have xen-utils-common suggest xen-doc, because it contains a broken
@@ -7,7 +8,10 @@ xen (4.11.1-2~) UNRELEASED; urgency=medium
   * Have xenstore-utils declare Breaks on xen-utils-common to make
     piuparts happy. (Closes: #911045)
 
- -- Hans van Kranenburg <hans@knorrie.org>  Sun, 20 Jan 2019 00:46:00 +0100
+  [ Ian Jackson ]
+  * Update to new upstream version 4.11.1+26-g87f51bf366.
+
+ -- Ian Jackson <ian.jackson@citrix.com>  Fri, 22 Feb 2019 14:00:19 +0000
 
 xen (4.11.1-1) unstable; urgency=medium
 
