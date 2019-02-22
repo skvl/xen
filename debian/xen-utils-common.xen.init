@@ -135,7 +135,7 @@ xenconsoled_start_real()
 	start-stop-daemon --start --quiet --pidfile "$XENCONSOLED_PIDFILE" --exec "$XENCONSOLED" --test > /dev/null \
 		|| return 1
 	start-stop-daemon --start --quiet --pidfile "$XENCONSOLED_PIDFILE" --exec "$XENCONSOLED" -- \
-		$XENCONSOLED_ARGS --pid-file="$XENCONSOLED_PIDFILE" \
+		$XENCONSOLED_ARGS --pid-file "$XENCONSOLED_PIDFILE" \
 		|| return 2
 }
 
@@ -233,7 +233,7 @@ xenstored_start()
 		if [ -x $try_xenstored ]; then
 			if start-stop-daemon --start --quiet \
 				--pidfile "$XENSTORED_PIDFILE" --exec "$try_xenstored" -- \
-				$XENSTORED_ARGS --pid-file="$XENSTORED_PIDFILE"; then
+				$XENSTORED_ARGS --pid-file "$XENSTORED_PIDFILE"; then
 					started_xenstored=$try_xenstored
 					break
 			fi
