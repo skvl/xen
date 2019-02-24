@@ -1,3 +1,9 @@
+xen (4.12.0~rc3-1) UNRELEASED; urgency=medium
+
+  * Update to new upstream version 4.12.0~rc3.
+
+ -- Hans van Kranenburg <hans@knorrie.org>  Sun, 24 Feb 2019 18:48:01 +0100
+
 xen (4.11.1+26-g87f51bf366-2) unstable; urgency=medium
 
   * Packaging change: override spurious lintian warning about
