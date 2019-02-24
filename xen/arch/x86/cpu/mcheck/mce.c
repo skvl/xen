@@ -535,9 +535,12 @@ void mcheck_cmn_handler(const struct cpu_user_regs *regs)
             mc_panic("MCE: No CPU found valid MCE, need reset");
         if ( !cpumask_empty(&mce_fatal_cpus) )
         {
-            char *ebufp, ebuf[96] = "MCE: Fatal error happened on CPUs ";
-            ebufp = ebuf + strlen(ebuf);
-            cpumask_scnprintf(ebufp, 95 - strlen(ebuf), &mce_fatal_cpus);
+            char ebuf[96];
+
+            snprintf(ebuf, sizeof(ebuf),
+                     "MCE: Fatal error happened on CPUs %*pb",
+                     nr_cpu_ids, cpumask_bits(&mce_fatal_cpus));
+
             mc_panic(ebuf);
         }
         atomic_set(&found_error, 0);
@@ -1660,7 +1663,7 @@ void mc_panic(char *s)
            "   The processor has reported a hardware error which cannot\n"
            "   be recovered from.  Xen will now reboot the machine.\n");
     mc_panic_dump();
-    panic("HARDWARE ERROR");
+    panic("HARDWARE ERROR\n");
 }
 
 /*
@@ -1756,7 +1759,7 @@ static int mce_delayed_action(mctelem_cookie_t mctc)
         dprintk(XENLOG_ERR, "MCE delayed action failed\n");
         is_mc_panic = true;
         x86_mcinfo_dump(mctelem_dataptr(mctc));
-        panic("MCE: Software recovery failed for the UCR");
+        panic("MCE: Software recovery failed for the UCR\n");
         break;
 
     case MCER_RECOVERED:

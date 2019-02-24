@@ -1,6 +1,7 @@
 #include <xen/init.h>
 #include <xen/lib.h>
 #include <xen/sched.h>
+#include <xen/nospec.h>
 #include <asm/cpuid.h>
 #include <asm/hvm/hvm.h>
 #include <asm/hvm/nestedhvm.h>
@@ -75,11 +76,6 @@ struct cpuid_policy __read_mostly raw_cpuid_policy,
     __read_mostly pv_max_cpuid_policy,
     __read_mostly hvm_max_cpuid_policy;
 
-static void cpuid_leaf(uint32_t leaf, struct cpuid_leaf *data)
-{
-    cpuid(leaf, &data->a, &data->b, &data->c, &data->d);
-}
-
 static void sanitise_featureset(uint32_t *fs)
 {
     /* for_each_set_bit() uses unsigned longs.  Extend with zeroes. */
@@ -102,7 +98,7 @@ static void sanitise_featureset(uint32_t *fs)
     for_each_set_bit(i, (void *)disabled_features,
                      sizeof(disabled_features) * 8)
     {
-        const uint32_t *dfs = lookup_deep_deps(i);
+        const uint32_t *dfs = x86_cpuid_lookup_deep_deps(i);
         unsigned int j;
 
         ASSERT(dfs); /* deep_features[] should guarentee this. */
@@ -210,7 +206,10 @@ static void recalculate_misc(struct cpuid_policy *p)
     p->basic.raw[0x6] = EMPTY_LEAF; /* Therm/Power not exposed to guests. */
 
     p->basic.raw[0x8] = EMPTY_LEAF;
-    p->basic.raw[0xb] = EMPTY_LEAF; /* TODO: Rework topology logic. */
+
+    /* TODO: Rework topology logic. */
+    memset(p->topo.raw, 0, sizeof(p->topo.raw));
+
     p->basic.raw[0xc] = EMPTY_LEAF;
 
     p->extd.e1d &= ~CPUID_COMMON_1D_FEATURES;
@@ -270,79 +269,8 @@ static void recalculate_misc(struct cpuid_policy *p)
 static void __init calculate_raw_policy(void)
 {
     struct cpuid_policy *p = &raw_cpuid_policy;
-    unsigned int i;
 
-    cpuid_leaf(0, &p->basic.raw[0]);
-    for ( i = 1; i < min(ARRAY_SIZE(p->basic.raw),
-                         p->basic.max_leaf + 1ul); ++i )
-    {
-        switch ( i )
-        {
-        case 0x4: case 0x7: case 0xd:
-            /* Multi-invocation leaves.  Deferred. */
-            continue;
-        }
-
-        cpuid_leaf(i, &p->basic.raw[i]);
-    }
-
-    if ( p->basic.max_leaf >= 4 )
-    {
-        for ( i = 0; i < ARRAY_SIZE(p->cache.raw); ++i )
-        {
-            union {
-                struct cpuid_leaf l;
-                struct cpuid_cache_leaf c;
-            } u;
-
-            cpuid_count_leaf(4, i, &u.l);
-
-            if ( u.c.type == 0 )
-                break;
-
-            p->cache.subleaf[i] = u.c;
-        }
-
-        /*
-         * The choice of CPUID_GUEST_NR_CACHE is arbitrary.  It is expected
-         * that it will eventually need increasing for future hardware.
-         */
-        if ( i == ARRAY_SIZE(p->cache.raw) )
-            printk(XENLOG_WARNING
-                   "CPUID: Insufficient Leaf 4 space for this hardware\n");
-    }
-
-    if ( p->basic.max_leaf >= 7 )
-    {
-        cpuid_count_leaf(7, 0, &p->feat.raw[0]);
-
-        for ( i = 1; i < min(ARRAY_SIZE(p->feat.raw),
-                             p->feat.max_subleaf + 1ul); ++i )
-            cpuid_count_leaf(7, i, &p->feat.raw[i]);
-    }
-
-    if ( p->basic.max_leaf >= XSTATE_CPUID )
-    {
-        uint64_t xstates;
-
-        cpuid_count_leaf(XSTATE_CPUID, 0, &p->xstate.raw[0]);
-        cpuid_count_leaf(XSTATE_CPUID, 1, &p->xstate.raw[1]);
-
-        xstates = ((uint64_t)(p->xstate.xcr0_high | p->xstate.xss_high) << 32) |
-            (p->xstate.xcr0_low | p->xstate.xss_low);
-
-        for ( i = 2; i < min(63ul, ARRAY_SIZE(p->xstate.raw)); ++i )
-        {
-            if ( xstates & (1ul << i) )
-                cpuid_count_leaf(XSTATE_CPUID, i, &p->xstate.raw[i]);
-        }
-    }
-
-    /* Extended leaves. */
-    cpuid_leaf(0x80000000, &p->extd.raw[0]);
-    for ( i = 1; i < min(ARRAY_SIZE(p->extd.raw),
-                         p->extd.max_leaf + 1 - 0x80000000ul); ++i )
-        cpuid_leaf(0x80000000 + i, &p->extd.raw[i]);
+    x86_cpuid_policy_fill_native(p);
 
     p->x86_vendor = boot_cpu_data.x86_vendor;
 }
@@ -363,6 +291,10 @@ static void __init calculate_host_policy(void)
     cpuid_featureset_to_policy(boot_cpu_data.x86_capability, p);
     recalculate_xstate(p);
     recalculate_misc(p);
+
+    /* When vPMU is disabled, drop it from the host policy. */
+    if ( vpmu_mode == XENPMU_MODE_OFF )
+        p->basic.raw[0xa] = EMPTY_LEAF;
 
     if ( p->extd.svm )
     {
@@ -441,7 +373,7 @@ static void __init calculate_hvm_max_policy(void)
     *p = host_cpuid_policy;
     cpuid_policy_to_featureset(p, hvm_featureset);
 
-    hvm_featuremask = hvm_funcs.hap_supported ?
+    hvm_featuremask = hvm_hap_supported() ?
         hvm_hap_featuremask : hvm_shadow_featuremask;
 
     for ( i = 0; i < ARRAY_SIZE(hvm_featureset); ++i )
@@ -517,36 +449,6 @@ bool recheck_cpu_features(unsigned int cpu)
     }
 
     return okay;
-}
-
-const uint32_t *lookup_deep_deps(uint32_t feature)
-{
-    static const struct {
-        uint32_t feature;
-        uint32_t fs[FSCAPINTS];
-    } deep_deps[] = INIT_DEEP_DEPS;
-    unsigned int start = 0, end = ARRAY_SIZE(deep_deps);
-
-    BUILD_BUG_ON(ARRAY_SIZE(deep_deps) != NR_DEEP_DEPS);
-
-    /* Fast early exit. */
-    if ( !test_bit(feature, deep_features) )
-        return NULL;
-
-    /* deep_deps[] is sorted.  Perform a binary search. */
-    while ( start < end )
-    {
-        unsigned int mid = start + ((end - start) / 2);
-
-        if ( deep_deps[mid].feature > feature )
-            end = mid;
-        else if ( deep_deps[mid].feature < feature )
-            start = mid + 1;
-        else
-            return deep_deps[mid].fs;
-    }
-
-    return NULL;
 }
 
 void recalculate_cpuid_policy(struct domain *d)
@@ -664,6 +566,10 @@ void recalculate_cpuid_policy(struct domain *d)
         }
     }
 
+    if ( vpmu_mode == XENPMU_MODE_OFF ||
+         ((vpmu_mode & XENPMU_MODE_ALL) && !is_hardware_domain(d)) )
+        p->basic.raw[0xa] = EMPTY_LEAF;
+
     if ( !p->extd.svm )
         p->extd.raw[0xa] = EMPTY_LEAF;
 
@@ -678,16 +584,17 @@ void recalculate_cpuid_policy(struct domain *d)
 
 int init_domain_cpuid_policy(struct domain *d)
 {
-    d->arch.cpuid = xmalloc(struct cpuid_policy);
+    struct cpuid_policy *p =
+        xmemdup(is_pv_domain(d) ?  &pv_max_cpuid_policy
+                                : &hvm_max_cpuid_policy);
 
-    if ( !d->arch.cpuid )
+    if ( !p )
         return -ENOMEM;
 
-    *d->arch.cpuid = is_pv_domain(d)
-        ? pv_max_cpuid_policy : hvm_max_cpuid_policy;
-
     if ( d->disable_migrate )
-        d->arch.cpuid->extd.itsc = cpu_has_itsc;
+        p->extd.itsc = cpu_has_itsc;
+
+    d->arch.cpuid = p;
 
     recalculate_cpuid_policy(d);
 
@@ -706,7 +613,7 @@ void guest_cpuid(const struct vcpu *v, uint32_t leaf,
      * First pass:
      * - Perform max_leaf/subleaf calculations.  Out-of-range leaves return
      *   all zeros, following the AMD model.
-     * - Fill in *res for leaves no longer handled on the legacy path.
+     * - Fill in *res with static data.
      * - Dispatch the virtualised leaves to their respective handlers.
      */
     switch ( leaf )
@@ -723,7 +630,7 @@ void guest_cpuid(const struct vcpu *v, uint32_t leaf,
             if ( subleaf >= ARRAY_SIZE(p->cache.raw) )
                 return;
 
-            *res = p->cache.raw[subleaf];
+            *res = array_access_nospec(p->cache.raw, subleaf);
             break;
 
         case 0x7:
@@ -732,18 +639,25 @@ void guest_cpuid(const struct vcpu *v, uint32_t leaf,
                                  ARRAY_SIZE(p->feat.raw) - 1) )
                 return;
 
-            *res = p->feat.raw[subleaf];
+            *res = array_access_nospec(p->feat.raw, subleaf);
+            break;
+
+        case 0xb:
+            if ( subleaf >= ARRAY_SIZE(p->topo.raw) )
+                return;
+
+            *res = array_access_nospec(p->topo.raw, subleaf);
             break;
 
         case XSTATE_CPUID:
             if ( !p->basic.xsave || subleaf >= ARRAY_SIZE(p->xstate.raw) )
                 return;
 
-            *res = p->xstate.raw[subleaf];
+            *res = array_access_nospec(p->xstate.raw, subleaf);
             break;
 
         default:
-            *res = p->basic.raw[leaf];
+            *res = array_access_nospec(p->basic.raw, leaf);
             break;
         }
         break;
@@ -767,7 +681,7 @@ void guest_cpuid(const struct vcpu *v, uint32_t leaf,
                                      ARRAY_SIZE(p->extd.raw) - 1) )
             return;
 
-        *res = p->extd.raw[leaf & 0xffff];
+        *res = array_access_nospec(p->extd.raw, leaf & 0xffff);
         break;
 
     default:
@@ -813,7 +727,7 @@ void guest_cpuid(const struct vcpu *v, uint32_t leaf,
         if ( is_hvm_domain(d) )
         {
             /* OSXSAVE clear in policy.  Fast-forward CR4 back in. */
-            if ( v->arch.hvm_vcpu.guest_cr[4] & X86_CR4_OSXSAVE )
+            if ( v->arch.hvm.guest_cr[4] & X86_CR4_OSXSAVE )
                 res->c |= cpufeat_mask(X86_FEATURE_OSXSAVE);
         }
         else /* PV domain */
@@ -825,7 +739,7 @@ void guest_cpuid(const struct vcpu *v, uint32_t leaf,
              *
              * Architecturally, the correct code here is simply:
              *
-             *   if ( v->arch.pv_vcpu.ctrlreg[4] & X86_CR4_OSXSAVE )
+             *   if ( v->arch.pv.ctrlreg[4] & X86_CR4_OSXSAVE )
              *       c |= cpufeat_mask(X86_FEATURE_OSXSAVE);
              *
              * However because of bugs in Xen (before c/s bd19080b, Nov 2010,
@@ -871,7 +785,7 @@ void guest_cpuid(const struct vcpu *v, uint32_t leaf,
              *    #UD or #GP is currently being serviced.
              */
             /* OSXSAVE clear in policy.  Fast-forward CR4 back in. */
-            if ( (v->arch.pv_vcpu.ctrlreg[4] & X86_CR4_OSXSAVE) ||
+            if ( (v->arch.pv.ctrlreg[4] & X86_CR4_OSXSAVE) ||
                  (regs->entry_vector == TRAP_invalid_op &&
                   guest_kernel_mode(v, regs) &&
                   (read_cr4() & X86_CR4_OSXSAVE)) )
@@ -934,7 +848,7 @@ void guest_cpuid(const struct vcpu *v, uint32_t leaf,
         if ( is_pv_domain(d) && is_hardware_domain(d) &&
              guest_kernel_mode(v, regs) && cpu_has_monitor &&
              regs->entry_vector == TRAP_gp_fault )
-            *res = raw_cpuid_policy.basic.raw[leaf];
+            *res = raw_cpuid_policy.basic.raw[5];
         break;
 
     case 0x7:
@@ -943,8 +857,8 @@ void guest_cpuid(const struct vcpu *v, uint32_t leaf,
         case 0:
             /* OSPKE clear in policy.  Fast-forward CR4 back in. */
             if ( (is_pv_domain(d)
-                  ? v->arch.pv_vcpu.ctrlreg[4]
-                  : v->arch.hvm_vcpu.guest_cr[4]) & X86_CR4_PKE )
+                  ? v->arch.pv.ctrlreg[4]
+                  : v->arch.hvm.guest_cr[4]) & X86_CR4_PKE )
                 res->c |= cpufeat_mask(X86_FEATURE_OSPKE);
             break;
         }
@@ -1056,7 +970,7 @@ void guest_cpuid(const struct vcpu *v, uint32_t leaf,
     case 0x8000001c:
         if ( (v->arch.xcr0 & X86_XCR0_LWP) && cpu_has_svm )
             /* Turn on available bit and other features specified in lwp_cfg. */
-            res->a = (res->d & v->arch.hvm_svm.guest_lwp_cfg) | 1;
+            res->a = (res->d & v->arch.hvm.svm.guest_lwp_cfg) | 1;
         break;
     }
 }

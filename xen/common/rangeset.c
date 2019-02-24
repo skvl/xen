@@ -384,6 +384,18 @@ int rangeset_consume_ranges(struct rangeset *r,
     return rc;
 }
 
+static int merge(unsigned long s, unsigned long e, void *data)
+{
+    struct rangeset *r = data;
+
+    return rangeset_add_range(r, s, e);
+}
+
+int rangeset_merge(struct rangeset *r1, struct rangeset *r2)
+{
+    return rangeset_report_ranges(r2, 0, ~0ul, merge, r1);
+}
+
 int rangeset_add_singleton(
     struct rangeset *r, unsigned long s)
 {
@@ -481,6 +493,9 @@ void rangeset_domain_destroy(
     struct domain *d)
 {
     struct rangeset *r;
+
+    if ( list_head_is_null(&d->rangesets) )
+        return;
 
     while ( !list_empty(&d->rangesets) )
     {

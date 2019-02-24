@@ -42,11 +42,10 @@
 #include <asm/cpufeature.h>
 #include <asm/debugger.h>
 #include <asm/event.h>
-#include <asm/flushtlb.h>
+#include <asm/hsr.h>
 #include <asm/mmio.h>
-#include <asm/monitor.h>
-#include <asm/psci.h>
 #include <asm/regs.h>
+#include <asm/smccc.h>
 #include <asm/traps.h>
 #include <asm/vgic.h>
 #include <asm/vtimer.h>
@@ -67,30 +66,6 @@ static inline void check_stack_alignment_constraints(void) {
     BUILD_BUG_ON((sizeof (struct cpu_info)) & 0x7);
 #endif
 }
-
-/*
- * GUEST_BUG_ON is intended for checking that the guest state has not been
- * corrupted in hardware and/or that the hardware behaves as we
- * believe it should (i.e. that certain traps can only occur when the
- * guest is in a particular mode).
- *
- * The intention is to limit the damage such h/w bugs (or spec
- * misunderstandings) can do by turning them into Denial of Service
- * attacks instead of e.g. information leaks or privilege escalations.
- *
- * GUEST_BUG_ON *MUST* *NOT* be used to check for guest controllable state!
- *
- * Compared with regular BUG_ON it dumps the guest vcpu state instead
- * of Xen's state.
- */
-#define guest_bug_on_failed(p)                          \
-do {                                                    \
-    show_execution_state(guest_cpu_user_regs());        \
-    panic("Guest Bug: %pv: '%s', line %d, file %s\n",   \
-          current, p, __LINE__, __FILE__);              \
-} while (0)
-#define GUEST_BUG_ON(p) \
-    do { if ( unlikely(p) ) guest_bug_on_failed(#p); } while (0)
 
 #ifdef CONFIG_ARM_32
 static int debug_stack_lines = 20;
@@ -122,7 +97,7 @@ register_t get_default_hcr_flags(void)
 {
     return  (HCR_PTW|HCR_BSU_INNER|HCR_AMO|HCR_IMO|HCR_FMO|HCR_VM|
              (vwfi != NATIVE ? (HCR_TWI|HCR_TWE) : 0) |
-             HCR_TSC|HCR_TAC|HCR_SWIO|HCR_TIDCP|HCR_FB);
+             HCR_TSC|HCR_TAC|HCR_SWIO|HCR_TIDCP|HCR_FB|HCR_TSW);
 }
 
 static enum {
@@ -182,8 +157,12 @@ void init_traps(void)
     WRITE_SYSREG((HCPTR_CP_MASK & ~(HCPTR_CP(10) | HCPTR_CP(11))) | HCPTR_TTA,
                  CPTR_EL2);
 
-    /* Setup hypervisor traps */
-    WRITE_SYSREG(get_default_hcr_flags(), HCR_EL2);
+    /*
+     * Configure HCR_EL2 with the bare minimum to run Xen until a guest
+     * is scheduled. {A,I,F}MO bits are set to allow EL2 receiving
+     * interrupts.
+     */
+    WRITE_SYSREG(HCR_AMO | HCR_FMO | HCR_IMO, HCR_EL2);
     isb();
 }
 
@@ -244,7 +223,8 @@ static register_t *select_user_reg(struct cpu_user_regs *regs, int reg)
      */
 #define REGOFFS(R) offsetof(struct cpu_user_regs, R)
 
-    switch ( reg ) {
+    switch ( reg )
+    {
     case 0 ... 7: /* Unbanked registers */
         BUILD_BUG_ON(REGOFFS(r0) + 7*sizeof(register_t) != REGOFFS(r7));
         return &regs->r0 + reg;
@@ -399,7 +379,7 @@ void panic_PAR(uint64_t par)
            second_in_first ? " during second stage lookup" : "",
            fsc_level_str(level));
 
-    panic("Error during Hypervisor-to-physical address translation");
+    panic("Error during Hypervisor-to-physical address translation\n");
 }
 
 static void cpsr_switch_mode(struct cpu_user_regs *regs, int mode)
@@ -422,7 +402,7 @@ static vaddr_t exception_handler32(vaddr_t offset)
 {
     uint32_t sctlr = READ_SYSREG32(SCTLR_EL1);
 
-    if (sctlr & SCTLR_V)
+    if ( sctlr & SCTLR_V )
         return 0xffff0000 + offset;
     else /* always have security exceptions */
         return READ_SYSREG(VBAR_EL1) + offset;
@@ -681,8 +661,7 @@ static void inject_vabt_exception(struct cpu_user_regs *regs)
         break;
     }
 
-    current->arch.hcr_el2 |= HCR_VA;
-    WRITE_SYSREG(current->arch.hcr_el2, HCR_EL2);
+    vcpu_hcr_set_flags(current, HCR_VA);
 }
 
 /*
@@ -786,9 +765,9 @@ static const char *mode_string(uint32_t cpsr)
     return mode_strings[mode] ? : "Unknown";
 }
 
-static void show_registers_32(struct cpu_user_regs *regs,
-                              struct reg_ctxt *ctxt,
-                              int guest_mode,
+static void show_registers_32(const struct cpu_user_regs *regs,
+                              const struct reg_ctxt *ctxt,
+                              bool guest_mode,
                               const struct vcpu *v)
 {
 
@@ -863,9 +842,9 @@ static void show_registers_32(struct cpu_user_regs *regs,
 }
 
 #ifdef CONFIG_ARM_64
-static void show_registers_64(struct cpu_user_regs *regs,
-                              struct reg_ctxt *ctxt,
-                              int guest_mode,
+static void show_registers_64(const struct cpu_user_regs *regs,
+                              const struct reg_ctxt *ctxt,
+                              bool guest_mode,
                               const struct vcpu *v)
 {
 
@@ -924,9 +903,9 @@ static void show_registers_64(struct cpu_user_regs *regs,
 }
 #endif
 
-static void _show_registers(struct cpu_user_regs *regs,
-                            struct reg_ctxt *ctxt,
-                            int guest_mode,
+static void _show_registers(const struct cpu_user_regs *regs,
+                            const struct reg_ctxt *ctxt,
+                            bool guest_mode,
                             const struct vcpu *v)
 {
     print_xen_info();
@@ -980,7 +959,7 @@ static void _show_registers(struct cpu_user_regs *regs,
     printk("\n");
 }
 
-void show_registers(struct cpu_user_regs *regs)
+void show_registers(const struct cpu_user_regs *regs)
 {
     struct reg_ctxt ctxt;
     ctxt.sctlr_el1 = READ_SYSREG(SCTLR_EL1);
@@ -1026,7 +1005,7 @@ void vcpu_show_registers(const struct vcpu *v)
     _show_registers(&v->arch.cpu_info->guest_cpu_user_regs, &ctxt, 1, v);
 }
 
-static void show_guest_stack(struct vcpu *v, struct cpu_user_regs *regs)
+static void show_guest_stack(struct vcpu *v, const struct cpu_user_regs *regs)
 {
     int i;
     vaddr_t sp;
@@ -1160,7 +1139,7 @@ static void show_guest_stack(struct vcpu *v, struct cpu_user_regs *regs)
  */
 #define STACK_FRAME_BASE(fp)       ((register_t*)(fp))
 #endif
-static void show_trace(struct cpu_user_regs *regs)
+static void show_trace(const struct cpu_user_regs *regs)
 {
     register_t *frame, next, addr, low, high;
 
@@ -1195,7 +1174,7 @@ static void show_trace(struct cpu_user_regs *regs)
     printk("\n");
 }
 
-void show_stack(struct cpu_user_regs *regs)
+void show_stack(const struct cpu_user_regs *regs)
 {
     register_t *stack = STACK_BEFORE_EXCEPTION(regs), addr;
     int i;
@@ -1222,7 +1201,7 @@ void show_stack(struct cpu_user_regs *regs)
     show_trace(regs);
 }
 
-void show_execution_state(struct cpu_user_regs *regs)
+void show_execution_state(const struct cpu_user_regs *regs)
 {
     show_registers(regs);
     show_stack(regs);
@@ -1248,14 +1227,14 @@ void vcpu_show_execution_state(struct vcpu *v)
     vcpu_unpause(v);
 }
 
-void do_unexpected_trap(const char *msg, struct cpu_user_regs *regs)
+void do_unexpected_trap(const char *msg, const struct cpu_user_regs *regs)
 {
     printk("CPU%d: Unexpected Trap: %s\n", smp_processor_id(), msg);
     show_execution_state(regs);
     panic("CPU%d: Unexpected Trap: %s\n", smp_processor_id(), msg);
 }
 
-int do_bug_frame(struct cpu_user_regs *regs, vaddr_t pc)
+int do_bug_frame(const struct cpu_user_regs *regs, vaddr_t pc)
 {
     const struct bug_frame *bug = NULL;
     const char *prefix = "", *filename, *predicate;
@@ -1312,7 +1291,7 @@ int do_bug_frame(struct cpu_user_regs *regs, vaddr_t pc)
             return 0;
 
         show_execution_state(regs);
-        panic("Xen BUG at %s%s:%d", prefix, filename, lineno);
+        panic("Xen BUG at %s%s:%d\n", prefix, filename, lineno);
 
     case BUGFRAME_assert:
         /* ASSERT: decode the predicate string pointer. */
@@ -1325,7 +1304,7 @@ int do_bug_frame(struct cpu_user_regs *regs, vaddr_t pc)
         if ( debugger_trap_fatal(TRAP_invalid_op, regs) )
             return 0;
         show_execution_state(regs);
-        panic("Assertion '%s' failed at %s%s:%d",
+        panic("Assertion '%s' failed at %s%s:%d\n",
               predicate, prefix, filename, lineno);
     }
 
@@ -1340,7 +1319,7 @@ static void do_trap_brk(struct cpu_user_regs *regs, const union hsr hsr)
      */
     BUG_ON(!hyp_mode(regs));
 
-    switch (hsr.brk.comment)
+    switch ( hsr.brk.comment )
     {
     case BRK_BUG_FRAME_IMM:
         if ( do_bug_frame(regs, regs->pc) )
@@ -1422,6 +1401,9 @@ static arm_hypercall_t arm_hypercall_table[] = {
     HYPERCALL(platform_op, 1),
     HYPERCALL_ARM(vcpu_op, 3),
     HYPERCALL(vm_assist, 2),
+#ifdef CONFIG_ARGO
+    HYPERCALL(argo_op, 5),
+#endif
 };
 
 #ifndef NDEBUG
@@ -1429,7 +1411,9 @@ static void do_debug_trap(struct cpu_user_regs *regs, unsigned int code)
 {
     uint32_t reg;
     uint32_t domid = current->domain->domain_id;
-    switch ( code ) {
+
+    switch ( code )
+    {
     case 0xe0 ... 0xef:
         reg = code - 0xe0;
         printk("DOM%d: R%d = 0x%"PRIregister" at 0x%"PRIvaddr"\n",
@@ -1446,7 +1430,7 @@ static void do_debug_trap(struct cpu_user_regs *regs, unsigned int code)
         show_execution_state(regs);
         break;
     default:
-        panic("DOM%d: Unhandled debug trap %#x", domid, code);
+        panic("DOM%d: Unhandled debug trap %#x\n", domid, code);
         break;
     }
 }
@@ -1739,12 +1723,13 @@ void handle_wo_wi(struct cpu_user_regs *regs,
     advance_pc(regs, hsr);
 }
 
-/* Read only as read as zero */
-void handle_ro_raz(struct cpu_user_regs *regs,
-                   int regidx,
-                   bool read,
-                   const union hsr hsr,
-                   int min_el)
+/* Read only as value provided with 'val' argument of this function */
+void handle_ro_read_val(struct cpu_user_regs *regs,
+                        int regidx,
+                        bool read,
+                        const union hsr hsr,
+                        int min_el,
+                        register_t val)
 {
     ASSERT((min_el == 0) || (min_el == 1));
 
@@ -1753,11 +1738,20 @@ void handle_ro_raz(struct cpu_user_regs *regs,
 
     if ( !read )
         return inject_undef_exception(regs, hsr);
-    /* else: raz */
 
-    set_user_reg(regs, regidx, 0);
+    set_user_reg(regs, regidx, val);
 
     advance_pc(regs, hsr);
+}
+
+/* Read only as read as zero */
+inline void handle_ro_raz(struct cpu_user_regs *regs,
+                          int regidx,
+                          bool read,
+                          const union hsr hsr,
+                          int min_el)
+{
+    handle_ro_read_val(regs, regidx, read, hsr, min_el, 0);
 }
 
 void dump_guest_s1_walk(struct domain *d, vaddr_t addr)
@@ -1813,8 +1807,8 @@ void dump_guest_s1_walk(struct domain *d, vaddr_t addr)
            offset, mfn_to_maddr(mfn), second[offset]);
 
 done:
-    if (second) unmap_domain_page(second);
-    if (first) unmap_domain_page(first);
+    if ( second ) unmap_domain_page(second);
+    if ( first ) unmap_domain_page(first);
 }
 
 /*
@@ -1906,7 +1900,6 @@ static void do_trap_stage2_abort_guest(struct cpu_user_regs *regs,
     vaddr_t gva;
     paddr_t gpa;
     uint8_t fsc = xabt.fsc & ~FSC_LL_MASK;
-    mfn_t mfn;
     bool is_data = (hsr.ec == HSR_EC_DATA_ABORT_LOWER_EL);
 
     /*
@@ -1985,12 +1978,11 @@ static void do_trap_stage2_abort_guest(struct cpu_user_regs *regs,
         }
 
         /*
-         * The PT walk may have failed because someone was playing
-         * with the Stage-2 page table. Walk the Stage-2 PT to check
-         * if the entry exists. If it's the case, return to the guest
+         * First check if the translation fault can be resolved by the
+         * P2M subsystem. If that's the case nothing else to do.
          */
-        mfn = gfn_to_mfn(current->domain, gaddr_to_gfn(gpa));
-        if ( !mfn_eq(mfn, INVALID_MFN) )
+        if ( p2m_resolve_translation_fault(current->domain,
+                                           gaddr_to_gfn(gpa)) )
             return;
 
         if ( is_data && try_map_mmio(gaddr_to_gfn(gpa)) )
@@ -2011,18 +2003,33 @@ inject_abt:
         inject_iabt_exception(regs, gva, hsr.len);
 }
 
+static inline bool needs_ssbd_flip(struct vcpu *v)
+{
+    if ( !check_workaround_ssbd() )
+        return false;
+
+    return !(v->arch.cpu_info->flags & CPUINFO_WORKAROUND_2_FLAG) &&
+             cpu_require_ssbd_mitigation();
+}
+
 static void enter_hypervisor_head(struct cpu_user_regs *regs)
 {
     if ( guest_mode(regs) )
     {
+        struct vcpu *v = current;
+
+        /* If the guest has disabled the workaround, bring it back on. */
+        if ( needs_ssbd_flip(v) )
+            arm_smccc_1_1_smc(ARM_SMCCC_ARCH_WORKAROUND_2_FID, 1, NULL);
+
         /*
          * If we pended a virtual abort, preserve it until it gets cleared.
          * See ARM ARM DDI 0487A.j D1.14.3 (Virtual Interrupts) for details,
          * but the crucial bit is "On taking a vSError interrupt, HCR_EL2.VSE
          * (alias of HCR.VA) is cleared to 0."
          */
-        if ( current->arch.hcr_el2 & HCR_VA )
-            current->arch.hcr_el2 = READ_SYSREG(HCR_EL2);
+        if ( v->arch.hcr_el2 & HCR_VA )
+            v->arch.hcr_el2 = READ_SYSREG(HCR_EL2);
 
 #ifdef CONFIG_NEW_VGIC
         /*
@@ -2032,11 +2039,11 @@ static void enter_hypervisor_head(struct cpu_user_regs *regs)
          * TODO: Investigate whether this is necessary to do on every
          * trap and how it can be optimised.
          */
-        vtimer_update_irqs(current);
-        vcpu_update_evtchn_irq(current);
+        vtimer_update_irqs(v);
+        vcpu_update_evtchn_irq(v);
 #endif
 
-        vgic_sync_from_lrs(current);
+        vgic_sync_from_lrs(v);
     }
 }
 
@@ -2046,7 +2053,8 @@ void do_trap_guest_sync(struct cpu_user_regs *regs)
 
     enter_hypervisor_head(regs);
 
-    switch (hsr.ec) {
+    switch ( hsr.ec )
+    {
     case HSR_EC_WFI_WFE:
         /*
          * HCR_EL2.TWI, HCR_EL2.TWE
@@ -2240,28 +2248,12 @@ void do_trap_fiq(struct cpu_user_regs *regs)
     gic_interrupt(regs, 1);
 }
 
-void leave_hypervisor_tail(void)
+static void check_for_pcpu_work(void)
 {
-    while (1)
+    ASSERT(!local_irq_is_enabled());
+
+    while ( softirq_pending(smp_processor_id()) )
     {
-        local_irq_disable();
-        if (!softirq_pending(smp_processor_id())) {
-            vgic_sync_to_lrs();
-
-            /*
-             * If the SErrors handle option is "DIVERSE", we have to prevent
-             * slipping the hypervisor SError to guest. In this option, before
-             * returning from trap, we have to synchronize SErrors to guarantee
-             * that the pending SError would be caught in hypervisor.
-             *
-             * If option is NOT "DIVERSE", SKIP_SYNCHRONIZE_SERROR_ENTRY_EXIT
-             * will be set to cpu_hwcaps. This means we can use the alternative
-             * to skip synchronizing SErrors for other SErrors handle options.
-             */
-            SYNCHRONIZE_SERROR(SKIP_SYNCHRONIZE_SERROR_ENTRY_EXIT);
-
-            return;
-        }
         local_irq_enable();
         do_softirq();
         /*
@@ -2269,7 +2261,59 @@ void leave_hypervisor_tail(void)
          * and we want to patch the hypervisor with almost no stack.
          */
         check_for_livepatch_work();
+        local_irq_disable();
     }
+}
+
+/*
+ * Process pending work for the vCPU. Any call should be fast or
+ * implement preemption.
+ */
+static void check_for_vcpu_work(void)
+{
+    struct vcpu *v = current;
+
+    if ( likely(!v->arch.need_flush_to_ram) )
+        return;
+
+    /*
+     * Give a chance for the pCPU to process work before handling the vCPU
+     * pending work.
+     */
+    check_for_pcpu_work();
+
+    local_irq_enable();
+    p2m_flush_vm(v);
+    local_irq_disable();
+}
+
+void leave_hypervisor_tail(void)
+{
+    local_irq_disable();
+
+    check_for_vcpu_work();
+    check_for_pcpu_work();
+
+    vgic_sync_to_lrs();
+
+    /*
+     * If the SErrors handle option is "DIVERSE", we have to prevent
+     * slipping the hypervisor SError to guest. In this option, before
+     * returning from trap, we have to synchronize SErrors to guarantee
+     * that the pending SError would be caught in hypervisor.
+     *
+     * If option is NOT "DIVERSE", SKIP_SYNCHRONIZE_SERROR_ENTRY_EXIT
+     * will be set to cpu_hwcaps. This means we can use the alternative
+     * to skip synchronizing SErrors for other SErrors handle options.
+     */
+    SYNCHRONIZE_SERROR(SKIP_SYNCHRONIZE_SERROR_ENTRY_EXIT);
+
+    /*
+     * The hypervisor runs with the workaround always present.
+     * If the guest wants it disabled, so be it...
+     */
+    if ( needs_ssbd_flip(current) )
+        arm_smccc_1_1_smc(ARM_SMCCC_ARCH_WORKAROUND_2_FID, 0, NULL);
 }
 
 /*

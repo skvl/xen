@@ -69,7 +69,6 @@ const hypercall_table_t pv_hypercall_table[] = {
 #endif
     HYPERCALL(event_channel_op),
     COMPAT_CALL(physdev_op),
-    HYPERCALL(hvm_op),
     HYPERCALL(sysctl),
     HYPERCALL(domctl),
 #ifdef CONFIG_KEXEC
@@ -78,8 +77,14 @@ const hypercall_table_t pv_hypercall_table[] = {
 #ifdef CONFIG_TMEM
     HYPERCALL(tmem_op),
 #endif
+#ifdef CONFIG_ARGO
+    COMPAT_CALL(argo_op),
+#endif
     HYPERCALL(xenpmu_op),
+#ifdef CONFIG_HVM
+    HYPERCALL(hvm_op),
     COMPAT_CALL(dm_op),
+#endif
     HYPERCALL(mca),
     HYPERCALL(arch_1),
 };

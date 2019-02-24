@@ -27,7 +27,6 @@
 #define _XEN_ASM_X86_P2M_H
 
 #include <xen/paging.h>
-#include <xen/p2m-common.h>
 #include <xen/mem_access.h>
 #include <asm/mem_sharing.h>
 #include <asm/page.h>    /* for pagetable_t */
@@ -204,6 +203,7 @@ struct p2m_domain {
 
     p2m_class_t       p2m_class; /* host/nested/alternate */
 
+#ifdef CONFIG_HVM
     /* Nested p2ms only: nested p2m base value that this p2m shadows.
      * This can be cleared to P2M_BASE_EADDR under the per-p2m lock but
      * needs both the per-p2m lock and the per-domain nestedp2m lock
@@ -216,12 +216,13 @@ struct p2m_domain {
      * The host p2m hasolds the head of the list and the np2ms are 
      * threaded on in LRU order. */
     struct list_head   np2m_list;
+#endif
 
     /* Host p2m: Log-dirty ranges registered for the domain. */
     struct rangeset   *logdirty_ranges;
 
     /* Host p2m: Global log-dirty mode enabled for the domain. */
-    bool_t             global_logdirty;
+    bool               global_logdirty;
 
     /* Host p2m: when this flag is set, don't flush all the nested-p2m 
      * tables on every host-p2m change.  The setter of this flag 
@@ -229,8 +230,10 @@ struct p2m_domain {
      * host p2m's lock. */
     int                defer_nested_flush;
 
+#ifdef CONFIG_HVM
     /* Alternate p2m: count of vcpu's currently using this p2m. */
     atomic_t           active_vcpus;
+#endif
 
     /* Pages used to construct the p2m */
     struct page_list_head pages;
@@ -306,6 +309,7 @@ struct p2m_domain {
      * to resume the search */
     unsigned long next_shared_gfn_to_relinquish;
 
+#ifdef CONFIG_HVM
     /* Populate-on-demand variables
      * All variables are protected with the pod lock. We cannot rely on
      * the p2m lock if it's turned into a fine-grained lock.
@@ -337,6 +341,8 @@ struct p2m_domain {
         mm_lock_t        lock;         /* Locking of private pod structs,   *
                                         * not relying on the p2m lock.      */
     } pod;
+#endif
+
     union {
         struct ept_data ept;
         /* NPT-equivalent structure could be added here. */
@@ -361,6 +367,12 @@ struct p2m_domain {
 /* get host p2m table */
 #define p2m_get_hostp2m(d)      ((d)->arch.p2m)
 
+/* All common type definitions should live ahead of this inclusion. */
+#ifdef _XEN_P2M_COMMON_H
+# error "xen/p2m-common.h should not be included directly"
+#endif
+#include <xen/p2m-common.h>
+
 /*
  * Updates vCPU's n2pm to match its np2m_base in VMCx12 and returns that np2m.
  */
@@ -376,7 +388,11 @@ struct p2m_domain *p2m_get_p2m(struct vcpu *v);
 #define NP2M_SCHEDLE_IN  0
 #define NP2M_SCHEDLE_OUT 1
 
+#ifdef CONFIG_HVM
 void np2m_schedule(int dir);
+#else
+static inline void np2m_schedule(int dir) {}
+#endif
 
 static inline bool_t p2m_is_hostp2m(const struct p2m_domain *p2m)
 {
@@ -489,7 +505,6 @@ static inline struct page_info *get_page_from_gfn(
     return mfn_valid(_mfn(gfn)) && get_page(page, d) ? page : NULL;
 }
 
-
 /* General conversion function from mfn to gfn */
 static inline unsigned long mfn_to_gfn(struct domain *d, mfn_t mfn)
 {
@@ -501,17 +516,15 @@ static inline unsigned long mfn_to_gfn(struct domain *d, mfn_t mfn)
 
 /* Deadlock-avoidance scheme when calling get_gfn on different gfn's */
 struct two_gfns {
-    struct domain  *first_domain;
-    unsigned long   first_gfn;
-    struct domain  *second_domain;
-    unsigned long   second_gfn;
+    struct domain *first_domain, *second_domain;
+    gfn_t          first_gfn,     second_gfn;
 };
 
 /* Returns mfn, type and access for potential caller consumption, but any
  * of those can be NULL */
-static inline void get_two_gfns(struct domain *rd, unsigned long rgfn,
-        p2m_type_t *rt, p2m_access_t *ra, mfn_t *rmfn, struct domain *ld, 
-        unsigned long lgfn, p2m_type_t *lt, p2m_access_t *la, mfn_t *lmfn,
+static inline void get_two_gfns(struct domain *rd, gfn_t rgfn,
+        p2m_type_t *rt, p2m_access_t *ra, mfn_t *rmfn, struct domain *ld,
+        gfn_t lgfn, p2m_type_t *lt, p2m_access_t *la, mfn_t *lmfn,
         p2m_query_t q, struct two_gfns *rval)
 {
     mfn_t           *first_mfn, *second_mfn, scratch_mfn;
@@ -529,7 +542,8 @@ do {                                                    \
     dest ## _t   = (source ## t)   ?: &scratch_t;       \
 } while (0)
 
-    if ( (rd->domain_id <= ld->domain_id) || ((rd == ld) && (rgfn <= lgfn)) )
+    if ( (rd->domain_id <= ld->domain_id) ||
+         ((rd == ld) && (gfn_x(rgfn) <= gfn_x(lgfn))) )
     {
         assign_pointers(first, r);
         assign_pointers(second, l);
@@ -541,10 +555,10 @@ do {                                                    \
 #undef assign_pointers
 
     /* Now do the gets */
-    *first_mfn  = get_gfn_type_access(p2m_get_hostp2m(rval->first_domain), 
-                                      rval->first_gfn, first_t, first_a, q, NULL);
-    *second_mfn = get_gfn_type_access(p2m_get_hostp2m(rval->second_domain), 
-                                      rval->second_gfn, second_t, second_a, q, NULL);
+    *first_mfn  = get_gfn_type_access(p2m_get_hostp2m(rval->first_domain),
+                                      gfn_x(rval->first_gfn), first_t, first_a, q, NULL);
+    *second_mfn = get_gfn_type_access(p2m_get_hostp2m(rval->second_domain),
+                                      gfn_x(rval->second_gfn), second_t, second_a, q, NULL);
 }
 
 static inline void put_two_gfns(struct two_gfns *arg)
@@ -552,8 +566,8 @@ static inline void put_two_gfns(struct two_gfns *arg)
     if ( !arg )
         return;
 
-    put_gfn(arg->second_domain, arg->second_gfn);
-    put_gfn(arg->first_domain, arg->first_gfn);
+    put_gfn(arg->second_domain, gfn_x(arg->second_gfn));
+    put_gfn(arg->first_domain,  gfn_x(arg->first_gfn));
 }
 
 /* Init the datastructures for later use by the p2m code */
@@ -612,9 +626,6 @@ int p2m_finish_type_change(struct domain *d,
                            gfn_t first_gfn,
                            unsigned long max_nr);
 
-/* Report a change affecting memory types. */
-void p2m_memory_type_changed(struct domain *d);
-
 int p2m_is_logdirty_range(struct p2m_domain *, unsigned long start,
                           unsigned long end);
 
@@ -643,6 +654,15 @@ int p2m_add_foreign(struct domain *tdom, unsigned long fgfn,
 /* Dump PoD information about the domain */
 void p2m_pod_dump_data(struct domain *d);
 
+#ifdef CONFIG_HVM
+
+/* Report a change affecting memory types. */
+void p2m_memory_type_changed(struct domain *d);
+
+/* Called by p2m code when demand-populating a PoD page */
+bool
+p2m_pod_demand_populate(struct p2m_domain *p2m, gfn_t gfn, unsigned int order);
+
 /* Move all pages from the populate-on-demand cache to the domain page_list
  * (usually in preparation for domain destruction) */
 int p2m_pod_empty_cache(struct domain *d);
@@ -658,6 +678,45 @@ p2m_pod_offline_or_broken_hit(struct page_info *p);
 /* Replace pod cache when offline/broken page triggered */
 void
 p2m_pod_offline_or_broken_replace(struct page_info *p);
+
+static inline long p2m_pod_entry_count(const struct p2m_domain *p2m)
+{
+    return p2m->pod.entry_count;
+}
+
+void p2m_pod_init(struct p2m_domain *p2m);
+
+#else
+
+static inline bool
+p2m_pod_demand_populate(struct p2m_domain *p2m, gfn_t gfn, unsigned int order)
+{
+    return false;
+}
+
+static inline int p2m_pod_empty_cache(struct domain *d)
+{
+    return 0;
+}
+
+static inline int p2m_pod_offline_or_broken_hit(struct page_info *p)
+{
+    return 0;
+}
+
+static inline void p2m_pod_offline_or_broken_replace(struct page_info *p)
+{
+    ASSERT_UNREACHABLE();
+}
+
+static inline long p2m_pod_entry_count(const struct p2m_domain *p2m)
+{
+    return 0;
+}
+
+static inline void p2m_pod_init(struct p2m_domain *p2m) {}
+
+#endif
 
 
 /*
@@ -727,10 +786,6 @@ extern void audit_p2m(struct domain *d,
 #define P2M_DEBUG(f, a...) do { (void)(f); } while(0)
 #endif
 
-/* Called by p2m code when demand-populating a PoD page */
-bool
-p2m_pod_demand_populate(struct p2m_domain *p2m, gfn_t gfn, unsigned int order);
-
 /*
  * Functions specific to the p2m-pt implementation
  */
@@ -788,7 +843,7 @@ void nestedp2m_write_p2m_entry(struct p2m_domain *p2m, unsigned long gfn,
 /*
  * Alternate p2m: shadow p2m tables used for alternate memory views
  */
-
+#ifdef CONFIG_HVM
 /* get current alternate p2m table */
 static inline struct p2m_domain *p2m_get_altp2m(struct vcpu *v)
 {
@@ -835,6 +890,10 @@ int p2m_change_altp2m_gfn(struct domain *d, unsigned int idx,
 int p2m_altp2m_propagate_change(struct domain *d, gfn_t gfn,
                                 mfn_t mfn, unsigned int page_order,
                                 p2m_type_t p2mt, p2m_access_t p2ma);
+#else
+struct p2m_domain *p2m_get_altp2m(struct vcpu *v);
+static inline void p2m_altp2m_check(struct vcpu *v, uint16_t idx) {}
+#endif
 
 /*
  * p2m type to IOMMU flags

@@ -552,7 +552,7 @@ static inline void vpid_sync_vcpu_gva(struct vcpu *v, unsigned long gva)
         type = INVVPID_ALL_CONTEXT;
 
 execute_invvpid:
-    __invvpid(type, v->arch.hvm_vcpu.n1asid.asid, (u64)gva);
+    __invvpid(type, v->arch.hvm.n1asid.asid, (u64)gva);
 }
 
 static inline void vpid_sync_all(void)
@@ -604,15 +604,16 @@ unsigned int p2m_find_altp2m_by_eptp(struct domain *d, uint64_t eptp);
 
 void update_guest_eip(void);
 
-int alloc_p2m_hap_data(struct p2m_domain *p2m);
-void free_p2m_hap_data(struct p2m_domain *p2m);
-void p2m_init_hap_data(struct p2m_domain *p2m);
-
 void vmx_pi_per_cpu_init(unsigned int cpu);
 void vmx_pi_desc_fixup(unsigned int cpu);
 
+#ifdef CONFIG_HVM
 void vmx_pi_hooks_assign(struct domain *d);
 void vmx_pi_hooks_deassign(struct domain *d);
+#else
+static inline void vmx_pi_hooks_assign(struct domain *d) {}
+static inline void vmx_pi_hooks_deassign(struct domain *d) {}
+#endif
 
 #define APIC_INVALID_DEST           0xffffffff
 

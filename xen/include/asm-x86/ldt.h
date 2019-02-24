@@ -6,10 +6,10 @@
 
 static inline void load_LDT(struct vcpu *v)
 {
-    struct desc_struct *desc;
+    seg_desc_t *desc;
     unsigned long ents;
 
-    if ( (ents = v->arch.pv_vcpu.ldt_ents) == 0 )
+    if ( (ents = v->arch.pv.ldt_ents) == 0 )
         lldt(0);
     else
     {

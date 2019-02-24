@@ -29,6 +29,7 @@
 #include <xen/event.h>
 #include <xen/trace.h>
 #include <public/vm_event.h>
+#include <asm/altp2m.h>
 #include <asm/domain.h>
 #include <asm/page.h>
 #include <asm/paging.h>
@@ -464,6 +465,13 @@ int p2m_pt_handle_deferred_changes(uint64_t gpa)
     struct p2m_domain *p2m = p2m_get_hostp2m(current->domain);
     int rc;
 
+    /*
+     * Should altp2m ever be enabled for NPT / shadow use, this code
+     * should be updated to make use of the active altp2m, like
+     * ept_handle_misconfig().
+     */
+    ASSERT(!altp2m_active(current->domain));
+
     p2m_lock(p2m);
     rc = do_recalc(p2m, PFN_DOWN(gpa));
     p2m_unlock(p2m);
@@ -477,10 +485,11 @@ p2m_pt_set_entry(struct p2m_domain *p2m, gfn_t gfn_, mfn_t mfn,
                  unsigned int page_order, p2m_type_t p2mt, p2m_access_t p2ma,
                  int sve)
 {
+    struct domain *d = p2m->domain;
     /* XXX -- this might be able to be faster iff current->domain == d */
     void *table;
     unsigned long gfn = gfn_x(gfn_);
-    unsigned long i, gfn_remainder = gfn;
+    unsigned long gfn_remainder = gfn;
     l1_pgentry_t *p2m_entry, entry_content;
     /* Intermediate table to free if we're replacing it with a superpage. */
     l1_pgentry_t intermediate_entry = l1e_empty();
@@ -501,7 +510,8 @@ p2m_pt_set_entry(struct p2m_domain *p2m, gfn_t gfn_, mfn_t mfn,
     unsigned int flags, iommu_old_flags = 0;
     unsigned long old_mfn = mfn_x(INVALID_MFN);
 
-    ASSERT(sve != 0);
+    if ( !sve )
+        return -EOPNOTSUPP;
 
     if ( tb_init_done )
     {
@@ -514,7 +524,7 @@ p2m_pt_set_entry(struct p2m_domain *p2m, gfn_t gfn_, mfn_t mfn,
         t.gfn = gfn;
         t.mfn = mfn_x(mfn);
         t.p2mt = p2mt;
-        t.d = p2m->domain->domain_id;
+        t.d = d->domain_id;
         t.order = page_order;
 
         __trace_var(TRC_MEM_SET_P2M_ENTRY, 0, sizeof(t), &t);
@@ -677,39 +687,18 @@ p2m_pt_set_entry(struct p2m_domain *p2m, gfn_t gfn_, mfn_t mfn,
          && (gfn + (1UL << page_order) - 1 > p2m->max_mapped_pfn) )
         p2m->max_mapped_pfn = gfn + (1UL << page_order) - 1;
 
-    if ( iommu_enabled && need_iommu(p2m->domain) &&
-         (iommu_old_flags != iommu_pte_flags || old_mfn != mfn_x(mfn)) )
+    if ( iommu_enabled && (iommu_old_flags != iommu_pte_flags ||
+                           old_mfn != mfn_x(mfn)) )
     {
         ASSERT(rc == 0);
 
-        if ( iommu_use_hap_pt(p2m->domain) )
-        {
-            if ( iommu_old_flags )
-                amd_iommu_flush_pages(p2m->domain, gfn, page_order);
-        }
-        else if ( iommu_pte_flags )
-            for ( i = 0; i < (1UL << page_order); i++ )
-            {
-                rc = iommu_map_page(p2m->domain, gfn + i, mfn_x(mfn) + i,
-                                    iommu_pte_flags);
-                if ( unlikely(rc) )
-                {
-                    while ( i-- )
-                        /* If statement to satisfy __must_check. */
-                        if ( iommu_unmap_page(p2m->domain, gfn + i) )
-                            continue;
-
-                    break;
-                }
-            }
-        else
-            for ( i = 0; i < (1UL << page_order); i++ )
-            {
-                int ret = iommu_unmap_page(p2m->domain, gfn + i);
-
-                if ( !rc )
-                    rc = ret;
-            }
+        if ( need_iommu_pt_sync(p2m->domain) )
+            rc = iommu_pte_flags ?
+                iommu_legacy_map(d, _dfn(gfn), mfn, page_order,
+                                 iommu_pte_flags) :
+                iommu_legacy_unmap(d, _dfn(gfn), page_order);
+        else if ( iommu_use_hap_pt(d) && iommu_old_flags )
+            amd_iommu_flush_pages(p2m->domain, gfn, page_order);
     }
 
     /*
@@ -967,7 +956,7 @@ static int p2m_pt_change_entry_type_range(struct p2m_domain *p2m,
     return err;
 }
 
-#if P2M_AUDIT
+#if P2M_AUDIT && defined(CONFIG_HVM)
 long p2m_pt_audit_p2m(struct p2m_domain *p2m)
 {
     unsigned long entry_count = 0, pmbad = 0;
@@ -1116,6 +1105,8 @@ long p2m_pt_audit_p2m(struct p2m_domain *p2m)
 
     return pmbad;
 }
+#else
+# define p2m_pt_audit_p2m NULL
 #endif /* P2M_AUDIT */
 
 /* Set up the p2m function pointers for pagetable format */

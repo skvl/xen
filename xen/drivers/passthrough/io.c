@@ -434,12 +434,12 @@ int pt_irq_create_bind(
             if ( vcpu )
                 pirq_dpci->gmsi.posted = true;
         }
-        if ( dest_vcpu_id >= 0 )
-            hvm_migrate_pirqs(d->vcpu[dest_vcpu_id]);
+        if ( vcpu && iommu_enabled )
+            hvm_migrate_pirq(pirq_dpci, vcpu);
 
         /* Use interrupt posting if it is supported. */
         if ( iommu_intpost )
-            pi_update_irte(vcpu ? &vcpu->arch.hvm_vmx.pi_desc : NULL,
+            pi_update_irte(vcpu ? &vcpu->arch.hvm.vmx.pi_desc : NULL,
                            info, pirq_dpci->gmsi.gvec);
 
         if ( pt_irq_bind->u.msi.gflags & XEN_DOMCTL_VMSI_X86_UNMASKED )

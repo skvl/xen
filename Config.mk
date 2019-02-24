@@ -274,18 +274,18 @@ QEMU_TRADITIONAL_URL ?= git://xenbits.xen.org/qemu-xen-traditional.git
 SEABIOS_UPSTREAM_URL ?= git://xenbits.xen.org/seabios.git
 MINIOS_UPSTREAM_URL ?= git://xenbits.xen.org/mini-os.git
 endif
-OVMF_UPSTREAM_REVISION ?= 947f3737abf65fda63f3ffd97fddfa6986986868
-QEMU_UPSTREAM_REVISION ?= qemu-xen-4.11.1
-MINIOS_UPSTREAM_REVISION ?= xen-RELEASE-4.11.1
+OVMF_UPSTREAM_REVISION ?= ef529e6ab7c31290a33045bb1f1837447cc0eb56
+QEMU_UPSTREAM_REVISION ?= qemu-xen-4.12.0-rc1
+MINIOS_UPSTREAM_REVISION ?= xen-4.12.0-rc1
 
-SEABIOS_UPSTREAM_REVISION ?= rel-1.11.1
+SEABIOS_UPSTREAM_REVISION ?= rel-1.12.0
 
 ETHERBOOT_NICS ?= rtl8139 8086100e
 
 
-QEMU_TRADITIONAL_REVISION ?= xen-4.11.1
-# Fri Sep 15 19:37:27 2017 +0100
-# qemu-xen-traditional: Link against xentoolcore
+QEMU_TRADITIONAL_REVISION ?= xen-4.12.0-rc1
+# Wed Oct 10 18:52:54 2018 +0000
+# xen/pt: allow QEMU to request MSI unmasking at bind time
 
 # Specify which qemu-dm to use. This may be `ioemu' to use the old
 # Mercurial in-tree version, or a local directory, or a git URL.

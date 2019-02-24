@@ -8,7 +8,6 @@
 #include <asm/processor.h>
 #include <asm/amd.h>
 #include <asm/hvm/support.h>
-#include <asm/setup.h> /* amd_init_cpu */
 #include <asm/spec_ctrl.h>
 #include <asm/acpi.h>
 #include <asm/apic.h>
@@ -44,6 +43,9 @@ integer_param("cpuid_mask_thermal_ecx", opt_cpuid_mask_thermal_ecx);
 /* 1 = allow, 0 = don't allow guest creation, -1 = don't allow boot */
 s8 __read_mostly opt_allow_unsafe;
 boolean_param("allow_unsafe", opt_allow_unsafe);
+
+/* Signal whether the ACPI C1E quirk is required. */
+bool __read_mostly amd_acpi_c1e_quirk;
 
 static inline int rdmsr_amd_safe(unsigned int msr, unsigned int *lo,
 				 unsigned int *hi)
@@ -209,8 +211,8 @@ static void amd_ctxt_switch_masking(const struct vcpu *next)
 	struct cpuidmasks *these_masks = &this_cpu(cpuidmasks);
 	const struct domain *nextd = next ? next->domain : NULL;
 	const struct cpuidmasks *masks =
-		(nextd && is_pv_domain(nextd) && nextd->arch.pv_domain.cpuidmasks)
-		? nextd->arch.pv_domain.cpuidmasks : &cpuidmask_defaults;
+		(nextd && is_pv_domain(nextd) && nextd->arch.pv.cpuidmasks)
+		? nextd->arch.pv.cpuidmasks : &cpuidmask_defaults;
 
 	if ((levelling_caps & LCAP_1cd) == LCAP_1cd) {
 		uint64_t val = masks->_1cd;
@@ -221,7 +223,7 @@ static void amd_ctxt_switch_masking(const struct vcpu *next)
 		 * kernel.
 		 */
 		if (next && is_pv_vcpu(next) && !is_idle_vcpu(next) &&
-		    !(next->arch.pv_vcpu.ctrlreg[4] & X86_CR4_OSXSAVE))
+		    !(next->arch.pv.ctrlreg[4] & X86_CR4_OSXSAVE))
 			val &= ~((uint64_t)cpufeat_mask(X86_FEATURE_OSXSAVE) << 32);
 
 		if (unlikely(these_masks->_1cd != val)) {
@@ -444,7 +446,7 @@ static void disable_c1e(void *unused)
 		       smp_processor_id(), msr_content);
 }
 
-static void check_disable_c1e(unsigned int port, u8 value)
+void amd_check_disable_c1e(unsigned int port, u8 value)
 {
 	/* C1E is sometimes enabled during entry to ACPI mode. */
 	if ((port == acpi_smi_cmd) && (value == acpi_enable_value))
@@ -629,7 +631,7 @@ static void init_amd(struct cpuinfo_x86 *c)
 	case 0xf ... 0x17:
 		disable_c1e(NULL);
 		if (acpi_smi_cmd && (acpi_enable_value | acpi_disable_value))
-			pv_post_outb_hook = check_disable_c1e;
+			amd_acpi_c1e_quirk = true;
 		break;
 	}
 

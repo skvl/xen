@@ -1,6 +1,7 @@
 #include <xen/init.h>
 #include <xen/lib.h>
 #include <xen/err.h>
+#include <xen/grant_table.h>
 #include <xen/sched.h>
 #include <xen/sched-if.h>
 #include <xen/domain.h>
@@ -415,6 +416,8 @@ static void *__init move_memory(
     return NULL;
 }
 
+#undef BOOTSTRAP_MAP_LIMIT
+
 static uint64_t __init consider_modules(
     uint64_t s, uint64_t e, uint32_t size, const module_t *mod,
     unsigned int nr_mods, unsigned int this_mod)
@@ -636,6 +639,12 @@ static void __init noreturn reinit_bsp_stack(void)
     reset_stack_and_jump(init_done);
 }
 
+/*
+ * Some scripts add "placeholder" to work around a grub error where it ate the
+ * first parameter.
+ */
+ignore_param("placeholder");
+
 static bool __init loader_is_grub2(const char *loader_name)
 {
     /* GRUB1="GNU GRUB 0.xx"; GRUB2="GRUB 1.xx" */
@@ -674,6 +683,7 @@ void __init noreturn __start_xen(unsigned long mbi_p)
     unsigned long nr_pages, raw_max_page, modules_headroom, *module_map;
     int i, j, e820_warn = 0, bytes = 0;
     bool acpi_boot_table_init_done = false, relocated = false;
+    int ret;
     struct ns16550_defaults ns16550 = {
         .data_bits = 8,
         .parity    = 'n',
@@ -681,6 +691,9 @@ void __init noreturn __start_xen(unsigned long mbi_p)
     };
     struct xen_domctl_createdomain dom0_cfg = {
         .flags = XEN_DOMCTL_CDF_s3_integrity,
+        .max_evtchn_port = -1,
+        .max_grant_frames = opt_max_grant_frames,
+        .max_maptrack_frames = opt_max_maptrack_frames,
     };
 
     /* Critical region without IDT or TSS.  Any fault is deadly! */
@@ -707,13 +720,19 @@ void __init noreturn __start_xen(unsigned long mbi_p)
 
     if ( pvh_boot )
     {
+        /*
+         * Force xen console to be enabled. We will reset it later in console
+         * initialisation code.
+         */
+        opt_console_xen = -1;
         ASSERT(mbi_p == 0);
-        mbi = pvh_init();
+        pvh_init(&mbi, &mod);
     }
     else
+    {
         mbi = __va(mbi_p);
-
-    mod = __va(mbi->mods_addr);
+        mod = __va(mbi->mods_addr);
+    }
 
     loader = (mbi->flags & MBI_LOADERNAME)
         ? (char *)__va(mbi->boot_loader_name) : "unknown";
@@ -819,7 +838,7 @@ void __init noreturn __start_xen(unsigned long mbi_p)
 
     /* Check that we have at least one Multiboot module. */
     if ( !(mbi->flags & MBI_MODULES) || (mbi->mods_count == 0) )
-        panic("dom0 kernel not specified. Check bootloader configuration.");
+        panic("dom0 kernel not specified. Check bootloader configuration\n");
 
     if ( pvh_boot )
     {
@@ -910,7 +929,7 @@ void __init noreturn __start_xen(unsigned long mbi_p)
         e820_raw.nr_map = 2;
     }
     else
-        panic("Bootloader provided no memory information.");
+        panic("Bootloader provided no memory information\n");
 
     /* Sanitise the raw E820 map to produce a final clean version. */
     max_page = raw_max_page = init_e820(memmap_type, &e820_raw);
@@ -941,23 +960,10 @@ void __init noreturn __start_xen(unsigned long mbi_p)
     initial_images = mod;
     nr_initial_images = mbi->mods_count;
 
-    /*
-     * Iterate backwards over all superpage-aligned RAM regions.
-     * 
-     * We require superpage alignment because the boot allocator is not yet
-     * initialised. Hence we can only map superpages in the address range
-     * 0 to BOOTSTRAP_DIRECTMAP_END, as this is guaranteed not to require
-     * dynamic allocation of pagetables.
-     * 
-     * As well as mapping superpages in that range, in preparation for
-     * initialising the boot allocator, we also look for a region to which
-     * we can relocate the dom0 kernel and other multiboot modules. Also, on
-     * x86/64, we relocate Xen to higher memory.
-     */
     for ( i = 0; !efi_enabled(EFI_LOADER) && i < mbi->mods_count; i++ )
     {
         if ( mod[i].mod_start & (PAGE_SIZE - 1) )
-            panic("Bootloader didn't honor module alignment request.");
+            panic("Bootloader didn't honor module alignment request\n");
         mod[i].mod_end -= mod[i].mod_start;
         mod[i].mod_start >>= PAGE_SHIFT;
         mod[i].reserved = 0;
@@ -986,6 +992,19 @@ void __init noreturn __start_xen(unsigned long mbi_p)
         highmem_start &= ~((1UL << L3_PAGETABLE_SHIFT) - 1);
 #endif
 
+    /*
+     * Iterate backwards over all superpage-aligned RAM regions.
+     *
+     * We require superpage alignment because the boot allocator is
+     * not yet initialised. Hence we can only map superpages in the
+     * address range BOOTSTRAP_MAP_BASE to 4GB, as this is guaranteed
+     * not to require dynamic allocation of pagetables.
+     *
+     * As well as mapping superpages in that range, in preparation for
+     * initialising the boot allocator, we also look for a region to which
+     * we can relocate the dom0 kernel and other multiboot modules. Also, on
+     * x86/64, we relocate Xen to higher memory.
+     */
     for ( i = boot_e820.nr_map-1; i >= 0; i-- )
     {
         uint64_t s, e, mask = (1UL << L2_PAGETABLE_SHIFT) - 1;
@@ -1032,11 +1051,20 @@ void __init noreturn __start_xen(unsigned long mbi_p)
             l3_pgentry_t *pl3e;
             l2_pgentry_t *pl2e;
             int i, j, k;
+            unsigned long pte_update_limit;
 
             /* Select relocation address. */
             e = end - reloc_size;
             xen_phys_start = e;
             bootsym(trampoline_xen_phys_start) = e;
+
+            /*
+             * No PTEs pointing above this address are candidates for relocation.
+             * Due to possibility of partial overlap of the end of source image
+             * and the beginning of region for destination image some PTEs may
+             * point to addresses in range [e, e + XEN_IMG_OFFSET).
+             */
+            pte_update_limit = PFN_DOWN(e + XEN_IMG_OFFSET);
 
             /*
              * Perform relocation to new physical address.
@@ -1061,7 +1089,7 @@ void __init noreturn __start_xen(unsigned long mbi_p)
                     /* Not present, 1GB mapping, or already relocated? */
                     if ( !(l3e_get_flags(*pl3e) & _PAGE_PRESENT) ||
                          (l3e_get_flags(*pl3e) & _PAGE_PSE) ||
-                         (l3e_get_pfn(*pl3e) > PFN_DOWN(xen_phys_start)) )
+                         (l3e_get_pfn(*pl3e) >= pte_update_limit) )
                         continue;
                     *pl3e = l3e_from_intpte(l3e_get_intpte(*pl3e) +
                                             xen_phys_start);
@@ -1071,7 +1099,7 @@ void __init noreturn __start_xen(unsigned long mbi_p)
                         /* Not present, PSE, or already relocated? */
                         if ( !(l2e_get_flags(*pl2e) & _PAGE_PRESENT) ||
                              (l2e_get_flags(*pl2e) & _PAGE_PSE) ||
-                             (l2e_get_pfn(*pl2e) > PFN_DOWN(xen_phys_start)) )
+                             (l2e_get_pfn(*pl2e) >= pte_update_limit) )
                             continue;
                         *pl2e = l2e_from_intpte(l2e_get_intpte(*pl2e) +
                                                 xen_phys_start);
@@ -1095,7 +1123,7 @@ void __init noreturn __start_xen(unsigned long mbi_p)
                 unsigned int flags;
 
                 if ( !(l2e_get_flags(*pl2e) & _PAGE_PRESENT) ||
-                     (l2e_get_pfn(*pl2e) > PFN_DOWN(xen_phys_start)) )
+                     (l2e_get_pfn(*pl2e) >= pte_update_limit) )
                     continue;
 
                 if ( !using_2M_mapping() )
@@ -1205,7 +1233,7 @@ void __init noreturn __start_xen(unsigned long mbi_p)
     }
 
     if ( modules_headroom && !mod->reserved )
-        panic("Not enough memory to relocate the dom0 kernel image.");
+        panic("Not enough memory to relocate the dom0 kernel image\n");
     for ( i = 0; i < mbi->mods_count; ++i )
     {
         uint64_t s = (uint64_t)mod[i].mod_start << PAGE_SHIFT;
@@ -1214,7 +1242,7 @@ void __init noreturn __start_xen(unsigned long mbi_p)
     }
 
     if ( !xen_phys_start )
-        panic("Not enough memory to relocate Xen.");
+        panic("Not enough memory to relocate Xen\n");
 
     /* This needs to remain in sync with xen_in_range(). */
     reserve_e820_ram(&boot_e820, __pa(_stext), __pa(__2M_rwdata_end));
@@ -1499,11 +1527,23 @@ void __init noreturn __start_xen(unsigned long mbi_p)
 
     generic_apic_probe();
 
+    mmio_ro_ranges = rangeset_new(NULL, "r/o mmio ranges",
+                                  RANGESETF_prettyprint_hex);
+
     acpi_boot_init();
 
     if ( smp_found_config )
         get_smp_config();
 
+    /*
+     * In the shim case, the number of CPUs should be solely controlled by the
+     * guest configuration file.
+     */
+    if ( pv_shim )
+    {
+        opt_nosmp = false;
+        max_cpus = 0;
+    }
     if ( opt_nosmp )
     {
         max_cpus = 0;
@@ -1522,9 +1562,6 @@ void __init noreturn __start_xen(unsigned long mbi_p)
     /* Low mappings were only needed for some BIOS table parsing. */
     zap_low_mappings();
 
-    mmio_ro_ranges = rangeset_new(NULL, "r/o mmio ranges",
-                                  RANGESETF_prettyprint_hex);
-
     init_apic_mappings();
 
     normalise_cpu_order();
@@ -1532,6 +1569,12 @@ void __init noreturn __start_xen(unsigned long mbi_p)
     init_cpu_to_node();
 
     x2apic_bsp_setup();
+
+    ret = init_irq_data();
+    if ( ret < 0 )
+        panic("Error %d setting up IRQ data\n", ret);
+
+    console_init_irq();
 
     init_IRQ();
 
@@ -1593,11 +1636,7 @@ void __init noreturn __start_xen(unsigned long mbi_p)
 
     local_irq_enable();
 
-    pt_pci_init();
-
     vesa_mtrr_init();
-
-    acpi_mmcfg_init();
 
     early_msi_init();
 
@@ -1639,7 +1678,7 @@ void __init noreturn __start_xen(unsigned long mbi_p)
             if ( (park_offline_cpus || num_online_cpus() < max_cpus) &&
                  !cpu_online(i) )
             {
-                int ret = cpu_up(i);
+                ret = cpu_up(i);
                 if ( ret != 0 )
                     printk("Failed to bring up CPU %u (error %d)\n", i, ret);
                 else if ( num_online_cpus() > max_cpus ||
@@ -1668,7 +1707,7 @@ void __init noreturn __start_xen(unsigned long mbi_p)
         watchdog_setup();
 
     if ( !tboot_protect_mem_regions() )
-        panic("Could not protect TXT memory regions");
+        panic("Could not protect TXT memory regions\n");
 
     init_guest_cpuid();
     init_guest_msr_policy();
@@ -1676,21 +1715,18 @@ void __init noreturn __start_xen(unsigned long mbi_p)
     if ( dom0_pvh )
     {
         dom0_cfg.flags |= (XEN_DOMCTL_CDF_hvm_guest |
-                           ((hvm_funcs.hap_supported && !opt_dom0_shadow) ?
+                           ((hvm_hap_supported() && !opt_dom0_shadow) ?
                             XEN_DOMCTL_CDF_hap : 0));
 
         dom0_cfg.arch.emulation_flags |=
             XEN_X86_EMU_LAPIC | XEN_X86_EMU_IOAPIC | XEN_X86_EMU_VPCI;
     }
+    dom0_cfg.max_vcpus = dom0_max_vcpus();
 
     /* Create initial domain 0. */
-    dom0 = domain_create(get_initial_domain_id(), &dom0_cfg);
+    dom0 = domain_create(get_initial_domain_id(), &dom0_cfg, !pv_shim);
     if ( IS_ERR(dom0) || (alloc_dom0_vcpu0(dom0) == NULL) )
-        panic("Error creating domain 0");
-
-    if ( !pv_shim )
-        dom0->is_privileged = 1;
-    dom0->target = NULL;
+        panic("Error creating domain 0\n");
 
     /* Grab the DOM0 command line. */
     cmdline = (char *)(mod[0].string ? __va(mod[0].string) : NULL);
@@ -1753,7 +1789,7 @@ void __init noreturn __start_xen(unsigned long mbi_p)
     if ( construct_dom0(dom0, mod, modules_headroom,
                         (initrdidx > 0) && (initrdidx < mbi->mods_count)
                         ? mod + initrdidx : NULL, cmdline) != 0)
-        panic("Could not set up DOM0 guest OS");
+        panic("Could not set up DOM0 guest OS\n");
 
     if ( cpu_has_smap )
     {
@@ -1798,10 +1834,13 @@ void arch_get_xen_caps(xen_capabilities_info_t *info)
 
     (*info)[0] = '\0';
 
-    snprintf(s, sizeof(s), "xen-%d.%d-x86_64 ", major, minor);
-    safe_strcat(*info, s);
-    snprintf(s, sizeof(s), "xen-%d.%d-x86_32p ", major, minor);
-    safe_strcat(*info, s);
+    if ( IS_ENABLED(CONFIG_PV) )
+    {
+        snprintf(s, sizeof(s), "xen-%d.%d-x86_64 ", major, minor);
+        safe_strcat(*info, s);
+        snprintf(s, sizeof(s), "xen-%d.%d-x86_32p ", major, minor);
+        safe_strcat(*info, s);
+    }
     if ( hvm_enabled )
     {
         snprintf(s, sizeof(s), "hvm-%d.%d-x86_32 ", major, minor);
@@ -1862,7 +1901,7 @@ static int __hwdom_init io_bitmap_cb(unsigned long s, unsigned long e,
 
     ASSERT(e <= INT_MAX);
     for ( i = s; i <= e; i++ )
-        __clear_bit(i, d->arch.hvm_domain.io_bitmap);
+        __clear_bit(i, d->arch.hvm.io_bitmap);
 
     return 0;
 }
@@ -1873,7 +1912,7 @@ void __hwdom_init setup_io_bitmap(struct domain *d)
 
     if ( is_hvm_domain(d) )
     {
-        bitmap_fill(d->arch.hvm_domain.io_bitmap, 0x10000);
+        bitmap_fill(d->arch.hvm.io_bitmap, 0x10000);
         rc = rangeset_report_ranges(d->arch.ioport_caps, 0, 0x10000,
                                     io_bitmap_cb, d);
         BUG_ON(rc);
@@ -1884,9 +1923,9 @@ void __hwdom_init setup_io_bitmap(struct domain *d)
          * Access to 1 byte RTC ports also needs to be trapped in order
          * to keep consistency with PV.
          */
-        __set_bit(0xcf8, d->arch.hvm_domain.io_bitmap);
-        __set_bit(RTC_PORT(0), d->arch.hvm_domain.io_bitmap);
-        __set_bit(RTC_PORT(1), d->arch.hvm_domain.io_bitmap);
+        __set_bit(0xcf8, d->arch.hvm.io_bitmap);
+        __set_bit(RTC_PORT(0), d->arch.hvm.io_bitmap);
+        __set_bit(RTC_PORT(1), d->arch.hvm.io_bitmap);
     }
 }
 

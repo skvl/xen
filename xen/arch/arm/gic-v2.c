@@ -353,6 +353,10 @@ static void __init gicv2_dist_init(void)
 
     type = readl_gicd(GICD_TYPER);
     nr_lines = 32 * ((type & GICD_TYPE_LINES) + 1);
+    /* Only 1020 interrupts are supported */
+    nr_lines = min(1020U, nr_lines);
+    gicv2_info.nr_lines = nr_lines;
+
     gic_cpus = 1 + ((type & GICD_TYPE_CPUS) >> 5);
     printk("GICv2: %d lines, %d cpu%s%s (IID %8.8x).\n",
            nr_lines, gic_cpus, (gic_cpus == 1) ? "" : "s",
@@ -375,10 +379,10 @@ static void __init gicv2_dist_init(void)
 
     /* Disable all global interrupts */
     for ( i = 32; i < nr_lines; i += 32 )
+    {
         writel_gicd(~0x0, GICD_ICENABLER + (i / 32) * 4);
-
-    /* Only 1020 interrupts are supported */
-    gicv2_info.nr_lines = min(1020U, nr_lines);
+        writel_gicd(~0x0, GICD_ICACTIVER + (i / 32) * 4);
+    }
 
     /* Turn on the distributor */
     writel_gicd(GICD_CTL_ENABLE, GICD_CTLR);
@@ -393,6 +397,7 @@ static void gicv2_cpu_init(void)
     /* The first 32 interrupts (PPI and SGI) are banked per-cpu, so
      * even though they are controlled with GICD registers, they must
      * be set up here with the other per-cpu state. */
+    writel_gicd(0xffffffff, GICD_ICACTIVER); /* Diactivate PPIs and SGIs */
     writel_gicd(0xffff0000, GICD_ICENABLER); /* Disable all PPI */
     writel_gicd(0x0000ffff, GICD_ISENABLER); /* Enable all SGI */
 
@@ -454,6 +459,12 @@ static void gicv2_send_SGI(enum gic_sgi sgi, enum gic_sgi_mode irqmode,
 {
     unsigned int mask = 0;
     cpumask_t online_mask;
+
+    /*
+     * Ensure that stores to Normal memory are visible to the other CPUs
+     * before they observe us issuing the IPI.
+     */
+    dmb(ishst);
 
     switch ( irqmode )
     {
@@ -941,7 +952,7 @@ static void gicv2_add_v2m_frame_to_list(paddr_t addr, paddr_t size,
 
         base = ioremap_nocache(addr, size);
         if ( !base )
-            panic("GICv2: Cannot remap v2m register frame");
+            panic("GICv2: Cannot remap v2m register frame\n");
 
         msi_typer = readl_relaxed(base + V2M_MSI_TYPER);
         spi_start = V2M_MSI_TYPER_BASE_SPI(msi_typer);
@@ -960,7 +971,7 @@ static void gicv2_add_v2m_frame_to_list(paddr_t addr, paddr_t size,
     /* Allocate an entry to record new v2m frame information. */
     v2m_data = xzalloc_bytes(sizeof(struct v2m_data));
     if ( !v2m_data )
-        panic("GICv2: Cannot allocate memory for v2m frame");
+        panic("GICv2: Cannot allocate memory for v2m frame\n");
 
     INIT_LIST_HEAD(&v2m_data->entry);
     v2m_data->addr = addr;
@@ -998,7 +1009,7 @@ static void gicv2_extension_dt_init(const struct dt_device_node *node)
 
         /* Get register frame resource from DT. */
         if ( dt_device_get_address(v2m, 0, &addr, &size) )
-            panic("GICv2: Cannot find a valid v2m frame address");
+            panic("GICv2: Cannot find a valid v2m frame address\n");
 
         /*
          * Check whether DT uses msi-base-spi and msi-num-spis properties to
@@ -1024,23 +1035,23 @@ static void __init gicv2_dt_init(void)
 
     res = dt_device_get_address(node, 0, &dbase, NULL);
     if ( res )
-        panic("GICv2: Cannot find a valid address for the distributor");
+        panic("GICv2: Cannot find a valid address for the distributor\n");
 
     res = dt_device_get_address(node, 1, &cbase, &csize);
     if ( res )
-        panic("GICv2: Cannot find a valid address for the CPU");
+        panic("GICv2: Cannot find a valid address for the CPU\n");
 
     res = dt_device_get_address(node, 2, &hbase, NULL);
     if ( res )
-        panic("GICv2: Cannot find a valid address for the hypervisor");
+        panic("GICv2: Cannot find a valid address for the hypervisor\n");
 
     res = dt_device_get_address(node, 3, &vbase, &vsize);
     if ( res )
-        panic("GICv2: Cannot find a valid address for the virtual CPU");
+        panic("GICv2: Cannot find a valid address for the virtual CPU\n");
 
     res = platform_get_irq(node, 0);
     if ( res < 0 )
-        panic("GICv2: Cannot find the maintenance IRQ");
+        panic("GICv2: Cannot find the maintenance IRQ\n");
     gicv2_info.maintenance_irq = res;
 
     /* TODO: Add check on distributor */
@@ -1215,7 +1226,7 @@ static void __init gicv2_acpi_init(void)
     {
         const char *msg = acpi_format_exception(status);
 
-        panic("GICv2: Failed to get MADT table, %s", msg);
+        panic("GICv2: Failed to get MADT table, %s\n", msg);
     }
 
     /* Collect CPU base addresses */
@@ -1223,7 +1234,7 @@ static void __init gicv2_acpi_init(void)
                                gic_acpi_parse_madt_cpu, table,
                                ACPI_MADT_TYPE_GENERIC_INTERRUPT, 0);
     if ( count <= 0 )
-        panic("GICv2: No valid GICC entries exists");
+        panic("GICv2: No valid GICC entries exists\n");
 
     /*
      * Find distributor base address. We expect one distributor entry since
@@ -1233,7 +1244,7 @@ static void __init gicv2_acpi_init(void)
                                gic_acpi_parse_madt_distributor, table,
                                ACPI_MADT_TYPE_GENERIC_DISTRIBUTOR, 0);
     if ( count <= 0 )
-        panic("GICv2: No valid GICD entries exists");
+        panic("GICv2: No valid GICD entries exists\n");
 }
 #else
 static void __init gicv2_acpi_init(void) { }
@@ -1263,7 +1274,7 @@ static int __init gicv2_init(void)
 
     if ( (dbase & ~PAGE_MASK) || (cbase & ~PAGE_MASK) ||
          (hbase & ~PAGE_MASK) || (vbase & ~PAGE_MASK) )
-        panic("GICv2 interfaces not page aligned");
+        panic("GICv2 interfaces not page aligned\n");
 
     gicv2.map_dbase = ioremap_nocache(dbase, PAGE_SIZE);
     if ( !gicv2.map_dbase )

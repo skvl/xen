@@ -21,12 +21,7 @@ int create_grant_host_mapping(unsigned long gpaddr, mfn_t mfn,
 int replace_grant_host_mapping(unsigned long gpaddr, mfn_t mfn,
                                unsigned long new_gpaddr, unsigned int flags);
 void gnttab_mark_dirty(struct domain *d, mfn_t mfn);
-#define gnttab_create_status_page(d, t, i) do {} while (0)
 #define gnttab_release_host_mappings(domain) 1
-static inline int replace_grant_supported(void)
-{
-    return 1;
-}
 
 /*
  * The region used by Xen on the memory will never be mapped in DOM0
@@ -35,10 +30,8 @@ static inline int replace_grant_supported(void)
  * Only use the text section as it's always present and will contain
  * enough space for a large grant table
  */
-static inline unsigned int gnttab_dom0_max(void)
-{
-    return PFN_DOWN(_etext - _stext);
-}
+#define gnttab_dom0_frames()                                             \
+    min_t(unsigned int, opt_max_grant_frames, PFN_DOWN(_etext - _stext))
 
 #define gnttab_init_arch(gt)                                             \
 ({                                                                       \
@@ -78,12 +71,6 @@ static inline unsigned int gnttab_dom0_max(void)
              : gnttab_shared_gmfn(NULL, gt, idx));                       \
 })
 
-#define gnttab_create_shared_page(d, t, i)                               \
-    do {                                                                 \
-        share_xen_page_with_guest(                                       \
-            virt_to_page((char *)(t)->shared_raw[i]), d, SHARE_rw);      \
-    } while ( 0 )
-
 #define gnttab_shared_gmfn(d, t, i)                                      \
     gfn_x(((i) >= nr_grant_frames(t)) ? INVALID_GFN : (t)->arch.shared_gfn[i])
 
@@ -91,7 +78,7 @@ static inline unsigned int gnttab_dom0_max(void)
     gfn_x(((i) >= nr_status_frames(t)) ? INVALID_GFN : (t)->arch.status_gfn[i])
 
 #define gnttab_need_iommu_mapping(d)                    \
-    (is_domain_direct_mapped(d) && need_iommu(d))
+    (is_domain_direct_mapped(d) && need_iommu_pt_sync(d))
 
 #endif /* __ASM_GRANT_TABLE_H__ */
 /*

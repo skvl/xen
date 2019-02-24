@@ -320,17 +320,17 @@ static int inject_event(struct domain *d,
     if ( data->vcpuid >= d->max_vcpus || !(v = d->vcpu[data->vcpuid]) )
         return -EINVAL;
 
-    if ( cmpxchg(&v->arch.hvm_vcpu.inject_event.vector,
+    if ( cmpxchg(&v->arch.hvm.inject_event.vector,
                  HVM_EVENT_VECTOR_UNSET, HVM_EVENT_VECTOR_UPDATING) !=
          HVM_EVENT_VECTOR_UNSET )
         return -EBUSY;
 
-    v->arch.hvm_vcpu.inject_event.type = data->type;
-    v->arch.hvm_vcpu.inject_event.insn_len = data->insn_len;
-    v->arch.hvm_vcpu.inject_event.error_code = data->error_code;
-    v->arch.hvm_vcpu.inject_event.cr2 = data->cr2;
+    v->arch.hvm.inject_event.type = data->type;
+    v->arch.hvm.inject_event.insn_len = data->insn_len;
+    v->arch.hvm.inject_event.error_code = data->error_code;
+    v->arch.hvm.inject_event.cr2 = data->cr2;
     smp_wmb();
-    v->arch.hvm_vcpu.inject_event.vector = data->vector;
+    v->arch.hvm.inject_event.vector = data->vector;
 
     return 0;
 }
@@ -416,7 +416,7 @@ static int dm_op(const struct dmop_args *op_args)
         if ( data->pad[0] || data->pad[1] || data->pad[2] )
             break;
 
-        rc = hvm_create_ioreq_server(d, false, data->handle_bufioreq,
+        rc = hvm_create_ioreq_server(d, data->handle_bufioreq,
                                      &data->id);
         break;
     }

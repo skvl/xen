@@ -88,6 +88,9 @@ struct pci_dev {
 
     nodeid_t node; /* NUMA node */
 
+    /* Device with errata, ignore the BARs. */
+    bool ignore_bars;
+
     enum pdev_type {
         DEV_TYPE_PCI_UNKNOWN,
         DEV_TYPE_PCIe_ENDPOINT,
@@ -143,13 +146,14 @@ struct pci_dev *pci_lock_domain_pdev(
 void setup_hwdom_pci_devices(struct domain *,
                             int (*)(u8 devfn, struct pci_dev *));
 int pci_release_devices(struct domain *d);
+void pci_segments_init(void);
 int pci_add_segment(u16 seg);
 const unsigned long *pci_get_ro_map(u16 seg);
 int pci_add_device(u16 seg, u8 bus, u8 devfn,
                    const struct pci_dev_info *, nodeid_t node);
 int pci_remove_device(u16 seg, u8 bus, u8 devfn);
 int pci_ro_device(int seg, int bus, int devfn);
-int pci_hide_device(int bus, int devfn);
+int pci_hide_device(unsigned int seg, unsigned int bus, unsigned int devfn);
 struct pci_dev *pci_get_pdev(int seg, int bus, int devfn);
 struct pci_dev *pci_get_real_pdev(int seg, int bus, int devfn);
 struct pci_dev *pci_get_pdev_by_domain(const struct domain *, int seg,
@@ -196,6 +200,7 @@ unsigned int pci_size_mem_bar(pci_sbdf_t sbdf, unsigned int pos,
                               uint64_t *paddr, uint64_t *psize,
                               unsigned int flags);
 
+void pci_intx(const struct pci_dev *, bool enable);
 bool_t pcie_aer_get_firmware_first(const struct pci_dev *);
 
 struct pirq;

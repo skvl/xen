@@ -75,8 +75,6 @@ extern int shadow_audit_enable;
 
 #define SHADOW_PRINTK(_f, _a...)                                     \
     debugtrace_printk("sh: %s(): " _f, __func__, ##_a)
-#define SHADOW_ERROR(_f, _a...)                                      \
-    printk("sh error: %s(): " _f, __func__, ##_a)
 #define SHADOW_DEBUG(flag, _f, _a...)                                \
     do {                                                              \
         if (SHADOW_DEBUG_ ## flag)                                   \
@@ -141,11 +139,7 @@ enum {
  * Auditing routines
  */
 
-#if SHADOW_AUDIT & SHADOW_AUDIT_ENTRIES_FULL
 extern void shadow_audit_tables(struct vcpu *v);
-#else
-#define shadow_audit_tables(_v) do {} while(0)
-#endif
 
 /******************************************************************************
  * Macro for dealing with the naming of the internal names of the
@@ -547,8 +541,8 @@ static inline void sh_put_ref(struct domain *d, mfn_t smfn, paddr_t entry_pa)
 
     if ( unlikely(x == 0) )
     {
-        SHADOW_ERROR("shadow ref underflow, smfn=%lx oc=%#lx t=%#x\n",
-                     mfn_x(smfn), sp->u.sh.count + 0UL, sp->u.sh.type);
+        printk(XENLOG_ERR "shadow ref underflow, smfn=%"PRI_mfn" oc=%#lx t=%#x\n",
+               mfn_x(smfn), sp->u.sh.count + 0UL, sp->u.sh.type);
         BUG();
     }
 

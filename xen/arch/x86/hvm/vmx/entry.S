@@ -81,7 +81,7 @@ UNLIKELY_END(realmode)
         test %al, %al
         jz .Lvmx_vmentry_restart
 
-        mov VCPU_arch_msr(%rbx), %rax
+        mov VCPU_arch_msrs(%rbx), %rax
         mov VCPUMSR_spec_ctrl_raw(%rax), %eax
 
         /* WARNING! `ret`, `call *`, `jmp *` not safe beyond this point. */
@@ -128,7 +128,7 @@ UNLIKELY_END(realmode)
         /* WARNING! `ret`, `call *`, `jmp *` not safe before this point. */
 
         call vmx_vmentry_failure
-        BUG  /* vmx_vmentry_failure() shouldn't return. */
+        jmp  .Lvmx_process_softirqs
 
 ENTRY(vmx_asm_do_vmentry)
         GET_CURRENT(bx)

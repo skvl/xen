@@ -17,7 +17,7 @@ obj-bin-y += bzimage.init.o
 obj-bin-y += clear_page.o
 obj-bin-y += copy_page.o
 obj-y += cpuid.o
-obj-y += compat.o x86_64/compat.o
+obj-$(CONFIG_PV) += compat.o x86_64/compat.o
 obj-$(CONFIG_KEXEC) += crash.o
 obj-y += debug.o
 obj-y += delay.o
@@ -27,6 +27,7 @@ obj-y += domain.o
 obj-bin-y += dom0_build.init.o
 obj-y += domain_page.o
 obj-y += e820.o
+obj-y += emul-i8254.o
 obj-y += extable.o
 obj-y += flushtlb.o
 obj-$(CONFIG_CRASH_DEBUG) += gdbstub.o
@@ -45,7 +46,7 @@ obj-y += microcode_amd.o
 obj-y += microcode_intel.o
 obj-y += microcode.o
 obj-y += mm.o x86_64/mm.o
-obj-y += monitor.o
+obj-$(CONFIG_HVM) += monitor.o
 obj-y += mpparse.o
 obj-y += nmi.o
 obj-y += numa.o
@@ -126,10 +127,7 @@ prelink-efi.o: $(ALL_OBJS) efi/boot.init.o efi/runtime.o efi/compat.o
 	$(guard) $(LD) $(LDFLAGS) -r -o $@ $(filter-out %/efi/built_in.o,$^)
 endif
 
-$(BASEDIR)/common/symbols-dummy.o:
-	$(MAKE) -f $(BASEDIR)/Rules.mk -C $(BASEDIR)/common symbols-dummy.o
-
-$(TARGET)-syms: prelink.o xen.lds $(BASEDIR)/common/symbols-dummy.o
+$(TARGET)-syms: prelink.o xen.lds
 	$(LD) $(LDFLAGS) -T xen.lds -N prelink.o $(build_id_linker) \
 	    $(BASEDIR)/common/symbols-dummy.o -o $(@D)/.$(@F).0
 	$(NM) -pa --format=sysv $(@D)/.$(@F).0 \
@@ -190,7 +188,7 @@ note_file :=
 endif
 note_file_option ?= $(note_file)
 
-$(TARGET).efi: prelink-efi.o $(note_file) efi.lds efi/relocs-dummy.o $(BASEDIR)/common/symbols-dummy.o efi/mkreloc
+$(TARGET).efi: prelink-efi.o $(note_file) efi.lds efi/relocs-dummy.o efi/mkreloc
 	$(foreach base, $(VIRT_BASE) $(ALT_BASE), \
 	          $(guard) $(LD) $(call EFI_LDFLAGS,$(base)) -T efi.lds -N $< efi/relocs-dummy.o \
 	                $(BASEDIR)/common/symbols-dummy.o $(note_file_option) -o $(@D)/.$(@F).$(base).0 &&) :
@@ -215,17 +213,30 @@ $(TARGET).efi: prelink-efi.o $(note_file) efi.lds efi/relocs-dummy.o $(BASEDIR)/
 efi/boot.init.o efi/runtime.o efi/compat.o efi/buildid.o: $(BASEDIR)/arch/x86/efi/built_in.o
 efi/boot.init.o efi/runtime.o efi/compat.o efi/buildid.o: ;
 
-asm-offsets.s: $(TARGET_SUBARCH)/asm-offsets.c
+asm-offsets.s: $(TARGET_SUBARCH)/asm-offsets.c $(BASEDIR)/include/asm-x86/asm-macros.h
 	$(CC) $(filter-out -Wa$(comma)% -flto,$(CFLAGS)) -S -o $@ $<
+
+asm-macros.i: CFLAGS += -D__ASSEMBLY__ -P
+
+$(BASEDIR)/include/asm-x86/asm-macros.h: asm-macros.i Makefile
+	echo '#if 0' >$@.new
+	echo '.if 0' >>$@.new
+	echo '#endif' >>$@.new
+	echo 'asm ( ".include \"$@\"" );' >>$@.new
+	echo '#if 0' >>$@.new
+	echo '.endif' >>$@.new
+	cat $< >>$@.new
+	echo '#endif' >>$@.new
+	$(call move-if-changed,$@.new,$@)
 
 xen.lds: xen.lds.S
 	$(CC) -P -E -Ui386 $(filter-out -Wa$(comma)%,$(AFLAGS)) -o $@ $<
-	sed -e 's/xen\.lds\.o:/xen\.lds:/g' <.xen.lds.d >.xen.lds.d.new
-	mv -f .xen.lds.d.new .xen.lds.d
+	sed -e 's/.*\.lds\.o:/$(@F):/g' <.$(@F).d >.$(@F).d.new
+	mv -f .$(@F).d.new .$(@F).d
 
 efi.lds: xen.lds.S
 	$(CC) -P -E -Ui386 -DEFI $(filter-out -Wa$(comma)%,$(AFLAGS)) -o $@ $<
-	sed -e 's/efi\.lds\.o:/efi\.lds:/g' <.$(@F).d >.$(@F).d.new
+	sed -e 's/.*\.lds\.o:/$(@F):/g' <.$(@F).d >.$(@F).d.new
 	mv -f .$(@F).d.new .$(@F).d
 
 boot/mkelf32: boot/mkelf32.c
@@ -237,6 +248,7 @@ efi/mkreloc: efi/mkreloc.c
 .PHONY: clean
 clean::
 	rm -f asm-offsets.s *.lds boot/*.o boot/*~ boot/core boot/mkelf32
+	rm -f asm-macros.i $(BASEDIR)/include/asm-x86/asm-macros.*
 	rm -f $(BASEDIR)/.xen-syms.[0-9]* boot/.*.d
 	rm -f $(BASEDIR)/.xen.efi.[0-9]* efi/*.efi efi/mkreloc
 	rm -f boot/cmdline.S boot/reloc.S boot/*.lnk boot/*.bin

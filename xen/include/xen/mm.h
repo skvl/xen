@@ -26,6 +26,11 @@
  *   A linear idea of a guest physical address space. For an auto-translated
  *   guest, pfn == gfn while for a non-translated guest, pfn != gfn.
  *
+ * dfn: Device DMA Frame Number (definitions in include/xen/iommu.h)
+ *   The linear frame numbers of device DMA address space. All initiators for
+ *   (i.e. all devices assigned to) a guest share a single DMA address space
+ *   and, by default, Xen will ensure dfn == pfn.
+ *
  * WARNING: Some of these terms have changed over time while others have been
  * used inconsistently, meaning that a lot of existing code does not match the
  * definitions above.  New code should use these terms as described here, and
@@ -185,7 +190,8 @@ int destroy_xen_mappings(unsigned long v, unsigned long e);
  */
 int populate_pt_range(unsigned long virt, unsigned long nr_mfns);
 /* Claim handling */
-unsigned long domain_adjust_tot_pages(struct domain *d, long pages);
+unsigned long __must_check domain_adjust_tot_pages(struct domain *d,
+    long pages);
 int domain_set_outstanding_pages(struct domain *d, unsigned long pages);
 void get_outstanding_claims(uint64_t *free_pages, uint64_t *outstanding_pages);
 
@@ -595,8 +601,11 @@ int __must_check donate_page(struct domain *d, struct page_info *page,
 #define RAM_TYPE_RESERVED     0x00000002
 #define RAM_TYPE_UNUSABLE     0x00000004
 #define RAM_TYPE_ACPI         0x00000008
+#define RAM_TYPE_UNKNOWN      0x00000010
 /* TRUE if the whole page at @mfn is of the requested RAM type(s) above. */
 int page_is_ram_type(unsigned long mfn, unsigned long mem_type);
+/* Returns the page type(s). */
+unsigned int page_get_ram_type(mfn_t mfn);
 
 /* Prepare/destroy a ring for a dom0 helper. Helper with talk
  * with Xen on behalf of this domain. */
@@ -642,7 +651,6 @@ enum XENSHARE_flags {
 };
 void share_xen_page_with_guest(struct page_info *page, struct domain *d,
                                enum XENSHARE_flags flags);
-int unshare_xen_page_with_guest(struct page_info *page, struct domain *d);
 
 static inline void share_xen_page_with_privileged_guests(
     struct page_info *page, enum XENSHARE_flags flags)

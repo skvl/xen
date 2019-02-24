@@ -88,6 +88,14 @@ typedef struct _EFI_APPLE_PROPERTIES {
     EFI_APPLE_PROPERTIES_GETALL GetAll;
 } EFI_APPLE_PROPERTIES;
 
+typedef struct _EFI_LOAD_OPTION {
+    UINT32 Attributes;
+    UINT16 FilePathListLength;
+    CHAR16 Description[];
+} EFI_LOAD_OPTION;
+
+#define LOAD_OPTION_ACTIVE              0x00000001
+
 union string {
     CHAR16 *w;
     char *s;
@@ -275,6 +283,16 @@ static int __init wstrncmp(const CHAR16 *s1, const CHAR16 *s2, UINTN n)
     return n ? *s1 - *s2 : 0;
 }
 
+static const CHAR16 *__init wmemchr(const CHAR16 *s, CHAR16 c, UINTN n)
+{
+    while ( n && *s != c )
+    {
+        --n;
+        ++s;
+    }
+    return n ? s : NULL;
+}
+
 static CHAR16 *__init s2w(union string *str)
 {
     const char *s = str->s;
@@ -374,14 +392,59 @@ static void __init PrintErrMesg(const CHAR16 *mesg, EFI_STATUS ErrCode)
 }
 
 static unsigned int __init get_argv(unsigned int argc, CHAR16 **argv,
-                                    CHAR16 *cmdline, UINTN cmdsize,
+                                    VOID *data, UINTN size, UINTN *offset,
                                     CHAR16 **options)
 {
-    CHAR16 *ptr = (CHAR16 *)(argv + argc + 1), *prev = NULL;
+    CHAR16 *ptr = (CHAR16 *)(argv + argc + 1), *prev = NULL, *cmdline = NULL;
     bool prev_sep = true;
 
-    for ( ; cmdsize > sizeof(*cmdline) && *cmdline;
-            cmdsize -= sizeof(*cmdline), ++cmdline )
+    if ( argc )
+    {
+        cmdline = data + *offset;
+        /* EFI_LOAD_OPTION does not supply an image name as first component. */
+        if ( *offset )
+            *argv++ = NULL;
+    }
+    else if ( size > sizeof(*cmdline) && !(size % sizeof(*cmdline)) &&
+              (wmemchr(data, 0, size / sizeof(*cmdline)) ==
+               data + size - sizeof(*cmdline)) )
+    {
+        /* Plain command line, as usually passed by the EFI shell. */
+        *offset = 0;
+        cmdline = data;
+    }
+    else if ( size > sizeof(EFI_LOAD_OPTION) )
+    {
+        const EFI_LOAD_OPTION *elo = data;
+        /* The minimum size the buffer needs to be. */
+        size_t elo_min = offsetof(EFI_LOAD_OPTION, Description[1]) +
+                         elo->FilePathListLength;
+
+        if ( (elo->Attributes & LOAD_OPTION_ACTIVE) && size > elo_min &&
+             !((size - elo_min) % sizeof(*cmdline)) )
+        {
+            const CHAR16 *desc = elo->Description;
+            const CHAR16 *end = wmemchr(desc, 0,
+                                        (size - elo_min) / sizeof(*desc) + 1);
+
+            if ( end )
+            {
+                *offset = elo_min + (end - desc) * sizeof(*desc);
+                if ( (size -= *offset) > sizeof(*cmdline) )
+                {
+                    cmdline = data + *offset;
+                    /* Cater for the image name as first component. */
+                    ++argc;
+                }
+            }
+        }
+    }
+
+    if ( !cmdline )
+        return 0;
+
+    for ( ; size > sizeof(*cmdline) && *cmdline;
+            size -= sizeof(*cmdline), ++cmdline )
     {
         bool cur_sep = *cmdline == L' ' || *cmdline == L'\t';
 
@@ -424,6 +487,7 @@ static EFI_FILE_HANDLE __init get_parent_handle(EFI_LOADED_IMAGE *loaded_image,
                                                 CHAR16 **leaf)
 {
     static EFI_GUID __initdata fs_protocol = SIMPLE_FILE_SYSTEM_PROTOCOL;
+    static CHAR16 __initdata buffer[512];
     EFI_FILE_HANDLE dir_handle;
     EFI_DEVICE_PATH *dp;
     CHAR16 *pathend, *ptr;
@@ -443,8 +507,7 @@ static EFI_FILE_HANDLE __init get_parent_handle(EFI_LOADED_IMAGE *loaded_image,
     if ( ret != EFI_SUCCESS )
         PrintErrMesg(L"OpenVolume failure", ret);
 
-#define buffer ((CHAR16 *)keyhandler_scratch)
-#define BUFFERSIZE sizeof(keyhandler_scratch)
+#define BUFFERSIZE sizeof(buffer)
     for ( dp = loaded_image->FilePath, *buffer = 0;
           DevicePathType(dp) != END_DEVICE_PATH_TYPE;
           dp = (void *)dp + DevicePathNodeLength(dp) )
@@ -1095,15 +1158,17 @@ efi_start(EFI_HANDLE ImageHandle, EFI_SYSTEM_TABLE *SystemTable)
 
     if ( use_cfg_file )
     {
+        UINTN offset = 0;
+
         argc = get_argv(0, NULL, loaded_image->LoadOptions,
-                        loaded_image->LoadOptionsSize, NULL);
+                        loaded_image->LoadOptionsSize, &offset, NULL);
         if ( argc > 0 &&
              efi_bs->AllocatePool(EfiLoaderData,
                                   (argc + 1) * sizeof(*argv) +
                                       loaded_image->LoadOptionsSize,
                                   (void **)&argv) == EFI_SUCCESS )
             get_argv(argc, argv, loaded_image->LoadOptions,
-                     loaded_image->LoadOptionsSize, &options);
+                     loaded_image->LoadOptionsSize, &offset, &options);
         else
             argc = 0;
         for ( i = 1; i < argc; ++i )
@@ -1244,6 +1309,19 @@ efi_start(EFI_HANDLE ImageHandle, EFI_SYSTEM_TABLE *SystemTable)
             efi_bs->FreePool(name.w);
         }
 
+        /*
+         * EFI_LOAD_OPTION does not supply an image name as first component:
+         * Make one up.
+         */
+        if ( argc && !*argv )
+        {
+            EFI_FILE_HANDLE handle = get_parent_handle(loaded_image,
+                                                       &file_name);
+
+            handle->Close(handle);
+            *argv = file_name;
+        }
+
         name.s = get_value(&cfg, section.s, "options");
         efi_arch_handle_cmdline(argc ? *argv : NULL, options, name.s);
 
@@ -1311,27 +1389,29 @@ static bool __initdata efi_map_uc;
 static int __init parse_efi_param(const char *s)
 {
     const char *ss;
-    int rc = 0;
+    int rc = 0, val;
 
     do {
-        bool val = strncmp(s, "no-", 3);
-
-        if ( !val )
-            s += 3;
-
         ss = strchr(s, ',');
         if ( !ss )
             ss = strchr(s, '\0');
 
-        if ( !cmdline_strcmp(s, "rs") )
+        if ( (val = parse_boolean("rs", s, ss)) >= 0 )
         {
             if ( val )
                 __set_bit(EFI_RS, &efi_flags);
             else
                 __clear_bit(EFI_RS, &efi_flags);
         }
-        else if ( !cmdline_strcmp(s, "attr=uc") )
-            efi_map_uc = val;
+        else if ( (ss - s) > 5 && !memcmp(s, "attr=", 5) )
+        {
+            if ( cmdline_strcmp(s + 5, "uc") )
+                efi_map_uc = true;
+            else if ( cmdline_strcmp(s + 5, "no") )
+                efi_map_uc = false;
+            else
+                rc = -EINVAL;
+        }
         else
             rc = -EINVAL;
 

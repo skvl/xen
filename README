@@ -1,9 +1,9 @@
 #################################
-__  __            _  _    _ _
-\ \/ /___ _ __   | || |  / / |
- \  // _ \ '_ \  | || |_ | | |
- /  \  __/ | | | |__   _|| | |
-/_/\_\___|_| |_|    |_|(_)_|_|
+ _  _    _ ____
+| || |  / |___ \      _ __ ___
+| || |_ | | __) |____| '__/ __|
+|__   _|| |/ __/_____| | | (__
+   |_|(_)_|_____|    |_|  \___|
 
 #################################
 
@@ -73,7 +73,8 @@ disabled at compile time:
       ocaml-findlib). Required to build ocaml components which
       includes the alternative ocaml xenstored.
     * cmake (if building vtpm stub domains)
-    * markdown
+    * pandoc, transfig, pod2{man,html,text} for rendering various pieces of
+      documentation into alternative formats
     * figlet (for generating the traditional Xen start of day banner)
     * systemd daemon development files
     * Development install of libnl3 (e.g., libnl-3-200,
@@ -199,8 +200,3 @@ http://sourceforge.net/projects/tboot.  This project hosts the code in a
 mercurial repo at http://tboot.sourceforge.net/hg/tboot.hg and contains
 tarballs of the source.  Instructions in the tboot README describe how
 to modify grub.conf to use tboot to launch Xen.
-
-There are optional targets as part of Xen's top-level makefile that will
-download and build tboot: install-tboot, build-tboot, dist-tboot, clean-tboot.
-These will download the latest tar file from the SourceForge site using wget,
-then build/install/dist according to Xen's settings.

@@ -28,10 +28,10 @@
 #include <inttypes.h>
 #include <sys/time.h>
 
+#include <xen-tools/libs.h>
+
 #define MAX_PKG_RESIDENCIES 12
 #define MAX_CORE_RESIDENCIES 8
-
-#define ARRAY_SIZE(a) (sizeof (a) / sizeof ((a)[0]))
 
 static xc_interface *xc_handle;
 static unsigned int max_cpu_nr;
@@ -1231,7 +1231,7 @@ int main(int argc, char *argv[])
         xc_interface_close(xc_handle);
         return ret;
     }
-    max_cpu_nr = physinfo.nr_cpus;
+    max_cpu_nr = physinfo.max_cpu_id + 1;
 
     /* calculate how many options match with user's input */
     for ( i = 0; i < ARRAY_SIZE(main_options); i++ )

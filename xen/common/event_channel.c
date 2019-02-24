@@ -746,7 +746,7 @@ void send_guest_vcpu_virq(struct vcpu *v, uint32_t virq)
     spin_unlock_irqrestore(&v->virq_lock, flags);
 }
 
-static void send_guest_global_virq(struct domain *d, uint32_t virq)
+void send_guest_global_virq(struct domain *d, uint32_t virq)
 {
     unsigned long flags;
     int port;
@@ -1284,10 +1284,10 @@ void evtchn_check_pollers(struct domain *d, unsigned int port)
     }
 }
 
-int evtchn_init(struct domain *d)
+int evtchn_init(struct domain *d, unsigned int max_port)
 {
     evtchn_2l_init(d);
-    d->max_evtchn_port = INT_MAX;
+    d->max_evtchn_port = min_t(unsigned int, max_port, INT_MAX);
 
     d->evtchn = alloc_evtchn_bucket(d, 0);
     if ( !d->evtchn )
@@ -1303,8 +1303,7 @@ int evtchn_init(struct domain *d)
     evtchn_from_port(d, 0)->state = ECS_RESERVED;
 
 #if MAX_VIRT_CPUS > BITS_PER_LONG
-    d->poll_mask = xzalloc_array(unsigned long,
-                                 BITS_TO_LONGS(domain_max_vcpus(d)));
+    d->poll_mask = xzalloc_array(unsigned long, BITS_TO_LONGS(d->max_vcpus));
     if ( !d->poll_mask )
     {
         free_evtchn_bucket(d, d->evtchn);
@@ -1378,11 +1377,9 @@ static void domain_dump_evtchn_info(struct domain *d)
     unsigned int port;
     int irq;
 
-    bitmap_scnlistprintf(keyhandler_scratch, sizeof(keyhandler_scratch),
-                         d->poll_mask, d->max_vcpus);
     printk("Event channel information for domain %d:\n"
-           "Polling vCPUs: {%s}\n"
-           "    port [p/m/s]\n", d->domain_id, keyhandler_scratch);
+           "Polling vCPUs: {%*pbl}\n"
+           "    port [p/m/s]\n", d->domain_id, d->max_vcpus, d->poll_mask);
 
     spin_lock(&d->event_lock);
 

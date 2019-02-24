@@ -104,10 +104,10 @@ void show_registers(const struct cpu_user_regs *regs)
     {
         struct segment_register sreg;
         context = CTXT_hvm_guest;
-        fault_crs[0] = v->arch.hvm_vcpu.guest_cr[0];
-        fault_crs[2] = v->arch.hvm_vcpu.guest_cr[2];
-        fault_crs[3] = v->arch.hvm_vcpu.guest_cr[3];
-        fault_crs[4] = v->arch.hvm_vcpu.guest_cr[4];
+        fault_crs[0] = v->arch.hvm.guest_cr[0];
+        fault_crs[2] = v->arch.hvm.guest_cr[2];
+        fault_crs[3] = v->arch.hvm.guest_cr[3];
+        fault_crs[4] = v->arch.hvm.guest_cr[4];
         hvm_get_segment_register(v, x86_seg_cs, &sreg);
         fault_regs.cs = sreg.sel;
         hvm_get_segment_register(v, x86_seg_ds, &sreg);
@@ -150,7 +150,12 @@ void show_registers(const struct cpu_user_regs *regs)
 
         rdmsrl(ler_msr, from);
         rdmsrl(ler_msr + 1, to);
-        printk("ler: %016lx -> %016lx\n", from, to);
+
+        /* Upper bits may store metadata.  Re-canonicalise for printing. */
+        printk("ler: from %016"PRIx64" [%ps]\n",
+               from, _p(canonicalise_addr(from)));
+        printk("       to %016"PRIx64" [%ps]\n",
+               to, _p(canonicalise_addr(to)));
     }
 }
 
@@ -164,15 +169,15 @@ void vcpu_show_registers(const struct vcpu *v)
     if ( !is_pv_vcpu(v) )
         return;
 
-    crs[0] = v->arch.pv_vcpu.ctrlreg[0];
+    crs[0] = v->arch.pv.ctrlreg[0];
     crs[2] = arch_get_cr2(v);
     crs[3] = pagetable_get_paddr(kernel ?
                                  v->arch.guest_table :
                                  v->arch.guest_table_user);
-    crs[4] = v->arch.pv_vcpu.ctrlreg[4];
-    crs[5] = v->arch.pv_vcpu.fs_base;
-    crs[6 + !kernel] = v->arch.pv_vcpu.gs_base_kernel;
-    crs[7 - !kernel] = v->arch.pv_vcpu.gs_base_user;
+    crs[4] = v->arch.pv.ctrlreg[4];
+    crs[5] = v->arch.pv.fs_base;
+    crs[6 + !kernel] = v->arch.pv.gs_base_kernel;
+    crs[7 - !kernel] = v->arch.pv.gs_base_user;
 
     _show_registers(regs, crs, CTXT_pv_guest, v);
 }
@@ -259,7 +264,7 @@ void do_double_fault(struct cpu_user_regs *regs)
     show_code(regs);
     show_stack_overflow(cpu, regs);
 
-    panic("DOUBLE FAULT -- system shutdown");
+    panic("DOUBLE FAULT -- system shutdown\n");
 }
 
 static unsigned int write_stub_trampoline(
@@ -293,8 +298,18 @@ static unsigned int write_stub_trampoline(
 }
 
 DEFINE_PER_CPU(struct stubs, stubs);
+
+#ifdef CONFIG_PV
 void lstar_enter(void);
 void cstar_enter(void);
+#else
+static void __cold star_enter(void)
+{
+    panic("lstar/cstar\n");
+}
+#define lstar_enter star_enter
+#define cstar_enter star_enter
+#endif /* CONFIG_PV */
 
 void subarch_percpu_traps_init(void)
 {
@@ -324,8 +339,10 @@ void subarch_percpu_traps_init(void)
     {
         /* SYSENTER entry. */
         wrmsrl(MSR_IA32_SYSENTER_ESP, stack_bottom);
-        wrmsrl(MSR_IA32_SYSENTER_EIP, (unsigned long)sysenter_entry);
-        wrmsr(MSR_IA32_SYSENTER_CS, __HYPERVISOR_CS, 0);
+        wrmsrl(MSR_IA32_SYSENTER_EIP,
+               IS_ENABLED(CONFIG_PV) ? (unsigned long)sysenter_entry : 0);
+        wrmsr(MSR_IA32_SYSENTER_CS,
+              IS_ENABLED(CONFIG_PV) ? __HYPERVISOR_CS : 0, 0);
     }
 
     /* Trampoline for SYSCALL entry from compatibility mode. */
@@ -349,10 +366,12 @@ void hypercall_page_initialise(struct domain *d, void *hypercall_page)
     memset(hypercall_page, 0xCC, PAGE_SIZE);
     if ( is_hvm_domain(d) )
         hvm_hypercall_page_initialise(d, hypercall_page);
-    else if ( !is_pv_32bit_domain(d) )
+    else if ( is_pv_64bit_domain(d) )
         hypercall_page_initialise_ring3_kernel(hypercall_page);
-    else
+    else if ( is_pv_32bit_domain(d) )
         hypercall_page_initialise_ring1_kernel(hypercall_page);
+    else
+        ASSERT_UNREACHABLE();
 }
 
 /*

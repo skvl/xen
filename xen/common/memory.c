@@ -23,6 +23,7 @@
 #include <xen/numa.h>
 #include <xen/mem_access.h>
 #include <xen/trace.h>
+#include <xen/grant_table.h>
 #include <asm/current.h>
 #include <asm/hardirq.h>
 #include <asm/p2m.h>
@@ -209,7 +210,8 @@ static void populate_physmap(struct memop_args *a)
             if ( d == curr_d )
                 goto out;
 
-            if ( guest_physmap_mark_populate_on_demand(d, gpfn,
+            if ( is_hvm_domain(d) &&
+                 guest_physmap_mark_populate_on_demand(d, gpfn,
                                                        a->extent_order) < 0 )
                 goto out;
         }
@@ -311,21 +313,22 @@ int guest_remove_page(struct domain *d, unsigned long gmfn)
 
     if ( unlikely(p2m_is_paging(p2mt)) )
     {
+        /*
+         * If the page hasn't yet been paged out, there is an
+         * actual page that needs to be released.
+         */
+        if ( p2mt == p2m_ram_paging_out )
+        {
+            ASSERT(mfn_valid(mfn));
+            goto obtain_page;
+        }
+
         rc = guest_physmap_remove_page(d, _gfn(gmfn), mfn, 0);
         if ( rc )
             goto out_put_gfn;
 
         put_gfn(d, gmfn);
 
-        /* If the page hasn't yet been paged out, there is an
-         * actual page that needs to be released. */
-        if ( p2mt == p2m_ram_paging_out )
-        {
-            ASSERT(mfn_valid(mfn));
-            page = mfn_to_page(mfn);
-            if ( test_and_clear_bit(_PGC_allocated, &page->count_info) )
-                put_page(page);
-        }
         p2m_mem_paging_drop_page(d, gmfn, p2mt);
 
         return 0;
@@ -340,7 +343,9 @@ int guest_remove_page(struct domain *d, unsigned long gmfn)
 #endif
     if ( unlikely(!mfn_valid(mfn)) )
     {
+#ifdef CONFIG_X86
         put_gfn(d, gmfn);
+#endif
         gdprintk(XENLOG_INFO, "Domain %u page number %lx invalid\n",
                 d->domain_id, gmfn);
 
@@ -358,7 +363,7 @@ int guest_remove_page(struct domain *d, unsigned long gmfn)
         rc = mem_sharing_unshare_page(d, gmfn, 0);
         if ( rc )
         {
-            (void)mem_sharing_notify_enomem(d, gmfn, 0);
+            mem_sharing_notify_enomem(d, gmfn, false);
             goto out_put_gfn;
         }
         /* Maybe the mfn changed */
@@ -367,11 +372,16 @@ int guest_remove_page(struct domain *d, unsigned long gmfn)
     }
 #endif /* CONFIG_X86 */
 
+ obtain_page: __maybe_unused;
     page = mfn_to_page(mfn);
     if ( unlikely(!get_page(page, d)) )
     {
+#ifdef CONFIG_X86
         put_gfn(d, gmfn);
-        gdprintk(XENLOG_INFO, "Bad page free for domain %u\n", d->domain_id);
+        if ( !p2m_is_paging(p2mt) )
+#endif
+            gdprintk(XENLOG_INFO, "Bad page free for Dom%u GFN %lx\n",
+                     d->domain_id, gmfn);
 
         return -ENXIO;
     }
@@ -391,8 +401,11 @@ int guest_remove_page(struct domain *d, unsigned long gmfn)
         put_page(page);
 
     put_page(page);
- out_put_gfn: __maybe_unused
+
+#ifdef CONFIG_X86
+ out_put_gfn:
     put_gfn(d, gmfn);
+#endif
 
     /*
      * Filter out -ENOENT return values that aren't a result of an empty p2m
@@ -638,7 +651,9 @@ static long memory_exchange(XEN_GUEST_HANDLE_PARAM(xen_memory_exchange_t) arg)
 #endif
                 if ( unlikely(!mfn_valid(mfn)) )
                 {
+#ifdef CONFIG_X86
                     put_gfn(d, gmfn + k);
+#endif
                     rc = -EINVAL;
                     goto fail;
                 }
@@ -648,12 +663,16 @@ static long memory_exchange(XEN_GUEST_HANDLE_PARAM(xen_memory_exchange_t) arg)
                 rc = steal_page(d, page, MEMF_no_refcount);
                 if ( unlikely(rc) )
                 {
+#ifdef CONFIG_X86
                     put_gfn(d, gmfn + k);
+#endif
                     goto fail;
                 }
 
                 page_list_add(page, &in_chunk_list);
+#ifdef CONFIG_X86
                 put_gfn(d, gmfn + k);
+#endif
             }
         }
 
@@ -807,10 +826,8 @@ int xenmem_add_to_physmap(struct domain *d, struct xen_add_to_physmap *xatp,
     xatp->gpfn += start;
     xatp->size -= start;
 
-#ifdef CONFIG_HAS_PASSTHROUGH
-    if ( need_iommu(d) )
-        this_cpu(iommu_dont_flush_iotlb) = 1;
-#endif
+    if ( has_iommu_pt(d) )
+       this_cpu(iommu_dont_flush_iotlb) = 1;
 
     while ( xatp->size > done )
     {
@@ -830,22 +847,22 @@ int xenmem_add_to_physmap(struct domain *d, struct xen_add_to_physmap *xatp,
         }
     }
 
-#ifdef CONFIG_HAS_PASSTHROUGH
-    if ( need_iommu(d) )
+    if ( has_iommu_pt(d) )
     {
         int ret;
 
         this_cpu(iommu_dont_flush_iotlb) = 0;
 
-        ret = iommu_iotlb_flush(d, xatp->idx - done, done);
+        ret = iommu_iotlb_flush(d, _dfn(xatp->idx - done), done,
+                                IOMMU_FLUSHF_added | IOMMU_FLUSHF_modified);
         if ( unlikely(ret) && rc >= 0 )
             rc = ret;
 
-        ret = iommu_iotlb_flush(d, xatp->gpfn - done, done);
+        ret = iommu_iotlb_flush(d, _dfn(xatp->gpfn - done), done,
+                                IOMMU_FLUSHF_added | IOMMU_FLUSHF_modified);
         if ( unlikely(ret) && rc >= 0 )
             rc = ret;
     }
-#endif
 
     return rc;
 }
@@ -986,6 +1003,44 @@ static long xatp_permission_check(struct domain *d, unsigned int space)
     return xsm_add_to_physmap(XSM_TARGET, current->domain, d);
 }
 
+static int acquire_grant_table(struct domain *d, unsigned int id,
+                               unsigned long frame,
+                               unsigned int nr_frames,
+                               xen_pfn_t mfn_list[])
+{
+    unsigned int i = nr_frames;
+
+    /* Iterate backwards in case table needs to grow */
+    while ( i-- != 0 )
+    {
+        mfn_t mfn = INVALID_MFN;
+        int rc;
+
+        switch ( id )
+        {
+        case XENMEM_resource_grant_table_id_shared:
+            rc = gnttab_get_shared_frame(d, frame + i, &mfn);
+            break;
+
+        case XENMEM_resource_grant_table_id_status:
+            rc = gnttab_get_status_frame(d, frame + i, &mfn);
+            break;
+
+        default:
+            rc = -EINVAL;
+            break;
+        }
+
+        if ( rc )
+            return rc;
+
+        ASSERT(!mfn_eq(mfn, INVALID_MFN));
+        mfn_list[i] = mfn_x(mfn);
+    }
+
+    return 0;
+}
+
 static int acquire_resource(
     XEN_GUEST_HANDLE_PARAM(xen_mem_acquire_resource_t) arg)
 {
@@ -996,7 +1051,7 @@ static int acquire_resource(
      * moment since they are small, but if they need to grow in future
      * use-cases then per-CPU arrays or heap allocations may be required.
      */
-    xen_pfn_t mfn_list[2];
+    xen_pfn_t mfn_list[32];
     int rc;
 
     if ( copy_from_guest(&xmar, arg, 1) )
@@ -1031,6 +1086,11 @@ static int acquire_resource(
 
     switch ( xmar.type )
     {
+    case XENMEM_resource_grant_table:
+        rc = acquire_grant_table(d, xmar.id, xmar.frame, xmar.nr_frames,
+                                 mfn_list);
+        break;
+
     default:
         rc = arch_acquire_resource(d, xmar.type, xmar.id, xmar.frame,
                                    xmar.nr_frames, mfn_list, &xmar.flags);
@@ -1049,6 +1109,16 @@ static int acquire_resource(
     {
         xen_pfn_t gfn_list[ARRAY_SIZE(mfn_list)];
         unsigned int i;
+
+        /*
+         * FIXME: Until foreign pages inserted into the P2M are properly
+         *        reference counted, it is unsafe to allow mapping of
+         *        non-caller-owned resource pages unless the caller is
+         *        the hardware domain.
+         */
+        if ( !(xmar.flags & XENMEM_rsrc_acq_caller_owned) &&
+             !is_hardware_domain(currd) )
+            return -EACCES;
 
         if ( copy_from_guest(gfn_list, xmar.frame_list, xmar.nr_frames) )
             rc = -EFAULT;
@@ -1572,36 +1642,65 @@ void destroy_ring_for_helper(
     }
 }
 
-int prepare_ring_for_helper(
-    struct domain *d, unsigned long gmfn, struct page_info **_page,
-    void **_va)
+/*
+ * Acquire a pointer to struct page_info for a specified doman and GFN,
+ * checking whether the page has been paged out, or needs unsharing.
+ * If the function succeeds then zero is returned, page_p is written
+ * with a pointer to the struct page_info with a reference taken, and
+ * p2mt_p it is written with the P2M type of the page. The caller is
+ * responsible for dropping the reference.
+ * If the function fails then an appropriate errno is returned and the
+ * values referenced by page_p and p2mt_p are undefined.
+ */
+int check_get_page_from_gfn(struct domain *d, gfn_t gfn, bool readonly,
+                            p2m_type_t *p2mt_p, struct page_info **page_p)
 {
-    struct page_info *page;
+    p2m_query_t q = readonly ? P2M_ALLOC : P2M_UNSHARE;
     p2m_type_t p2mt;
-    void *va;
+    struct page_info *page;
 
-    page = get_page_from_gfn(d, gmfn, &p2mt, P2M_UNSHARE);
+    page = get_page_from_gfn(d, gfn_x(gfn), &p2mt, q);
 
 #ifdef CONFIG_HAS_MEM_PAGING
     if ( p2m_is_paging(p2mt) )
     {
         if ( page )
             put_page(page);
-        p2m_mem_paging_populate(d, gmfn);
-        return -ENOENT;
+
+        p2m_mem_paging_populate(d, gfn_x(gfn));
+        return -EAGAIN;
     }
 #endif
 #ifdef CONFIG_HAS_MEM_SHARING
-    if ( p2m_is_shared(p2mt) )
+    if ( (q & P2M_UNSHARE) && p2m_is_shared(p2mt) )
     {
         if ( page )
             put_page(page);
-        return -ENOENT;
+
+        return -EAGAIN;
     }
 #endif
 
     if ( !page )
         return -EINVAL;
+
+    *p2mt_p = p2mt;
+    *page_p = page;
+    return 0;
+}
+
+int prepare_ring_for_helper(
+    struct domain *d, unsigned long gmfn, struct page_info **_page,
+    void **_va)
+{
+    p2m_type_t p2mt;
+    struct page_info *page;
+    void *va;
+    int rc;
+
+    rc = check_get_page_from_gfn(d, _gfn(gmfn), false, &p2mt, &page);
+    if ( rc )
+        return (rc == -EAGAIN) ? -ENOENT : rc;
 
     if ( !get_page_type(page, PGT_writable_page) )
     {

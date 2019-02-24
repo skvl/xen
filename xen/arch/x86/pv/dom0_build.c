@@ -106,13 +106,13 @@ static __init void setup_pv_physmap(struct domain *d, unsigned long pgtbl_pfn,
     l1_pgentry_t *pl1e = NULL;
 
     if ( v_start <= vphysmap_end && vphysmap_start <= v_end )
-        panic("DOM0 P->M table overlaps initial mapping");
+        panic("DOM0 P->M table overlaps initial mapping\n");
 
     while ( vphysmap_start < vphysmap_end )
     {
         if ( d->tot_pages + ((round_pgup(vphysmap_end) - vphysmap_start)
                              >> PAGE_SHIFT) + 3 > nr_pages )
-            panic("Dom0 allocation too small for initial P->M table");
+            panic("Dom0 allocation too small for initial P->M table\n");
 
         if ( pl1e )
         {
@@ -132,7 +132,7 @@ static __init void setup_pv_physmap(struct domain *d, unsigned long pgtbl_pfn,
         pl4e = l4start + l4_table_offset(vphysmap_start);
         if ( !l4e_get_intpte(*pl4e) )
         {
-            page = alloc_domheap_page(d, 0);
+            page = alloc_domheap_page(d, MEMF_no_scrub);
             if ( !page )
                 break;
 
@@ -155,18 +155,18 @@ static __init void setup_pv_physmap(struct domain *d, unsigned long pgtbl_pfn,
              * logdirty mode on dom0.
              */
             if ( (!IS_ENABLED(CONFIG_SHADOW_PAGING) ||
-                  !d->arch.pv_domain.check_l1tf) && cpu_has_page1gb &&
+                  !d->arch.pv.check_l1tf) && cpu_has_page1gb &&
                  !(vphysmap_start & ((1UL << L3_PAGETABLE_SHIFT) - 1)) &&
                  vphysmap_end >= vphysmap_start + (1UL << L3_PAGETABLE_SHIFT) &&
                  (page = alloc_domheap_pages(d,
                                              L3_PAGETABLE_SHIFT - PAGE_SHIFT,
-                                             0)) != NULL )
+                                             MEMF_no_scrub)) != NULL )
             {
                 *pl3e = l3e_from_page(page, L1_PROT|_PAGE_DIRTY|_PAGE_PSE);
                 vphysmap_start += 1UL << L3_PAGETABLE_SHIFT;
                 continue;
             }
-            if ( (page = alloc_domheap_page(d, 0)) == NULL )
+            if ( (page = alloc_domheap_page(d, MEMF_no_scrub)) == NULL )
                 break;
 
             /* No mapping, PGC_allocated + page-table page. */
@@ -186,13 +186,13 @@ static __init void setup_pv_physmap(struct domain *d, unsigned long pgtbl_pfn,
                  vphysmap_end >= vphysmap_start + (1UL << L2_PAGETABLE_SHIFT) &&
                  (page = alloc_domheap_pages(d,
                                              L2_PAGETABLE_SHIFT - PAGE_SHIFT,
-                                             0)) != NULL )
+                                             MEMF_no_scrub)) != NULL )
             {
                 *pl2e = l2e_from_page(page, L1_PROT|_PAGE_DIRTY|_PAGE_PSE);
                 vphysmap_start += 1UL << L2_PAGETABLE_SHIFT;
                 continue;
             }
-            if ( (page = alloc_domheap_page(d, 0)) == NULL )
+            if ( (page = alloc_domheap_page(d, MEMF_no_scrub)) == NULL )
                 break;
 
             /* No mapping, PGC_allocated + page-table page. */
@@ -207,7 +207,7 @@ static __init void setup_pv_physmap(struct domain *d, unsigned long pgtbl_pfn,
 
         pl1e += l1_table_offset(vphysmap_start);
         BUG_ON(l1e_get_intpte(*pl1e));
-        page = alloc_domheap_page(d, 0);
+        page = alloc_domheap_page(d, MEMF_no_scrub);
         if ( !page )
             break;
 
@@ -216,7 +216,7 @@ static __init void setup_pv_physmap(struct domain *d, unsigned long pgtbl_pfn,
         vphysmap_start &= PAGE_MASK;
     }
     if ( !page )
-        panic("Not enough RAM for DOM0 P->M table");
+        panic("Not enough RAM for DOM0 P->M table\n");
 
     if ( pl1e )
         unmap_domain_page(pl1e);
@@ -239,7 +239,8 @@ static struct page_info * __init alloc_chunk(struct domain *d,
         order = last_order;
     else if ( max_pages & (max_pages - 1) )
         --order;
-    while ( (page = alloc_domheap_pages(d, order, dom0_memflags)) == NULL )
+    while ( (page = alloc_domheap_pages(d, order, dom0_memflags |
+                                                  MEMF_no_scrub)) == NULL )
         if ( order-- == 0 )
             break;
     if ( page )
@@ -265,7 +266,7 @@ static struct page_info * __init alloc_chunk(struct domain *d,
 
         if ( d->tot_pages + (1 << order) > d->max_pages )
             continue;
-        pg2 = alloc_domheap_pages(d, order, MEMF_exact_node);
+        pg2 = alloc_domheap_pages(d, order, MEMF_exact_node | MEMF_no_scrub);
         if ( pg2 > page )
         {
             free_domheap_pages(page, free_order);
@@ -394,8 +395,8 @@ int __init dom0_construct_pv(struct domain *d,
     if ( compat32 )
     {
         d->arch.is_32bit_pv = d->arch.has_32bit_shinfo = 1;
-        d->arch.pv_domain.xpti = false;
-        d->arch.pv_domain.pcid = false;
+        d->arch.pv.xpti = false;
+        d->arch.pv.pcid = false;
         v->vcpu_info = (void *)&d->shared_info->compat.vcpu_info[0];
         if ( setup_compat_arg_xlat(v) != 0 )
             BUG();
@@ -413,7 +414,7 @@ int __init dom0_construct_pv(struct domain *d,
         value = (parms.virt_hv_start_low + mask) & ~mask;
         BUG_ON(!is_pv_32bit_domain(d));
         if ( value > __HYPERVISOR_COMPAT_VIRT_START )
-            panic("Domain 0 expects too high a hypervisor start address");
+            panic("Domain 0 expects too high a hypervisor start address\n");
         HYPERVISOR_COMPAT_VIRT_START(d) =
             max_t(unsigned int, m2p_compat_vstart, value);
     }
@@ -495,16 +496,16 @@ int __init dom0_construct_pv(struct domain *d,
         count -= PAGE_ALIGN(initrd_len);
     order = get_order_from_bytes(count);
     if ( (1UL << order) + PFN_UP(initrd_len) > nr_pages )
-        panic("Domain 0 allocation is too small for kernel image");
+        panic("Domain 0 allocation is too small for kernel image\n");
 
     if ( parms.p2m_base != UNSET_ADDR )
     {
         vphysmap_start = parms.p2m_base;
         vphysmap_end   = vphysmap_start + nr_pages * sizeof(unsigned long);
     }
-    page = alloc_domheap_pages(d, order, 0);
+    page = alloc_domheap_pages(d, order, MEMF_no_scrub);
     if ( page == NULL )
-        panic("Not enough RAM for domain 0 allocation");
+        panic("Not enough RAM for domain 0 allocation\n");
     alloc_spfn = mfn_x(page_to_mfn(page));
     alloc_epfn = alloc_spfn + d->tot_pages;
 
@@ -519,9 +520,9 @@ int __init dom0_construct_pv(struct domain *d,
              ((mfn + count - 1) >> (d->arch.physaddr_bitsize - PAGE_SHIFT)) )
         {
             order = get_order_from_pages(count);
-            page = alloc_domheap_pages(d, order, 0);
+            page = alloc_domheap_pages(d, order, MEMF_no_scrub);
             if ( !page )
-                panic("Not enough RAM for domain 0 initrd");
+                panic("Not enough RAM for domain 0 initrd\n");
             for ( count = -count; order--; )
                 if ( count & (1UL << order) )
                 {
@@ -596,8 +597,8 @@ int __init dom0_construct_pv(struct domain *d,
 
     if ( is_pv_32bit_domain(d) )
     {
-        v->arch.pv_vcpu.failsafe_callback_cs = FLAT_COMPAT_KERNEL_CS;
-        v->arch.pv_vcpu.event_callback_cs    = FLAT_COMPAT_KERNEL_CS;
+        v->arch.pv.failsafe_callback_cs = FLAT_COMPAT_KERNEL_CS;
+        v->arch.pv.event_callback_cs    = FLAT_COMPAT_KERNEL_CS;
     }
 
     /* WARNING: The new domain must have its 'processor' field filled in! */
@@ -608,9 +609,9 @@ int __init dom0_construct_pv(struct domain *d,
     }
     else
     {
-        page = alloc_domheap_page(d, MEMF_no_owner);
+        page = alloc_domheap_page(d, MEMF_no_owner | MEMF_no_scrub);
         if ( !page )
-            panic("Not enough RAM for domain 0 PML4");
+            panic("Not enough RAM for domain 0 PML4\n");
         page->u.inuse.type_info = PGT_l4_page_table|PGT_validated|1;
         l4start = l4tab = page_to_virt(page);
         maddr_to_page(mpt_alloc)->u.inuse.type_info = PGT_l3_page_table;
@@ -691,11 +692,8 @@ int __init dom0_construct_pv(struct domain *d,
             if ( i == 3 )
                 l3e_get_page(*l3tab)->u.inuse.type_info |= PGT_pae_xen_l2;
         }
-        /* Install read-only guest visible MPT mapping. */
-        l2tab = l3e_to_l2e(l3start[3]);
-        memcpy(&l2tab[COMPAT_L2_PAGETABLE_FIRST_XEN_SLOT(d)],
-               &compat_idle_pg_table_l2[l2_table_offset(HIRO_COMPAT_MPT_VIRT_START)],
-               COMPAT_L2_PAGETABLE_XEN_SLOTS(d) * sizeof(*l2tab));
+
+        init_xen_pae_l2_slots(l3e_to_l2e(l3start[3]), d);
     }
 
     /* Pages that are part of page tables must be read only. */
@@ -716,6 +714,7 @@ int __init dom0_construct_pv(struct domain *d,
             cpu = p->processor;
     }
 
+    domain_update_node_affinity(d);
     d->arch.paging.mode = 0;
 
     /* Set up CR3 value for write_ptbase */
@@ -832,7 +831,7 @@ int __init dom0_construct_pv(struct domain *d,
     while ( pfn < nr_pages )
     {
         if ( (page = alloc_chunk(d, nr_pages - d->tot_pages)) == NULL )
-            panic("Not enough RAM for DOM0 reservation");
+            panic("Not enough RAM for DOM0 reservation\n");
         while ( pfn < d->tot_pages )
         {
             mfn = mfn_x(page_to_mfn(page));
@@ -911,7 +910,7 @@ int __init dom0_construct_pv(struct domain *d,
     pv_destroy_gdt(v);
 
     if ( test_bit(XENFEAT_supervisor_mode_kernel, parms.f_required) )
-        panic("Dom0 requires supervisor-mode execution");
+        panic("Dom0 requires supervisor-mode execution\n");
 
     rc = dom0_setup_permissions(d);
     BUG_ON(rc != 0);

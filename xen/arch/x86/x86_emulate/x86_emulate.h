@@ -23,6 +23,8 @@
 #ifndef __X86_EMULATE_H__
 #define __X86_EMULATE_H__
 
+#include <xen/lib/x86/cpuid.h>
+
 #define MAX_INST_LEN 15
 
 #if defined(__i386__)
@@ -168,13 +170,10 @@ enum x86_emulate_fpu_type {
     X86EMUL_FPU_mmx, /* MMX instruction set (%mm0-%mm7) */
     X86EMUL_FPU_xmm, /* SSE instruction set (%xmm0-%xmm7/15) */
     X86EMUL_FPU_ymm, /* AVX/XOP instruction set (%ymm0-%ymm7/15) */
+    X86EMUL_FPU_opmask, /* AVX512 opmask instruction set (%k0-%k7) */
+    X86EMUL_FPU_zmm, /* AVX512 instruction set (%zmm0-%zmm7/31) */
     /* This sentinel will never be passed to ->get_fpu(). */
     X86EMUL_FPU_none
-};
-
-struct cpuid_leaf
-{
-    uint32_t a, b, c, d;
 };
 
 struct x86_emulate_state;

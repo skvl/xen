@@ -1,8 +1,8 @@
 /******************************************************************************
  * domctl.h
- * 
+ *
  * Domain management operations. For use by node control stack.
- * 
+ *
  * Permission is hereby granted, free of charge, to any person obtaining a copy
  * of this software and associated documentation files (the "Software"), to
  * deal in the Software without restriction, including without limitation the
@@ -38,7 +38,7 @@
 #include "hvm/save.h"
 #include "memory.h"
 
-#define XEN_DOMCTL_INTERFACE_VERSION 0x00000010
+#define XEN_DOMCTL_INTERFACE_VERSION 0x00000011
 
 /*
  * NB. xen_domctl.domain is an IN/OUT parameter for this operation.
@@ -49,7 +49,7 @@ struct xen_domctl_createdomain {
     /* IN parameters */
     uint32_t ssidref;
     xen_domain_handle_t handle;
- /* Is this an HVM guest (as opposed to a PVH or PV guest)? */
+ /* Is this an HVM guest (as opposed to a PV guest)? */
 #define _XEN_DOMCTL_CDF_hvm_guest     0
 #define XEN_DOMCTL_CDF_hvm_guest      (1U<<_XEN_DOMCTL_CDF_hvm_guest)
  /* Use hardware-assisted paging if available? */
@@ -65,6 +65,16 @@ struct xen_domctl_createdomain {
 #define _XEN_DOMCTL_CDF_xs_domain     4
 #define XEN_DOMCTL_CDF_xs_domain      (1U<<_XEN_DOMCTL_CDF_xs_domain)
     uint32_t flags;
+
+    /*
+     * Various domain limits, which impact the quantity of resources (global
+     * mapping space, xenheap, etc) a guest may consume.
+     */
+    uint32_t max_vcpus;
+    uint32_t max_evtchn_port;
+    uint32_t max_grant_frames;
+    uint32_t max_maptrack_frames;
+
     struct xen_arch_domainconfig arch;
 };
 
@@ -302,7 +312,14 @@ struct xen_domctl_vcpuaffinity {
 };
 
 
-/* XEN_DOMCTL_max_vcpus */
+/*
+ * XEN_DOMCTL_max_vcpus:
+ *
+ * The parameter passed to XEN_DOMCTL_max_vcpus must match the value passed to
+ * XEN_DOMCTL_createdomain.  This hypercall is in the process of being removed
+ * (once the failure paths in domain_create() have been improved), but is
+ * still required in the short term to allocate the vcpus themselves.
+ */
 struct xen_domctl_max_vcpus {
     uint32_t max;           /* maximum number of vcpus */
 };
@@ -491,7 +508,7 @@ struct xen_domctl_assign_device {
     } u;
 };
 
-/* Retrieve sibling devices infomation of machine_sbdf */
+/* Retrieve sibling devices information of machine_sbdf */
 /* XEN_DOMCTL_get_device_group */
 struct xen_domctl_get_device_group {
     uint32_t  machine_sbdf;     /* IN */
@@ -635,6 +652,22 @@ struct xen_domctl_cpuid {
   uint32_t ecx;
   uint32_t edx;
 };
+
+/*
+ * XEN_DOMCTL_get_cpu_policy (x86 specific)
+ *
+ * Query the CPUID and MSR policies for a specific domain.
+ */
+struct xen_domctl_cpu_policy {
+    uint32_t nr_leaves; /* IN/OUT: Number of leaves in/written to
+                         * 'cpuid_policy'. */
+    uint32_t nr_msrs;   /* IN/OUT: Number of MSRs in/written to
+                         * 'msr_domain_policy' */
+    XEN_GUEST_HANDLE_64(xen_cpuid_leaf_t) cpuid_policy; /* OUT */
+    XEN_GUEST_HANDLE_64(xen_msr_entry_t) msr_policy;    /* OUT */
+};
+typedef struct xen_domctl_cpu_policy xen_domctl_cpu_policy_t;
+DEFINE_XEN_GUEST_HANDLE(xen_domctl_cpu_policy_t);
 #endif
 
 /*
@@ -752,7 +785,7 @@ struct xen_domctl_gdbsx_domstatus {
 /*
  * Domain memory paging
  * Page memory in and out.
- * Domctl interface to set up and tear down the 
+ * Domctl interface to set up and tear down the
  * pager<->hypervisor interface. Use XENMEM_paging_op*
  * to perform per-page operations.
  *
@@ -804,7 +837,7 @@ struct xen_domctl_gdbsx_domstatus {
  */
 #define XEN_DOMCTL_VM_EVENT_OP_SHARING           3
 
-/* Use for teardown/setup of helper<->hypervisor interface for paging, 
+/* Use for teardown/setup of helper<->hypervisor interface for paging,
  * access and sharing.*/
 struct xen_domctl_vm_event_op {
     uint32_t       op;           /* XEN_VM_EVENT_* */
@@ -872,15 +905,6 @@ struct xen_domctl_set_access_required {
 
 struct xen_domctl_set_broken_page_p2m {
     uint64_aligned_t pfn;
-};
-
-/*
- * XEN_DOMCTL_set_max_evtchn: sets the maximum event channel port
- * number the guest may use.  Use this limit the amount of resources
- * (global mapping space, xenheap) a guest may use for event channels.
- */
-struct xen_domctl_set_max_evtchn {
-    uint32_t max_port;
 };
 
 /*
@@ -998,6 +1022,8 @@ struct xen_domctl_psr_cmt_op {
 #define XEN_DOMCTL_MONITOR_EVENT_INTERRUPT             8
 #define XEN_DOMCTL_MONITOR_EVENT_DESC_ACCESS           9
 #define XEN_DOMCTL_MONITOR_EVENT_EMUL_UNIMPLEMENTED    10
+/* Enabled by default */
+#define XEN_DOMCTL_MONITOR_EVENT_INGUEST_PAGEFAULT     11
 
 struct xen_domctl_monitor_op {
     uint32_t op; /* XEN_DOMCTL_MONITOR_OP_* */
@@ -1065,11 +1091,6 @@ struct xen_domctl_psr_alloc {
     uint32_t cmd;       /* IN: XEN_DOMCTL_PSR_* */
     uint32_t target;    /* IN */
     uint64_t data;      /* IN/OUT */
-};
-
-struct xen_domctl_set_gnttab_limits {
-    uint32_t grant_frames;     /* IN */
-    uint32_t maptrack_frames;  /* IN */
 };
 
 /* XEN_DOMCTL_vuart_op */
@@ -1161,7 +1182,7 @@ struct xen_domctl {
 #define XEN_DOMCTL_set_broken_page_p2m           67
 #define XEN_DOMCTL_setnodeaffinity               68
 #define XEN_DOMCTL_getnodeaffinity               69
-#define XEN_DOMCTL_set_max_evtchn                70
+/* #define XEN_DOMCTL_set_max_evtchn             70 - Moved into XEN_DOMCTL_createdomain */
 #define XEN_DOMCTL_cacheflush                    71
 #define XEN_DOMCTL_get_vcpu_msrs                 72
 #define XEN_DOMCTL_set_vcpu_msrs                 73
@@ -1170,8 +1191,9 @@ struct xen_domctl {
 #define XEN_DOMCTL_monitor_op                    77
 #define XEN_DOMCTL_psr_alloc                     78
 #define XEN_DOMCTL_soft_reset                    79
-#define XEN_DOMCTL_set_gnttab_limits             80
+/* #define XEN_DOMCTL_set_gnttab_limits          80 - Moved into XEN_DOMCTL_createdomain */
 #define XEN_DOMCTL_vuart_op                      81
+#define XEN_DOMCTL_get_cpu_policy                82
 #define XEN_DOMCTL_gdbsx_guestmemio            1000
 #define XEN_DOMCTL_gdbsx_pausevcpu             1001
 #define XEN_DOMCTL_gdbsx_unpausevcpu           1002
@@ -1216,13 +1238,13 @@ struct xen_domctl {
         struct xen_domctl_mem_sharing_op    mem_sharing_op;
 #if defined(__i386__) || defined(__x86_64__)
         struct xen_domctl_cpuid             cpuid;
+        struct xen_domctl_cpu_policy        cpu_policy;
         struct xen_domctl_vcpuextstate      vcpuextstate;
         struct xen_domctl_vcpu_msrs         vcpu_msrs;
 #endif
         struct xen_domctl_set_access_required access_required;
         struct xen_domctl_audit_p2m         audit_p2m;
         struct xen_domctl_set_virq_handler  set_virq_handler;
-        struct xen_domctl_set_max_evtchn    set_max_evtchn;
         struct xen_domctl_gdbsx_memio       gdbsx_guest_memio;
         struct xen_domctl_set_broken_page_p2m set_broken_page_p2m;
         struct xen_domctl_cacheflush        cacheflush;
@@ -1232,7 +1254,6 @@ struct xen_domctl {
         struct xen_domctl_psr_cmt_op        psr_cmt_op;
         struct xen_domctl_monitor_op        monitor_op;
         struct xen_domctl_psr_alloc         psr_alloc;
-        struct xen_domctl_set_gnttab_limits set_gnttab_limits;
         struct xen_domctl_vuart_op          vuart_op;
         uint8_t                             pad[128];
     } u;

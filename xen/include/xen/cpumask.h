@@ -8,9 +8,6 @@
  * See detailed comments in the file xen/bitmap.h describing the
  * data type on which these cpumasks are based.
  *
- * For details of cpumask_scnprintf() and cpulist_scnprintf(),
- * see bitmap_scnprintf() and bitmap_scnlistprintf() in lib/bitmap.c.
- *
  * The available cpumask operations are:
  *
  * void cpumask_set_cpu(cpu, mask)	turn on bit 'cpu' in mask
@@ -45,9 +42,6 @@
  *
  * const cpumask_t *cpumask_of(cpu)	Return cpumask with bit 'cpu' set
  * unsigned long *cpumask_bits(mask)	Array of unsigned long's in mask
- *
- * int cpumask_scnprintf(buf, len, mask) Format cpumask for printing
- * int cpulist_scnprintf(buf, len, mask) Format cpumask as list for printing
  *
  * for_each_cpu(cpu, mask)		for-loop cpu over mask
  *
@@ -312,18 +306,6 @@ static inline const cpumask_t *cpumask_of(unsigned int cpu)
 
 #define cpumask_bits(maskp) ((maskp)->bits)
 
-static inline int cpumask_scnprintf(char *buf, int len,
-				    const cpumask_t *srcp)
-{
-	return bitmap_scnprintf(buf, len, srcp->bits, nr_cpu_ids);
-}
-
-static inline int cpulist_scnprintf(char *buf, int len,
-				    const cpumask_t *srcp)
-{
-	return bitmap_scnlistprintf(buf, len, srcp->bits, nr_cpu_ids);
-}
-
 /*
  * cpumask_var_t: struct cpumask for stack usage.
  *
@@ -345,9 +327,9 @@ static inline int cpulist_scnprintf(char *buf, int len,
 
 typedef cpumask_t *cpumask_var_t;
 
-static inline bool_t alloc_cpumask_var(cpumask_var_t *mask)
+static inline bool alloc_cpumask_var(cpumask_var_t *mask)
 {
-	*(void **)mask = _xmalloc(nr_cpumask_bits / 8, sizeof(long));
+	*mask = _xmalloc(nr_cpumask_bits / 8, sizeof(long));
 	return *mask != NULL;
 }
 
@@ -358,9 +340,9 @@ static inline bool cond_alloc_cpumask_var(cpumask_var_t *mask)
 	return *mask != NULL;
 }
 
-static inline bool_t zalloc_cpumask_var(cpumask_var_t *mask)
+static inline bool zalloc_cpumask_var(cpumask_var_t *mask)
 {
-	*(void **)mask = _xzalloc(nr_cpumask_bits / 8, sizeof(long));
+	*mask = _xzalloc(nr_cpumask_bits / 8, sizeof(long));
 	return *mask != NULL;
 }
 
@@ -383,16 +365,16 @@ static inline void free_cpumask_var(cpumask_var_t mask)
 #else
 typedef cpumask_t cpumask_var_t[1];
 
-static inline bool_t alloc_cpumask_var(cpumask_var_t *mask)
+static inline bool alloc_cpumask_var(cpumask_var_t *mask)
 {
-	return 1;
+	return true;
 }
 #define cond_alloc_cpumask_var alloc_cpumask_var
 
-static inline bool_t zalloc_cpumask_var(cpumask_var_t *mask)
+static inline bool zalloc_cpumask_var(cpumask_var_t *mask)
 {
 	cpumask_clear(*mask);
-	return 1;
+	return true;
 }
 #define cond_zalloc_cpumask_var zalloc_cpumask_var
 

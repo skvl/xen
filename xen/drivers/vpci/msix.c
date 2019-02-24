@@ -21,6 +21,7 @@
 #include <xen/vpci.h>
 
 #include <asm/msi.h>
+#include <asm/p2m.h>
 
 #define VMSIX_SIZE(num) offsetof(struct vpci_msix, entries[num])
 
@@ -152,7 +153,7 @@ static struct vpci_msix *msix_find(const struct domain *d, unsigned long addr)
 {
     struct vpci_msix *msix;
 
-    list_for_each_entry ( msix, &d->arch.hvm_domain.msix_tables, next )
+    list_for_each_entry ( msix, &d->arch.hvm.msix_tables, next )
     {
         const struct vpci_bar *bars = msix->pdev->vpci->header.bars;
         unsigned int i;
@@ -395,6 +396,54 @@ static const struct hvm_mmio_ops vpci_msix_table_ops = {
     .write = msix_write,
 };
 
+int vpci_make_msix_hole(const struct pci_dev *pdev)
+{
+    struct domain *d = pdev->domain;
+    unsigned int i;
+
+    if ( !pdev->vpci->msix )
+        return 0;
+
+    /* Make sure there's a hole for the MSIX table/PBA in the p2m. */
+    for ( i = 0; i < ARRAY_SIZE(pdev->vpci->msix->tables); i++ )
+    {
+        unsigned long start = PFN_DOWN(vmsix_table_addr(pdev->vpci, i));
+        unsigned long end = PFN_DOWN(vmsix_table_addr(pdev->vpci, i) +
+                                     vmsix_table_size(pdev->vpci, i) - 1);
+
+        for ( ; start <= end; start++ )
+        {
+            p2m_type_t t;
+            mfn_t mfn = get_gfn_query(d, start, &t);
+
+            switch ( t )
+            {
+            case p2m_mmio_dm:
+            case p2m_invalid:
+                break;
+            case p2m_mmio_direct:
+                if ( mfn_x(mfn) == start )
+                {
+                    clear_identity_p2m_entry(d, start);
+                    break;
+                }
+                /* fallthrough. */
+            default:
+                put_gfn(d, start);
+                gprintk(XENLOG_WARNING,
+                        "%04x:%02x:%02x.%u: existing mapping (mfn: %" PRI_mfn
+                        "type: %d) at %#lx clobbers MSIX MMIO area\n",
+                        pdev->seg, pdev->bus, PCI_SLOT(pdev->devfn),
+                        PCI_FUNC(pdev->devfn), mfn_x(mfn), t, start);
+                return -EEXIST;
+            }
+            put_gfn(d, start);
+        }
+    }
+
+    return 0;
+}
+
 static int init_msix(struct pci_dev *pdev)
 {
     struct domain *d = pdev->domain;
@@ -438,10 +487,10 @@ static int init_msix(struct pci_dev *pdev)
     if ( rc )
         return rc;
 
-    if ( list_empty(&d->arch.hvm_domain.msix_tables) )
+    if ( list_empty(&d->arch.hvm.msix_tables) )
         register_mmio_handler(d, &vpci_msix_table_ops);
 
-    list_add(&pdev->vpci->msix->next, &d->arch.hvm_domain.msix_tables);
+    list_add(&pdev->vpci->msix->next, &d->arch.hvm.msix_tables);
 
     return 0;
 }

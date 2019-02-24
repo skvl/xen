@@ -45,6 +45,7 @@
 #include <asm/gic_v3_its.h>
 #include <asm/vgic.h>
 #include <asm/vgic-emul.h>
+#include <asm/vreg.h>
 
 /*
  * Data structure to describe a virtual ITS.
@@ -1547,6 +1548,10 @@ int vgic_v3_its_init_domain(struct domain *d)
 void vgic_v3_its_free_domain(struct domain *d)
 {
     struct virt_its *pos, *temp;
+
+    /* Cope with unitialized vITS */
+    if ( list_head_is_null(&d->arch.vgic.vits_list) )
+        return;
 
     list_for_each_entry_safe( pos, temp, &d->arch.vgic.vits_list, vits_list )
     {

@@ -17,6 +17,7 @@
 #include <xen/sched.h>
 #include <xen/pci.h>
 #include <xen/pci_regs.h>
+#include <xen/pci_ids.h>
 #include <xen/list.h>
 #include <xen/prefetch.h>
 #include <xen/iommu.h>
@@ -126,11 +127,11 @@ static int pci_segments_iterate(
     return rc;
 }
 
-void __init pt_pci_init(void)
+void __init pci_segments_init(void)
 {
     radix_tree_init(&pci_segments);
     if ( !alloc_pseg(0) )
-        panic("Could not initialize PCI segment 0");
+        panic("Could not initialize PCI segment 0\n");
 }
 
 int __init pci_add_segment(u16 seg)
@@ -187,37 +188,25 @@ custom_param("pci-phantom", parse_phantom_dev);
 static u16 __read_mostly command_mask;
 static u16 __read_mostly bridge_ctl_mask;
 
-/*
- * The 'pci' parameter controls certain PCI device aspects.
- * Optional comma separated value may contain:
- *
- *   serr                       don't suppress system errors (default)
- *   no-serr                    suppress system errors
- *   perr                       don't suppress parity errors (default)
- *   no-perr                    suppress parity errors
- */
 static int __init parse_pci_param(const char *s)
 {
     const char *ss;
     int rc = 0;
 
     do {
-        bool_t on = !!strncmp(s, "no-", 3);
+        int val;
         u16 cmd_mask = 0, brctl_mask = 0;
-
-        if ( !on )
-            s += 3;
 
         ss = strchr(s, ',');
         if ( !ss )
             ss = strchr(s, '\0');
 
-        if ( !cmdline_strcmp(s, "serr") )
+        if ( (val = parse_boolean("serr", s, ss)) >= 0 )
         {
             cmd_mask = PCI_COMMAND_SERR;
             brctl_mask = PCI_BRIDGE_CTL_SERR | PCI_BRIDGE_CTL_DTMR_SERR;
         }
-        else if ( !cmdline_strcmp(s, "perr") )
+        else if ( (val = parse_boolean("perr", s, ss)) >= 0 )
         {
             cmd_mask = PCI_COMMAND_PARITY;
             brctl_mask = PCI_BRIDGE_CTL_PARITY;
@@ -225,7 +214,7 @@ static int __init parse_pci_param(const char *s)
         else
             rc = -EINVAL;
 
-        if ( on )
+        if ( val )
         {
             command_mask &= ~cmd_mask;
             bridge_ctl_mask &= ~brctl_mask;
@@ -296,6 +285,46 @@ static void check_pdev(const struct pci_dev *pdev)
         break;
     }
 #undef PCI_STATUS_CHECK
+}
+
+static void apply_quirks(struct pci_dev *pdev)
+{
+    uint16_t vendor = pci_conf_read16(pdev->seg, pdev->bus,
+                                      PCI_SLOT(pdev->devfn),
+                                      PCI_FUNC(pdev->devfn), PCI_VENDOR_ID);
+    uint16_t device = pci_conf_read16(pdev->seg, pdev->bus,
+                                      PCI_SLOT(pdev->devfn),
+                                      PCI_FUNC(pdev->devfn), PCI_DEVICE_ID);
+    static const struct {
+        uint16_t vendor, device;
+    } ignore_bars[] = {
+        /*
+         * Device [8086:2fc0]
+         * Erratum HSE43
+         * CONFIG_TDP_NOMINAL CSR Implemented at Incorrect Offset
+         * http://www.intel.com/content/www/us/en/processors/xeon/xeon-e5-v3-spec-update.html 
+         */
+        { PCI_VENDOR_ID_INTEL, 0x2fc0 },
+        /*
+         * Devices [8086:6f60,6fa0,6fc0]
+         * Errata BDF2 / BDX2
+         * PCI BARs in the Home Agent Will Return Non-Zero Values During Enumeration
+         * http://www.intel.com/content/www/us/en/processors/xeon/xeon-e5-v4-spec-update.html 
+        */
+        { PCI_VENDOR_ID_INTEL, 0x6f60 },
+        { PCI_VENDOR_ID_INTEL, 0x6fa0 },
+        { PCI_VENDOR_ID_INTEL, 0x6fc0 },
+    };
+    unsigned int i;
+
+    for ( i = 0; i < ARRAY_SIZE(ignore_bars); i++)
+        if ( vendor == ignore_bars[i].vendor &&
+             device == ignore_bars[i].device )
+            /*
+             * For these errata force ignoring the BARs, which prevents vPCI
+             * from trying to size the BARs or add handlers to trap accesses.
+             */
+            pdev->ignore_bars = true;
 }
 
 static struct pci_dev *alloc_pdev(struct pci_seg *pseg, u8 bus, u8 devfn)
@@ -397,6 +426,7 @@ static struct pci_dev *alloc_pdev(struct pci_seg *pseg, u8 bus, u8 devfn)
     }
 
     check_pdev(pdev);
+    apply_quirks(pdev);
 
     return pdev;
 }
@@ -440,17 +470,23 @@ static void _pci_hide_device(struct pci_dev *pdev)
     list_add(&pdev->domain_list, &dom_xen->arch.pdev_list);
 }
 
-int __init pci_hide_device(int bus, int devfn)
+int __init pci_hide_device(unsigned int seg, unsigned int bus,
+                           unsigned int devfn)
 {
     struct pci_dev *pdev;
+    struct pci_seg *pseg;
     int rc = -ENOMEM;
 
     pcidevs_lock();
-    pdev = alloc_pdev(get_pseg(0), bus, devfn);
-    if ( pdev )
+    pseg = alloc_pseg(seg);
+    if ( pseg )
     {
-        _pci_hide_device(pdev);
-        rc = 0;
+        pdev = alloc_pdev(pseg, bus, devfn);
+        if ( pdev )
+        {
+            _pci_hide_device(pdev);
+            rc = 0;
+        }
     }
     pcidevs_unlock();
 
@@ -927,10 +963,11 @@ enum pdev_type pdev_type(u16 seg, u8 bus, u8 devfn)
     case PCI_CLASS_BRIDGE_HOST:
         return DEV_TYPE_PCI_HOST_BRIDGE;
 
-    case 0x0000: case 0xffff:
+    case 0xffff:
         return DEV_TYPE_PCI_UNKNOWN;
     }
 
+    /* NB: treat legacy pre PCI 2.0 devices (class_device == 0) as endpoints. */
     return pos ? DEV_TYPE_PCIe_ENDPOINT : DEV_TYPE_PCI;
 }
 
@@ -1415,10 +1452,9 @@ static int assign_device(struct domain *d, u16 seg, u8 bus, u8 devfn, u32 flag)
 
     /* Prevent device assign if mem paging or mem sharing have been 
      * enabled for this domain */
-    if ( unlikely(!need_iommu(d) &&
-            (d->arch.hvm_domain.mem_sharing_enabled ||
-             vm_event_check_ring(d->vm_event_paging) ||
-             p2m_get_hostp2m(d)->global_logdirty)) )
+    if ( unlikely(d->arch.hvm.mem_sharing_enabled ||
+                  vm_event_check_ring(d->vm_event_paging) ||
+                  p2m_get_hostp2m(d)->global_logdirty) )
         return -EXDEV;
 
     if ( !pcidevs_trylock() )
@@ -1459,7 +1495,7 @@ static int assign_device(struct domain *d, u16 seg, u8 bus, u8 devfn, u32 flag)
     }
 
  done:
-    if ( !has_arch_pdevs(d) && need_iommu(d) )
+    if ( !has_arch_pdevs(d) && has_iommu_pt(d) )
         iommu_teardown(d);
     pcidevs_unlock();
 
@@ -1509,7 +1545,7 @@ int deassign_device(struct domain *d, u16 seg, u8 bus, u8 devfn)
 
     pdev->fault.count = 0;
 
-    if ( !has_arch_pdevs(d) && need_iommu(d) )
+    if ( !has_arch_pdevs(d) && has_iommu_pt(d) )
         iommu_teardown(d);
 
     return ret;

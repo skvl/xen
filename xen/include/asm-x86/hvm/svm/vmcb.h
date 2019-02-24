@@ -479,20 +479,25 @@ struct vmcb_struct {
     u64 sysenter_esp;
     u64 sysenter_eip;
     u64 _cr2;                   /* cleanbit 9 */
-    u64 pdpe0;
-    u64 pdpe1;
-    u64 pdpe2;
-    u64 pdpe3;
+    u64 res16[4];
     u64 _g_pat;                 /* cleanbit 4 */
     u64 _debugctlmsr;           /* cleanbit 10 */
     u64 _lastbranchfromip;      /* cleanbit 10 */
     u64 _lastbranchtoip;        /* cleanbit 10 */
     u64 _lastintfromip;         /* cleanbit 10 */
     u64 _lastinttoip;           /* cleanbit 10 */
-    u64 res16[301];
+    u64 res17[301];
 };
 
 struct svm_domain {
+    /* OSVW MSRs */
+    union {
+        uint64_t raw[2];
+        struct {
+            uint64_t length;
+            uint64_t status;
+        };
+    } osvw;
 };
 
 /*
@@ -510,7 +515,7 @@ enum vmcb_sync_state {
     vmcb_needs_vmload     /* VMCB dirty (VMLOAD needed)? */
 };
 
-struct arch_svm_struct {
+struct svm_vcpu {
     struct vmcb_struct *vmcb;
     u64    vmcb_pa;
     unsigned long *msrpm;
@@ -533,15 +538,6 @@ struct arch_svm_struct {
     /* AMD lightweight profiling MSR */
     uint64_t guest_lwp_cfg;      /* guest version */
     uint64_t cpu_lwp_cfg;        /* CPU version */
-
-    /* data breakpoint extension MSRs */
-    uint32_t dr_mask[4];
-
-    /* OSVW MSRs */
-    struct {
-        u64 length;
-        u64 status;
-    } osvw;
 };
 
 struct vmcb_struct *alloc_vmcb(void);

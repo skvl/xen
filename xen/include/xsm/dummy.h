@@ -48,7 +48,8 @@ void __xsm_action_mismatch_detected(void);
  * There is no xsm_default_t argument available, so the value from the assertion
  * is used to initialize the variable.
  */
-#define XSM_INLINE /* */
+#define XSM_INLINE __maybe_unused
+
 #define XSM_DEFAULT_ARG /* */
 #define XSM_DEFAULT_VOID void
 #define XSM_ASSERT_ACTION(def) xsm_default_t action = def; (void)action
@@ -230,6 +231,8 @@ static XSM_INLINE int xsm_memory_stat_reservation(XSM_DEFAULT_ARG struct domain 
 static XSM_INLINE int xsm_console_io(XSM_DEFAULT_ARG struct domain *d, int cmd)
 {
     XSM_ASSERT_ACTION(XSM_OTHER);
+    if ( d->is_console )
+        return xsm_default_action(XSM_HOOK, d, NULL);
 #ifdef CONFIG_VERBOSE_DEBUG
     if ( cmd == CONSOLEIO_write )
         return xsm_default_action(XSM_HOOK, d, NULL);
@@ -584,7 +587,7 @@ static XSM_INLINE int xsm_vm_event_control(XSM_DEFAULT_ARG struct domain *d, int
     return xsm_default_action(action, current->domain, d);
 }
 
-#ifdef CONFIG_HAS_MEM_ACCESS
+#ifdef CONFIG_MEM_ACCESS
 static XSM_INLINE int xsm_mem_access(XSM_DEFAULT_ARG struct domain *d)
 {
     XSM_ASSERT_ACTION(XSM_DM_PRIV);
@@ -716,6 +719,31 @@ static XSM_INLINE int xsm_dm_op(XSM_DEFAULT_ARG struct domain *d)
 }
 
 #endif /* CONFIG_X86 */
+
+#ifdef CONFIG_ARGO
+static XSM_INLINE int xsm_argo_enable(const struct domain *d)
+{
+    return 0;
+}
+
+static XSM_INLINE int xsm_argo_register_single_source(const struct domain *d,
+                                                      const struct domain *t)
+{
+    return 0;
+}
+
+static XSM_INLINE int xsm_argo_register_any_source(const struct domain *d)
+{
+    return 0;
+}
+
+static XSM_INLINE int xsm_argo_send(const struct domain *d,
+                                    const struct domain *t)
+{
+    return 0;
+}
+
+#endif /* CONFIG_ARGO */
 
 #include <public/version.h>
 static XSM_INLINE int xsm_xen_version (XSM_DEFAULT_ARG uint32_t op)

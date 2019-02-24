@@ -11,9 +11,21 @@
 #include <asm/asm_defns.h>
 #include <asm/apicdef.h>
 #include <asm/page.h>
+#include <asm/processor.h>
 #include <public/xen.h>
 #include <irq_vectors.h>
 
+/* %rsp: struct cpu_user_regs */
+.macro ASSERT_CONTEXT_IS_XEN
+#ifndef NDEBUG
+        testb $3, UREGS_cs(%rsp)
+        UNLIKELY_START(nz, ASSERT_XEN_\@)
+        ASSERT_FAILED("INTERRUPTED XEN CONTEXT")
+        __UNLIKELY_END(ASSERT_XEN_\@)
+#endif
+.endm
+
+#ifdef CONFIG_PV
 /* %rbx: struct vcpu */
 ENTRY(switch_to_kernel)
         leaq  VCPU_trap_bounce(%rbx),%rdx
@@ -120,16 +132,6 @@ process_trap:
         call create_bounce_frame
         jmp  test_all_events
 
-/* No special register assumptions. */
-ENTRY(ret_from_intr)
-        GET_CURRENT(bx)
-        testb $3, UREGS_cs(%rsp)
-        jz    restore_all_xen
-        movq  VCPU_domain(%rbx), %rax
-        cmpb  $0, DOMAIN_is_32bit_pv(%rax)
-        je    test_all_events
-        jmp   compat_test_all_events
-
         .section .text.entry, "ax", @progbits
 
 /* %rbx: struct vcpu, interrupts disabled */
@@ -137,7 +139,7 @@ restore_all_guest:
         ASSERT_INTERRUPTS_DISABLED
 
         /* Stash guest SPEC_CTRL value while we can read struct vcpu. */
-        mov VCPU_arch_msr(%rbx), %rdx
+        mov VCPU_arch_msrs(%rbx), %rdx
         mov VCPUMSR_spec_ctrl_raw(%rdx), %r15d
 
         /* Copy guest mappings and switch to per-CPU root page table. */
@@ -210,26 +212,6 @@ iret_exit_to_guest:
 .Lft0:  iretq
         _ASM_PRE_EXTABLE(.Lft0, handle_exception)
 
-        ALIGN
-/* No special register assumptions. */
-restore_all_xen:
-        /*
-         * Check whether we need to switch to the per-CPU page tables, in
-         * case we return to late PV exit code (from an NMI or #MC).
-         */
-        GET_STACK_END(bx)
-        cmpb  $0, STACK_CPUINFO_FIELD(use_pv_cr3)(%rbx)
-UNLIKELY_START(ne, exit_cr3)
-        mov   STACK_CPUINFO_FIELD(pv_cr3)(%rbx), %rax
-        mov   %rax, %cr3
-UNLIKELY_END(exit_cr3)
-
-        /* WARNING! `ret`, `call *`, `jmp *` not safe beyond this point. */
-        SPEC_CTRL_EXIT_TO_XEN_IST /* Req: %rbx=end, Clob: acd */
-
-        RESTORE_ALL adj=8
-        iretq
-
 /*
  * When entering SYSCALL from kernel mode:
  *  %rax                            = hypercall vector
@@ -266,7 +248,8 @@ ENTRY(lstar_enter)
         jz    .Llstar_cr3_okay
         movb  $0, STACK_CPUINFO_FIELD(use_pv_cr3)(%rbx)
         mov   %rcx, %cr3
-        movq  $0, STACK_CPUINFO_FIELD(xen_cr3)(%rbx)
+        /* %r12 is still zero at this point. */
+        mov   %r12, STACK_CPUINFO_FIELD(xen_cr3)(%rbx)
 .Llstar_cr3_okay:
         sti
 
@@ -302,7 +285,8 @@ GLOBAL(sysenter_eflags_saved)
         jz    .Lsyse_cr3_okay
         movb  $0, STACK_CPUINFO_FIELD(use_pv_cr3)(%rbx)
         mov   %rcx, %cr3
-        movq  $0, STACK_CPUINFO_FIELD(xen_cr3)(%rbx)
+        /* %r12 is still zero at this point. */
+        mov   %r12, STACK_CPUINFO_FIELD(xen_cr3)(%rbx)
 .Lsyse_cr3_okay:
         sti
 
@@ -351,7 +335,8 @@ ENTRY(int80_direct_trap)
         jz    .Lint80_cr3_okay
         movb  $0, STACK_CPUINFO_FIELD(use_pv_cr3)(%rbx)
         mov   %rcx, %cr3
-        movq  $0, STACK_CPUINFO_FIELD(xen_cr3)(%rbx)
+        /* %r12 is still zero at this point. */
+        mov   %r12, STACK_CPUINFO_FIELD(xen_cr3)(%rbx)
 .Lint80_cr3_okay:
         sti
 
@@ -367,7 +352,7 @@ UNLIKELY_END(msi_check)
         mov   VCPU_domain(%rbx), %rax
 
         /*
-         * if ( null_trap_info(v, &v->arch.pv_vcpu.trap_ctxt[0x80]) )
+         * if ( null_trap_info(v, &v->arch.pv.trap_ctxt[0x80]) )
          *    goto int80_slow_path;
          */
         mov    0x80 * TRAPINFO_sizeof + TRAPINFO_eip(%rsi), %rdi
@@ -548,8 +533,48 @@ ENTRY(dom_crash_sync_extable)
         xorl  %edi,%edi
         jmp   asm_domain_crash_synchronous /* Does not return */
         .popsection
+#endif /* CONFIG_PV */
+
+/* --- CODE BELOW THIS LINE (MOSTLY) NOT GUEST RELATED --- */
+
+        .text
+
+/* No special register assumptions. */
+ENTRY(ret_from_intr)
+#ifdef CONFIG_PV
+        GET_CURRENT(bx)
+        testb $3, UREGS_cs(%rsp)
+        jz    restore_all_xen
+        movq  VCPU_domain(%rbx), %rax
+        cmpb  $0, DOMAIN_is_32bit_pv(%rax)
+        je    test_all_events
+        jmp   compat_test_all_events
+#else
+        ASSERT_CONTEXT_IS_XEN
+        jmp   restore_all_xen
+#endif
 
         .section .text.entry, "ax", @progbits
+
+        ALIGN
+/* No special register assumptions. */
+restore_all_xen:
+        /*
+         * Check whether we need to switch to the per-CPU page tables, in
+         * case we return to late PV exit code (from an NMI or #MC).
+         */
+        GET_STACK_END(bx)
+        cmpb  $0, STACK_CPUINFO_FIELD(use_pv_cr3)(%rbx)
+UNLIKELY_START(ne, exit_cr3)
+        mov   STACK_CPUINFO_FIELD(pv_cr3)(%rbx), %rax
+        mov   %rax, %cr3
+UNLIKELY_END(exit_cr3)
+
+        /* WARNING! `ret`, `call *`, `jmp *` not safe beyond this point. */
+        SPEC_CTRL_EXIT_TO_XEN_IST /* Req: %rbx=end, Clob: acd */
+
+        RESTORE_ALL adj=8
+        iretq
 
 ENTRY(common_interrupt)
         SAVE_ALL CLAC
@@ -566,11 +591,11 @@ ENTRY(common_interrupt)
         jz    .Lintr_cr3_okay
         movb  $0, STACK_CPUINFO_FIELD(use_pv_cr3)(%r14)
         mov   %rcx, %cr3
-        xor   %ecx, %ecx
-        mov   %rcx, STACK_CPUINFO_FIELD(xen_cr3)(%r14)
+        /* %r12 is still zero at this point. */
+        mov   %r12, STACK_CPUINFO_FIELD(xen_cr3)(%r14)
         testb $3, UREGS_cs(%rsp)
-        cmovnz %rcx, %r15
-        cmovnz %rcx, %rbx
+        cmovnz %r12, %r15
+        cmovnz %r12d, %ebx
 .Lintr_cr3_okay:
 
         CR4_PV32_RESTORE
@@ -598,11 +623,11 @@ GLOBAL(handle_exception)
         jz    .Lxcpt_cr3_okay
         movb  $0, STACK_CPUINFO_FIELD(use_pv_cr3)(%r14)
         mov   %rcx, %cr3
-        xor   %ecx, %ecx
-        mov   %rcx, STACK_CPUINFO_FIELD(xen_cr3)(%r14)
+        /* %r12 is still zero at this point. */
+        mov   %r12, STACK_CPUINFO_FIELD(xen_cr3)(%r14)
         testb $3, UREGS_cs(%rsp)
-        cmovnz %rcx, %r15
-        cmovnz %rcx, %r13
+        cmovnz %r12, %r15
+        cmovnz %r12d, %r13d
 .Lxcpt_cr3_okay:
 
 handle_exception_saved:
@@ -610,6 +635,7 @@ handle_exception_saved:
         testb $X86_EFLAGS_IF>>8,UREGS_eflags+1(%rsp)
         jz    exception_with_ints_disabled
 
+#ifdef CONFIG_PV
         ALTERNATIVE_2 "jmp .Lcr4_pv32_done", \
             __stringify(mov VCPU_domain(%rbx), %rax), X86_FEATURE_XEN_SMEP, \
             __stringify(mov VCPU_domain(%rbx), %rax), X86_FEATURE_XEN_SMAP
@@ -649,6 +675,9 @@ handle_exception_saved:
         test  $~(PFEC_write_access|PFEC_insn_fetch),%eax
         jz    compat_test_all_events
 .Lcr4_pv32_done:
+#else
+        ASSERT_CONTEXT_IS_XEN
+#endif /* CONFIG_PV */
         sti
 1:      movq  %rsp,%rdi
         movzbl UREGS_entry_vector(%rsp),%eax
@@ -658,12 +687,17 @@ handle_exception_saved:
         INDIRECT_CALL %rdx
         mov   %r15, STACK_CPUINFO_FIELD(xen_cr3)(%r14)
         mov   %r13b, STACK_CPUINFO_FIELD(use_pv_cr3)(%r14)
+#ifdef CONFIG_PV
         testb $3,UREGS_cs(%rsp)
         jz    restore_all_xen
         movq  VCPU_domain(%rbx),%rax
         cmpb  $0, DOMAIN_is_32bit_pv(%rax)
         jne   compat_test_all_events
         jmp   test_all_events
+#else
+        ASSERT_CONTEXT_IS_XEN
+        jmp   restore_all_xen
+#endif
 
 /* No special register assumptions. */
 exception_with_ints_disabled:
@@ -775,7 +809,8 @@ ENTRY(double_fault)
         jz    .Ldblf_cr3_okay
         movb  $0, STACK_CPUINFO_FIELD(use_pv_cr3)(%r14)
         mov   %rbx, %cr3
-        movq $0, STACK_CPUINFO_FIELD(xen_cr3)(%r14)
+        /* %r12 is still zero at this point. */
+        mov   %r12, STACK_CPUINFO_FIELD(xen_cr3)(%r14)
 .Ldblf_cr3_okay:
 
         movq  %rsp,%rdi
@@ -809,9 +844,11 @@ handle_ist_exception:
         jz    .List_cr3_okay
         movb  $0, STACK_CPUINFO_FIELD(use_pv_cr3)(%r14)
         mov   %rcx, %cr3
-        movq  $0, STACK_CPUINFO_FIELD(xen_cr3)(%r14)
+        /* %r12 is still zero at this point. */
+        mov   %r12, STACK_CPUINFO_FIELD(xen_cr3)(%r14)
 .List_cr3_okay:
 
+#ifdef CONFIG_PV
         CR4_PV32_RESTORE
         testb $3,UREGS_cs(%rsp)
         jz    1f
@@ -826,7 +863,11 @@ handle_ist_exception:
         movl  $UREGS_kernel_sizeof/8,%ecx
         movq  %rdi,%rsp
         rep   movsq
-1:      movq  %rsp,%rdi
+1:
+#else
+        ASSERT_CONTEXT_IS_XEN
+#endif
+        movq  %rsp,%rdi
         movzbl UREGS_entry_vector(%rsp),%eax
         leaq  exception_table(%rip),%rdx
         mov   (%rdx, %rax, 8), %rdx
@@ -837,6 +878,7 @@ handle_ist_exception:
         jne   ret_from_intr
 
         /* We want to get straight to the IRET on the NMI exit path. */
+#ifdef CONFIG_PV
         testb $3,UREGS_cs(%rsp)
         jz    restore_all_xen
         GET_CURRENT(bx)
@@ -852,6 +894,10 @@ handle_ist_exception:
         cmpb  $0,DOMAIN_is_32bit_pv(%rax)
         je    restore_all_guest
         jmp   compat_restore_all_guest
+#else
+        ASSERT_CONTEXT_IS_XEN
+        jmp   restore_all_xen
+#endif
 
 ENTRY(machine_check)
         pushq $0

@@ -27,6 +27,8 @@
 
 #include "_paths.h"
 
+//#define DEBUG 1
+
 libxl_domain_type libxl__domain_type(libxl__gc *gc, uint32_t domid)
 {
     libxl_ctx *ctx = libxl__gc_owner(gc);
@@ -142,12 +144,13 @@ static int numa_place_domain(libxl__gc *gc, uint32_t domid,
 {
     int found;
     libxl__numa_candidate candidate;
-    libxl_bitmap cpupool_nodemap;
+    libxl_bitmap cpumap, cpupool_nodemap, *map;
     libxl_cpupoolinfo cpupool_info;
     int i, cpupool, rc = 0;
     uint64_t memkb;
 
     libxl__numa_candidate_init(&candidate);
+    libxl_bitmap_init(&cpumap);
     libxl_bitmap_init(&cpupool_nodemap);
     libxl_cpupoolinfo_init(&cpupool_info);
 
@@ -162,6 +165,35 @@ static int numa_place_domain(libxl__gc *gc, uint32_t domid,
     rc = libxl_cpupool_info(CTX, &cpupool_info, cpupool);
     if (rc)
         goto out;
+    map = &cpupool_info.cpumap;
+
+    /*
+     * If there's a well defined hard affinity mask (i.e., the same one for all
+     * the vcpus), we can try to run the placement considering only the pcpus
+     * within such mask.
+     */
+    if (info->num_vcpu_hard_affinity)
+    {
+#ifdef DEBUG
+        int j;
+
+        for (j = 0; j < info->num_vcpu_hard_affinity; j++)
+            assert(libxl_bitmap_equal(&info->vcpu_hard_affinity[0],
+                                      &info->vcpu_hard_affinity[j], 0));
+#endif /* DEBUG */
+
+        rc = libxl_bitmap_and(CTX, &cpumap, &info->vcpu_hard_affinity[0],
+                              &cpupool_info.cpumap);
+        if (rc)
+            goto out;
+
+        /* Hard affinity must contain at least one cpu of our cpupool */
+        if (libxl_bitmap_is_empty(&cpumap)) {
+            LOG(ERROR, "Hard affinity completely outside of domain's cpupool!");
+            rc = ERROR_INVAL;
+            goto out;
+        }
+    }
 
     rc = libxl_domain_need_memory(CTX, info, &memkb);
     if (rc)
@@ -174,8 +206,7 @@ static int numa_place_domain(libxl__gc *gc, uint32_t domid,
     /* Find the best candidate with enough free memory and at least
      * as much pcpus as the domain has vcpus.  */
     rc = libxl__get_numa_candidate(gc, memkb, info->max_vcpus,
-                                   0, 0, &cpupool_info.cpumap,
-                                   numa_cmpf, &candidate, &found);
+                                   0, 0, map, numa_cmpf, &candidate, &found);
     if (rc)
         goto out;
 
@@ -206,6 +237,7 @@ static int numa_place_domain(libxl__gc *gc, uint32_t domid,
  out:
     libxl__numa_candidate_dispose(&candidate);
     libxl_bitmap_dispose(&cpupool_nodemap);
+    libxl_bitmap_dispose(&cpumap);
     libxl_cpupoolinfo_dispose(&cpupool_info);
     return rc;
 }
@@ -345,8 +377,7 @@ static void hvm_set_conf_params(xc_interface *handle, uint32_t domid,
 }
 
 int libxl__build_pre(libxl__gc *gc, uint32_t domid,
-              libxl_domain_config *d_config, libxl__domain_build_state *state,
-              bool is_reset)
+              libxl_domain_config *d_config, libxl__domain_build_state *state)
 {
     libxl_domain_build_info *const info = &d_config->b_info;
     libxl_ctx *ctx = libxl__gc_owner(gc);
@@ -354,17 +385,9 @@ int libxl__build_pre(libxl__gc *gc, uint32_t domid,
     int rc;
     uint64_t size;
 
-    if (!is_reset) {
-        if (xc_domain_max_vcpus(ctx->xch, domid, info->max_vcpus) != 0) {
-            LOG(ERROR, "Couldn't set max vcpu count");
-            return ERROR_FAIL;
-        }
-
-        if (xc_domain_set_gnttab_limits(ctx->xch, domid, info->max_grant_frames,
-                                        info->max_maptrack_frames) != 0) {
-            LOG(ERROR, "Couldn't set grant table limits");
-            return ERROR_FAIL;
-        }
+    if (xc_domain_max_vcpus(ctx->xch, domid, info->max_vcpus) != 0) {
+        LOG(ERROR, "Couldn't set max vcpu count");
+        return ERROR_FAIL;
     }
 
     /*
@@ -382,9 +405,8 @@ int libxl__build_pre(libxl__gc *gc, uint32_t domid,
      * reflect the placement result if that is the case
      */
     if (libxl_defbool_val(info->numa_placement)) {
-        if (info->cpumap.size || info->num_vcpu_hard_affinity ||
-            info->num_vcpu_soft_affinity)
-            LOG(WARN, "Can't run NUMA placement, as an (hard or soft) "
+        if (info->cpumap.size || info->num_vcpu_soft_affinity)
+            LOG(WARN, "Can't run NUMA placement, as a soft "
                       "affinity has been specified explicitly");
         else if (info->nodemap.size)
             LOG(WARN, "Can't run NUMA placement, as the domain has "
@@ -592,13 +614,6 @@ int libxl__build_post(libxl__gc *gc, uint32_t domid,
     rc = libxl_domain_sched_params_set(CTX, domid, &info->sched_params);
     if (rc)
         return rc;
-
-    rc = xc_domain_set_max_evtchn(ctx->xch, domid, info->event_channels);
-    if (rc) {
-        LOG(ERROR, "Failed to set event channel limit to %d (%d)",
-            info->event_channels, rc);
-        return ERROR_FAIL;
-    }
 
     libxl_cpuid_apply_policy(ctx, domid);
     if (info->cpuid != NULL)
@@ -819,6 +834,7 @@ int libxl__build_pv(libxl__gc *gc, uint32_t domid,
     dom->xenstore_evtchn = state->store_port;
     dom->xenstore_domid = state->store_domid;
     dom->claim_enabled = libxl_defbool_val(info->claim_mode);
+    dom->max_vcpus = info->max_vcpus;
 
     if (info->num_vnuma_nodes != 0) {
         unsigned int i;
@@ -908,7 +924,6 @@ static int hvm_build_set_params(xc_interface *handle, uint32_t domid,
     *store_mfn = str_mfn;
     *console_mfn = cons_mfn;
 
-    xc_dom_gnttab_hvm_seed(handle, domid, *console_mfn, *store_mfn, console_domid, store_domid);
     return 0;
 }
 
@@ -1132,6 +1147,19 @@ static int libxl__domain_firmware(libxl__gc *gc,
     }
 
     if (info->type == LIBXL_DOMAIN_TYPE_HVM &&
+        info->u.hvm.bios == LIBXL_BIOS_TYPE_ROMBIOS &&
+        libxl__ipxe_path()) {
+        const char *fp = libxl__ipxe_path();
+        rc = xc_dom_module_file(dom, fp, "ipxe");
+
+        if (rc) {
+            LOGE(ERROR, "failed to load IPXE %s (%d)", fp, rc);
+            rc = ERROR_FAIL;
+            goto out;
+        }
+    }
+
+    if (info->type == LIBXL_DOMAIN_TYPE_HVM &&
         info->u.hvm.smbios_firmware) {
         data = NULL;
         e = libxl_read_file_contents(ctx, info->u.hvm.smbios_firmware,
@@ -1260,6 +1288,9 @@ int libxl__build_hvm(libxl__gc *gc, uint32_t domid,
     dom->mmio_start = mmio_start;
     dom->vga_hole_size = device_model ? LIBXL_VGA_HOLE_SIZE : 0;
     dom->device_model = device_model;
+    dom->max_vcpus = info->max_vcpus;
+    dom->console_domid = state->console_domid;
+    dom->xenstore_domid = state->store_domid;
 
     rc = libxl__domain_device_construct_rdm(gc, d_config,
                                             info->u.hvm.rdm_mem_boundary_memkb*1024,

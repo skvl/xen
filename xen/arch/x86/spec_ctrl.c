@@ -24,6 +24,7 @@
 #include <asm/microcode.h>
 #include <asm/msr.h>
 #include <asm/processor.h>
+#include <asm/pv/domain.h>
 #include <asm/pv/shim.h>
 #include <asm/setup.h>
 #include <asm/spec_ctrl.h>
@@ -57,63 +58,6 @@ uint8_t __read_mostly default_spec_ctrl_flags;
 paddr_t __read_mostly l1tf_addr_mask, __read_mostly l1tf_safe_maddr;
 static bool __initdata cpu_has_bug_l1tf;
 static unsigned int __initdata l1d_maxphysaddr;
-
-static int __init parse_bti(const char *s)
-{
-    const char *ss;
-    int val, rc = 0;
-
-    do {
-        ss = strchr(s, ',');
-        if ( !ss )
-            ss = strchr(s, '\0');
-
-        val = parse_bool(s, ss);
-        if ( !val )
-        {
-            opt_thunk = THUNK_JMP;
-            opt_ibrs = 0;
-            opt_ibpb = false;
-            opt_rsb_pv = false;
-            opt_rsb_hvm = false;
-        }
-        else if ( val > 0 )
-            rc = -EINVAL;
-        else if ( !strncmp(s, "thunk=", 6) )
-        {
-            s += 6;
-
-            if ( !cmdline_strcmp(s, "retpoline") )
-                opt_thunk = THUNK_RETPOLINE;
-            else if ( !cmdline_strcmp(s, "lfence") )
-                opt_thunk = THUNK_LFENCE;
-            else if ( !cmdline_strcmp(s, "jmp") )
-                opt_thunk = THUNK_JMP;
-            else
-                rc = -EINVAL;
-        }
-        else if ( (val = parse_boolean("ibrs", s, ss)) >= 0 )
-            opt_ibrs = val;
-        else if ( (val = parse_boolean("ibpb", s, ss)) >= 0 )
-            opt_ibpb = val;
-        else if ( (val = parse_boolean("rsb_native", s, ss)) >= 0 )
-            opt_rsb_pv = val;
-        else if ( (val = parse_boolean("rsb_vmexit", s, ss)) >= 0 )
-            opt_rsb_hvm = val;
-        else if ( (val = parse_boolean("rsb", s, ss)) >= 0 )
-        {
-            opt_rsb_pv = val;
-            opt_rsb_hvm = val;
-        }
-        else
-            rc = -EINVAL;
-
-        s = ss + 1;
-    } while ( *ss );
-
-    return rc;
-}
-custom_param("bti", parse_bti);
 
 static int __init parse_spec_ctrl(const char *s)
 {
@@ -327,13 +271,8 @@ static void __init print_details(enum ind_thunk thunk, uint64_t caps)
      * Alternatives blocks for protecting against and/or virtualising
      * mitigation support for guests.
      */
-    printk("  Support for VMs: PV:%s%s%s%s, HVM:%s%s%s%s\n",
-           (boot_cpu_has(X86_FEATURE_SC_MSR_PV) ||
-            boot_cpu_has(X86_FEATURE_SC_RSB_PV) ||
-            opt_eager_fpu)                           ? ""               : " None",
-           boot_cpu_has(X86_FEATURE_SC_MSR_PV)       ? " MSR_SPEC_CTRL" : "",
-           boot_cpu_has(X86_FEATURE_SC_RSB_PV)       ? " RSB"           : "",
-           opt_eager_fpu                             ? " EAGER_FPU"     : "",
+#ifdef CONFIG_HVM
+    printk("  Support for HVM VMs:%s%s%s%s\n",
            (boot_cpu_has(X86_FEATURE_SC_MSR_HVM) ||
             boot_cpu_has(X86_FEATURE_SC_RSB_HVM) ||
             opt_eager_fpu)                           ? ""               : " None",
@@ -341,13 +280,25 @@ static void __init print_details(enum ind_thunk thunk, uint64_t caps)
            boot_cpu_has(X86_FEATURE_SC_RSB_HVM)      ? " RSB"           : "",
            opt_eager_fpu                             ? " EAGER_FPU"     : "");
 
-    printk("  XPTI (64-bit PV only): Dom0 %s, DomU %s\n",
+#endif
+#ifdef CONFIG_PV
+    printk("  Support for PV VMs:%s%s%s%s\n",
+           (boot_cpu_has(X86_FEATURE_SC_MSR_PV) ||
+            boot_cpu_has(X86_FEATURE_SC_RSB_PV) ||
+            opt_eager_fpu)                           ? ""               : " None",
+           boot_cpu_has(X86_FEATURE_SC_MSR_PV)       ? " MSR_SPEC_CTRL" : "",
+           boot_cpu_has(X86_FEATURE_SC_RSB_PV)       ? " RSB"           : "",
+           opt_eager_fpu                             ? " EAGER_FPU"     : "");
+
+    printk("  XPTI (64-bit PV only): Dom0 %s, DomU %s (with%s PCID)\n",
            opt_xpti_hwdom ? "enabled" : "disabled",
-           opt_xpti_domu  ? "enabled" : "disabled");
+           opt_xpti_domu  ? "enabled" : "disabled",
+           xpti_pcid_enabled() ? "" : "out");
 
     printk("  PV L1TF shadowing: Dom0 %s, DomU %s\n",
            opt_pv_l1tf_hwdom ? "enabled"  : "disabled",
            opt_pv_l1tf_domu  ? "enabled"  : "disabled");
+#endif
 }
 
 /* Calculate whether Retpoline is known-safe on this CPU. */
@@ -867,11 +818,6 @@ void __init init_speculation_mitigations(void)
         setup_force_cpu_cap(X86_FEATURE_SC_MSR_IDLE);
 
     xpti_init_default(caps);
-
-    if ( !opt_xpti_hwdom && !opt_xpti_domu )
-        setup_force_cpu_cap(X86_FEATURE_NO_XPTI);
-    else
-        setup_clear_cpu_cap(X86_FEATURE_NO_XPTI);
 
     l1tf_calculations(caps);
 

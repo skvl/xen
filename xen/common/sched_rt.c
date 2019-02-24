@@ -203,7 +203,7 @@ struct rt_vcpu {
     s_time_t period;
     s_time_t budget;
 
-    /* VCPU current infomation in nanosecond */
+    /* VCPU current information in nanosecond */
     s_time_t cur_budget;         /* current budget */
     s_time_t last_start;         /* last start time */
     s_time_t cur_deadline;       /* current deadline for EDF */
@@ -328,11 +328,10 @@ rt_dump_vcpu(const struct scheduler *ops, const struct rt_vcpu *svc)
 
     cpupool_mask = cpupool_domain_cpumask(svc->vcpu->domain);
     cpumask_and(mask, cpupool_mask, svc->vcpu->cpu_hard_affinity);
-    cpulist_scnprintf(keyhandler_scratch, sizeof(keyhandler_scratch), mask);
     printk("[%5d.%-2u] cpu %u, (%"PRI_stime", %"PRI_stime"),"
            " cur_b=%"PRI_stime" cur_d=%"PRI_stime" last_start=%"PRI_stime"\n"
            " \t\t priority_level=%d has_extratime=%d\n"
-           " \t\t onQ=%d runnable=%d flags=%x effective hard_affinity=%s\n",
+           " \t\t onQ=%d runnable=%d flags=%x effective hard_affinity=%*pbl\n",
             svc->vcpu->domain->domain_id,
             svc->vcpu->vcpu_id,
             svc->vcpu->processor,
@@ -346,7 +345,7 @@ rt_dump_vcpu(const struct scheduler *ops, const struct rt_vcpu *svc)
             vcpu_on_q(svc),
             vcpu_runnable(svc->vcpu),
             svc->flags,
-            keyhandler_scratch);
+            nr_cpu_ids, cpumask_bits(mask));
 }
 
 static void

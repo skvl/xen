@@ -213,7 +213,7 @@ int paging_log_dirty_enable(struct domain *d, bool_t log_global)
 {
     int ret;
 
-    if ( need_iommu(d) && log_global )
+    if ( has_iommu_pt(d) && log_global )
     {
         /*
          * Refuse to turn on global log-dirty mode
@@ -851,15 +851,14 @@ int paging_enable(struct domain *d, u32 mode)
 
 /* Called from the guest to indicate that a process is being torn down
  * and therefore its pagetables will soon be discarded */
-void pagetable_dying(struct domain *d, paddr_t gpa)
+void pagetable_dying(paddr_t gpa)
 {
 #ifdef CONFIG_SHADOW_PAGING
-    struct vcpu *v;
+    struct vcpu *curr = current;
 
-    ASSERT(paging_mode_shadow(d));
+    ASSERT(paging_mode_shadow(curr->domain));
 
-    v = d->vcpu[0];
-    v->arch.paging.mode->shadow.pagetable_dying(v, gpa);
+    curr->arch.paging.mode->shadow.pagetable_dying(gpa);
 #else
     BUG();
 #endif
@@ -919,6 +918,7 @@ const struct paging_mode *paging_get_mode(struct vcpu *v)
     return paging_get_nestedmode(v);
 }
 
+#ifdef CONFIG_HVM
 void paging_update_nestedmode(struct vcpu *v)
 {
     ASSERT(nestedhvm_enabled(v->domain));
@@ -930,6 +930,7 @@ void paging_update_nestedmode(struct vcpu *v)
         v->arch.paging.nestedmode = NULL;
     hvm_asid_flush_vcpu(v);
 }
+#endif
 
 void paging_write_p2m_entry(struct p2m_domain *p2m, unsigned long gfn,
                             l1_pgentry_t *p, l1_pgentry_t new,
