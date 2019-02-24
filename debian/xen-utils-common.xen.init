@@ -257,9 +257,10 @@ xenstored_start()
 	    return 2
 	fi
 
-	# Add some extra entries about dom0 into xenstore
+	# Add some extra entries about dom0 into xenstore. Since Xen 4.12, this
+	# also allows setting Dom0 UUID.
 	if [ -e $ROOT/bin/xen-init-dom0 ] ; then
-	    $ROOT/bin/xen-init-dom0 > /dev/null
+	    $ROOT/bin/xen-init-dom0 ${XEN_DOM0_UUID} > /dev/null
 	else
 	    # xen-init-dom0 has been present since Stretch.
 	    # Remove this compatibility section in Buster+1
