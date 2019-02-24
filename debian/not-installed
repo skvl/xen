@@ -7,7 +7,13 @@ etc/init.d/xendriverdomain
 etc/init.d/xencommons
 etc/init.d/xen-watchdog
 etc/init.d/xendomains
+
+# The following two files are installed in xen-utils-common while
+# being renamed by dh-exec. However, dh-exec fails to register them
+# as installed. See bug #831786. Fool dh_missing by pretending
+# they're not installed at all, for now.
 etc/default/xencommons
+etc/bash_completion.d/xl.sh
 
 # This is all handled by debian/shuffle-boot-files,
 # which dh_missing does not know about.
