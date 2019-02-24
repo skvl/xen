@@ -1,5 +1,8 @@
 #! /usr/bin/dh-exec --with=install
 
+# Note: dh-exec breaks dh_missing by failing to register the
+# installed files.  Also see comments in debian/not-installed.
+
 etc/xen/scripts
 etc/xen/xl*
 etc/bash_completion.d/xl.sh => usr/share/bash-completion/completions/xl
