@@ -320,4 +320,3 @@ override_dh_missing:
 # earlier versions.  See ./ucf-remove-fixup for more details.
 override_dh_ucf:
 	dh_ucf
-	debian/ucf-remove-fixup xen-utils-common /etc/default/xen

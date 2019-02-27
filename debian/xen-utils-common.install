@@ -8,7 +8,7 @@ etc/xen/xl*
 etc/bash_completion.d/xl.sh => usr/share/bash-completion/completions/xl
 
 etc/default/xendomains
-etc/default/xencommons => /etc/default/xen
+etc/default/xencommons => usr/share/xen-utils-common/default.xen
 etc/xen/oxenstored.conf
 
 usr/bin
