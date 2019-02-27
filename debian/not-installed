@@ -7,7 +7,6 @@ etc/init.d/xendriverdomain
 etc/init.d/xencommons
 etc/init.d/xen-watchdog
 etc/init.d/xendomains
-etc/default/xencommons
 
 # This is all handled by debian/shuffle-boot-files,
 # which dh_missing does not know about.
