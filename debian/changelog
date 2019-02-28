@@ -1,8 +1,19 @@
-xen (4.11.1+26-g87f51bf366-3~) unstable; urgency=medium
+xen (4.11.1+26-g87f51bf366-3) unstable; urgency=medium
 
-  * 
+  Minor useability improvements and fixes:
+  * bash-completion: also complete 'xen'  [Hans van Kranenburg]
+  * /etc/default/xen: Handle with ucf again, like in stretch.
+    Closes:#923401.  [Ian Jackson]
 
- --
+  Build fix:
+  * Fix FTBFS when building only arch-indep binaries (eg
+    dpkg-buildpackage -A).  Was due to dh-exec bug wrt not-installed.
+    Closes:#923013.  [Hans van Kranenburg; report from Santiago Vila]
+
+  Documentation fix:
+  * grub.d/xen.cfg: dom0_mem max IS needed  [Hans van Kranenburg]
+
+ -- Ian Jackson <ijackson@chiark.greenend.org.uk>  Thu, 28 Feb 2019 16:37:04 +0000
 
 xen (4.11.1+26-g87f51bf366-2) unstable; urgency=medium
 
