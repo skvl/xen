@@ -1,0 +1,36 @@
+From: Ian Jackson <ian.jackson@citrix.com>
+Date: Wed, 3 Oct 2018 18:44:18 +0100
+Subject: docs/man: Fix two typos detected by the Debian lintian tool
+
+Signed-off-by: Ian Jackson <ian.jackson@citrix.com>
+---
+ docs/man/xenstore.pod.1 | 2 +-
+ docs/man/xl.pod.1.in    | 2 +-
+ 2 files changed, 2 insertions(+), 2 deletions(-)
+
+diff --git a/docs/man/xenstore.pod.1 b/docs/man/xenstore.pod.1
+index 7417289..dd8f806 100644
+--- a/docs/man/xenstore.pod.1
++++ b/docs/man/xenstore.pod.1
+@@ -18,7 +18,7 @@ Sets the permissions of keys.
+ 
+ =item B<xenstore-exists>(1)
+ 
+-Test for the existance of a key.
++Test for the existence of a key.
+ 
+ =item B<xenstore-list>(1)
+ 
+diff --git a/docs/man/xl.pod.1.in b/docs/man/xl.pod.1.in
+index 48da205..f0be6ef 100644
+--- a/docs/man/xl.pod.1.in
++++ b/docs/man/xl.pod.1.in
+@@ -1398,7 +1398,7 @@ Creates a new network device in the domain specified by I<domain-id>.
+ I<network-device> describes the device to attach, using the same format as the
+ B<vif> string in the domain config file. See L<xl.cfg(5)> and
+ L<xl-network-configuration(5)>
+-for more informations.
++for more information.
+ 
+ Note that only attaching PV network interfaces is supported.
+ 

@@ -1,0 +1,36 @@
+From: Ian Jackson <ian.jackson@citrix.com>
+Date: Wed, 3 Oct 2018 19:00:22 +0100
+Subject: Various: Fix typo `mappping'
+
+Signed-off-by: Ian Jackson <ian.jackson@citrix.com>
+---
+ tools/python/xen/lowlevel/xc/xc.c   | 2 +-
+ xen/drivers/passthrough/vtd/iommu.h | 2 +-
+ 2 files changed, 2 insertions(+), 2 deletions(-)
+
+diff --git a/tools/python/xen/lowlevel/xc/xc.c b/tools/python/xen/lowlevel/xc/xc.c
+index efb3729..f0878b7 100644
+--- a/tools/python/xen/lowlevel/xc/xc.c
++++ b/tools/python/xen/lowlevel/xc/xc.c
+@@ -2367,7 +2367,7 @@ static PyMethodDef pyxc_methods[] = {
+     { "domain_set_memmap_limit", 
+       (PyCFunction)pyxc_domain_set_memmap_limit, 
+       METH_VARARGS, "\n"
+-      "Set a domain's physical memory mappping limit\n"
++      "Set a domain's physical memory mapping limit\n"
+       " dom [int]: Identifier of domain.\n"
+       " map_limitkb [int]: .\n"
+       "Returns: [int] 0 on success; -1 on error.\n" },
+diff --git a/xen/drivers/passthrough/vtd/iommu.h b/xen/drivers/passthrough/vtd/iommu.h
+index 72c1a2e..5cd14b8 100644
+--- a/xen/drivers/passthrough/vtd/iommu.h
++++ b/xen/drivers/passthrough/vtd/iommu.h
+@@ -510,7 +510,7 @@ struct qi_ctrl {
+ struct ir_ctrl {
+     u64 iremap_maddr;            /* interrupt remap table machine address */
+     int iremap_num;              /* total num of used interrupt remap entry */
+-    spinlock_t iremap_lock;      /* lock for irq remappping table */
++    spinlock_t iremap_lock;      /* lock for irq remapping table */
+ };
+ 
+ struct iommu_flush {

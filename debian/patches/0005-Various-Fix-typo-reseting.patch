@@ -1,0 +1,36 @@
+From: Ian Jackson <ian.jackson@citrix.com>
+Date: Wed, 3 Oct 2018 18:56:39 +0100
+Subject: Various: Fix typo `reseting'
+
+Signed-off-by: Ian Jackson <ian.jackson@citrix.com>
+---
+ tools/misc/xenlockprof.c | 2 +-
+ tools/misc/xenperf.c     | 2 +-
+ 2 files changed, 2 insertions(+), 2 deletions(-)
+
+diff --git a/tools/misc/xenlockprof.c b/tools/misc/xenlockprof.c
+index df23c82..11f43a3 100644
+--- a/tools/misc/xenlockprof.c
++++ b/tools/misc/xenlockprof.c
+@@ -46,7 +46,7 @@ int main(int argc, char *argv[])
+     {
+         if ( xc_lockprof_reset(xc_handle) != 0 )
+         {
+-            fprintf(stderr, "Error reseting profile data: %d (%s)\n",
++            fprintf(stderr, "Error resetting profile data: %d (%s)\n",
+                     errno, strerror(errno));
+             return 1;
+         }
+diff --git a/tools/misc/xenperf.c b/tools/misc/xenperf.c
+index 07e584a..a5fbdaa 100644
+--- a/tools/misc/xenperf.c
++++ b/tools/misc/xenperf.c
+@@ -123,7 +123,7 @@ int main(int argc, char *argv[])
+     {
+         if ( xc_perfc_reset(xc_handle) != 0 )
+         {
+-            fprintf(stderr, "Error reseting performance counters: %d (%s)\n",
++            fprintf(stderr, "Error resetting performance counters: %d (%s)\n",
+                     errno, strerror(errno));
+             return 1;
+         }
