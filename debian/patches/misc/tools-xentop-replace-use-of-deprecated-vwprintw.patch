@@ -1,0 +1,31 @@
+From: Christopher Clark <christopher.w.clark@gmail.com>
+Date: Wed, 18 Jul 2018 15:22:17 -0700
+Subject: tools/xentop : replace use of deprecated vwprintw
+
+gcc-8.1 complains:
+
+| xentop.c: In function 'print':
+| xentop.c:304:4: error: 'vwprintw' is deprecated [-Werror=deprecated-declarations]
+|     vwprintw(stdscr, (curses_str_t)fmt, args);
+|     ^~~~~~~~
+
+vw_printw (note the underscore) is a non-deprecated alternative.
+
+Signed-off-by: Christopher Clark <christopher.clark6@baesystems.com>
+---
+ tools/xenstat/xentop/xentop.c | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/tools/xenstat/xentop/xentop.c b/tools/xenstat/xentop/xentop.c
+index 2fd2b67..c465810 100644
+--- a/tools/xenstat/xentop/xentop.c
++++ b/tools/xenstat/xentop/xentop.c
+@@ -301,7 +301,7 @@ static void print(const char *fmt, ...)
+ 	if (!batch) {
+ 		if((current_row() < lines()-1)) {
+ 			va_start(args, fmt);
+-			vwprintw(stdscr, (curses_str_t)fmt, args);
++			vw_printw(stdscr, (curses_str_t)fmt, args);
+ 			va_end(args);
+ 		}
+ 	} else {

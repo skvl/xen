@@ -1,0 +1,55 @@
+From: Christopher Clark <christopher.w.clark@gmail.com>
+Date: Thu, 16 Aug 2018 13:22:41 -0700
+Subject: libxl/arm: Fix build on arm64 + acpi w/ gcc 8.2
+
+Add zero-padding to #defined ACPI table strings that are copied.
+Provides sufficient characters to satisfy the length required to
+fully populate the destination and prevent array-bounds warnings.
+Add BUILD_BUG_ON sizeof checks for compile-time length checking.
+
+Signed-off-by: Christopher Clark <christopher.clark6@baesystems.com>
+Reviewed-by: Stefano Stabellini <sstabellini@kernel.org>
+Acked-by: Wei Liu <wei.liu2@citrix.com>
+(cherry picked from commit b8f33431f3dd23fb43a879f4bdb4283fdc9465ad)
+---
+ tools/libxl/libxl_arm_acpi.c | 10 +++++++---
+ 1 file changed, 7 insertions(+), 3 deletions(-)
+
+diff --git a/tools/libxl/libxl_arm_acpi.c b/tools/libxl/libxl_arm_acpi.c
+index 636f724..ba874c3 100644
+--- a/tools/libxl/libxl_arm_acpi.c
++++ b/tools/libxl/libxl_arm_acpi.c
+@@ -48,9 +48,9 @@ extern const unsigned char dsdt_anycpu_arm[];
+ _hidden
+ extern const int dsdt_anycpu_arm_len;
+ 
+-#define ACPI_OEM_ID "Xen"
+-#define ACPI_OEM_TABLE_ID "ARM"
+-#define ACPI_ASL_COMPILER_ID "XL"
++#define ACPI_OEM_ID "Xen\0\0"
++#define ACPI_OEM_TABLE_ID "ARM\0\0\0\0"
++#define ACPI_ASL_COMPILER_ID "XL\0"
+ 
+ enum {
+     RSDP,
+@@ -190,6 +190,7 @@ static void make_acpi_rsdp(libxl__gc *gc, struct xc_dom_image *dom,
+     struct acpi_table_rsdp *rsdp = (void *)dom->acpi_modules[0].data + offset;
+ 
+     memcpy(rsdp->signature, "RSD PTR ", sizeof(rsdp->signature));
++    BUILD_BUG_ON(sizeof(ACPI_OEM_ID) != sizeof(rsdp->oem_id));
+     memcpy(rsdp->oem_id, ACPI_OEM_ID, sizeof(rsdp->oem_id));
+     rsdp->length = acpitables[RSDP].size;
+     rsdp->revision = 0x02;
+@@ -205,9 +206,12 @@ static void make_acpi_header(struct acpi_table_header *h, const char *sig,
+     memcpy(h->signature, sig, 4);
+     h->length = len;
+     h->revision = rev;
++    BUILD_BUG_ON(sizeof(ACPI_OEM_ID) != sizeof(h->oem_id));
+     memcpy(h->oem_id, ACPI_OEM_ID, sizeof(h->oem_id));
++    BUILD_BUG_ON(sizeof(ACPI_OEM_TABLE_ID) != sizeof(h->oem_table_id));
+     memcpy(h->oem_table_id, ACPI_OEM_TABLE_ID, sizeof(h->oem_table_id));
+     h->oem_revision = 0;
++    BUILD_BUG_ON(sizeof(ACPI_ASL_COMPILER_ID) != sizeof(h->asl_compiler_id));
+     memcpy(h->asl_compiler_id, ACPI_ASL_COMPILER_ID,
+            sizeof(h->asl_compiler_id));
+     h->asl_compiler_revision = 0;
