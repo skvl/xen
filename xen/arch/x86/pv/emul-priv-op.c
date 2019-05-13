@@ -32,6 +32,7 @@
 #include <asm/hypercall.h>
 #include <asm/mc146818rtc.h>
 #include <asm/p2m.h>
+#include <asm/pv/domain.h>
 #include <asm/pv/traps.h>
 #include <asm/shared.h>
 #include <asm/traps.h>
@@ -785,8 +786,19 @@ static int write_cr(unsigned int reg, unsigned long val,
     }
 
     case 4: /* Write CR4 */
-        curr->arch.pv_vcpu.ctrlreg[4] = pv_guest_cr4_fixup(curr, val);
-        write_cr4(pv_guest_cr4_to_real_cr4(curr));
+        /*
+         * If this write will disable FSGSBASE, refresh Xen's idea of the
+         * guest bases now that they can no longer change.
+         */
+        if ( (curr->arch.pv_vcpu.ctrlreg[4] & X86_CR4_FSGSBASE) &&
+             !(val & X86_CR4_FSGSBASE) )
+        {
+            curr->arch.pv_vcpu.fs_base = __rdfsbase();
+            curr->arch.pv_vcpu.gs_base_kernel = __rdgsbase();
+        }
+
+        curr->arch.pv_vcpu.ctrlreg[4] = pv_fixup_guest_cr4(curr, val);
+        write_cr4(pv_make_cr4(curr));
         ctxt_switch_levelling(curr);
         return X86EMUL_OKAY;
     }
@@ -834,14 +846,15 @@ static int read_msr(unsigned int reg, uint64_t *val,
     case MSR_FS_BASE:
         if ( is_pv_32bit_domain(currd) )
             break;
-        *val = cpu_has_fsgsbase ? __rdfsbase() : curr->arch.pv_vcpu.fs_base;
+        *val = (read_cr4() & X86_CR4_FSGSBASE) ? __rdfsbase()
+                                               : curr->arch.pv_vcpu.fs_base;
         return X86EMUL_OKAY;
 
     case MSR_GS_BASE:
         if ( is_pv_32bit_domain(currd) )
             break;
-        *val = cpu_has_fsgsbase ? __rdgsbase()
-                                : curr->arch.pv_vcpu.gs_base_kernel;
+        *val = (read_cr4() & X86_CR4_FSGSBASE) ? __rdgsbase()
+                                               : curr->arch.pv_vcpu.gs_base_kernel;
         return X86EMUL_OKAY;
 
     case MSR_SHADOW_GS_BASE:

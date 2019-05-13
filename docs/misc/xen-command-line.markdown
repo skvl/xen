@@ -1096,7 +1096,7 @@ detection of systems known to misbehave upon accesses to that port.
 > Default: `new` unless directed-EOI is supported
 
 ### iommu
-> `= List of [ <boolean> | force | required | intremap | intpost | qinval | snoop | sharept | dom0-passthrough | dom0-strict | amd-iommu-perdev-intremap | workaround_bios_bug | igfx | verbose | debug ]`
+> `= List of [ <boolean> | force | required | intremap | intpost | qinval | snoop | sharept | dom0-passthrough | dom0-strict | amd-iommu-perdev-intremap | workaround_bios_bug | igfx | crash-disable | verbose | debug ]`
 
 > Sub-options:
 
@@ -1185,6 +1185,16 @@ detection of systems known to misbehave upon accesses to that port.
 >> is `no-igfx`, which is similar to Linux `intel_iommu=igfx_off` option used
 >> to workaround graphics issues. If adding `no-igfx` fixes anything, you
 >> should file a bug reporting the problem.
+
+>  `crash-disable`
+
+> Default: `false`
+
+>> This option controls disabling IOMMU functionality (DMAR/IR/QI) before
+>> switching to a crash kernel. This option is inactive by default and
+>> is for compatibility with older kdump kernels only. Modern kernels copy
+>> all the necessary tables from the previous one following kexec which makes
+>>  the transition transparent for them with IOMMU functions still on.
 
 > `verbose`
 
@@ -1998,7 +2008,7 @@ Use Virtual Processor ID support if available.  This prevents the need for TLB
 flushes on VM entry and exit, increasing performance.
 
 ### vpmu (x86)
-> `= ( <boolean> | { bts | ipc | arch [, ...] } )`
+> `= ( <boolean> | { bts | ipc | arch | rtm-abort=<bool> [, ...] } )`
 
 > Default: `off`
 
@@ -2023,6 +2033,21 @@ pre-defined architectural events only. These are exposed by cpuid, and listed
 in the Pre-Defined Architectural Performance Events table from the Intel 64
 and IA-32 Architectures Software Developer's Manual, Volume 3B, System
 Programming Guide, Part 2.
+
+vpmu=rtm-abort controls a trade-off between working Restricted Transactional
+Memory, and working performance counters.
+
+All processors released to date (Q1 2019) supporting Transactional Memory
+Extensions suffer an erratum which has been addressed in microcode.
+
+Processors based on the Skylake microarchitecture with up-to-date
+microcode internally use performance counter 3 to work around the erratum.
+A consequence is that the counter gets reprogrammed whenever an `XBEGIN`
+instruction is executed.
+
+An alternative mode exists where PCR3 behaves as before, at the cost of
+`XBEGIN` unconditionally aborting.  Enabling `rtm-abort` mode will
+activate this alternative mode.
 
 If a boolean is not used, combinations of flags are allowed, comma separated.
 For example, vpmu=arch,bts.

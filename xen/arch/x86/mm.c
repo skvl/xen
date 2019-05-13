@@ -81,6 +81,22 @@
  * OS's, which will generally use the WP bit to simplify copy-on-write
  * implementation (in that case, OS wants a fault when it writes to
  * an application-supplied buffer).
+ *
+ * PV domUs and IOMMUs:
+ * --------------------
+ * For a guest to be able to DMA into a page, that page must be in the
+ * domain's IOMMU.  However, we *must not* allow DMA into 'special'
+ * pages (such as page table pages, descriptor tables, &c); and we
+ * must also ensure that mappings are removed from the IOMMU when the
+ * page is freed.  Finally, it is inherently racy to make any changes
+ * based on a page with a non-zero type count.
+ *
+ * To that end, we put the page in the IOMMU only when a page gains
+ * the PGT_writeable type; and we remove the page when it loses the
+ * PGT_writeable type (not when the type count goes to zero).  This
+ * effectively protects the IOMMU status update with the type count we
+ * have just acquired.  We must also check for PGT_writable type when
+ * doing the final put_page(), and remove it from the iommu if so.
  */
 
 #include <xen/init.h>
@@ -505,33 +521,13 @@ void make_cr3(struct vcpu *v, mfn_t mfn)
         v->arch.cr3 |= get_pcid_bits(v, false);
 }
 
-unsigned long pv_guest_cr4_to_real_cr4(const struct vcpu *v)
-{
-    const struct domain *d = v->domain;
-    unsigned long cr4;
-
-    cr4 = v->arch.pv_vcpu.ctrlreg[4] & ~X86_CR4_DE;
-    cr4 |= mmu_cr4_features & (X86_CR4_PSE | X86_CR4_SMEP | X86_CR4_SMAP |
-                               X86_CR4_OSXSAVE | X86_CR4_FSGSBASE);
-
-    if ( d->arch.pv_domain.pcid )
-        cr4 |= X86_CR4_PCIDE;
-    else if ( !d->arch.pv_domain.xpti )
-        cr4 |= X86_CR4_PGE;
-
-    cr4 |= d->arch.vtsc ? X86_CR4_TSD : 0;
-
-    return cr4;
-}
-
 void write_ptbase(struct vcpu *v)
 {
     struct cpu_info *cpu_info = get_cpu_info();
     unsigned long new_cr4;
 
     new_cr4 = (is_pv_vcpu(v) && !is_idle_vcpu(v))
-              ? pv_guest_cr4_to_real_cr4(v)
-              : ((read_cr4() & ~(X86_CR4_PCIDE | X86_CR4_TSD)) | X86_CR4_PGE);
+              ? pv_make_cr4(v) : mmu_cr4_features;
 
     if ( is_pv_vcpu(v) && v->domain->arch.pv_domain.xpti )
     {
@@ -550,8 +546,6 @@ void write_ptbase(struct vcpu *v)
         switch_cr3_cr4(v->arch.cr3, new_cr4);
         cpu_info->pv_cr3 = 0;
     }
-
-    ASSERT(is_pv_vcpu(v) || read_cr4() == mmu_cr4_features);
 }
 
 /*
@@ -1110,7 +1104,7 @@ get_page_from_l1e(
 define_get_linear_pagetable(l2);
 static int
 get_page_from_l2e(
-    l2_pgentry_t l2e, unsigned long pfn, struct domain *d)
+    l2_pgentry_t l2e, unsigned long pfn, struct domain *d, int partial)
 {
     unsigned long mfn = l2e_get_pfn(l2e);
     int rc;
@@ -1125,7 +1119,8 @@ get_page_from_l2e(
         return -EINVAL;
     }
 
-    rc = get_page_and_type_from_mfn(_mfn(mfn), PGT_l1_page_table, d, 0, 0);
+    rc = get_page_and_type_from_mfn(_mfn(mfn), PGT_l1_page_table, d,
+                                    partial, false);
     if ( unlikely(rc == -EINVAL) && get_l2_linear_pagetable(l2e, pfn, d) )
         rc = 0;
 
@@ -1279,8 +1274,11 @@ void put_page_from_l1e(l1_pgentry_t l1e, struct domain *l1e_owner)
  * NB. Virtual address 'l2e' maps to a machine address within frame 'pfn'.
  * Note also that this automatically deals correctly with linear p.t.'s.
  */
-static int put_page_from_l2e(l2_pgentry_t l2e, unsigned long pfn)
+static int put_page_from_l2e(l2_pgentry_t l2e, unsigned long pfn,
+                             int partial, bool defer)
 {
+    int rc = 0;
+
     if ( !(l2e_get_flags(l2e) & _PAGE_PRESENT) || (l2e_get_pfn(l2e) == pfn) )
         return 1;
 
@@ -1295,13 +1293,27 @@ static int put_page_from_l2e(l2_pgentry_t l2e, unsigned long pfn)
     else
     {
         struct page_info *pg = l2e_get_page(l2e);
-        int rc = _put_page_type(pg, false, mfn_to_page(_mfn(pfn)));
+        struct page_info *ptpg = mfn_to_page(_mfn(pfn));
 
-        ASSERT(!rc);
-        put_page(pg);
+        if ( unlikely(partial > 0) )
+        {
+            ASSERT(!defer);
+            rc = _put_page_type(pg, true, ptpg);
+        }
+        else if ( defer )
+        {
+            current->arch.old_guest_ptpg = ptpg;
+            current->arch.old_guest_table = pg;
+        }
+        else
+        {
+            rc = _put_page_type(pg, true, ptpg);
+            if ( likely(!rc) )
+                put_page(pg);
+        }
     }
 
-    return 0;
+    return rc;
 }
 
 static int put_page_from_l3e(l3_pgentry_t l3e, unsigned long pfn,
@@ -1471,11 +1483,12 @@ static int alloc_l2_table(struct page_info *page, unsigned long type)
     unsigned long  pfn = mfn_x(page_to_mfn(page));
     l2_pgentry_t  *pl2e;
     unsigned int   i;
-    int            rc = 0;
+    int            rc = 0, partial = page->partial_pte;
 
     pl2e = map_domain_page(_mfn(pfn));
 
-    for ( i = page->nr_validated_ptes; i < L2_PAGETABLE_ENTRIES; i++ )
+    for ( i = page->nr_validated_ptes; i < L2_PAGETABLE_ENTRIES;
+          i++, partial = 0 )
     {
         if ( i > page->nr_validated_ptes && hypercall_preempt_check() )
         {
@@ -1485,23 +1498,33 @@ static int alloc_l2_table(struct page_info *page, unsigned long type)
         }
 
         if ( !is_guest_l2_slot(d, type, i) ||
-             (rc = get_page_from_l2e(pl2e[i], pfn, d)) > 0 )
+             (rc = get_page_from_l2e(pl2e[i], pfn, d, partial)) > 0 )
             continue;
 
-        if ( unlikely(rc == -ERESTART) )
+        if ( rc == -ERESTART )
         {
             page->nr_validated_ptes = i;
-            break;
+            page->partial_pte = partial ?: 1;
         }
-
-        if ( rc < 0 )
+        else if ( rc == -EINTR && i )
+        {
+            page->nr_validated_ptes = i;
+            page->partial_pte = 0;
+            rc = -ERESTART;
+        }
+        else if ( rc < 0 && rc != -EINTR )
         {
             gdprintk(XENLOG_WARNING, "Failure in alloc_l2_table: slot %#x\n", i);
-            while ( i-- > 0 )
-                if ( is_guest_l2_slot(d, type, i) )
-                    put_page_from_l2e(pl2e[i], pfn);
-            break;
+            if ( i )
+            {
+                page->nr_validated_ptes = i;
+                page->partial_pte = 0;
+                current->arch.old_guest_ptpg = NULL;
+                current->arch.old_guest_table = page;
+            }
         }
+        if ( rc < 0 )
+            break;
 
         pl2e[i] = adjust_guest_l2e(pl2e[i], d);
     }
@@ -1536,6 +1559,13 @@ static int alloc_l3_table(struct page_info *page)
     for ( i = page->nr_validated_ptes; i < L3_PAGETABLE_ENTRIES;
           i++, partial = 0 )
     {
+        if ( i > page->nr_validated_ptes && hypercall_preempt_check() )
+        {
+            page->nr_validated_ptes = i;
+            rc = -ERESTART;
+            break;
+        }
+
         if ( is_pv_32bit_domain(d) && (i == 3) )
         {
             if ( !(l3e_get_flags(pl3e[i]) & _PAGE_PRESENT) ||
@@ -1781,28 +1811,50 @@ static int free_l2_table(struct page_info *page)
     struct domain *d = page_get_owner(page);
     unsigned long pfn = mfn_x(page_to_mfn(page));
     l2_pgentry_t *pl2e;
-    unsigned int  i = page->nr_validated_ptes - 1;
-    int err = 0;
+    int rc = 0, partial = page->partial_pte;
+    unsigned int i = page->nr_validated_ptes - !partial;
 
     pl2e = map_domain_page(_mfn(pfn));
 
-    ASSERT(page->nr_validated_ptes);
-    do {
-        if ( is_guest_l2_slot(d, page->u.inuse.type_info, i) &&
-             put_page_from_l2e(pl2e[i], pfn) == 0 &&
-             i && hypercall_preempt_check() )
+    for ( ; ; )
+    {
+        if ( is_guest_l2_slot(d, page->u.inuse.type_info, i) )
+            rc = put_page_from_l2e(pl2e[i], pfn, partial, false);
+        if ( rc < 0 )
+            break;
+
+        partial = 0;
+
+        if ( !i-- )
+            break;
+
+        if ( hypercall_preempt_check() )
         {
-           page->nr_validated_ptes = i;
-           err = -ERESTART;
+            rc = -EINTR;
+            break;
         }
-    } while ( !err && i-- );
+    }
 
     unmap_domain_page(pl2e);
 
-    if ( !err )
+    if ( rc >= 0 )
+    {
         page->u.inuse.type_info &= ~PGT_pae_xen_l2;
+        rc = 0;
+    }
+    else if ( rc == -ERESTART )
+    {
+        page->nr_validated_ptes = i;
+        page->partial_pte = partial ?: -1;
+    }
+    else if ( rc == -EINTR && i < L2_PAGETABLE_ENTRIES - 1 )
+    {
+        page->nr_validated_ptes = i + 1;
+        page->partial_pte = 0;
+        rc = -ERESTART;
+    }
 
-    return err;
+    return rc;
 }
 
 static int free_l3_table(struct page_info *page)
@@ -1815,15 +1867,25 @@ static int free_l3_table(struct page_info *page)
 
     pl3e = map_domain_page(_mfn(pfn));
 
-    do {
+    for ( ; ; )
+    {
         rc = put_page_from_l3e(pl3e[i], pfn, partial, 0);
         if ( rc < 0 )
             break;
+
         partial = 0;
-        if ( rc > 0 )
-            continue;
-        pl3e[i] = unadjust_guest_l3e(pl3e[i], d);
-    } while ( i-- );
+        if ( rc == 0 )
+            pl3e[i] = unadjust_guest_l3e(pl3e[i], d);
+
+        if ( !i-- )
+            break;
+
+        if ( hypercall_preempt_check() )
+        {
+            rc = -EINTR;
+            break;
+        }
+    }
 
     unmap_domain_page(pl3e);
 
@@ -2122,7 +2184,7 @@ static int mod_l2_entry(l2_pgentry_t *pl2e,
             return -EBUSY;
         }
 
-        if ( unlikely((rc = get_page_from_l2e(nl2e, pfn, d)) < 0) )
+        if ( unlikely((rc = get_page_from_l2e(nl2e, pfn, d, 0)) < 0) )
             return rc;
 
         nl2e = adjust_guest_l2e(nl2e, d);
@@ -2141,7 +2203,8 @@ static int mod_l2_entry(l2_pgentry_t *pl2e,
         return -EBUSY;
     }
 
-    put_page_from_l2e(ol2e, pfn);
+    put_page_from_l2e(ol2e, pfn, 0, true);
+
     return rc;
 }
 
@@ -2275,19 +2338,79 @@ static int mod_l4_entry(l4_pgentry_t *pl4e,
     return rc;
 }
 
-static int cleanup_page_cacheattr(struct page_info *page)
+/*
+ * In the course of a page's use, it may have caused other secondary
+ * mappings to have changed:
+ * - Xen's mappings may have been changed to accomodate the requested
+ *   cache attibutes
+ * - A page may have been put into the IOMMU of a PV guest when it
+ *   gained a writable mapping.
+ *
+ * Now that the page is being freed, clean up these mappings if
+ * appropriate.  NB that at this point the page is still "allocated",
+ * but not "live" (i.e., its refcount is 0), so it's safe to read the
+ * count_info, owner, and type_info without synchronization.
+ */
+static int cleanup_page_mappings(struct page_info *page)
 {
     unsigned int cacheattr =
         (page->count_info & PGC_cacheattr_mask) >> PGC_cacheattr_base;
+    int rc = 0;
+    unsigned long mfn = mfn_x(page_to_mfn(page));
 
-    if ( likely(cacheattr == 0) )
-        return 0;
+    /*
+     * If we've modified xen mappings as a result of guest cache
+     * attributes, restore them to the "normal" state.
+     */
+    if ( unlikely(cacheattr) )
+    {
+        page->count_info &= ~PGC_cacheattr_mask;
 
-    page->count_info &= ~PGC_cacheattr_mask;
+        BUG_ON(is_xen_heap_page(page));
 
-    BUG_ON(is_xen_heap_page(page));
+        rc = update_xen_mappings(mfn, 0);
+    }
 
-    return update_xen_mappings(mfn_x(page_to_mfn(page)), 0);
+    /*
+     * If this may be in a PV domain's IOMMU, remove it.
+     *
+     * NB that writable xenheap pages have their type set and cleared by
+     * implementation-specific code, rather than by get_page_type().  As such:
+     * - They aren't expected to have an IOMMU mapping, and
+     * - We don't necessarily expect the type count to be zero when the final
+     * put_page happens.
+     *
+     * Go ahead and attemp to call iommu_unmap() on xenheap pages anyway, just
+     * in case; but only ASSERT() that the type count is zero and remove the
+     * PGT_writable type for non-xenheap pages.
+     */
+    if ( (page->u.inuse.type_info & PGT_type_mask) == PGT_writable_page )
+    {
+        struct domain *d = page_get_owner(page);
+
+        if ( d && is_pv_domain(d) && unlikely(need_iommu(d)) )
+        {
+            int rc2 = iommu_unmap_page(d, mfn);
+
+            if ( !rc )
+                rc = rc2;
+        }
+
+        if ( likely(!is_xen_heap_page(page)) )
+        {
+            ASSERT((page->u.inuse.type_info &
+                    (PGT_type_mask | PGT_count_mask)) == PGT_writable_page);
+            /*
+             * Clear the type to record the fact that all writable mappings
+             * have been removed.  But if either operation failed, leave
+             * type_info alone.
+             */
+            if ( likely(!rc) )
+                page->u.inuse.type_info &= ~(PGT_type_mask | PGT_count_mask);
+        }
+    }
+
+    return rc;
 }
 
 void put_page(struct page_info *page)
@@ -2303,7 +2426,7 @@ void put_page(struct page_info *page)
 
     if ( unlikely((nx & PGC_count_mask) == 0) )
     {
-        if ( cleanup_page_cacheattr(page) == 0 )
+        if ( !cleanup_page_mappings(page) )
             free_domheap_page(page);
         else
             gdprintk(XENLOG_WARNING,
@@ -2751,6 +2874,13 @@ static int _get_page_type(struct page_info *page, unsigned long type,
                 iommu_ret = iommu_map_page(d, gfn_x(gfn),
                                            mfn_x(page_to_mfn(page)),
                                            IOMMUF_readable|IOMMUF_writable);
+
+            if ( unlikely(iommu_ret) )
+            {
+                _put_page_type(page, false, NULL);
+                rc = iommu_ret;
+                goto out;
+            }
         }
     }
 
@@ -2765,11 +2895,9 @@ static int _get_page_type(struct page_info *page, unsigned long type,
         rc = alloc_page_type(page, type, preemptible);
     }
 
+ out:
     if ( (x & PGT_partial) && !(nx & PGT_partial) )
         put_page(page);
-
-    if ( !rc )
-        rc = iommu_ret;
 
     return rc;
 }
@@ -3966,70 +4094,107 @@ int donate_page(
     return -EINVAL;
 }
 
+/*
+ * Steal page will attempt to remove `page` from domain `d`.  Upon
+ * return, `page` will be in a state similar to the state of a page
+ * returned from alloc_domheap_page() with MEMF_no_owner set:
+ * - refcount 0
+ * - type count cleared
+ * - owner NULL
+ * - page caching attributes cleaned up
+ * - removed from the domain's page_list
+ *
+ * If MEMF_no_refcount is not set, the domain's tot_pages will be
+ * adjusted.  If this results in the page count falling to 0,
+ * put_domain() will be called.
+ *
+ * The caller should either call free_domheap_page() to free the
+ * page, or assign_pages() to put it back on some domain's page list.
+ */
 int steal_page(
     struct domain *d, struct page_info *page, unsigned int memflags)
 {
     unsigned long x, y;
     bool drop_dom_ref = false;
-    const struct domain *owner = dom_xen;
+    const struct domain *owner;
+    int rc;
 
     if ( paging_mode_external(d) )
         return -EOPNOTSUPP;
 
-    spin_lock(&d->page_alloc_lock);
-
-    if ( is_xen_heap_page(page) || ((owner = page_get_owner(page)) != d) )
+    /* Grab a reference to make sure the page doesn't change under our feet */
+    rc = -EINVAL;
+    if ( !(owner = page_get_owner_and_reference(page)) )
         goto fail;
 
+    if ( owner != d || is_xen_heap_page(page) )
+        goto fail_put;
+
     /*
-     * We require there is just one reference (PGC_allocated). We temporarily
-     * drop this reference now so that we can safely swizzle the owner.
+     * We require there are exactly two references -- the one we just
+     * took, and PGC_allocated. We temporarily drop both these
+     * references so that the page becomes effectively non-"live" for
+     * the domain.
      */
     y = page->count_info;
     do {
         x = y;
-        if ( (x & (PGC_count_mask|PGC_allocated)) != (1 | PGC_allocated) )
-            goto fail;
-        y = cmpxchg(&page->count_info, x, x & ~PGC_count_mask);
+        if ( (x & (PGC_count_mask|PGC_allocated)) != (2 | PGC_allocated) )
+            goto fail_put;
+        y = cmpxchg(&page->count_info, x, x & ~(PGC_count_mask|PGC_allocated));
     } while ( y != x );
 
     /*
-     * With the sole reference dropped temporarily, no-one can update type
-     * information. Type count also needs to be zero in this case, but e.g.
-     * PGT_seg_desc_page may still have PGT_validated set, which we need to
-     * clear before transferring ownership (as validation criteria vary
-     * depending on domain type).
+     * NB this is safe even if the page ends up being given back to
+     * the domain, because the count is zero: subsequent mappings will
+     * cause the cache attributes to be re-instated inside
+     * get_page_from_l1e(), or the page to be added back to the IOMMU
+     * upon the type changing to PGT_writeable, as appropriate.
      */
+    if ( (rc = cleanup_page_mappings(page)) )
+    {
+        /*
+         * Couldn't fixup Xen's mappings; put things the way we found
+         * it and return an error
+         */
+        page->count_info |= PGC_allocated | 1;
+        goto fail;
+    }
+
+    /*
+     * With the reference count now zero, nobody can grab references
+     * to do anything else with the page.  Return the page to a state
+     * that it might be upon return from alloc_domheap_pages with
+     * MEMF_no_owner set.
+     */
+    spin_lock(&d->page_alloc_lock);
+
     BUG_ON(page->u.inuse.type_info & (PGT_count_mask | PGT_locked |
                                       PGT_pinned));
     page->u.inuse.type_info = 0;
-
-    /* Swizzle the owner then reinstate the PGC_allocated reference. */
     page_set_owner(page, NULL);
-    y = page->count_info;
-    do {
-        x = y;
-        BUG_ON((x & (PGC_count_mask|PGC_allocated)) != PGC_allocated);
-    } while ( (y = cmpxchg(&page->count_info, x, x | 1)) != x );
+    page_list_del(page, &d->page_list);
 
     /* Unlink from original owner. */
     if ( !(memflags & MEMF_no_refcount) && !domain_adjust_tot_pages(d, -1) )
         drop_dom_ref = true;
-    page_list_del(page, &d->page_list);
 
     spin_unlock(&d->page_alloc_lock);
+
     if ( unlikely(drop_dom_ref) )
         put_domain(d);
+
     return 0;
 
+ fail_put:
+    put_page(page);
  fail:
-    spin_unlock(&d->page_alloc_lock);
     gdprintk(XENLOG_WARNING, "Bad steal mfn %" PRI_mfn
              " from d%d (owner d%d) caf=%08lx taf=%" PRtype_info "\n",
              mfn_x(page_to_mfn(page)), d->domain_id,
              owner ? owner->domain_id : DOMID_INVALID,
              page->count_info, page->u.inuse.type_info);
-    return -EINVAL;
+    return rc;
 }
 
 static int __do_update_va_mapping(
