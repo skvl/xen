@@ -1,6 +1,25 @@
-xen (4.11.1+58-g3b062f5040-1) UNRELEASED; urgency=medium
+xen (4.11.1+58-g3b062f5040-1) unstable; urgency=medium
 
-  * Update to new upstream version 4.11.1+58-g3b062f5040.
+  * Update to new upstream version 4.11.1+58-g3b062f5040, which also
+    contains the following security fixes:
+    - Fix: grant table transfer issues on large hosts
+    XSA-284 (no CVE yet)
+    - Fix: race with pass-through device hotplug
+    XSA-285 (no CVE yet)
+    - Fix: x86: steal_page violates page_struct access discipline
+    XSA-287 (no CVE yet)
+    - Fix: x86: Inconsistent PV IOMMU discipline
+    XSA-288 (no CVE yet)
+    - Fix: missing preemption in x86 PV page table unvalidation
+    XSA-290 (no CVE yet)
+    - Fix: x86/PV: page type reference counting issue with failed IOMMU update
+    XSA-291 (no CVE yet)
+    - Fix: x86: insufficient TLB flushing when using PCID
+    XSA-292 (no CVE yet)
+    - Fix: x86: PV kernel context switch corruption
+    XSA-293 (no CVE yet)
+    - Fix: x86 shadow: Insufficient TLB flushing when using PCID
+    XSA-294 (no CVE yet)
 
  -- Hans van Kranenburg <hans@knorrie.org>  Mon, 13 May 2019 21:54:56 +0200
 
