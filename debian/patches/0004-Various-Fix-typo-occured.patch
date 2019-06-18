@@ -1,0 +1,120 @@
+From: Ian Jackson <ian.jackson@citrix.com>
+Date: Wed, 3 Oct 2018 18:55:36 +0100
+Subject: Various: Fix typo `occured'
+
+Signed-off-by: Ian Jackson <ian.jackson@citrix.com>
+---
+ tools/xl/xl_flask.c                | 2 +-
+ xen/arch/arm/arm64/lib/memcmp.S    | 2 +-
+ xen/arch/x86/hvm/hvm.c             | 2 +-
+ xen/arch/x86/hvm/svm/intr.c        | 2 +-
+ xen/drivers/passthrough/arm/smmu.c | 2 +-
+ xen/include/efi/efiprot.h          | 2 +-
+ xen/include/public/xen.h           | 2 +-
+ xen/include/xen/sched.h            | 2 +-
+ 8 files changed, 8 insertions(+), 8 deletions(-)
+
+diff --git a/tools/xl/xl_flask.c b/tools/xl/xl_flask.c
+index 5237697..6b11f09 100644
+--- a/tools/xl/xl_flask.c
++++ b/tools/xl/xl_flask.c
+@@ -75,7 +75,7 @@ int main_setenforce(int argc, char **argv)
+             fprintf(stderr, "Flask XSM disabled\n");
+         }
+         else
+-            fprintf(stderr, "error occured while setting enforcing mode (%i)\n", ret);
++            fprintf(stderr, "error occurred while setting enforcing mode (%i)\n", ret);
+     }
+ 
+     return ret;
+diff --git a/xen/arch/arm/arm64/lib/memcmp.S b/xen/arch/arm/arm64/lib/memcmp.S
+index 2eb8156..87c2537 100644
+--- a/xen/arch/arm/arm64/lib/memcmp.S
++++ b/xen/arch/arm/arm64/lib/memcmp.S
+@@ -210,7 +210,7 @@ CPU_LE( lsr	tmp2, tmp2, tmp1 )
+ .Lunequal_proc:
+ 	cbz	diff, .Lremain8
+ 
+-/*There is differnence occured in the latest comparison.*/
++/*There is differnence occurred in the latest comparison.*/
+ .Lnot_limit:
+ /*
+ * For little endian,reverse the low significant equal bits into MSB,then
+diff --git a/xen/arch/x86/hvm/hvm.c b/xen/arch/x86/hvm/hvm.c
+index 2d3c55a..73d8769 100644
+--- a/xen/arch/x86/hvm/hvm.c
++++ b/xen/arch/x86/hvm/hvm.c
+@@ -1736,7 +1736,7 @@ int hvm_hap_nested_page_fault(paddr_t gpa, unsigned long gla,
+         case NESTEDHVM_PAGEFAULT_RETRY:
+             return 1;
+         case NESTEDHVM_PAGEFAULT_L1_ERROR:
+-            /* An error occured while translating gpa from
++            /* An error occurred while translating gpa from
+              * l2 guest address to l1 guest address. */
+             return 0;
+         case NESTEDHVM_PAGEFAULT_INJECT:
+diff --git a/xen/arch/x86/hvm/svm/intr.c b/xen/arch/x86/hvm/svm/intr.c
+index 8511ff0..b000cdf 100644
+--- a/xen/arch/x86/hvm/svm/intr.c
++++ b/xen/arch/x86/hvm/svm/intr.c
+@@ -159,7 +159,7 @@ void svm_intr_assist(void)
+             int rc;
+ 
+             /* l2 guest was running when an interrupt for
+-             * the l1 guest occured.
++             * the l1 guest occurred.
+              */
+             rc = nestedsvm_vcpu_interrupt(v, intack);
+             switch (rc) {
+diff --git a/xen/drivers/passthrough/arm/smmu.c b/xen/drivers/passthrough/arm/smmu.c
+index 74c09b0..4853cf1 100644
+--- a/xen/drivers/passthrough/arm/smmu.c
++++ b/xen/drivers/passthrough/arm/smmu.c
+@@ -2278,7 +2278,7 @@ MODULE_DEVICE_TABLE(of, arm_smmu_of_match);
+ 
+ /*
+  * Xen: We don't have refcount for allocated memory so manually free memory
+- * when an error occured.
++ * when an error occurred.
+  */
+ static int arm_smmu_device_dt_probe(struct platform_device *pdev)
+ {
+diff --git a/xen/include/efi/efiprot.h b/xen/include/efi/efiprot.h
+index 05d3afb..8cf04df 100644
+--- a/xen/include/efi/efiprot.h
++++ b/xen/include/efi/efiprot.h
+@@ -691,7 +691,7 @@ typedef enum {
+ 
+   @retval EFI_SUCCESS           The Blt operation completed.
+   @retval EFI_INVALID_PARAMETER BltOperation is not valid.
+-  @retval EFI_DEVICE_ERROR      A hardware error occured writting to the video buffer.
++  @retval EFI_DEVICE_ERROR      A hardware error occurred writting to the video buffer.
+ 
+ **/
+ typedef
+diff --git a/xen/include/public/xen.h b/xen/include/public/xen.h
+index fb1df8f..68ee098 100644
+--- a/xen/include/public/xen.h
++++ b/xen/include/public/xen.h
+@@ -177,7 +177,7 @@ DEFINE_XEN_GUEST_HANDLE(xen_ulong_t);
+ #define VIRQ_XENOPROF   7  /* V. XenOprofile interrupt: new sample available */
+ #define VIRQ_CON_RING   8  /* G. (DOM0) Bytes received on console            */
+ #define VIRQ_PCPU_STATE 9  /* G. (DOM0) PCPU state changed                   */
+-#define VIRQ_MEM_EVENT  10 /* G. (DOM0) A memory event has occured           */
++#define VIRQ_MEM_EVENT  10 /* G. (DOM0) A memory event has occurred          */
+ #define VIRQ_XC_RESERVED 11 /* G. Reserved for XenClient                     */
+ #define VIRQ_ENOMEM     12 /* G. (DOM0) Low on heap memory       */
+ #define VIRQ_XENPMU     13 /* V.  PMC interrupt                              */
+diff --git a/xen/include/xen/sched.h b/xen/include/xen/sched.h
+index e79d5a3..3a65d08 100644
+--- a/xen/include/xen/sched.h
++++ b/xen/include/xen/sched.h
+@@ -627,7 +627,7 @@ void noreturn __domain_crash_synchronous(void);
+ 
+ /*
+  * Called from assembly code, with an optional address to help indicate why
+- * the crash occured.  If addr is 0, look up address from last extable
++ * the crash occurred.  If addr is 0, look up address from last extable
+  * redirection.
+  */
+ void noreturn asm_domain_crash_synchronous(unsigned long addr);

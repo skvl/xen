@@ -1,0 +1,25 @@
+From: Bastian Blank <waldi@debian.org>
+Date: Sat, 5 Jul 2014 11:46:50 +0200
+Subject: tools/xenstat: Fix shared library version
+
+libxenstat does not have a stable ABI.  Set its version to the current
+Xen release version.
+
+Signed-off-by: Ian Jackson <ian.jackson@citrix.com>
+---
+ tools/xenstat/libxenstat/Makefile | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/tools/xenstat/libxenstat/Makefile b/tools/xenstat/libxenstat/Makefile
+index 8979fa1..8c6ddf8 100644
+--- a/tools/xenstat/libxenstat/Makefile
++++ b/tools/xenstat/libxenstat/Makefile
+@@ -18,7 +18,7 @@ include $(XEN_ROOT)/tools/Rules.mk
+ LDCONFIG=ldconfig
+ MAKE_LINK=ln -sf
+ 
+-MAJOR=0
++MAJOR=4.11
+ MINOR=0
+ 
+ LIB=src/libxenstat.a
