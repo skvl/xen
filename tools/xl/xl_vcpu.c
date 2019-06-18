@@ -144,13 +144,13 @@ static void vcpulist(int argc, char **argv)
         }
 
         for (i = 0; i<nb_domain; i++)
-            print_domain_vcpuinfo(dominfo[i].domid, physinfo.nr_cpus);
+            print_domain_vcpuinfo(dominfo[i].domid, physinfo.max_cpu_id + 1);
 
         libxl_dominfo_list_free(dominfo, nb_domain);
     } else {
         for (; argc > 0; ++argv, --argc) {
             uint32_t domid = find_domain(*argv);
-            print_domain_vcpuinfo(domid, physinfo.nr_cpus);
+            print_domain_vcpuinfo(domid, physinfo.max_cpu_id + 1);
         }
     }
   vcpulist_out:
@@ -283,19 +283,15 @@ int main_vcpupin(int argc, char **argv)
 
     /* Only hard affinity matters here */
     if (!ignore_masks) {
-        libxl_domain_config d_config;
+        libxl_dominfo dominfo;
 
-        libxl_domain_config_init(&d_config);
-        rc = libxl_retrieve_domain_configuration(ctx, domid, &d_config);
-        if (rc) {
-            fprintf(stderr, "Could not retrieve domain configuration\n");
-            libxl_domain_config_dispose(&d_config);
+        if (libxl_domain_info(ctx, &dominfo, domid)) {
+            fprintf(stderr, "Could not get domain info\n");
             goto out;
         }
 
-        apply_global_affinity_masks(d_config.b_info.type, hard, 1);
-
-        libxl_domain_config_dispose(&d_config);
+        /* HVM and PVH domains use the same global affinity mask */
+        apply_global_affinity_masks(dominfo.domain_type, hard, 1);
     }
 
     if (force) {
