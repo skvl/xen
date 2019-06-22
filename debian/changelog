@@ -1,3 +1,11 @@
+xen (4.11.1+92-g6c33308a8d-2) unstable; urgency=high
+
+  * Mention MDS and the need for updated microcode and disabling
+    hyper-threading in NEWS.
+  * Mention the ucode=scan option in the grub.d/xen documentation.
+
+ -- Hans van Kranenburg <hans@knorrie.org>  Sat, 22 Jun 2019 11:15:08 +0200
+
 xen (4.11.1+92-g6c33308a8d-1) unstable; urgency=high
 
   * Update to new upstream version 4.11.1+92-g6c33308a8d, which also
