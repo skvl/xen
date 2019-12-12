@@ -1770,6 +1770,18 @@ static void init_heap_pages(
     bool idle_scrub = false;
 
     /*
+     * Keep MFN 0 away from the buddy allocator to avoid crossing zone
+     * boundary when merging two buddies.
+     */
+    if ( !mfn_x(page_to_mfn(pg)) )
+    {
+        if ( nr_pages-- <= 1 )
+            return;
+        pg++;
+    }
+
+
+    /*
      * Some pages may not go through the boot allocator (e.g reserved
      * memory at boot but released just after --- kernel, initramfs,
      * etc.).
@@ -2279,7 +2291,7 @@ int assign_pages(
     for ( i = 0; i < (1 << order); i++ )
     {
         ASSERT(page_get_owner(&pg[i]) == NULL);
-        ASSERT((pg[i].count_info & ~(PGC_allocated | 1)) == 0);
+        ASSERT(!pg[i].count_info);
         page_set_owner(&pg[i], d);
         smp_wmb(); /* Domain pointer must be visible before updating refcnt. */
         pg[i].count_info = PGC_allocated | 1;

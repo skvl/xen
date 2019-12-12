@@ -89,7 +89,6 @@
 #define cpu_has_xsaves          boot_cpu_has(X86_FEATURE_XSAVES)
 
 /* CPUID level 0x00000007:0.ebx */
-#define cpu_has_fsgsbase        boot_cpu_has(X86_FEATURE_FSGSBASE)
 #define cpu_has_bmi1            boot_cpu_has(X86_FEATURE_BMI1)
 #define cpu_has_hle             boot_cpu_has(X86_FEATURE_HLE)
 #define cpu_has_avx2            boot_cpu_has(X86_FEATURE_AVX2)
@@ -112,6 +111,9 @@
 
 /* CPUID level 0x80000007.edx */
 #define cpu_has_itsc            boot_cpu_has(X86_FEATURE_ITSC)
+
+/* CPUID level 0x00000007:0.edx */
+#define cpu_has_tsx_force_abort boot_cpu_has(X86_FEATURE_TSX_FORCE_ABORT)
 
 /* Synthesized. */
 #define cpu_has_arch_perfmon    boot_cpu_has(X86_FEATURE_ARCH_PERFMON)

@@ -33,6 +33,7 @@
 #include <asm/hypercall.h>
 #include <asm/mc146818rtc.h>
 #include <asm/p2m.h>
+#include <asm/pv/domain.h>
 #include <asm/pv/traps.h>
 #include <asm/shared.h>
 #include <asm/traps.h>
@@ -194,7 +195,7 @@ static bool pci_cfg_ok(struct domain *currd, unsigned int start,
     /* AMD extended configuration space access? */
     if ( CF8_ADDR_HI(currd->arch.pci_cf8) &&
          boot_cpu_data.x86_vendor == X86_VENDOR_AMD &&
-         boot_cpu_data.x86 >= 0x10 && boot_cpu_data.x86 <= 0x17 )
+         boot_cpu_data.x86 >= 0x10 && boot_cpu_data.x86 < 0x17 )
     {
         uint64_t msr_val;
 
@@ -779,8 +780,19 @@ static int write_cr(unsigned int reg, unsigned long val,
     }
 
     case 4: /* Write CR4 */
-        curr->arch.pv.ctrlreg[4] = pv_guest_cr4_fixup(curr, val);
-        write_cr4(pv_guest_cr4_to_real_cr4(curr));
+        /*
+         * If this write will disable FSGSBASE, refresh Xen's idea of the
+         * guest bases now that they can no longer change.
+         */
+        if ( (curr->arch.pv.ctrlreg[4] & X86_CR4_FSGSBASE) &&
+             !(val & X86_CR4_FSGSBASE) )
+        {
+            curr->arch.pv.fs_base = __rdfsbase();
+            curr->arch.pv.gs_base_kernel = __rdgsbase();
+        }
+
+        curr->arch.pv.ctrlreg[4] = pv_fixup_guest_cr4(curr, val);
+        write_cr4(pv_make_cr4(curr));
         ctxt_switch_levelling(curr);
         return X86EMUL_OKAY;
     }
@@ -827,14 +839,15 @@ static int read_msr(unsigned int reg, uint64_t *val,
     case MSR_FS_BASE:
         if ( is_pv_32bit_domain(currd) )
             break;
-        *val = cpu_has_fsgsbase ? __rdfsbase() : curr->arch.pv.fs_base;
+        *val = (read_cr4() & X86_CR4_FSGSBASE) ? __rdfsbase()
+                                               : curr->arch.pv.fs_base;
         return X86EMUL_OKAY;
 
     case MSR_GS_BASE:
         if ( is_pv_32bit_domain(currd) )
             break;
-        *val = cpu_has_fsgsbase ? __rdgsbase()
-                                : curr->arch.pv.gs_base_kernel;
+        *val = (read_cr4() & X86_CR4_FSGSBASE) ? __rdgsbase()
+                                               : curr->arch.pv.gs_base_kernel;
         return X86EMUL_OKAY;
 
     case MSR_SHADOW_GS_BASE:
@@ -880,16 +893,16 @@ static int read_msr(unsigned int reg, uint64_t *val,
         *val = 0;
         return X86EMUL_OKAY;
 
-    case MSR_IA32_UCODE_REV:
-        BUILD_BUG_ON(MSR_IA32_UCODE_REV != MSR_AMD_PATCHLEVEL);
-        if ( boot_cpu_data.x86_vendor == X86_VENDOR_INTEL )
-        {
-            if ( wrmsr_safe(MSR_IA32_UCODE_REV, 0) )
-                break;
-            /* As documented in the SDM: Do a CPUID 1 here */
-            cpuid_eax(1);
-        }
-        goto normal;
+    case MSR_FAM10H_MMIO_CONF_BASE:
+        if ( boot_cpu_data.x86_vendor != X86_VENDOR_AMD ||
+             boot_cpu_data.x86 < 0x10 || boot_cpu_data.x86 >= 0x17 )
+            break;
+        /* fall through */
+    case MSR_AMD64_NB_CFG:
+        if ( !is_hardware_domain(currd) || !is_pinned_vcpu(curr) )
+            goto normal;
+        *val = 0;
+        return X86EMUL_OKAY;
 
     case MSR_IA32_MISC_ENABLE:
         rdmsrl(reg, *val);
@@ -1001,9 +1014,6 @@ static int write_msr(unsigned int reg, uint64_t val,
         break;
 
     case MSR_AMD64_NB_CFG:
-        if ( boot_cpu_data.x86_vendor != X86_VENDOR_AMD ||
-             boot_cpu_data.x86 < 0x10 || boot_cpu_data.x86 > 0x17 )
-            break;
         if ( !is_hardware_domain(currd) || !is_pinned_vcpu(curr) )
             return X86EMUL_OKAY;
         if ( (rdmsr_safe(MSR_AMD64_NB_CFG, temp) != 0) ||
@@ -1015,7 +1025,7 @@ static int write_msr(unsigned int reg, uint64_t val,
 
     case MSR_FAM10H_MMIO_CONF_BASE:
         if ( boot_cpu_data.x86_vendor != X86_VENDOR_AMD ||
-             boot_cpu_data.x86 < 0x10 || boot_cpu_data.x86 > 0x17 )
+             boot_cpu_data.x86 < 0x10 || boot_cpu_data.x86 >= 0x17 )
             break;
         if ( !is_hardware_domain(currd) || !is_pinned_vcpu(curr) )
             return X86EMUL_OKAY;
@@ -1033,17 +1043,6 @@ static int write_msr(unsigned int reg, uint64_t val,
         if ( wrmsr_safe(MSR_FAM10H_MMIO_CONF_BASE, val) == 0 )
             return X86EMUL_OKAY;
         break;
-
-    case MSR_IA32_UCODE_REV:
-        if ( boot_cpu_data.x86_vendor != X86_VENDOR_INTEL )
-            break;
-        if ( !is_hardware_domain(currd) || !is_pinned_vcpu(curr) )
-            return X86EMUL_OKAY;
-        if ( rdmsr_safe(reg, temp) )
-            break;
-        if ( val )
-            goto invalid;
-        return X86EMUL_OKAY;
 
     case MSR_IA32_MISC_ENABLE:
         rdmsrl(reg, temp);

@@ -1049,8 +1049,12 @@ static void __init efi_set_gop_mode(EFI_GRAPHICS_OUTPUT_PROTOCOL *gop, UINTN gop
     EFI_STATUS status;
     UINTN info_size;
 
-    /* Set graphics mode. */
-    if ( gop_mode < gop->Mode->MaxMode && gop_mode != gop->Mode->Mode )
+    /*
+     * Set graphics mode to a selected one and reset it if we didn't come
+     * directly from EFI loader as video settings might have been already modified.
+     */
+    if ( gop_mode < gop->Mode->MaxMode &&
+         (gop_mode != gop->Mode->Mode || !efi_enabled(EFI_LOADER)) )
         gop->SetMode(gop, gop_mode);
 
     /* Get graphics and frame buffer info. */
@@ -1114,7 +1118,7 @@ static int __init __maybe_unused set_color(u32 mask, int bpp, u8 *pos, u8 *sz)
        return -EINVAL;
    for ( *pos = 0; !(mask & 1); ++*pos )
        mask >>= 1;
-   for ( *sz = 0; mask & 1; ++sz)
+   for ( *sz = 0; mask & 1; ++*sz)
        mask >>= 1;
    if ( mask )
        return -EINVAL;
@@ -1405,9 +1409,9 @@ static int __init parse_efi_param(const char *s)
         }
         else if ( (ss - s) > 5 && !memcmp(s, "attr=", 5) )
         {
-            if ( cmdline_strcmp(s + 5, "uc") )
+            if ( !cmdline_strcmp(s + 5, "uc") )
                 efi_map_uc = true;
-            else if ( cmdline_strcmp(s + 5, "no") )
+            else if ( !cmdline_strcmp(s + 5, "no") )
                 efi_map_uc = false;
             else
                 rc = -EINVAL;

@@ -429,6 +429,8 @@ static void hvm_set_guest_tsc_msr(struct vcpu *v, u64 guest_tsc)
 
     hvm_set_guest_tsc(v, guest_tsc);
     v->arch.hvm.msr_tsc_adjust += v->arch.hvm.cache_tsc_offset - tsc_offset;
+    if ( v == current )
+        update_vcpu_system_time(v);
 }
 
 static void hvm_set_guest_tsc_adjust(struct vcpu *v, u64 tsc_adjust)
@@ -436,6 +438,8 @@ static void hvm_set_guest_tsc_adjust(struct vcpu *v, u64 tsc_adjust)
     v->arch.hvm.cache_tsc_offset += tsc_adjust - v->arch.hvm.msr_tsc_adjust;
     hvm_set_tsc_offset(v, v->arch.hvm.cache_tsc_offset, 0);
     v->arch.hvm.msr_tsc_adjust = tsc_adjust;
+    if ( v == current )
+        update_vcpu_system_time(v);
 }
 
 u64 hvm_get_guest_tsc_fixed(struct vcpu *v, uint64_t at_tsc)
@@ -1627,7 +1631,7 @@ void hvm_triple_fault(void)
     struct domain *d = v->domain;
     u8 reason = d->arch.hvm.params[HVM_PARAM_TRIPLE_FAULT_REASON];
 
-    gprintk(XENLOG_INFO,
+    gprintk(XENLOG_ERR,
             "Triple fault - invoking HVM shutdown action %d\n",
             reason);
     vcpu_show_execution_state(v);
@@ -1688,6 +1692,7 @@ int hvm_hap_nested_page_fault(paddr_t gpa, unsigned long gla,
     int sharing_enomem = 0;
     vm_event_request_t *req_ptr = NULL;
     bool_t ap2m_active, sync = 0;
+    unsigned int page_order;
 
     /* On Nested Virtualization, walk the guest page table.
      * If this succeeds, all is fine.
@@ -1754,19 +1759,24 @@ int hvm_hap_nested_page_fault(paddr_t gpa, unsigned long gla,
     hostp2m = p2m_get_hostp2m(currd);
     mfn = get_gfn_type_access(hostp2m, gfn, &p2mt, &p2ma,
                               P2M_ALLOC | (npfec.write_access ? P2M_UNSHARE : 0),
-                              NULL);
+                              &page_order);
 
     if ( ap2m_active )
     {
-        if ( p2m_altp2m_lazy_copy(curr, gpa, gla, npfec, &p2m) )
-        {
-            /* entry was lazily copied from host -- retry */
-            __put_gfn(hostp2m, gfn);
-            rc = 1;
-            goto out;
-        }
+        p2m = p2m_get_altp2m(curr);
 
-        mfn = get_gfn_type_access(p2m, gfn, &p2mt, &p2ma, 0, NULL);
+        /*
+         * Get the altp2m entry if present; or if not, propagate from
+         * the host p2m.  NB that this returns with gfn locked in the
+         * altp2m.
+         */
+        if ( p2m_altp2m_get_or_propagate(p2m, gfn, &mfn, &p2mt,
+                                         &p2ma, page_order) )
+        {
+            /* Entry was copied from host -- retry fault */
+            rc = 1;
+            goto out_put_gfn;
+        }
     }
     else
         p2m = hostp2m;
@@ -1806,6 +1816,24 @@ int hvm_hap_nested_page_fault(paddr_t gpa, unsigned long gla,
         case p2m_access_rwx:
             violation = 0;
             break;
+        }
+
+        /*
+         * Workaround for XSA-304 / CVE-2018-12207.  If we take an execution
+         * fault against a non-executable superpage, shatter it to regain
+         * execute permissions.
+         */
+        if ( page_order > 0 && npfec.insn_fetch && npfec.present && !violation )
+        {
+            int res = p2m_set_entry(p2m, _gfn(gfn), mfn, PAGE_ORDER_4K,
+                                    p2mt, p2ma);
+
+            if ( res )
+                printk(XENLOG_ERR "Failed to shatter gfn %"PRI_gfn": %d\n",
+                       gfn, res);
+
+            rc = !res;
+            goto out_put_gfn;
         }
 
         if ( violation )
@@ -2869,7 +2897,7 @@ void hvm_prepare_vm86_tss(struct vcpu *v, uint32_t base, uint32_t limit)
 
 void hvm_task_switch(
     uint16_t tss_sel, enum hvm_task_switch_reason taskswitch_reason,
-    int32_t errcode)
+    int32_t errcode, unsigned int insn_len)
 {
     struct vcpu *v = current;
     struct cpu_user_regs *regs = guest_cpu_user_regs();
@@ -2943,7 +2971,7 @@ void hvm_task_switch(
     if ( taskswitch_reason == TSW_iret )
         eflags &= ~X86_EFLAGS_NT;
 
-    tss.eip    = regs->eip;
+    tss.eip    = regs->eip + insn_len;
     tss.eflags = eflags;
     tss.eax    = regs->eax;
     tss.ecx    = regs->ecx;
@@ -3964,45 +3992,71 @@ static void hvm_s3_resume(struct domain *d)
     }
 }
 
-static int hvmop_flush_tlb_all(void)
+bool hvm_flush_vcpu_tlb(bool (*flush_vcpu)(void *ctxt, struct vcpu *v),
+                        void *ctxt)
 {
+    static DEFINE_PER_CPU(cpumask_t, flush_cpumask);
+    cpumask_t *mask = &this_cpu(flush_cpumask);
     struct domain *d = current->domain;
     struct vcpu *v;
 
-    if ( !is_hvm_domain(d) )
-        return -EINVAL;
-
     /* Avoid deadlock if more than one vcpu tries this at the same time. */
     if ( !spin_trylock(&d->hypercall_deadlock_mutex) )
-        return -ERESTART;
+        return false;
 
     /* Pause all other vcpus. */
     for_each_vcpu ( d, v )
-        if ( v != current )
+        if ( v != current && flush_vcpu(ctxt, v) )
             vcpu_pause_nosync(v);
 
     /* Now that all VCPUs are signalled to deschedule, we wait... */
     for_each_vcpu ( d, v )
-        if ( v != current )
+        if ( v != current && flush_vcpu(ctxt, v) )
             while ( !vcpu_runnable(v) && v->is_running )
                 cpu_relax();
 
     /* All other vcpus are paused, safe to unlock now. */
     spin_unlock(&d->hypercall_deadlock_mutex);
 
+    cpumask_clear(mask);
+
     /* Flush paging-mode soft state (e.g., va->gfn cache; PAE PDPE cache). */
     for_each_vcpu ( d, v )
+    {
+        unsigned int cpu;
+
+        if ( !flush_vcpu(ctxt, v) )
+            continue;
+
         paging_update_cr3(v, false);
 
-    /* Flush all dirty TLBs. */
-    flush_tlb_mask(d->dirty_cpumask);
+        cpu = read_atomic(&v->dirty_cpu);
+        if ( is_vcpu_dirty_cpu(cpu) )
+            __cpumask_set_cpu(cpu, mask);
+    }
+
+    /* Flush TLBs on all CPUs with dirty vcpu state. */
+    flush_tlb_mask(mask);
 
     /* Done. */
     for_each_vcpu ( d, v )
-        if ( v != current )
+        if ( v != current && flush_vcpu(ctxt, v) )
             vcpu_unpause(v);
 
-    return 0;
+    return true;
+}
+
+static bool always_flush(void *ctxt, struct vcpu *v)
+{
+    return true;
+}
+
+static int hvmop_flush_tlb_all(void)
+{
+    if ( !is_hvm_domain(current->domain) )
+        return -EINVAL;
+
+    return hvm_flush_vcpu_tlb(always_flush, NULL) ? 0 : -ERESTART;
 }
 
 static int hvmop_set_evtchn_upcall_vector(
@@ -4538,6 +4592,10 @@ static int do_altp2m_op(
             break;
         }
 
+        rc = domain_pause_except_self(d);
+        if ( rc )
+            break;
+
         ostate = d->arch.altp2m_active;
         d->arch.altp2m_active = !!a.u.domain_state.state;
 
@@ -4556,13 +4614,14 @@ static int do_altp2m_op(
             if ( ostate )
                 p2m_flush_altp2m(d);
         }
+
+        domain_unpause_except_self(d);
         break;
     }
 
     case HVMOP_altp2m_vcpu_enable_notify:
     {
         struct vcpu *v;
-        p2m_type_t p2mt;
 
         if ( a.u.enable_notify.pad ||
              a.u.enable_notify.vcpu_id >= d->max_vcpus )
@@ -4579,16 +4638,7 @@ static int do_altp2m_op(
 
         v = d->vcpu[a.u.enable_notify.vcpu_id];
 
-        if ( !gfn_eq(vcpu_altp2m(v).veinfo_gfn, INVALID_GFN) ||
-             mfn_eq(get_gfn_query_unlocked(v->domain,
-                    a.u.enable_notify.gfn, &p2mt), INVALID_MFN) )
-        {
-            rc = -EINVAL;
-            break;
-        }
-
-        vcpu_altp2m(v).veinfo_gfn = _gfn(a.u.enable_notify.gfn);
-        altp2m_vcpu_update_vmfunc_ve(v);
+        rc = altp2m_vcpu_enable_ve(v, _gfn(a.u.enable_notify.gfn));
         break;
     }
 
@@ -4610,12 +4660,7 @@ static int do_altp2m_op(
 
         v = d->vcpu[a.u.enable_notify.vcpu_id];
 
-        /* Already disabled, nothing to do. */
-        if ( gfn_eq(vcpu_altp2m(v).veinfo_gfn, INVALID_GFN) )
-            break;
-
-        vcpu_altp2m(v).veinfo_gfn = INVALID_GFN;
-        altp2m_vcpu_update_vmfunc_ve(v);
+        altp2m_vcpu_disable_ve(v);
         break;
     }
 
@@ -4696,12 +4741,10 @@ static int do_altp2m_op(
         if ( rc > 0 )
         {
             a.u.set_mem_access_multi.opaque = rc;
+            rc = -ERESTART;
             if ( __copy_field_to_guest(guest_handle_cast(arg, xen_hvm_altp2m_op_t),
                                        &a, u.set_mem_access_multi.opaque) )
                 rc = -EFAULT;
-            else
-                rc = hypercall_create_continuation(__HYPERVISOR_hvm_op, "lh",
-                                                   HVMOP_altp2m, arg);
         }
         break;
 
@@ -4820,14 +4863,8 @@ static int compat_altp2m_op(
     switch ( a.cmd )
     {
     case HVMOP_altp2m_set_mem_access_multi:
-        /*
-         * The return code can be positive only if it is the return value
-         * of hypercall_create_continuation. In this case, the opaque value
-         * must be copied back to the guest.
-         */
-        if ( rc > 0 )
+        if ( rc == -ERESTART )
         {
-            ASSERT(rc == __HYPERVISOR_hvm_op);
             a.u.set_mem_access_multi.opaque =
                 nat.altp2m_op->u.set_mem_access_multi.opaque;
             if ( __copy_field_to_guest(guest_handle_cast(arg,

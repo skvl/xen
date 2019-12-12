@@ -92,6 +92,7 @@ extern int __setup_msi_irq(struct irq_desc *, struct msi_desc *,
 extern void teardown_msi_irq(int irq);
 extern int msi_free_vector(struct msi_desc *entry);
 extern int pci_restore_msi_state(struct pci_dev *pdev);
+extern int pci_reset_msix_state(struct pci_dev *pdev);
 
 struct msi_desc {
 	struct msi_attrib {
@@ -250,7 +251,6 @@ void mask_msi_irq(struct irq_desc *);
 void unmask_msi_irq(struct irq_desc *);
 void guest_mask_msi_irq(struct irq_desc *, bool mask);
 void ack_nonmaskable_msi_irq(struct irq_desc *);
-void end_nonmaskable_msi_irq(struct irq_desc *, u8 vector);
 void set_msi_affinity(struct irq_desc *, const cpumask_t *);
 
 #endif /* __ASM_MSI_H */

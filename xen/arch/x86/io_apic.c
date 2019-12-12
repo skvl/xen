@@ -517,8 +517,9 @@ static void clear_IO_APIC_pin(unsigned int apic, unsigned int pin)
     if (entry.irr) {
         /* Make sure the trigger mode is set to level. */
         if (!entry.trigger) {
+            entry = __ioapic_read_entry(apic, pin, false);
             entry.trigger = 1;
-            __ioapic_write_entry(apic, pin, TRUE, entry);
+            __ioapic_write_entry(apic, pin, false, entry);
         }
         __io_apic_eoi(apic, entry.vector, pin);
     }
@@ -528,7 +529,7 @@ static void clear_IO_APIC_pin(unsigned int apic, unsigned int pin)
      */
     memset(&entry, 0, sizeof(entry));
     entry.mask = 1;
-    __ioapic_write_entry(apic, pin, TRUE, entry);
+    __ioapic_write_entry(apic, pin, false, entry);
 
     entry = __ioapic_read_entry(apic, pin, TRUE);
     if (entry.irr)
@@ -1732,7 +1733,7 @@ static void end_level_ioapic_irq_new(struct irq_desc *desc, u8 vector)
 
     v = apic_read(APIC_TMR + ((i & ~0x1f) >> 1));
 
-    ack_APIC_irq();
+    end_nonmaskable_irq(desc, vector);
 
     if ( (desc->status & IRQ_MOVE_PENDING) &&
          !io_apic_level_ack_pending(desc->irq) )

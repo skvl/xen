@@ -31,6 +31,7 @@
 #include <asm/xstate.h>
 #include <asm/hvm/hvm.h>
 #include <asm/hvm/io.h>
+#include <asm/hvm/nestedhvm.h>
 #include <asm/hvm/support.h>
 #include <asm/hvm/vmx/vmx.h>
 #include <asm/hvm/vmx/vvmx.h>
@@ -67,6 +68,7 @@ integer_param("ple_window", ple_window);
 
 static bool __read_mostly opt_ept_pml = true;
 static s8 __read_mostly opt_ept_ad = -1;
+int8_t __read_mostly opt_ept_exec_sp = -1;
 
 static int __init parse_ept_param(const char *s)
 {
@@ -82,6 +84,8 @@ static int __init parse_ept_param(const char *s)
             opt_ept_ad = val;
         else if ( (val = parse_boolean("pml", s, ss)) >= 0 )
             opt_ept_pml = val;
+        else if ( (val = parse_boolean("exec-sp", s, ss)) >= 0 )
+            opt_ept_exec_sp = val;
         else
             rc = -EINVAL;
 
@@ -91,6 +95,55 @@ static int __init parse_ept_param(const char *s)
     return rc;
 }
 custom_param("ept", parse_ept_param);
+
+static int parse_ept_param_runtime(const char *s)
+{
+    struct domain *d;
+    int val;
+
+    if ( !cpu_has_vmx_ept || !hvm_funcs.hap_supported ||
+         !(hvm_funcs.hap_capabilities &
+           (HVM_HAP_SUPERPAGE_2MB | HVM_HAP_SUPERPAGE_1GB)) )
+    {
+        printk("VMX: EPT not available, or not in use - ignoring\n");
+        return 0;
+    }
+
+    if ( (val = parse_boolean("exec-sp", s, NULL)) < 0 )
+        return -EINVAL;
+
+    opt_ept_exec_sp = val;
+
+    rcu_read_lock(&domlist_read_lock);
+    for_each_domain ( d )
+    {
+        /* PV, or HVM Shadow domain?  Not applicable. */
+        if ( !paging_mode_hap(d) )
+            continue;
+
+        /* Hardware domain? Not applicable. */
+        if ( is_hardware_domain(d) )
+            continue;
+
+        /* Nested Virt?  Broken and exec_sp forced on to avoid livelocks. */
+        if ( nestedhvm_enabled(d) )
+            continue;
+
+        /* Setting already matches?  No need to rebuild the p2m. */
+        if ( d->arch.hvm.vmx.exec_sp == val )
+            continue;
+
+        d->arch.hvm.vmx.exec_sp = val;
+        p2m_change_entry_type_global(d, p2m_ram_rw, p2m_ram_rw);
+    }
+    rcu_read_unlock(&domlist_read_lock);
+
+    printk("VMX: EPT executable superpages %sabled\n",
+           val ? "en" : "dis");
+
+    return 0;
+}
+custom_runtime_only_param("ept", parse_ept_param_runtime);
 
 /* Dynamic (run-time adjusted) execution control flags. */
 u32 vmx_pin_based_exec_control __read_mostly;
@@ -796,7 +849,7 @@ static void vmx_set_host_env(struct vcpu *v)
               (unsigned long)(this_cpu(gdt_table) - FIRST_RESERVED_GDT_ENTRY));
     __vmwrite(HOST_IDTR_BASE, (unsigned long)idt_tables[cpu]);
 
-    __vmwrite(HOST_TR_BASE, (unsigned long)&per_cpu(init_tss, cpu));
+    __vmwrite(HOST_TR_BASE, (unsigned long)&per_cpu(tss_page, cpu).tss);
 
     __vmwrite(HOST_SYSENTER_ESP, get_stack_bottom());
 
@@ -1490,15 +1543,15 @@ int vmx_del_msr(struct vcpu *v, uint32_t msr, enum vmx_msr_list_type type)
     switch ( type )
     {
     case VMX_MSR_HOST:
-        __vmwrite(VM_EXIT_MSR_LOAD_COUNT, vmx->host_msr_count--);
+        __vmwrite(VM_EXIT_MSR_LOAD_COUNT, --vmx->host_msr_count);
         break;
 
     case VMX_MSR_GUEST:
-        __vmwrite(VM_EXIT_MSR_STORE_COUNT, vmx->msr_save_count--);
+        __vmwrite(VM_EXIT_MSR_STORE_COUNT, --vmx->msr_save_count);
 
         /* Fallthrough */
     case VMX_MSR_GUEST_LOADONLY:
-        __vmwrite(VM_ENTRY_MSR_LOAD_COUNT, vmx->msr_load_count--);
+        __vmwrite(VM_ENTRY_MSR_LOAD_COUNT, --vmx->msr_load_count);
         break;
     }
 

@@ -38,6 +38,7 @@
 #include <xen/livepatch.h>
 #include <public/sysctl.h>
 #include <public/hvm/hvm_vcpu.h>
+#include <asm/altp2m.h>
 #include <asm/regs.h>
 #include <asm/mc146818rtc.h>
 #include <asm/system.h>
@@ -113,7 +114,7 @@ static void play_dead(void)
      * this case, heap corruption or #PF can occur (when heap debugging is
      * enabled). For example, even printk() can involve tasklet scheduling,
      * which touches per-cpu vars.
-     * 
+     *
      * Consider very carefully when adding code to *dead_idle. Most hypervisor
      * subsystems are unsafe to call.
      */
@@ -409,9 +410,6 @@ void arch_vcpu_destroy(struct vcpu *v)
     xfree(v->arch.msrs);
     v->arch.msrs = NULL;
 
-    if ( !is_idle_domain(v->domain) )
-        vpmu_destroy(v);
-
     if ( is_hvm_vcpu(v) )
         hvm_vcpu_destroy(v);
     else
@@ -475,8 +473,6 @@ int arch_domain_create(struct domain *d,
     int rc;
 
     INIT_LIST_HEAD(&d->arch.pdev_list);
-
-    d->arch.relmem = RELMEM_not_started;
     INIT_PAGE_LIST_HEAD(&d->arch.relmem_list);
 
     spin_lock_init(&d->arch.e820_lock);
@@ -769,49 +765,6 @@ void arch_domain_creation_finished(struct domain *d)
 {
 }
 
-/*
- * These are the masks of CR4 bits (subject to hardware availability) which a
- * PV guest may not legitimiately attempt to modify.
- */
-static unsigned long __read_mostly pv_cr4_mask, compat_pv_cr4_mask;
-
-static int __init init_pv_cr4_masks(void)
-{
-    unsigned long common_mask = ~X86_CR4_TSD;
-
-    /*
-     * All PV guests may attempt to modify TSD, DE and OSXSAVE.
-     */
-    if ( cpu_has_de )
-        common_mask &= ~X86_CR4_DE;
-    if ( cpu_has_xsave )
-        common_mask &= ~X86_CR4_OSXSAVE;
-
-    pv_cr4_mask = compat_pv_cr4_mask = common_mask;
-
-    /*
-     * 64bit PV guests may attempt to modify FSGSBASE.
-     */
-    if ( cpu_has_fsgsbase )
-        pv_cr4_mask &= ~X86_CR4_FSGSBASE;
-
-    return 0;
-}
-__initcall(init_pv_cr4_masks);
-
-unsigned long pv_guest_cr4_fixup(const struct vcpu *v, unsigned long guest_cr4)
-{
-    unsigned long hv_cr4 = real_cr4_to_pv_guest_cr4(read_cr4());
-    unsigned long mask = is_pv_32bit_vcpu(v) ? compat_pv_cr4_mask : pv_cr4_mask;
-
-    if ( (guest_cr4 & mask) != (hv_cr4 & mask) )
-        printk(XENLOG_G_WARNING
-               "d%d attempted to change %pv's CR4 flags %08lx -> %08lx\n",
-               current->domain->domain_id, v, hv_cr4, guest_cr4);
-
-    return (hv_cr4 & mask) | (guest_cr4 & ~mask);
-}
-
 #define xen_vcpu_guest_context vcpu_guest_context
 #define fpu_ctxt fpu_ctxt.x
 CHECK_FIELD_(struct, vcpu_guest_context, fpu_ctxt);
@@ -829,7 +782,6 @@ int arch_set_info_guest(
 #ifdef CONFIG_PV
     unsigned long cr3_gfn;
     struct page_info *cr3_page;
-    unsigned long cr4;
     int rc = 0;
 #endif
 
@@ -1005,9 +957,7 @@ int arch_set_info_guest(
     v->arch.pv.ctrlreg[0] &= X86_CR0_TS;
     v->arch.pv.ctrlreg[0] |= read_cr0() & ~X86_CR0_TS;
 
-    cr4 = v->arch.pv.ctrlreg[4];
-    v->arch.pv.ctrlreg[4] = cr4 ? pv_guest_cr4_fixup(v, cr4) :
-        real_cr4_to_pv_guest_cr4(mmu_cr4_features);
+    v->arch.pv.ctrlreg[4] = pv_fixup_guest_cr4(v, v->arch.pv.ctrlreg[4]);
 
     memset(v->arch.dr, 0, sizeof(v->arch.dr));
     v->arch.dr6 = X86_DR6_DEFAULT;
@@ -1151,9 +1101,15 @@ int arch_set_info_guest(
                     rc = -ERESTART;
                     /* Fallthrough */
                 case -ERESTART:
+                    /*
+                     * NB that we're putting the kernel-mode table
+                     * here, which we've already successfully
+                     * validated above; hence partial = false;
+                     */
                     v->arch.old_guest_ptpg = NULL;
                     v->arch.old_guest_table =
                         pagetable_get_page(v->arch.guest_table);
+                    v->arch.old_guest_table_partial = false;
                     v->arch.guest_table = pagetable_null();
                     break;
                 default:
@@ -1349,13 +1305,8 @@ static void load_segments(struct vcpu *n)
     per_cpu(dirty_segment_mask, cpu) = 0;
 
 #ifdef CONFIG_HVM
-    if ( !is_pv_32bit_vcpu(n) && !cpu_has_fsgsbase && cpu_has_svm &&
-         !((uregs->fs | uregs->gs) & ~3) &&
-         /*
-          * The remaining part is just for optimization: If only shadow GS
-          * needs loading, there's nothing to be gained here.
-          */
-         (n->arch.pv.fs_base | n->arch.pv.gs_base_user | n->arch.pv.ldt_ents) )
+    if ( cpu_has_svm && !is_pv_32bit_vcpu(n) &&
+         !(read_cr4() & X86_CR4_FSGSBASE) && !((uregs->fs | uregs->gs) & ~3) )
     {
         unsigned long gsb = n->arch.flags & TF_kernel_mode
             ? n->arch.pv.gs_base_kernel : n->arch.pv.gs_base_user;
@@ -1534,7 +1485,8 @@ static void save_segments(struct vcpu *v)
     regs->fs = read_sreg(fs);
     regs->gs = read_sreg(gs);
 
-    if ( cpu_has_fsgsbase && !is_pv_32bit_vcpu(v) )
+    /* %fs/%gs bases can only be stale if WR{FS,GS}BASE are usable. */
+    if ( (read_cr4() & X86_CR4_FSGSBASE) && !is_pv_32bit_vcpu(v) )
     {
         v->arch.pv.fs_base = __rdfsbase();
         if ( v->arch.flags & TF_kernel_mode )
@@ -1609,11 +1561,14 @@ bool update_runstate_area(struct vcpu *v)
     bool rc;
     struct guest_memory_policy policy = { .nested_guest_mode = false };
     void __user *guest_handle = NULL;
+    struct vcpu_runstate_info runstate;
 
     if ( guest_handle_is_null(runstate_guest(v)) )
         return true;
 
     update_guest_memory_policy(v, &policy);
+
+    memcpy(&runstate, &v->runstate, sizeof(runstate));
 
     if ( VM_ASSIST(v->domain, runstate_update_flag) )
     {
@@ -1621,9 +1576,9 @@ bool update_runstate_area(struct vcpu *v)
             ? &v->runstate_guest.compat.p->state_entry_time + 1
             : &v->runstate_guest.native.p->state_entry_time + 1;
         guest_handle--;
-        v->runstate.state_entry_time |= XEN_RUNSTATE_UPDATE;
+        runstate.state_entry_time |= XEN_RUNSTATE_UPDATE;
         __raw_copy_to_guest(guest_handle,
-                            (void *)(&v->runstate.state_entry_time + 1) - 1, 1);
+                            (void *)(&runstate.state_entry_time + 1) - 1, 1);
         smp_wmb();
     }
 
@@ -1631,20 +1586,20 @@ bool update_runstate_area(struct vcpu *v)
     {
         struct compat_vcpu_runstate_info info;
 
-        XLAT_vcpu_runstate_info(&info, &v->runstate);
+        XLAT_vcpu_runstate_info(&info, &runstate);
         __copy_to_guest(v->runstate_guest.compat, &info, 1);
         rc = true;
     }
     else
-        rc = __copy_to_guest(runstate_guest(v), &v->runstate, 1) !=
-             sizeof(v->runstate);
+        rc = __copy_to_guest(runstate_guest(v), &runstate, 1) !=
+             sizeof(runstate);
 
     if ( guest_handle )
     {
-        v->runstate.state_entry_time &= ~XEN_RUNSTATE_UPDATE;
+        runstate.state_entry_time &= ~XEN_RUNSTATE_UPDATE;
         smp_wmb();
         __raw_copy_to_guest(guest_handle,
-                            (void *)(&v->runstate.state_entry_time + 1) - 1, 1);
+                            (void *)(&runstate.state_entry_time + 1) - 1, 1);
     }
 
     update_guest_memory_policy(v, &policy);
@@ -1659,9 +1614,60 @@ static void _update_runstate_area(struct vcpu *v)
         v->arch.pv.need_update_runstate_area = 1;
 }
 
+/*
+ * Overview of Xen's GDTs.
+ *
+ * Xen maintains per-CPU compat and regular GDTs which are both a single page
+ * in size.  Some content is specific to each CPU (the TSS, the per-CPU marker
+ * for #DF handling, and optionally the LDT).  The compat and regular GDTs
+ * differ by the layout and content of the guest accessible selectors.
+ *
+ * The Xen selectors live from 0xe000 (slot 14 of 16), and need to always
+ * appear in this position for interrupt/exception handling to work.
+ *
+ * A PV guest may specify GDT frames of their own (slots 0 to 13).  Room for a
+ * full GDT exists in the per-domain mappings.
+ *
+ * To schedule a PV vcpu, we point slot 14 of the guest's full GDT at the
+ * current CPU's compat or regular (as appropriate) GDT frame.  This is so
+ * that the per-CPU parts still work correctly after switching pagetables and
+ * loading the guests full GDT into GDTR.
+ *
+ * To schedule Idle or HVM vcpus, we load a GDT base address which causes the
+ * regular per-CPU GDT frame to appear with selectors at the appropriate
+ * offset.
+ */
 static inline bool need_full_gdt(const struct domain *d)
 {
     return is_pv_domain(d) && !is_idle_domain(d);
+}
+
+static void update_xen_slot_in_full_gdt(const struct vcpu *v, unsigned int cpu)
+{
+    l1e_write(pv_gdt_ptes(v) + FIRST_RESERVED_GDT_PAGE,
+              !is_pv_32bit_vcpu(v) ? per_cpu(gdt_table_l1e, cpu)
+                                   : per_cpu(compat_gdt_table_l1e, cpu));
+}
+
+static void load_full_gdt(const struct vcpu *v)
+{
+    struct desc_ptr gdt_desc = {
+        .limit = LAST_RESERVED_GDT_BYTE,
+        .base = GDT_VIRT_START(v),
+    };
+
+    lgdt(&gdt_desc);
+}
+
+static void load_default_gdt(unsigned int cpu)
+{
+    struct desc_ptr gdt_desc = {
+        .limit = LAST_RESERVED_GDT_BYTE,
+        .base  = (unsigned long)(per_cpu(gdt_table, cpu) -
+                                 FIRST_RESERVED_GDT_ENTRY),
+    };
+
+    lgdt(&gdt_desc);
 }
 
 static void __context_switch(void)
@@ -1671,8 +1677,6 @@ static void __context_switch(void)
     struct vcpu          *p = per_cpu(curr_vcpu, cpu);
     struct vcpu          *n = current;
     struct domain        *pd = p->domain, *nd = n->domain;
-    seg_desc_t           *gdt;
-    struct desc_ptr       gdt_desc;
 
     ASSERT(p != n);
     ASSERT(!vcpu_cpu_dirty(n));
@@ -1712,45 +1716,25 @@ static void __context_switch(void)
 
     psr_ctxt_switch_to(nd);
 
-    gdt = !is_pv_32bit_domain(nd) ? per_cpu(gdt_table, cpu) :
-                                    per_cpu(compat_gdt_table, cpu);
     if ( need_full_gdt(nd) )
-    {
-        unsigned long mfn = virt_to_mfn(gdt);
-        l1_pgentry_t *pl1e = pv_gdt_ptes(n);
-        unsigned int i;
-
-        for ( i = 0; i < NR_RESERVED_GDT_PAGES; i++ )
-            l1e_write(pl1e + FIRST_RESERVED_GDT_PAGE + i,
-                      l1e_from_pfn(mfn + i, __PAGE_HYPERVISOR_RW));
-    }
+        update_xen_slot_in_full_gdt(n, cpu);
 
     if ( need_full_gdt(pd) &&
          ((p->vcpu_id != n->vcpu_id) || !need_full_gdt(nd)) )
-    {
-        gdt_desc.limit = LAST_RESERVED_GDT_BYTE;
-        gdt_desc.base  = (unsigned long)(gdt - FIRST_RESERVED_GDT_ENTRY);
-
-        lgdt(&gdt_desc);
-    }
+        load_default_gdt(cpu);
 
     write_ptbase(n);
 
 #if defined(CONFIG_PV) && defined(CONFIG_HVM)
     /* Prefetch the VMCB if we expect to use it later in the context switch */
-    if ( is_pv_domain(nd) && !is_pv_32bit_domain(nd) && !is_idle_domain(nd) &&
-         !cpu_has_fsgsbase && cpu_has_svm )
+    if ( cpu_has_svm && is_pv_domain(nd) && !is_pv_32bit_domain(nd) &&
+         !is_idle_domain(nd) && !(read_cr4() & X86_CR4_FSGSBASE) )
         svm_load_segs(0, 0, 0, 0, 0, 0, 0);
 #endif
 
     if ( need_full_gdt(nd) &&
          ((p->vcpu_id != n->vcpu_id) || !need_full_gdt(pd)) )
-    {
-        gdt_desc.limit = LAST_RESERVED_GDT_BYTE;
-        gdt_desc.base = GDT_VIRT_START(n);
-
-        lgdt(&gdt_desc);
-    }
+        load_full_gdt(n);
 
     if ( pd != nd )
         cpumask_clear_cpu(cpu, pd->dirty_cpumask);
@@ -1931,9 +1915,34 @@ static int relinquish_memory(
             break;
         case -ERESTART:
         case -EINTR:
+            /*
+             * -EINTR means PGT_validated has been re-set; re-set
+             * PGT_pinned again so that it gets picked up next time
+             * around.
+             *
+             * -ERESTART, OTOH, means PGT_partial is set instead.  Put
+             * it back on the list, but don't set PGT_pinned; the
+             * section below will finish off de-validation.  But we do
+             * need to drop the general ref associated with
+             * PGT_pinned, since put_page_and_type_preemptible()
+             * didn't do it.
+             *
+             * NB we can do an ASSERT for PGT_validated, since we
+             * "own" the type ref; but theoretically, the PGT_partial
+             * could be cleared by someone else.
+             */
+            if ( ret == -EINTR )
+            {
+                ASSERT(page->u.inuse.type_info & PGT_validated);
+                set_bit(_PGT_pinned, &page->u.inuse.type_info);
+            }
+            else
+                put_page(page);
+
             ret = -ERESTART;
+
+            /* Put the page back on the list and drop the ref we grabbed above */
             page_list_add(page, list);
-            set_bit(_PGT_pinned, &page->u.inuse.type_info);
             put_page(page);
             goto out;
         default:
@@ -1978,6 +1987,25 @@ static int relinquish_memory(
                     goto out;
                 case -ERESTART:
                     page_list_add(page, list);
+                    /*
+                     * PGT_partial holds a type ref and a general ref.
+                     * If we came in with PGT_partial set, then we 1)
+                     * don't need to grab an extra type count, and 2)
+                     * do need to drop the extra page ref we grabbed
+                     * at the top of the loop.  If we didn't come in
+                     * with PGT_partial set, we 1) do need to drab an
+                     * extra type count, but 2) can transfer the page
+                     * ref we grabbed above to it.
+                     *
+                     * Note that we must increment type_info before
+                     * setting PGT_partial.  Theoretically it should
+                     * be safe to drop the page ref before setting
+                     * PGT_partial, but do it afterwards just to be
+                     * extra safe.
+                     */
+                    if ( !(x & PGT_partial) )
+                        page->u.inuse.type_info++;
+                    smp_wmb();
                     page->u.inuse.type_info |= PGT_partial;
                     if ( x & PGT_partial )
                         put_page(page);
@@ -2020,24 +2048,68 @@ int domain_relinquish_resources(struct domain *d)
 
     BUG_ON(!cpumask_empty(d->dirty_cpumask));
 
-    switch ( d->arch.relmem )
+    /*
+     * This hypercall can take minutes of wallclock time to complete.  This
+     * logic implements a co-routine, stashing state in struct domain across
+     * hypercall continuation boundaries.
+     */
+    switch ( d->arch.rel_priv )
     {
-    case RELMEM_not_started:
+        /*
+         * Record the current progress.  Subsequent hypercall continuations
+         * will logically restart work from this point.
+         *
+         * PROGRESS() markers must not be in the middle of loops.  The loop
+         * variable isn't preserved across a continuation.
+         *
+         * To avoid redundant work, there should be a marker before each
+         * function which may return -ERESTART.
+         */
+#define PROGRESS(x)                                                     \
+        d->arch.rel_priv = PROG_ ## x; /* Fallthrough */ case PROG_ ## x
+
+        enum {
+            PROG_paging = 1,
+            PROG_vcpu_pagetables,
+            PROG_shared,
+            PROG_xen,
+            PROG_l4,
+            PROG_l3,
+            PROG_l2,
+            PROG_done,
+        };
+
+    case 0:
         ret = pci_release_devices(d);
         if ( ret )
             return ret;
+
+    PROGRESS(paging):
 
         /* Tear down paging-assistance stuff. */
         ret = paging_teardown(d);
         if ( ret )
             return ret;
 
-        /* Drop the in-use references to page-table bases. */
+    PROGRESS(vcpu_pagetables):
+
+        /*
+         * Drop the in-use references to page-table bases and clean
+         * up vPMU instances.
+         */
         for_each_vcpu ( d, v )
         {
             ret = vcpu_destroy_pagetables(v);
             if ( ret )
                 return ret;
+
+            vpmu_destroy(v);
+        }
+
+        if ( altp2m_active(d) )
+        {
+            for_each_vcpu ( d, v )
+                altp2m_vcpu_disable_ve(v);
         }
 
         if ( is_pv_domain(d) )
@@ -2058,10 +2130,7 @@ int domain_relinquish_resources(struct domain *d)
             d->arch.auto_unmask = 0;
         }
 
-        d->arch.relmem = RELMEM_shared;
-        /* fallthrough */
-
-    case RELMEM_shared:
+    PROGRESS(shared):
 
         if ( is_hvm_domain(d) )
         {
@@ -2072,44 +2141,39 @@ int domain_relinquish_resources(struct domain *d)
                 return ret;
         }
 
-        d->arch.relmem = RELMEM_xen;
-
         spin_lock(&d->page_alloc_lock);
         page_list_splice(&d->arch.relmem_list, &d->page_list);
         INIT_PAGE_LIST_HEAD(&d->arch.relmem_list);
         spin_unlock(&d->page_alloc_lock);
 
-        /* Fallthrough. Relinquish every page of memory. */
-    case RELMEM_xen:
+    PROGRESS(xen):
+
         ret = relinquish_memory(d, &d->xenpage_list, ~0UL);
         if ( ret )
             return ret;
-        d->arch.relmem = RELMEM_l4;
-        /* fallthrough */
 
-    case RELMEM_l4:
+    PROGRESS(l4):
+
         ret = relinquish_memory(d, &d->page_list, PGT_l4_page_table);
         if ( ret )
             return ret;
-        d->arch.relmem = RELMEM_l3;
-        /* fallthrough */
 
-    case RELMEM_l3:
+    PROGRESS(l3):
+
         ret = relinquish_memory(d, &d->page_list, PGT_l3_page_table);
         if ( ret )
             return ret;
-        d->arch.relmem = RELMEM_l2;
-        /* fallthrough */
 
-    case RELMEM_l2:
+    PROGRESS(l2):
+
         ret = relinquish_memory(d, &d->page_list, PGT_l2_page_table);
         if ( ret )
             return ret;
-        d->arch.relmem = RELMEM_done;
-        /* fallthrough */
 
-    case RELMEM_done:
+    PROGRESS(done):
         break;
+
+#undef PROGRESS
 
     default:
         BUG();
@@ -2152,7 +2216,7 @@ void vcpu_kick(struct vcpu *v)
      * pending flag. These values may fluctuate (after all, we hold no
      * locks) but the key insight is that each change will cause
      * evtchn_upcall_pending to be polled.
-     * 
+     *
      * NB2. We save the running flag across the unblock to avoid a needless
      * IPI for domains that we IPI'd to unblock.
      */

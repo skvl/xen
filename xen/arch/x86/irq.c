@@ -99,16 +99,19 @@ void unlock_vector_lock(void)
     spin_unlock(&vector_lock);
 }
 
-static void trace_irq_mask(u32 event, int irq, int vector, cpumask_t *mask)
+static void trace_irq_mask(uint32_t event, int irq, int vector,
+                           const cpumask_t *mask)
 {
     struct {
         unsigned int irq:16, vec:16;
         unsigned int mask[6];
-    } d;
-    d.irq = irq;
-    d.vec = vector;
-    memset(d.mask, 0, sizeof(d.mask));
-    memcpy(d.mask, mask, min(sizeof(d.mask), sizeof(cpumask_t)));
+    } d = {
+       .irq = irq,
+       .vec = vector,
+    };
+
+    memcpy(d.mask, mask,
+           min(sizeof(d.mask), BITS_TO_LONGS(nr_cpu_ids) * sizeof(long)));
     trace_var(event, 1, sizeof(d), &d);
 }
 
@@ -385,6 +388,7 @@ int __init init_irq_data(void)
 }
 
 static void __do_IRQ_guest(int vector);
+static void flush_ready_eoi(void);
 
 static void ack_none(struct irq_desc *desc)
 {
@@ -676,7 +680,8 @@ void irq_move_cleanup_interrupt(struct cpu_user_regs *regs)
          * next attempt by sending another IRQ_MOVE_CLEANUP_VECTOR
          * to myself.
          */
-        if (irr  & (1 << (vector % 32))) {
+        if ( irr & (1u << (vector % 32)) )
+        {
             send_IPI_self(IRQ_MOVE_CLEANUP_VECTOR);
             TRACE_3D(TRC_HW_IRQ_MOVE_CLEANUP_DELAY,
                      irq, vector, smp_processor_id());
@@ -782,6 +787,7 @@ void pirq_set_affinity(struct domain *d, int pirq, const cpumask_t *mask)
 }
 
 DEFINE_PER_CPU(unsigned int, irq_count);
+static DEFINE_PER_CPU(bool, check_eoi_deferral);
 
 uint8_t alloc_hipriority_vector(void)
 {
@@ -925,7 +931,25 @@ void do_IRQ(struct cpu_user_regs *regs)
 
  out:
     if ( desc->handler->end )
+    {
+        /*
+         * If higher priority vectors still have their EOIs pending, we may
+         * not issue an EOI here, as this would EOI the highest priority one.
+         */
+        if ( cpu_has_pending_apic_eoi() )
+        {
+            this_cpu(check_eoi_deferral) = true;
+            desc->handler->end(desc, vector);
+            this_cpu(check_eoi_deferral) = false;
+
+            spin_unlock(&desc->lock);
+            flush_ready_eoi();
+            goto out_no_unlock;
+        }
+
         desc->handler->end(desc, vector);
+    }
+
  out_no_end:
     spin_unlock(&desc->lock);
  out_no_unlock:
@@ -1078,6 +1102,29 @@ static DEFINE_PER_CPU(struct pending_eoi, pending_eoi[NR_DYNAMIC_VECTORS]);
 bool cpu_has_pending_apic_eoi(void)
 {
     return pending_eoi_sp(this_cpu(pending_eoi)) != 0;
+}
+
+void end_nonmaskable_irq(struct irq_desc *desc, uint8_t vector)
+{
+    struct pending_eoi *peoi = this_cpu(pending_eoi);
+    unsigned int sp = pending_eoi_sp(peoi);
+
+    if ( !this_cpu(check_eoi_deferral) || !sp || peoi[sp - 1].vector < vector )
+    {
+        ack_APIC_irq();
+        return;
+    }
+
+    /* Defer this vector's EOI until all higher ones have been EOI-ed. */
+    pending_eoi_sp(peoi) = sp + 1;
+    do {
+        peoi[sp] = peoi[sp - 1];
+    } while ( --sp && peoi[sp - 1].vector > vector );
+    ASSERT(!sp || peoi[sp - 1].vector < vector);
+
+    peoi[sp].irq = desc->irq;
+    peoi[sp].vector = vector;
+    peoi[sp].ready = 1;
 }
 
 static inline void set_pirq_eoi(struct domain *d, unsigned int irq)
@@ -2723,10 +2770,4 @@ int allocate_and_map_msi_pirq(struct domain *d, int index, int *pirq_p,
     }
 
     return ret;
-}
-
-void arch_evtchn_inject(struct vcpu *v)
-{
-    if ( is_hvm_vcpu(v) )
-        hvm_assert_evtchn_irq(v);
 }

@@ -217,11 +217,15 @@ static int update_domain_cpuid_info(struct domain *d,
         if ( is_pv_domain(d) && ((levelling_caps & LCAP_7ab0) == LCAP_7ab0) )
         {
             uint64_t mask = cpuidmask_defaults._7ab0;
-            uint32_t eax = ctl->eax;
-            uint32_t ebx = p->feat._7b0;
 
+            /*
+             * Leaf 7[0].eax is max_subleaf, not a feature mask.  Take it
+             * wholesale from the policy, but clamp the features in 7[0].ebx
+             * per usual.
+             */
             if ( boot_cpu_data.x86_vendor == X86_VENDOR_AMD )
-                mask &= ((uint64_t)eax << 32) | ebx;
+                mask = (((uint64_t)p->feat.max_subleaf << 32) |
+                        ((uint32_t)mask & p->feat._7b0));
 
             d->arch.pv.cpuidmasks->_7ab0 = mask;
         }
@@ -490,6 +494,26 @@ long arch_do_domctl(
             {
                 ret = -EFAULT;
                 break;
+            }
+
+            /*
+             * Avoid checking for preemption when the `hostp2m' lock isn't
+             * involve, i.e. non-translated guest, and avoid preemption on
+             * the last iteration.
+             */
+            if ( paging_mode_translate(d) &&
+                 likely((i + 1) < num) && hypercall_preempt_check() )
+            {
+                domctl->u.getpageframeinfo3.num = num - i - 1;
+                domctl->u.getpageframeinfo3.array.p =
+                    guest_handle + ((i + 1) * width);
+                if ( __copy_to_guest(u_domctl, domctl, 1) )
+                {
+                    ret = -EFAULT;
+                    break;
+                }
+                return hypercall_create_continuation(__HYPERVISOR_domctl,
+                                                     "h", u_domctl);
             }
         }
 

@@ -40,6 +40,8 @@
 #include <xen/pfn.h>
 #include <xen/sizes.h>
 #include <xen/libfdt/libfdt.h>
+
+#include <asm/guest_atomics.h>
 #include <asm/setup.h>
 
 struct domain *dom_xen, *dom_io, *dom_cow;
@@ -149,6 +151,7 @@ mfn_t xenheap_mfn_end __read_mostly;
 vaddr_t xenheap_virt_end __read_mostly;
 #ifdef CONFIG_ARM_64
 vaddr_t xenheap_virt_start __read_mostly;
+unsigned long xenheap_base_pdx __read_mostly;
 #endif
 
 unsigned long frametable_base_pdx __read_mostly;
@@ -809,6 +812,7 @@ void __init setup_xenheap_mappings(unsigned long base_mfn,
     if ( mfn_eq(xenheap_mfn_start, INVALID_MFN) )
     {
         xenheap_mfn_start = _mfn(base_mfn);
+        xenheap_base_pdx = mfn_to_pdx(_mfn(base_mfn));
         xenheap_virt_start = DIRECTMAP_VIRT_START +
             (base_mfn - mfn) * PAGE_SIZE;
     }
@@ -874,8 +878,8 @@ void __init setup_xenheap_mappings(unsigned long base_mfn,
 /* Map a frame table to cover physical addresses ps through pe */
 void __init setup_frametable_mappings(paddr_t ps, paddr_t pe)
 {
-    unsigned long nr_pages = (pe - ps) >> PAGE_SHIFT;
-    unsigned long nr_pdxs = pfn_to_pdx(nr_pages);
+    unsigned long nr_pdxs = mfn_to_pdx(mfn_add(maddr_to_mfn(pe), -1)) -
+                            mfn_to_pdx(maddr_to_mfn(ps)) + 1;
     unsigned long frametable_size = nr_pdxs * sizeof(struct page_info);
     mfn_t base_mfn;
     const unsigned long mapping_size = frametable_size < MB(32) ? MB(2) : MB(32);
@@ -972,7 +976,7 @@ static int create_xen_entries(enum xenmap_operation op,
                               unsigned long nr_mfns,
                               unsigned int flags)
 {
-    int rc;
+    int rc = 0;
     unsigned long addr = virt, addr_end = addr + nr_mfns * PAGE_SIZE;
     lpae_t pte, *entry;
     lpae_t *third = NULL;
@@ -1001,7 +1005,8 @@ static int create_xen_entries(enum xenmap_operation op,
                 {
                     printk("%s: trying to replace an existing mapping addr=%lx mfn=%"PRI_mfn"\n",
                            __func__, addr, mfn_x(mfn));
-                    return -EINVAL;
+                    rc = -EINVAL;
+                    goto out;
                 }
                 if ( op == RESERVE )
                     break;
@@ -1018,7 +1023,8 @@ static int create_xen_entries(enum xenmap_operation op,
                 {
                     printk("%s: trying to %s a non-existing mapping addr=%lx\n",
                            __func__, op == REMOVE ? "remove" : "modify", addr);
-                    return -EINVAL;
+                    rc = -EINVAL;
+                    goto out;
                 }
                 if ( op == REMOVE )
                     pte.bits = 0;
@@ -1031,7 +1037,8 @@ static int create_xen_entries(enum xenmap_operation op,
                     {
                         printk("%s: Incorrect combination for addr=%lx\n",
                                __func__, addr);
-                        return -EINVAL;
+                        rc = -EINVAL;
+                        goto out;
                     }
                 }
                 write_pte(entry, pte);
@@ -1040,11 +1047,14 @@ static int create_xen_entries(enum xenmap_operation op,
                 BUG();
         }
     }
+out:
+    /*
+     * Flush the TLBs even in case of failure because we may have
+     * partially modified the PT. This will prevent any unexpected
+     * behavior afterwards.
+     */
     flush_xen_data_tlb_range_va(virt, PAGE_SIZE * nr_mfns);
 
-    rc = 0;
-
-out:
     return rc;
 }
 
@@ -1380,17 +1390,9 @@ void put_page_type(struct page_info *page)
     return;
 }
 
-void gnttab_clear_flag(unsigned long nr, uint16_t *addr)
+void gnttab_clear_flag(struct domain *d, unsigned long nr, uint16_t *addr)
 {
-    /*
-     * Note that this cannot be clear_bit(), as the access must be
-     * confined to the specified 2 bytes.
-     */
-    uint16_t mask = ~(1 << nr), old;
-
-    do {
-        old = *addr;
-    } while (cmpxchg(addr, old, old & mask) != old);
+    guest_clear_mask16(d, BIT(nr), addr);
 }
 
 void gnttab_mark_dirty(struct domain *d, mfn_t mfn)

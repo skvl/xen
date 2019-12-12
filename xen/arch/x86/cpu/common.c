@@ -414,6 +414,10 @@ static void generic_identify(struct cpuinfo_x86 *c)
 			    &c->x86_capability[cpufeat_word(X86_FEATURE_FSGSBASE)],
 			    &c->x86_capability[cpufeat_word(X86_FEATURE_PKU)],
 			    &c->x86_capability[cpufeat_word(X86_FEATURE_AVX512_4VNNIW)]);
+	if (c->cpuid_level >= 0xd)
+		cpuid_count(0xd, 1,
+			    &c->x86_capability[cpufeat_word(X86_FEATURE_XSAVEOPT)],
+			    &tmp, &tmp, &tmp);
 }
 
 /*
@@ -460,7 +464,7 @@ void identify_cpu(struct cpuinfo_x86 *c)
 		this_cpu->c_init(c);
 
 
-   	if ( !opt_pku )
+   	if (c == &boot_cpu_data && !opt_pku)
 		setup_clear_cpu_cap(X86_FEATURE_PKU);
 
 	/*
@@ -723,7 +727,7 @@ void load_system_tables(void)
 	unsigned long stack_bottom = get_stack_bottom(),
 		stack_top = stack_bottom & ~(STACK_SIZE - 1);
 
-	struct tss_struct *tss = &this_cpu(init_tss);
+	struct tss64 *tss = &this_cpu(tss_page).tss;
 	seg_desc_t *gdt =
 		this_cpu(gdt_table) - FIRST_RESERVED_GDT_ENTRY;
 	seg_desc_t *compat_gdt =
@@ -738,7 +742,7 @@ void load_system_tables(void)
 		.limit = (IDT_ENTRIES * sizeof(idt_entry_t)) - 1,
 	};
 
-	*tss = (struct tss_struct){
+	*tss = (struct tss64){
 		/* Main stack for interrupts/exceptions. */
 		.rsp0 = stack_bottom,
 
@@ -763,16 +767,12 @@ void load_system_tables(void)
 		.bitmap = IOBMP_INVALID_OFFSET,
 	};
 
-	_set_tssldt_desc(
-		gdt + TSS_ENTRY,
-		(unsigned long)tss,
-		offsetof(struct tss_struct, __cacheline_filler) - 1,
-		SYS_DESC_tss_avail);
-	_set_tssldt_desc(
-		compat_gdt + TSS_ENTRY,
-		(unsigned long)tss,
-		offsetof(struct tss_struct, __cacheline_filler) - 1,
-		SYS_DESC_tss_busy);
+	BUILD_BUG_ON(sizeof(*tss) <= 0x67); /* Mandated by the architecture. */
+
+	_set_tssldt_desc(gdt + TSS_ENTRY, (unsigned long)tss,
+			 sizeof(*tss) - 1, SYS_DESC_tss_avail);
+	_set_tssldt_desc(compat_gdt + TSS_ENTRY, (unsigned long)tss,
+			 sizeof(*tss) - 1, SYS_DESC_tss_busy);
 
 	lgdt(&gdtr);
 	lidt(&idtr);

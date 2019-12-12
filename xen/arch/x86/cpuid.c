@@ -29,7 +29,12 @@ static int __init parse_xen_cpuid(const char *s)
         if ( !ss )
             ss = strchr(s, '\0');
 
-        if ( (val = parse_boolean("ibpb", s, ss)) >= 0 )
+        if ( (val = parse_boolean("md-clear", s, ss)) >= 0 )
+        {
+            if ( !val )
+                setup_clear_cpu_cap(X86_FEATURE_MD_CLEAR);
+        }
+        else if ( (val = parse_boolean("ibpb", s, ss)) >= 0 )
         {
             if ( !val )
                 setup_clear_cpu_cap(X86_FEATURE_IBPB);
@@ -519,6 +524,20 @@ void recalculate_cpuid_policy(struct domain *d)
     if ( cpu_has_itsc && (d->disable_migrate || d->arch.vtsc) )
         __set_bit(X86_FEATURE_ITSC, max_fs);
 
+    /*
+     * On hardware with MSR_TSX_CTRL, the admin may have elected to disable
+     * TSX and hide the feature bits.  Migrating-in VMs may have been booted
+     * pre-mitigation when the TSX features were visbile.
+     *
+     * This situation is compatible (albeit with a perf hit to any TSX code in
+     * the guest), so allow the feature bits to remain set.
+     */
+    if ( cpu_has_tsx_ctrl )
+    {
+        __set_bit(X86_FEATURE_HLE, max_fs);
+        __set_bit(X86_FEATURE_RTM, max_fs);
+    }
+
     /* Clamp the toolstacks choices to reality. */
     for ( i = 0; i < ARRAY_SIZE(fs); i++ )
         fs[i] &= max_fs[i];
@@ -776,7 +795,8 @@ void guest_cpuid(const struct vcpu *v, uint32_t leaf,
              *    damage itself.
              *
              * - Enlightened CPUID or CPUID faulting available:
-             *    Xen can fully control what is seen here.  Guest kernels need
+             *    Xen can fully control what is seen here.  When the guest has
+             *    been configured to have XSAVE available, guest kernels need
              *    to see the leaked OSXSAVE via the enlightened path, but
              *    guest userspace and the native is given architectural
              *    behaviour.
@@ -786,7 +806,8 @@ void guest_cpuid(const struct vcpu *v, uint32_t leaf,
              */
             /* OSXSAVE clear in policy.  Fast-forward CR4 back in. */
             if ( (v->arch.pv.ctrlreg[4] & X86_CR4_OSXSAVE) ||
-                 (regs->entry_vector == TRAP_invalid_op &&
+                 (p->basic.xsave &&
+                  regs->entry_vector == TRAP_invalid_op &&
                   guest_kernel_mode(v, regs) &&
                   (read_cr4() & X86_CR4_OSXSAVE)) )
                 res->c |= cpufeat_mask(X86_FEATURE_OSXSAVE);

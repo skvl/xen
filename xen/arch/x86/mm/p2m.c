@@ -289,15 +289,20 @@ static void change_entry_type_global(struct p2m_domain *p2m,
                                      p2m_type_t ot, p2m_type_t nt)
 {
     p2m->change_entry_type_global(p2m, ot, nt);
-    p2m->global_logdirty = (nt == p2m_ram_logdirty);
+    /* Don't allow 'recalculate' operations to change the logdirty state. */
+    if ( ot != nt )
+        p2m->global_logdirty = (nt == p2m_ram_logdirty);
 }
 
+/*
+ * May be called with ot = nt = p2m_ram_rw for its side effect of
+ * recalculating all PTEs in the p2m.
+ */
 void p2m_change_entry_type_global(struct domain *d,
                                   p2m_type_t ot, p2m_type_t nt)
 {
     struct p2m_domain *hostp2m = p2m_get_hostp2m(d);
 
-    ASSERT(ot != nt);
     ASSERT(p2m_is_changeable(ot) && p2m_is_changeable(nt));
 
     p2m_lock(hostp2m);
@@ -778,9 +783,9 @@ p2m_remove_page(struct p2m_domain *p2m, unsigned long gfn_l, unsigned long mfn,
     p2m_type_t t;
     p2m_access_t a;
 
+    /* IOMMU for PV guests is handled in get_page_type() and put_page(). */
     if ( !paging_mode_translate(p2m->domain) )
-        return need_iommu_pt_sync(p2m->domain) ?
-            iommu_legacy_unmap(p2m->domain, _dfn(mfn), page_order) : 0;
+        return 0;
 
     ASSERT(gfn_locked_by_me(p2m, gfn));
     P2M_DEBUG("removing gfn=%#lx mfn=%#lx\n", gfn_l, mfn);
@@ -825,10 +830,35 @@ guest_physmap_add_entry(struct domain *d, gfn_t gfn, mfn_t mfn,
     int pod_count = 0;
     int rc = 0;
 
+    /* IOMMU for PV guests is handled in get_page_type() and put_page(). */
     if ( !paging_mode_translate(d) )
-        return (need_iommu_pt_sync(d) && t == p2m_ram_rw) ?
-            iommu_legacy_map(d, _dfn(mfn_x(mfn)), mfn, page_order,
-                             IOMMUF_readable | IOMMUF_writable) : 0;
+    {
+        struct page_info *page = mfn_to_page(mfn);
+
+        /*
+         * Our interface for PV guests wrt IOMMU entries hasn't been very
+         * clear; but historically, pages have started out with IOMMU mappings,
+         * and only lose them when changed to a different page type.
+         *
+         * Retain this property by grabbing a writable type ref and then
+         * dropping it immediately.  The result will be pages that have a
+         * writable type (and an IOMMU entry), but a count of 0 (such that
+         * any guest-requested type changes succeed and remove the IOMMU
+         * entry).
+         */
+        if ( !need_iommu_pt_sync(d) || t != p2m_ram_rw )
+            return 0;
+
+        for ( i = 0; i < (1UL << page_order); ++i, ++page )
+        {
+            if ( get_page_and_type(page, d, PGT_writable_page) )
+                put_page_and_type(page);
+            else
+                return -EINVAL;
+        }
+
+        return 0;
+    }
 
     /* foreign pages are added thru p2m_add_foreign */
     if ( p2m_is_foreign(t) )
@@ -1306,7 +1336,7 @@ int set_identity_p2m_entry(struct domain *d, unsigned long gfn_l,
 
     if ( !paging_mode_translate(p2m->domain) )
     {
-        if ( !need_iommu_pt_sync(d) )
+        if ( !has_iommu_pt(d) )
             return 0;
         return iommu_legacy_map(d, _dfn(gfn_l), _mfn(gfn_l), PAGE_ORDER_4K,
                                 IOMMUF_readable | IOMMUF_writable);
@@ -1397,7 +1427,7 @@ int clear_identity_p2m_entry(struct domain *d, unsigned long gfn_l)
 
     if ( !paging_mode_translate(d) )
     {
-        if ( !need_iommu_pt_sync(d) )
+        if ( !has_iommu_pt(d) )
             return 0;
         return iommu_legacy_unmap(d, _dfn(gfn_l), PAGE_ORDER_4K);
     }
@@ -2342,65 +2372,74 @@ bool_t p2m_switch_vcpu_altp2m_by_id(struct vcpu *v, unsigned int idx)
 }
 
 /*
- * If the fault is for a not present entry:
- *     if the entry in the host p2m has a valid mfn, copy it and retry
- *     else indicate that outer handler should handle fault
+ * Read info about the gfn in an altp2m, locking the gfn.
  *
- * If the fault is for a present entry:
- *     indicate that outer handler should handle fault
+ * If the entry is valid, pass the results back to the caller.
+ *
+ * If the entry was invalid, and the host's entry is also invalid,
+ * return to the caller without any changes.
+ *
+ * If the entry is invalid, and the host entry was valid, propagate
+ * the host's entry to the altp2m (retaining page order), and indicate
+ * that the caller should re-try the faulting instruction.
  */
-
-bool_t p2m_altp2m_lazy_copy(struct vcpu *v, paddr_t gpa,
-                            unsigned long gla, struct npfec npfec,
-                            struct p2m_domain **ap2m)
+bool p2m_altp2m_get_or_propagate(struct p2m_domain *ap2m, unsigned long gfn_l,
+                                 mfn_t *mfn, p2m_type_t *p2mt,
+                                 p2m_access_t *p2ma, unsigned int page_order)
 {
-    struct p2m_domain *hp2m = p2m_get_hostp2m(v->domain);
-    p2m_type_t p2mt;
-    p2m_access_t p2ma;
-    unsigned int page_order;
-    gfn_t gfn = _gfn(paddr_to_pfn(gpa));
+    p2m_type_t ap2mt;
+    p2m_access_t ap2ma;
     unsigned long mask;
-    mfn_t mfn;
-    int rv;
+    gfn_t gfn;
+    mfn_t amfn;
+    int rc;
 
-    *ap2m = p2m_get_altp2m(v);
+    /*
+     * NB we must get the full lock on the altp2m here, in addition to
+     * the lock on the individual gfn, since we may change a range of
+     * gfns below.
+     */
+    p2m_lock(ap2m);
 
-    mfn = get_gfn_type_access(*ap2m, gfn_x(gfn), &p2mt, &p2ma,
-                              0, &page_order);
-    __put_gfn(*ap2m, gfn_x(gfn));
+    amfn = get_gfn_type_access(ap2m, gfn_l, &ap2mt, &ap2ma, 0, NULL);
 
-    if ( !mfn_eq(mfn, INVALID_MFN) )
-        return 0;
+    if ( !mfn_eq(amfn, INVALID_MFN) )
+    {
+        p2m_unlock(ap2m);
+        *mfn  = amfn;
+        *p2mt = ap2mt;
+        *p2ma = ap2ma;
+        return false;
+    }
 
-    mfn = get_gfn_type_access(hp2m, gfn_x(gfn), &p2mt, &p2ma,
-                              P2M_ALLOC, &page_order);
-    __put_gfn(hp2m, gfn_x(gfn));
-
-    if ( mfn_eq(mfn, INVALID_MFN) )
-        return 0;
-
-    p2m_lock(*ap2m);
+    /* Host entry is also invalid; don't bother setting the altp2m entry. */
+    if ( mfn_eq(*mfn, INVALID_MFN) )
+    {
+        p2m_unlock(ap2m);
+        return false;
+    }
 
     /*
      * If this is a superpage mapping, round down both frame numbers
-     * to the start of the superpage.
+     * to the start of the superpage.  NB that we repupose `amfn`
+     * here.
      */
     mask = ~((1UL << page_order) - 1);
-    mfn = _mfn(mfn_x(mfn) & mask);
-    gfn = _gfn(gfn_x(gfn) & mask);
+    amfn = _mfn(mfn_x(*mfn) & mask);
+    gfn = _gfn(gfn_l & mask);
 
-    rv = p2m_set_entry(*ap2m, gfn, mfn, page_order, p2mt, p2ma);
-    p2m_unlock(*ap2m);
+    rc = p2m_set_entry(ap2m, gfn, amfn, page_order, *p2mt, *p2ma);
+    p2m_unlock(ap2m);
 
-    if ( rv )
+    if ( rc )
     {
-        gdprintk(XENLOG_ERR,
-	    "failed to set entry for %#"PRIx64" -> %#"PRIx64" p2m %#"PRIx64"\n",
-	    gfn_x(gfn), mfn_x(mfn), (unsigned long)*ap2m);
-        domain_crash(hp2m->domain);
+        gprintk(XENLOG_ERR,
+                "failed to set entry for %"PRI_gfn" -> %"PRI_mfn" altp2m %u, rc %d\n",
+                gfn_l, mfn_x(amfn), vcpu_altp2m(current).p2midx, rc);
+        domain_crash(ap2m->domain);
     }
 
-    return 1;
+    return true;
 }
 
 enum altp2m_reset_type {
@@ -2530,8 +2569,11 @@ int p2m_destroy_altp2m_by_id(struct domain *d, unsigned int idx)
     if ( !idx || idx >= MAX_ALTP2M )
         return rc;
 
-    domain_pause_except_self(d);
+    rc = domain_pause_except_self(d);
+    if ( rc )
+        return rc;
 
+    rc = -EBUSY;
     altp2m_list_lock(d);
 
     if ( d->arch.altp2m_eptp[idx] != mfn_x(INVALID_MFN) )
@@ -2561,8 +2603,11 @@ int p2m_switch_domain_altp2m_by_id(struct domain *d, unsigned int idx)
     if ( idx >= MAX_ALTP2M )
         return rc;
 
-    domain_pause_except_self(d);
+    rc = domain_pause_except_self(d);
+    if ( rc )
+        return rc;
 
+    rc = -EINVAL;
     altp2m_list_lock(d);
 
     if ( d->arch.altp2m_eptp[idx] != mfn_x(INVALID_MFN) )

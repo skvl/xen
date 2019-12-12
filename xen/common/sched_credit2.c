@@ -504,6 +504,7 @@ struct csched2_private {
  * Physical CPU
  */
 struct csched2_pcpu {
+    cpumask_t sibling_mask;            /* Siblings in the same runqueue      */
     int runq_id;
 };
 
@@ -656,7 +657,7 @@ static inline
 void smt_idle_mask_set(unsigned int cpu, const cpumask_t *idlers,
                        cpumask_t *mask)
 {
-    const cpumask_t *cpu_siblings = per_cpu(cpu_sibling_mask, cpu);
+    const cpumask_t *cpu_siblings = &csched2_pcpu(cpu)->sibling_mask;
 
     if ( cpumask_subset(cpu_siblings, idlers) )
         cpumask_or(mask, mask, cpu_siblings);
@@ -668,10 +669,10 @@ void smt_idle_mask_set(unsigned int cpu, const cpumask_t *idlers,
 static inline
 void smt_idle_mask_clear(unsigned int cpu, cpumask_t *mask)
 {
-    const cpumask_t *cpu_siblings = per_cpu(cpu_sibling_mask, cpu);
+    const cpumask_t *cpu_siblings = &csched2_pcpu(cpu)->sibling_mask;
 
     if ( cpumask_subset(cpu_siblings, mask) )
-        cpumask_andnot(mask, mask, per_cpu(cpu_sibling_mask, cpu));
+        cpumask_andnot(mask, mask, cpu_siblings);
 }
 
 /*
@@ -3793,6 +3794,7 @@ init_pdata(struct csched2_private *prv, struct csched2_pcpu *spc,
            unsigned int cpu)
 {
     struct csched2_runqueue_data *rqd;
+    unsigned int rcpu;
 
     ASSERT(rw_is_write_locked(&prv->lock));
     ASSERT(!cpumask_test_cpu(cpu, &prv->initialized));
@@ -3810,7 +3812,17 @@ init_pdata(struct csched2_private *prv, struct csched2_pcpu *spc,
         printk(XENLOG_INFO " First cpu on runqueue, activating\n");
         activate_runqueue(prv, spc->runq_id);
     }
-    
+
+    __cpumask_set_cpu(cpu, &spc->sibling_mask);
+
+    if ( cpumask_weight(&rqd->active) > 0 )
+        for_each_cpu ( rcpu, per_cpu(cpu_sibling_mask, cpu) )
+            if ( cpumask_test_cpu(rcpu, &rqd->active) )
+            {
+                __cpumask_set_cpu(cpu, &csched2_pcpu(rcpu)->sibling_mask);
+                __cpumask_set_cpu(rcpu, &spc->sibling_mask);
+            }
+
     __cpumask_set_cpu(cpu, &rqd->idle);
     __cpumask_set_cpu(cpu, &rqd->active);
     __cpumask_set_cpu(cpu, &prv->initialized);
@@ -3897,6 +3909,7 @@ csched2_deinit_pdata(const struct scheduler *ops, void *pcpu, int cpu)
     struct csched2_private *prv = csched2_priv(ops);
     struct csched2_runqueue_data *rqd;
     struct csched2_pcpu *spc = pcpu;
+    unsigned int rcpu;
 
     write_lock_irqsave(&prv->lock, flags);
 
@@ -3926,6 +3939,9 @@ csched2_deinit_pdata(const struct scheduler *ops, void *pcpu, int cpu)
     __cpumask_clear_cpu(cpu, &rqd->idle);
     __cpumask_clear_cpu(cpu, &rqd->smt_idle);
     __cpumask_clear_cpu(cpu, &rqd->active);
+
+    for_each_cpu ( rcpu, &rqd->active )
+        __cpumask_clear_cpu(cpu, &csched2_pcpu(rcpu)->sibling_mask);
 
     if ( cpumask_empty(&rqd->active) )
     {
@@ -4056,6 +4072,8 @@ csched2_deinit(struct scheduler *ops)
 
     prv = csched2_priv(ops);
     ops->sched_data = NULL;
+    if ( prv )
+        xfree(prv->rqd);
     xfree(prv);
 }
 

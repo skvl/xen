@@ -507,7 +507,7 @@ static void amd_get_topology(struct cpuinfo_x86 *c)
                 u32 eax, ebx, ecx, edx;
 
                 cpuid(0x8000001e, &eax, &ebx, &ecx, &edx);
-                c->x86_num_siblings = ((ebx >> 8) & 0x3) + 1;
+                c->x86_num_siblings = ((ebx >> 8) & 0xff) + 1;
 
                 if (c->x86 < 0x17)
                         c->compute_unit_id = ebx & 0xFF;
@@ -628,7 +628,7 @@ static void init_amd(struct cpuinfo_x86 *c)
 
 	switch(c->x86)
 	{
-	case 0xf ... 0x17:
+	case 0xf ... 0x11:
 		disable_c1e(NULL);
 		if (acpi_smi_cmd && (acpi_enable_value | acpi_disable_value))
 			amd_acpi_c1e_quirk = true;

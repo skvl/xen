@@ -30,11 +30,12 @@ bool_t __initdata iommu_enable = 1;
 bool_t __read_mostly iommu_enabled;
 bool_t __read_mostly force_iommu;
 bool_t __read_mostly iommu_verbose;
-bool_t __read_mostly iommu_workaround_bios_bug;
+bool __read_mostly iommu_quarantine = true;
 bool_t __read_mostly iommu_igfx = 1;
 bool_t __read_mostly iommu_snoop = 1;
 bool_t __read_mostly iommu_qinval = 1;
 bool_t __read_mostly iommu_intremap = 1;
+bool_t __read_mostly iommu_crash_disable;
 
 static bool __hwdom_initdata iommu_hwdom_none;
 bool __hwdom_initdata iommu_hwdom_strict;
@@ -74,8 +75,8 @@ static int __init parse_iommu_param(const char *s)
         else if ( (val = parse_boolean("force", s, ss)) >= 0 ||
                   (val = parse_boolean("required", s, ss)) >= 0 )
             force_iommu = val;
-        else if ( (val = parse_boolean("workaround_bios_bug", s, ss)) >= 0 )
-            iommu_workaround_bios_bug = val;
+        else if ( (val = parse_boolean("quarantine", s, ss)) >= 0 )
+            iommu_quarantine = val;
         else if ( (val = parse_boolean("igfx", s, ss)) >= 0 )
             iommu_igfx = val;
         else if ( (val = parse_boolean("verbose", s, ss)) >= 0 )
@@ -88,6 +89,10 @@ static int __init parse_iommu_param(const char *s)
             iommu_intremap = val;
         else if ( (val = parse_boolean("intpost", s, ss)) >= 0 )
             iommu_intpost = val;
+#ifdef CONFIG_KEXEC
+        else if ( (val = parse_boolean("crash-disable", s, ss)) >= 0 )
+            iommu_crash_disable = val;
+#endif
         else if ( (val = parse_boolean("debug", s, ss)) >= 0 )
         {
             iommu_debug = val;
@@ -230,6 +235,9 @@ void iommu_teardown(struct domain *d)
 {
     struct domain_iommu *hd = dom_iommu(d);
 
+    if ( d == dom_io )
+        return;
+
     hd->status = IOMMU_STATUS_disabled;
     hd->platform_ops->teardown(d);
     tasklet_schedule(&iommu_pt_cleanup_tasklet);
@@ -238,6 +246,9 @@ void iommu_teardown(struct domain *d)
 int iommu_construct(struct domain *d)
 {
     struct domain_iommu *hd = dom_iommu(d);
+
+    if ( d == dom_io )
+        return 0;
 
     if ( hd->status == IOMMU_STATUS_initialized )
         return 0;
@@ -486,6 +497,21 @@ int iommu_iotlb_flush_all(struct domain *d, unsigned int flush_flags)
     return rc;
 }
 
+static int __init iommu_quarantine_init(void)
+{
+    const struct domain_iommu *hd = dom_iommu(dom_io);
+    int rc;
+
+    rc = iommu_domain_init(dom_io);
+    if ( rc )
+        return rc;
+
+    if ( !hd->platform_ops->quarantine_init )
+        return 0;
+
+    return hd->platform_ops->quarantine_init(dom_io);
+}
+
 int __init iommu_setup(void)
 {
     int rc = -ENODEV;
@@ -519,6 +545,9 @@ int __init iommu_setup(void)
     printk("I/O virtualisation %sabled\n", iommu_enabled ? "en" : "dis");
     if ( iommu_enabled )
     {
+        if ( iommu_quarantine_init() )
+            panic("Could not set up quarantine\n");
+
         printk(" - Dom0 mode: %s\n",
                iommu_hwdom_passthrough ? "Passthrough" :
                iommu_hwdom_strict ? "Strict" : "Relaxed");
@@ -579,6 +608,9 @@ void iommu_share_p2m_table(struct domain* d)
 
 void iommu_crash_shutdown(void)
 {
+    if ( !iommu_crash_disable )
+        return;
+
     if ( iommu_enabled )
         iommu_get_ops()->crash_shutdown();
     iommu_enabled = iommu_intremap = iommu_intpost = 0;

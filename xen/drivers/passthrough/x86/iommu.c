@@ -70,6 +70,27 @@ int arch_iommu_populate_page_table(struct domain *d)
                 rc = iommu_map(d, _dfn(gfn), _mfn(mfn), PAGE_ORDER_4K,
                                IOMMUF_readable | IOMMUF_writable,
                                &flush_flags);
+
+                /*
+                 * We may be working behind the back of a running guest, which
+                 * may change the type of a page at any time.  We can't prevent
+                 * this (for instance, by bumping the type count while mapping
+                 * the page) without causing legitimate guest type-change
+                 * operations to fail.  So after adding the page to the IOMMU,
+                 * check again to make sure this is still valid.  NB that the
+                 * writable entry in the iommu is harmless until later, when
+                 * the actual device gets assigned.
+                 */
+                if ( !rc && !is_hvm_domain(d) &&
+                     ((page->u.inuse.type_info & PGT_type_mask) !=
+                      PGT_writable_page) )
+                {
+                    rc = iommu_unmap(d, _dfn(gfn), PAGE_ORDER_4K, &flush_flags);
+                    /* If the type changed yet again, simply force a retry. */
+                    if ( !rc && ((page->u.inuse.type_info & PGT_type_mask) ==
+                                 PGT_writable_page) )
+                        rc = -ERESTART;
+                }
             }
             if ( rc )
             {
@@ -151,12 +172,7 @@ static bool __hwdom_init hwdom_iommu_map(const struct domain *d,
      * inclusive mapping additionally maps in every pfn up to 4GB except those
      * that fall in unusable ranges for PV Dom0.
      */
-    if ( (pfn > max_pfn && !mfn_valid(mfn)) || xen_in_range(pfn) ||
-         /*
-          * Ignore any address below 1MB, that's already identity mapped by the
-          * Dom0 builder for HVM.
-          */
-         (!d->domain_id && is_hvm_domain(d) && pfn < PFN_DOWN(MB(1))) )
+    if ( (pfn > max_pfn && !mfn_valid(mfn)) || xen_in_range(pfn) )
         return false;
 
     switch ( type = page_get_ram_type(mfn) )

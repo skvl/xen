@@ -263,6 +263,16 @@ static always_inline unsigned int cpuid_count_ebx(
     return ebx;
 }
 
+static always_inline unsigned int cpuid_count_edx(
+    unsigned int leaf, unsigned int subleaf)
+{
+    unsigned int edx, tmp;
+
+    cpuid_count(leaf, subleaf, &tmp, &tmp, &tmp, &edx);
+
+    return edx;
+}
+
 static inline unsigned long read_cr0(void)
 {
     unsigned long cr0;
@@ -304,11 +314,31 @@ static inline unsigned long read_cr4(void)
 
 static inline void write_cr4(unsigned long val)
 {
+    struct cpu_info *info = get_cpu_info();
+
     /* No global pages in case of PCIDs enabled! */
     ASSERT(!(val & X86_CR4_PGE) || !(val & X86_CR4_PCIDE));
 
-    get_cpu_info()->cr4 = val;
-    asm volatile ( "mov %0,%%cr4" : : "r" (val) );
+    /*
+     * On hardware supporting FSGSBASE, the value in %cr4 is the kernel's
+     * choice for 64bit PV guests, which impacts whether Xen can use the
+     * instructions.
+     *
+     * The {rd,wr}{fs,gs}base() helpers use info->cr4 to work out whether it
+     * is safe to execute the {RD,WR}{FS,GS}BASE instruction, falling back to
+     * the MSR path if not.  Some users require interrupt safety.
+     *
+     * If FSGSBASE is currently or about to become clear, reflect this in
+     * info->cr4 before updating %cr4, so an interrupt which hits in the
+     * middle won't observe FSGSBASE set in info->cr4 but clear in %cr4.
+     */
+    info->cr4 = val & (info->cr4 | ~X86_CR4_FSGSBASE);
+
+    asm volatile ( "mov %[val], %%cr4"
+                   : "+m" (info->cr4) /* Force ordering without a barrier. */
+                   : [val] "r" (val) );
+
+    info->cr4 = val;
 }
 
 /* Clear and set 'TS' bit respectively */
@@ -396,7 +426,7 @@ static always_inline void __mwait(unsigned long eax, unsigned long ecx)
 #define IOBMP_BYTES             8192
 #define IOBMP_INVALID_OFFSET    0x8000
 
-struct __packed __cacheline_aligned tss_struct {
+struct __packed tss64 {
     uint32_t :32;
     uint64_t rsp0, rsp1, rsp2;
     uint64_t :64;
@@ -407,9 +437,11 @@ struct __packed __cacheline_aligned tss_struct {
     uint64_t ist[7];
     uint64_t :64;
     uint16_t :16, bitmap;
-    /* Pads the TSS to be cacheline-aligned (total size is 0x80). */
-    uint8_t __cacheline_filler[24];
 };
+struct tss_page {
+    struct tss64 __aligned(PAGE_SIZE) tss;
+};
+DECLARE_PER_CPU(struct tss_page, tss_page);
 
 #define IST_NONE 0UL
 #define IST_DF   1UL
@@ -448,7 +480,6 @@ static inline void disable_each_ist(idt_entry_t *idt)
 extern idt_entry_t idt_table[];
 extern idt_entry_t *idt_tables[];
 
-DECLARE_PER_CPU(struct tss_struct, init_tss);
 DECLARE_PER_CPU(root_pgentry_t *, root_pgt);
 
 extern void write_ptbase(struct vcpu *v);
@@ -587,6 +618,9 @@ static inline uint8_t get_cpu_family(uint32_t raw, uint8_t *model,
         *stepping = raw & 0xf;
     return fam;
 }
+
+extern int8_t opt_tsx, cpu_has_tsx_ctrl;
+void tsx_init(void);
 
 #endif /* !__ASSEMBLY__ */
 

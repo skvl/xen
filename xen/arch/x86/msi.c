@@ -533,11 +533,6 @@ static void ack_maskable_msi_irq(struct irq_desc *desc)
     ack_APIC_irq(); /* ACKTYPE_NONE */
 }
 
-void end_nonmaskable_msi_irq(struct irq_desc *desc, u8 vector)
-{
-    ack_APIC_irq(); /* ACKTYPE_EOI */
-}
-
 /*
  * IRQ chip for MSI PCI/PCI-X/PCI-Express devices,
  * which implement the MSI or MSI-X capability structure.
@@ -560,7 +555,7 @@ static hw_irq_controller pci_msi_nonmaskable = {
     .enable       = irq_enable_none,
     .disable      = irq_disable_none,
     .ack          = ack_nonmaskable_msi_irq,
-    .end          = end_nonmaskable_msi_irq,
+    .end          = end_nonmaskable_irq,
     .set_affinity = set_msi_affinity
 };
 
@@ -1292,6 +1287,31 @@ void pci_cleanup_msi(struct pci_dev *pdev)
     msi_free_irqs(pdev);
 }
 
+int pci_reset_msix_state(struct pci_dev *pdev)
+{
+    uint8_t slot = PCI_SLOT(pdev->devfn);
+    uint8_t func = PCI_FUNC(pdev->devfn);
+    unsigned int pos = pci_find_cap_offset(pdev->seg, pdev->bus, slot, func,
+                                           PCI_CAP_ID_MSIX);
+
+    ASSERT(pos);
+    /*
+     * Xen expects the device state to be the after reset one, and hence
+     * host_maskall = guest_maskall = false and all entries should have the
+     * mask bit set. Test that the maskall bit is not set, having it set could
+     * signal that the device hasn't been reset properly.
+     */
+    if ( pci_conf_read16(pdev->seg, pdev->bus, slot, func,
+                         msix_control_reg(pos)) &
+         PCI_MSIX_FLAGS_MASKALL )
+        return -EBUSY;
+
+    pdev->msix->host_maskall = false;
+    pdev->msix->guest_maskall = false;
+
+    return 0;
+}
+
 int pci_msi_conf_write_intercept(struct pci_dev *pdev, unsigned int reg,
                                  unsigned int size, uint32_t *data)
 {
@@ -1328,6 +1348,7 @@ int pci_msi_conf_write_intercept(struct pci_dev *pdev, unsigned int reg,
     {
         uint16_t cntl;
         uint32_t unused;
+        unsigned int nvec = entry->msi.nvec;
 
         pos = entry->msi_attrib.pos;
         if ( reg < pos || reg >= entry->msi.mpos + 8 )
@@ -1340,7 +1361,7 @@ int pci_msi_conf_write_intercept(struct pci_dev *pdev, unsigned int reg,
 
         cntl = pci_conf_read16(seg, bus, slot, func, msi_control_reg(pos));
         unused = ~(uint32_t)0 >> (32 - multi_msi_capable(cntl));
-        for ( pos = 0; pos < entry->msi.nvec; ++pos, ++entry )
+        for ( pos = 0; pos < nvec; ++pos, ++entry )
         {
             entry->msi_attrib.guest_masked =
                 *data >> entry->msi_attrib.entry_nr;

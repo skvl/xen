@@ -1580,7 +1580,7 @@ static int __init make_gic_domU_node(const struct domain *d, void *fdt)
     case GIC_V2:
         return make_gicv2_domU_node(d, fdt);
     default:
-        panic("Unsupported GIC version");
+        panic("Unsupported GIC version\n");
     }
 }
 
@@ -2069,7 +2069,6 @@ void __init create_domUs(void)
             .arch.gic_version = XEN_DOMCTL_CONFIG_GIC_NATIVE,
             .arch.nr_spis = 0,
             .flags = XEN_DOMCTL_CDF_hvm_guest | XEN_DOMCTL_CDF_hap,
-            .max_vcpus = 1,
             .max_evtchn_port = -1,
             .max_grant_frames = 64,
             .max_maptrack_frames = 1024,
@@ -2080,16 +2079,19 @@ void __init create_domUs(void)
 
         if ( dt_property_read_bool(node, "vpl011") )
             d_cfg.arch.nr_spis = GUEST_VPL011_SPI - 32 + 1;
-        dt_property_read_u32(node, "cpus", &d_cfg.max_vcpus);
+
+        if ( !dt_property_read_u32(node, "cpus", &d_cfg.max_vcpus) )
+            panic("Missing property 'cpus' for domain %s\n",
+                  dt_node_name(node));
 
         d = domain_create(++max_init_domid, &d_cfg, false);
         if ( IS_ERR(d) )
-            panic("Error creating domain %s", dt_node_name(node));
+            panic("Error creating domain %s\n", dt_node_name(node));
 
         d->is_console = true;
 
         if ( construct_domU(d, node) != 0 )
-            panic("Could not set up domain %s", dt_node_name(node));
+            panic("Could not set up domain %s\n", dt_node_name(node));
 
         domain_unpause_by_systemcontroller(d);
     }

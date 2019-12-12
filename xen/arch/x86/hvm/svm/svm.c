@@ -173,24 +173,6 @@ static void svm_enable_msr_interception(struct domain *d, uint32_t msr)
         svm_intercept_msr(v, msr, MSR_INTERCEPT_WRITE);
 }
 
-static void svm_set_icebp_interception(struct domain *d, bool enable)
-{
-    const struct vcpu *v;
-
-    for_each_vcpu ( d, v )
-    {
-        struct vmcb_struct *vmcb = v->arch.hvm.svm.vmcb;
-        uint32_t intercepts = vmcb_get_general2_intercepts(vmcb);
-
-        if ( enable )
-            intercepts |= GENERAL2_INTERCEPT_ICEBP;
-        else
-            intercepts &= ~GENERAL2_INTERCEPT_ICEBP;
-
-        vmcb_set_general2_intercepts(vmcb, intercepts);
-    }
-}
-
 static void svm_save_dr(struct vcpu *v)
 {
     struct vmcb_struct *vmcb = v->arch.hvm.svm.vmcb;
@@ -627,21 +609,21 @@ static void svm_cpuid_policy_changed(struct vcpu *v)
                       cp->extd.ibpb ? MSR_INTERCEPT_NONE : MSR_INTERCEPT_RW);
 }
 
-static void svm_sync_vmcb(struct vcpu *v, enum vmcb_sync_state new_state)
+void svm_sync_vmcb(struct vcpu *v, enum vmcb_sync_state new_state)
 {
     struct svm_vcpu *svm = &v->arch.hvm.svm;
 
     if ( new_state == vmcb_needs_vmsave )
     {
         if ( svm->vmcb_sync_state == vmcb_needs_vmload )
-            svm_vmload(svm->vmcb);
+            svm_vmload_pa(svm->vmcb_pa);
 
         svm->vmcb_sync_state = new_state;
     }
     else
     {
         if ( svm->vmcb_sync_state == vmcb_needs_vmsave )
-            svm_vmsave(svm->vmcb);
+            svm_vmsave_pa(svm->vmcb_pa);
 
         if ( svm->vmcb_sync_state != vmcb_needs_vmload )
             svm->vmcb_sync_state = new_state;
@@ -1574,8 +1556,7 @@ static int svm_cpu_up_prepare(unsigned int cpu)
             goto err;
 
 #ifdef CONFIG_PV
-        if ( !cpu_has_fsgsbase )
-            per_cpu(host_vmcb_va, cpu) = __map_domain_page_global(pg);
+        per_cpu(host_vmcb_va, cpu) = __map_domain_page_global(pg);
 #endif
 
         clear_domain_page(page_to_mfn(pg));
@@ -2571,7 +2552,6 @@ static struct hvm_function_table __initdata svm_function_table = {
     .msr_read_intercept   = svm_msr_read_intercept,
     .msr_write_intercept  = svm_msr_write_intercept,
     .enable_msr_interception = svm_enable_msr_interception,
-    .set_icebp_interception = svm_set_icebp_interception,
     .set_rdtsc_exiting    = svm_set_rdtsc_exiting,
     .set_descriptor_access_exiting = svm_set_descriptor_access_exiting,
     .get_insn_bytes       = svm_get_insn_bytes,
@@ -2758,6 +2738,9 @@ void svm_vmexit_handler(struct cpu_user_regs *regs)
             {
                 trap_type = X86_EVENTTYPE_PRI_SW_EXCEPTION;
                 inst_len = svm_get_insn_len(v, INSTR_ICEBP);
+
+                if ( !inst_len )
+                    break;
             }
 
             rc = hvm_monitor_debug(regs->rip,
@@ -2870,7 +2853,52 @@ void svm_vmexit_handler(struct cpu_user_regs *regs)
 
     case VMEXIT_TASK_SWITCH: {
         enum hvm_task_switch_reason reason;
-        int32_t errcode = -1;
+        int32_t errcode = -1, insn_len = -1;
+
+        /*
+         * All TASK_SWITCH intercepts have fault-like semantics.  NRIP is
+         * never provided, even for instruction-induced task switches, but we
+         * need to know the instruction length in order to set %eip suitably
+         * in the outgoing TSS.
+         *
+         * For a task switch which vectored through the IDT, look at the type
+         * to distinguish interrupts/exceptions from instruction based
+         * switches.
+         */
+        if ( vmcb->exitintinfo.fields.v )
+        {
+            switch ( vmcb->exitintinfo.fields.type )
+            {
+                /*
+                 * #BP and #OF are from INT3/INTO respectively.  #DB from
+                 * ICEBP is handled specially, and already has fault
+                 * semantics.
+                 */
+            case X86_EVENTTYPE_HW_EXCEPTION:
+                if ( vmcb->exitintinfo.fields.vector == TRAP_int3 ||
+                     vmcb->exitintinfo.fields.vector == TRAP_overflow )
+                    break;
+                /* Fallthrough */
+            case X86_EVENTTYPE_EXT_INTR:
+            case X86_EVENTTYPE_NMI:
+                insn_len = 0;
+                break;
+            }
+
+            /*
+             * The common logic above will have forwarded the vectoring
+             * information.  Undo this as we are going to emulate.
+             */
+            vmcb->eventinj.bytes = 0;
+        }
+
+        /*
+         * insn_len being -1 indicates that we have an instruction-induced
+         * task switch.  Decode under %rip to find its length.
+         */
+        if ( insn_len < 0 && (insn_len = svm_get_task_switch_insn_len()) == 0 )
+            goto crash_or_fault;
+
         if ( (vmcb->exitinfo2 >> 36) & 1 )
             reason = TSW_iret;
         else if ( (vmcb->exitinfo2 >> 38) & 1 )
@@ -2880,15 +2908,7 @@ void svm_vmexit_handler(struct cpu_user_regs *regs)
         if ( (vmcb->exitinfo2 >> 44) & 1 )
             errcode = (uint32_t)vmcb->exitinfo2;
 
-        /*
-         * Some processors set the EXITINTINFO field when the task switch
-         * is caused by a task gate in the IDT. In this case we will be
-         * emulating the event injection, so we do not want the processor
-         * to re-inject the original event!
-         */
-        vmcb->eventinj.bytes = 0;
-
-        hvm_task_switch((uint16_t)vmcb->exitinfo1, reason, errcode);
+        hvm_task_switch(vmcb->exitinfo1, reason, errcode, insn_len);
         break;
     }
 
@@ -3085,6 +3105,7 @@ void svm_vmexit_handler(struct cpu_user_regs *regs)
         gprintk(XENLOG_ERR, "Unexpected vmexit: reason %#"PRIx64", "
                 "exitinfo1 %#"PRIx64", exitinfo2 %#"PRIx64"\n",
                 exit_reason, vmcb->exitinfo1, vmcb->exitinfo2);
+    crash_or_fault:
         svm_crash_or_fault(v);
         break;
     }

@@ -376,6 +376,8 @@ void start_secondary(void *unused)
     if ( boot_cpu_has(X86_FEATURE_IBRSB) )
         wrmsrl(MSR_SPEC_CTRL, default_xen_spec_ctrl);
 
+    tsx_init(); /* Needs microcode.  May change HLE/RTM feature bits. */
+
     if ( xen_guest )
         hypervisor_ap_setup();
 
@@ -830,7 +832,13 @@ static int setup_cpu_root_pgt(unsigned int cpu)
     if ( !rc )
         rc = clone_mapping(idt_tables[cpu], rpt);
     if ( !rc )
-        rc = clone_mapping(&per_cpu(init_tss, cpu), rpt);
+    {
+        struct tss_page *ptr = &per_cpu(tss_page, cpu);
+
+        BUILD_BUG_ON(sizeof(*ptr) != PAGE_SIZE);
+
+        rc = clone_mapping(&ptr->tss, rpt);
+    }
     if ( !rc )
         rc = clone_mapping((void *)per_cpu(stubs.addr, cpu), rpt);
 
@@ -990,6 +998,8 @@ static int cpu_smpboot_alloc(unsigned int cpu)
     if ( gdt == NULL )
         goto out;
     per_cpu(gdt_table, cpu) = gdt;
+    per_cpu(gdt_table_l1e, cpu) =
+        l1e_from_pfn(virt_to_mfn(gdt), __PAGE_HYPERVISOR_RW);
     memcpy(gdt, boot_cpu_gdt_table, NR_RESERVED_GDT_PAGES * PAGE_SIZE);
     BUILD_BUG_ON(NR_CPUS > 0x10000);
     gdt[PER_CPU_GDT_ENTRY - FIRST_RESERVED_GDT_ENTRY].a = cpu;
@@ -997,6 +1007,8 @@ static int cpu_smpboot_alloc(unsigned int cpu)
     per_cpu(compat_gdt_table, cpu) = gdt = alloc_xenheap_pages(order, memflags);
     if ( gdt == NULL )
         goto out;
+    per_cpu(compat_gdt_table_l1e, cpu) =
+        l1e_from_pfn(virt_to_mfn(gdt), __PAGE_HYPERVISOR_RW);
     memcpy(gdt, boot_cpu_compat_gdt_table, NR_RESERVED_GDT_PAGES * PAGE_SIZE);
     gdt[PER_CPU_GDT_ENTRY - FIRST_RESERVED_GDT_ENTRY].a = cpu;
 

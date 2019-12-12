@@ -3511,7 +3511,8 @@ x86_emulate(
     }
 
     /* With a memory operand, fetch the mask register in use (if any). */
-    if ( ea.type == OP_MEM && evex.opmsk )
+    if ( ea.type == OP_MEM && evex.opmsk &&
+         _get_fpu(fpu_type = X86EMUL_FPU_opmask, ctxt, ops) == X86EMUL_OKAY )
     {
         uint8_t *stb = get_stub(stub);
 
@@ -3530,6 +3531,14 @@ x86_emulate(
         put_stub(stub);
 
         fault_suppression = true;
+    }
+
+    if ( fpu_type == X86EMUL_FPU_opmask )
+    {
+        /* Squash (side) effects of the _get_fpu() above. */
+        x86_emul_reset_event(ctxt);
+        put_fpu(X86EMUL_FPU_opmask, false, state, ctxt, ops);
+        fpu_type = X86EMUL_FPU_none;
     }
 
     /* Decode (but don't fetch) the destination operand: register or memory. */
@@ -4063,10 +4072,12 @@ x86_emulate(
         {
             /*
              * xbegin unconditionally aborts, xabort is unconditionally
-             * a nop.
+             * a nop. It also does not truncate the destination address to
+             * 16 bits when 16-bit operand size is in effect.
              */
             if ( b & 1 )
             {
+                op_bytes = 4;
                 jmp_rel((int32_t)src.val);
                 _regs.r(ax) = 0;
             }
@@ -6570,6 +6581,8 @@ x86_emulate(
     case X86EMUL_OPC_VEX_66(0x0f, 0xf3): /* vpsllq xmm/m128,{x,y}mm,{x,y}mm */
     case X86EMUL_OPC_66(0x0f, 0xf4):     /* pmuludq xmm/m128,xmm */
     case X86EMUL_OPC_VEX_66(0x0f, 0xf4): /* vpmuludq {x,y}mm/mem,{x,y}mm,{x,y}mm */
+    CASE_SIMD_PACKED_INT(0x0f, 0xf5):    /* pmaddwd {,x}mm/mem,{,x}mm */
+    case X86EMUL_OPC_VEX_66(0x0f, 0xf5): /* vpmaddwd {x,y}mm/mem,{x,y}mm,{x,y}mm */
     case X86EMUL_OPC_66(0x0f, 0xf6):     /* psadbw xmm/m128,xmm */
     case X86EMUL_OPC_VEX_66(0x0f, 0xf6): /* vpsadbw {x,y}mm/mem,{x,y}mm,{x,y}mm */
     CASE_SIMD_PACKED_INT(0x0f, 0xf8):    /* psubb {,x}mm/mem,{,x}mm */
@@ -8548,6 +8561,9 @@ x86_emulate(
 
         invoke_stub("", "", "+m" (mask) : "a" (&mask));
         put_stub(stub);
+
+        if ( rc != X86EMUL_OKAY )
+            goto done;
 
         state->simd_size = simd_none;
         break;

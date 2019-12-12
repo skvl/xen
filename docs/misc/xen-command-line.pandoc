@@ -483,7 +483,7 @@ accounting for hardware capabilities as enumerated via CPUID.
 
 Currently accepted:
 
-The Speculation Control hardware features `ibrsb`, `stibp`, `ibpb`,
+The Speculation Control hardware features `md-clear`, `ibrsb`, `stibp`, `ibpb`,
 `l1d-flush` and `ssbd` are used by default if available and applicable.  They can
 be ignored, e.g. `no-ibrsb`, at which point Xen won't use them itself, and
 won't offer them to guests.
@@ -895,7 +895,7 @@ Controls for interacting with the system Extended Firmware Interface.
     uncacheable.
 
 ### ept
-> `= List of [ ad=<bool>, pml=<bool> ]`
+> `= List of [ ad=<bool>, pml=<bool>, exec-sp=<bool> ]`
 
 > Applicability: Intel
 
@@ -925,6 +925,31 @@ introduced with the Nehalem architecture.
     functionally depends on A/D tracking, so choosing `ad=0` will implicitly
     disable PML.  `pml=0` can be used to prevent the use of PML on otherwise
     capable hardware.
+
+*   The `exec-sp` boolean controls whether EPT superpages with execute
+    permissions are permitted.  In general this is good for performance.
+
+    However, on processors vulnerable CVE-2018-12207, HVM guest kernels can
+    use executable superpages to crash the host.  By default, executable
+    superpages are disabled on affected hardware.
+
+    If HVM guest kernels are trusted not to mount a DoS against the system,
+    this option can enabled to regain performance.
+
+    This boolean may be modified at runtime using `xl set-parameters
+    ept=[no-]exec-sp` to switch between fast and secure.
+
+    *   When switching from secure to fast, preexisting HVM domains will run
+        at their current performance until they are rebooted; new domains will
+        run without any overhead.
+
+    *   When switching from fast to secure, all HVM domains will immediately
+        suffer a performance penalty.
+
+    **Warning: No guarantee is made that this runtime option will be retained
+      indefinitely, or that it will retain this exact behaviour.  It is
+      intended as an emergency option for people who first chose fast, then
+      change their minds to secure, and wish not to reboot.**
 
 ### extra_guest_irqs
 > `= [<domU number>][,<dom0 number>]`
@@ -1171,10 +1196,9 @@ detection of systems known to misbehave upon accesses to that port.
 > Default: `new` unless directed-EOI is supported
 
 ### iommu
-    = List of [ <bool>, verbose, debug, force, required,
-                sharept, intremap, intpost,
-                snoop, qinval, igfx, workaround_bios_bug,
-                amd-iommu-perdev-intremap,
+    = List of [ <bool>, verbose, debug, force, required, quarantine,
+                sharept, intremap, intpost, crash-disable,
+                snoop, qinval, igfx, amd-iommu-perdev-intremap,
                 dom0-{passthrough,strict} ]
 
     All sub-options are boolean in nature.
@@ -1210,6 +1234,12 @@ boolean (e.g. `iommu=no`) can override this and leave the IOMMUs disabled.
     will prevent Xen from booting if IOMMUs aren't discovered and enabled
     successfully.
 
+*   The `quarantine` boolean can be used to control Xen's behavior when
+    de-assigning devices from guests.  If enabled (the default), Xen always
+    quarantines such devices; they must be explicitly assigned back to Dom0
+    before they can be used there again.  If disabled, Xen will only
+    quarantine devices the toolstack hass arranged for getting quarantined.
+
 *   The `sharept` boolean controls whether the IOMMU pagetables are shared
     with the CPU-side HAP pagetables, or allocated separately.  Sharing
     reduces the memory overhead, but doesn't work in combination with CPU-side
@@ -1235,6 +1265,12 @@ boolean (e.g. `iommu=no`) can override this and leave the IOMMUs disabled.
     This option depends on `intremap`, and is disabled by default due to some
     corner cases in the implementation which have yet to be resolved.
 
+*   The `crash-disable` boolean controls disabling IOMMU functionality (DMAR/IR/QI)
+    before switching to a crash kernel. This option is inactive by default and
+    is for compatibility with older kdump kernels only. Modern kernels copy
+    all the necessary tables from the previous one following kexec which makes
+    the transition transparent for them with IOMMU functions still on.
+
 The following options are specific to Intel VT-d hardware:
 
 *   The `snoop` boolean controls the Snoop Control sub-feature, and is active
@@ -1258,10 +1294,6 @@ The following options are specific to Intel VT-d hardware:
     It is intended as a debugging mechanism for graphics issues, and to be
     similar to Linux's `intel_iommu=igfx_off` option.  If specifying `no-igfx`
     fixes anything, please report the problem.
-
-*   The `workaround_bios_bug` boolean is disabled by default.  It can be used
-    to ignore errors when parsing the ACPI tables, and finding a listed PCI
-    device which doesn't appear to exist in the system.
 
 The following options are specific to AMD-Vi hardware:
 
@@ -1786,48 +1818,23 @@ enabling more sockets and cores to go into deeper sleep states.
 Set the serial transmit buffer size.
 
 ### serrors (ARM)
-> `= diverse | forward | panic`
+> `= diverse | panic`
 
 > Default: `diverse`
 
-This parameter is provided to administrators to determine how the
-hypervisors handle SErrors.
-
-In order to distinguish guest-generated SErrors from hypervisor-generated
-SErrors we have to place SError checking code in every EL1 <-> EL2 paths.
-That will cause overhead on entries and exits due to dsb/isb. However, not all
-platforms need to categorize SErrors. For example, a host that is running with
-trusted guests. The administrator can confirm that all guests that are running
-on the host will not trigger such SErrors. In this case, the administrator can
-use this parameter to skip categorizing SErrors and reduce the overhead of
-dsb/isb.
-
-We provided the following 3 options to administrators to determine how the
-hypervisors handle SErrors:
+This parameter is provided to administrators to determine how the hypervisor
+handles SErrors.
 
 * `diverse`:
-  The hypervisor will distinguish guest SErrors from hypervisor SErrors.
-  The guest generated SErrors will be forwarded to guests, the hypervisor
-  generated SErrors will cause the whole system to crash.
-  It requires:
-  1. dsb/isb on all EL1 -> EL2 trap entries to categorize SErrors correctly.
-  2. dsb/isb on EL2 -> EL1 return paths to prevent slipping hypervisor
-     SErrors to guests.
-  3. dsb/isb in context switch to isolate SErrors between 2 vCPUs.
-
-* `forward`:
-  The hypervisor will not distinguish guest SErrors from hypervisor SErrors.
-  All SErrors will be forwarded to guests, except the SErrors generated when
-  the idle vCPU is running. The idle domain doesn't have the ability to handle
-  SErrors, so we have to crash the whole system when we get SErros with the
-  idle vCPU. This option will avoid most overhead of the dsb/isb, except the
-  dsb/isb in context switch which is used to isolate the SErrors between 2
-  vCPUs.
+  The hypervisor will distinguish guest SErrors from hypervisor SErrors:
+    - The guest generated SErrors will be forwarded to the currently running
+      guest.
+    - The hypervisor generated SErrors will cause the whole system to crash
 
 * `panic`:
-  The hypervisor will not distinguish guest SErrors from hypervisor SErrors.
-  All SErrors will crash the whole system. This option will avoid all overhead
-  of the dsb/isb pairs.
+  All SErrors will cause the whole system to crash. This option should only
+  be used if you trust all your guests and/or they don't have a gadget (e.g.
+  device) to generate SErrors in normal run.
 
 ### shim_mem (x86)
 > `= List of ( min:<size> | max:<size> | <size> )`
@@ -1894,7 +1901,7 @@ not be able to control the state of the mitigation.
 By default SSBD will be mitigated at runtime (i.e `ssbd=runtime`).
 
 ### spec-ctrl (x86)
-> `= List of [ <bool>, xen=<bool>, {pv,hvm,msr-sc,rsb}=<bool>,
+> `= List of [ <bool>, xen=<bool>, {pv,hvm,msr-sc,rsb,md-clear}=<bool>,
 >              bti-thunk=retpoline|lfence|jmp, {ibrs,ibpb,ssbd,eager-fpu,
 >              l1d-flush}=<bool> ]`
 
@@ -1909,7 +1916,7 @@ extreme care.**
 An overall boolean value, `spec-ctrl=no`, can be specified to turn off all
 mitigations, including pieces of infrastructure used to virtualise certain
 mitigation features for guests.  This also includes settings which `xpti`,
-`smt`, `pv-l1tf` control, unless the respective option(s) have been
+`smt`, `pv-l1tf`, `tsx` control, unless the respective option(s) have been
 specified earlier on the command line.
 
 Alternatively, a slightly more restricted `spec-ctrl=no-xen` can be used to
@@ -1918,9 +1925,10 @@ in place for guests to use.
 
 Use of a positive boolean value for either of these options is invalid.
 
-The booleans `pv=`, `hvm=`, `msr-sc=` and `rsb=` offer fine grained control
-over the alternative blocks used by Xen.  These impact Xen's ability to
-protect itself, and Xen's ability to virtualise support for guests to use.
+The booleans `pv=`, `hvm=`, `msr-sc=`, `rsb=` and `md-clear=` offer fine
+grained control over the alternative blocks used by Xen.  These impact Xen's
+ability to protect itself, and Xen's ability to virtualise support for guests
+to use.
 
 * `pv=` and `hvm=` offer control over all suboptions for PV and HVM guests
   respectively.
@@ -1929,6 +1937,11 @@ protect itself, and Xen's ability to virtualise support for guests to use.
   guests and if disabled, guests will be unable to use IBRS/STIBP/SSBD/etc.
 * `rsb=` offers control over whether to overwrite the Return Stack Buffer /
   Return Address Stack on entry to Xen.
+* `md-clear=` offers control over whether to use VERW to flush
+  microarchitectural buffers on idle and exit from Xen.  *Note: For
+  compatibility with development versions of this fix, `mds=` is also accepted
+  on Xen 4.12 and earlier as an alias.  Consult vendor documentation in
+  preference to here.*
 
 If Xen was compiled with INDIRECT_THUNK support, `bti-thunk=` can be used to
 select which of the thunks gets patched into the `__x86_indirect_thunk_%reg`
@@ -2015,6 +2028,33 @@ Xen version.
 
 ### tsc (x86)
 > `= unstable | skewed | stable:socket`
+
+### tsx
+    = <bool>
+
+    Applicability: x86
+    Default: false on parts vulnerable to TAA, true otherwise
+
+Controls for the use of Transactional Synchronization eXtensions.
+
+On Intel parts released in Q3 2019 (with updated microcode), and future parts,
+a control has been introduced which allows TSX to be turned off.
+
+On systems with the ability to turn TSX off, this boolean offers system wide
+control of whether TSX is enabled or disabled.
+
+On parts vulnerable to CVE-2019-11135 / TSX Asynchronous Abort, the following
+logic applies:
+
+ * An explicit `tsx=` choice is honoured, even if it is `true` and would
+   result in a vulnerable system.
+
+ * When no explicit `tsx=` choice is given, parts vulnerable to TAA will be
+   mitigated by disabling TSX, as this is the lowest overhead option.
+
+ * If the use of TSX is important, the more expensive TAA mitigations can be
+   opted in to with `smt=0 spec-ctrl=md-clear`, at which point TSX will remain
+   active by default.
 
 ### ucode (x86)
 > `= [<integer> | scan]`
@@ -2108,36 +2148,53 @@ Use Virtual Processor ID support if available.  This prevents the need for TLB
 flushes on VM entry and exit, increasing performance.
 
 ### vpmu (x86)
-> `= ( <boolean> | { bts | ipc | arch [, ...] } )`
+    = List of [ <bool>, bts, ipc, arch, rtm-abort=<bool> ]
 
-> Default: `off`
+    Applicability: x86.  Default: false
 
-Switch on the virtualized performance monitoring unit for HVM guests.
+Controls for Performance Monitoring Unit virtualisation.
 
-If the current cpu isn't supported a message like
-'VPMU: Initialization failed. ...'
-is printed on the hypervisor serial log.
+Performance monitoring facilities tend to be very hardware specific, and
+provide access to a wealth of low level processor information.
 
-For some Intel Nehalem processors a quirk handling exist for an unknown
-wrong behaviour (see `handle_pmc_quirk()`).
+*   An overall boolean can be used to enable or disable vPMU support.  vPMU is
+    disabled by default.
 
-If 'vpmu=bts' is specified the virtualisation of the Branch Trace Store (BTS)
-feature is switched on on Intel processors supporting this feature.
+    When enabled, guests have full access to all performance counter settings,
+    including model specific functionality.  This is a superset of the
+    functionality offered by `ipc` and/or `arch`, but a subset of the
+    functionality offered by `bts`.
 
-vpmu=ipc enables performance monitoring, but restricts the counters to the
-most minimum set possible: instructions, cycles, and reference cycles. These
-can be used to calculate instructions per cycle (IPC).
+    Xen's watchdog functionality is implemented using performance counters.
+    As a result, use of the **watchdog** option will override and disable
+    vPMU.
 
-vpmu=arch enables performance monitoring, but restricts the counters to the
-pre-defined architectural events only. These are exposed by cpuid, and listed
-in the Pre-Defined Architectural Performance Events table from the Intel 64
-and IA-32 Architectures Software Developer's Manual, Volume 3B, System
-Programming Guide, Part 2.
+*   The `bts` option enables performance monitoring, and permits additional
+    access to the Branch Trace Store controls.  BTS is an Intel feature where
+    the processor can write data into a buffer whenever a branch occurs.
+    However, as this feature isn't virtualised, a misconfiguration by the
+    guest can lock the entire system up.
 
-If a boolean is not used, combinations of flags are allowed, comma separated.
-For example, vpmu=arch,bts.
+*   The `ipc` option allows access to the most minimal set of counters
+    possible: instructions, cycles, and reference cycles.  These can be used
+    to calculate instructions per cycle (IPC).
 
-Note that if **watchdog** option is also specified vpmu will be turned off.
+*   The `arch` option allows access to the pre-defined architectural events.
+
+*   The `rtm-abort` boolean controls a trade-off between working Restricted
+    Transactional Memory, and working performance counters.
+
+    All processors released to date (Q1 2019) supporting Transactional Memory
+    Extensions suffer an erratum which has been addressed in microcode.
+
+    Processors based on the Skylake microarchitecture with up-to-date
+    microcode internally use performance counter 3 to work around the erratum.
+    A consequence is that the counter gets reprogrammed whenever an `XBEGIN`
+    instruction is executed.
+
+    An alternative mode exists where PCR3 behaves as before, at the cost of
+    `XBEGIN` unconditionally aborting.  Enabling `rtm-abort` mode will
+    activate this alternative mode.
 
 *Warning:*
 As the virtualisation is not 100% safe, don't use the vpmu flag on

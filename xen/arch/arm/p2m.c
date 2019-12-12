@@ -225,21 +225,14 @@ void p2m_tlb_flush_sync(struct p2m_domain *p2m)
 static lpae_t *p2m_get_root_pointer(struct p2m_domain *p2m,
                                     gfn_t gfn)
 {
-    unsigned int root_table;
-
-    if ( P2M_ROOT_PAGES == 1 )
-        return __map_domain_page(p2m->root);
+    unsigned long root_table;
 
     /*
-     * Concatenated root-level tables. The table number will be the
-     * offset at the previous level. It is not possible to
-     * concatenate a level-0 root.
+     * While the root table index is the offset from the previous level,
+     * we can't use (P2M_ROOT_LEVEL - 1) because the root level might be
+     * 0. Yet we still want to check if all the unused bits are zeroed.
      */
-    ASSERT(P2M_ROOT_LEVEL > 0);
-
-    root_table = gfn_x(gfn) >> (level_orders[P2M_ROOT_LEVEL - 1]);
-    root_table &= LPAE_ENTRY_MASK;
-
+    root_table = gfn_x(gfn) >> (level_orders[P2M_ROOT_LEVEL] + LPAE_SHIFT);
     if ( root_table >= P2M_ROOT_PAGES )
         return NULL;
 
@@ -405,7 +398,12 @@ mfn_t p2m_get_entry(struct p2m_domain *p2m, gfn_t gfn,
      * the table should always be non-NULL because the gfn is below
      * p2m->max_mapped_gfn and the root table pages are always present.
      */
-    BUG_ON(table == NULL);
+    if ( !table )
+    {
+        ASSERT_UNREACHABLE();
+        level = P2M_ROOT_LEVEL;
+        goto out;
+    }
 
     for ( level = P2M_ROOT_LEVEL; level < 3; level++ )
     {
@@ -1059,17 +1057,9 @@ static int __p2m_set_entry(struct p2m_domain *p2m,
         p2m_write_pte(entry, pte, p2m->clean_pte);
 
         p2m->max_mapped_gfn = gfn_max(p2m->max_mapped_gfn,
-                                      gfn_add(sgfn, 1 << page_order));
+                                      gfn_add(sgfn, (1UL << page_order) - 1));
         p2m->lowest_mapped_gfn = gfn_min(p2m->lowest_mapped_gfn, sgfn);
     }
-
-    /*
-     * Free the entry only if the original pte was valid and the base
-     * is different (to avoid freeing when permission is changed).
-     */
-    if ( p2m_is_valid(orig_pte) &&
-         !mfn_eq(lpae_get_mfn(*entry), lpae_get_mfn(orig_pte)) )
-        p2m_free_entry(p2m, orig_pte, level);
 
     if ( has_iommu_pt(p2m->domain) &&
          (lpae_is_valid(orig_pte) || lpae_is_valid(*entry)) )
@@ -1086,6 +1076,14 @@ static int __p2m_set_entry(struct p2m_domain *p2m,
     }
     else
         rc = 0;
+
+    /*
+     * Free the entry only if the original pte was valid and the base
+     * is different (to avoid freeing when permission is changed).
+     */
+    if ( p2m_is_valid(orig_pte) &&
+         !mfn_eq(lpae_get_mfn(*entry), lpae_get_mfn(orig_pte)) )
+        p2m_free_entry(p2m, orig_pte, level);
 
 out:
     unmap_domain_page(table);
@@ -1220,7 +1218,11 @@ bool p2m_resolve_translation_fault(struct domain *d, gfn_t gfn)
      * The table should always be non-NULL because the gfn is below
      * p2m->max_mapped_gfn and the root table pages are always present.
      */
-    BUG_ON(table == NULL);
+    if ( !table )
+    {
+        ASSERT_UNREACHABLE();
+        goto out;
+    }
 
     /*
      * Go down the page-tables until an entry has the valid bit unset or
@@ -1596,7 +1598,7 @@ int relinquish_p2m_mapping(struct domain *d)
     p2m_write_lock(p2m);
 
     start = p2m->lowest_mapped_gfn;
-    end = p2m->max_mapped_gfn;
+    end = gfn_add(p2m->max_mapped_gfn, 1);
 
     for ( ; gfn_x(start) < gfn_x(end);
           start = gfn_next_boundary(start, order) )
@@ -1665,7 +1667,7 @@ int p2m_cache_flush_range(struct domain *d, gfn_t *pstart, gfn_t end)
     p2m_read_lock(p2m);
 
     start = gfn_max(start, p2m->lowest_mapped_gfn);
-    end = gfn_min(end, p2m->max_mapped_gfn);
+    end = gfn_min(end, gfn_add(p2m->max_mapped_gfn, 1));
 
     next_block_gfn = start;
 

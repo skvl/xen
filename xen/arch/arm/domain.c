@@ -27,6 +27,7 @@
 #include <asm/event.h>
 #include <asm/gic.h>
 #include <asm/guest_access.h>
+#include <asm/guest_atomics.h>
 #include <asm/irq.h>
 #include <asm/p2m.h>
 #include <asm/platform.h>
@@ -278,28 +279,31 @@ static void ctxt_switch_to(struct vcpu *n)
 static void update_runstate_area(struct vcpu *v)
 {
     void __user *guest_handle = NULL;
+    struct vcpu_runstate_info runstate;
 
     if ( guest_handle_is_null(runstate_guest(v)) )
         return;
+
+    memcpy(&runstate, &v->runstate, sizeof(runstate));
 
     if ( VM_ASSIST(v->domain, runstate_update_flag) )
     {
         guest_handle = &v->runstate_guest.p->state_entry_time + 1;
         guest_handle--;
-        v->runstate.state_entry_time |= XEN_RUNSTATE_UPDATE;
+        runstate.state_entry_time |= XEN_RUNSTATE_UPDATE;
         __raw_copy_to_guest(guest_handle,
-                            (void *)(&v->runstate.state_entry_time + 1) - 1, 1);
+                            (void *)(&runstate.state_entry_time + 1) - 1, 1);
         smp_wmb();
     }
 
-    __copy_to_guest(runstate_guest(v), &v->runstate, 1);
+    __copy_to_guest(runstate_guest(v), &runstate, 1);
 
     if ( guest_handle )
     {
-        v->runstate.state_entry_time &= ~XEN_RUNSTATE_UPDATE;
+        runstate.state_entry_time &= ~XEN_RUNSTATE_UPDATE;
         smp_wmb();
         __raw_copy_to_guest(guest_handle,
-                            (void *)(&v->runstate.state_entry_time + 1) - 1, 1);
+                            (void *)(&runstate.state_entry_time + 1) - 1, 1);
     }
 }
 
@@ -348,17 +352,6 @@ void context_switch(struct vcpu *prev, struct vcpu *next)
 
     local_irq_disable();
 
-    /*
-     * If the serrors_op is "FORWARD", we have to prevent forwarding
-     * SError to wrong vCPU. So before context switch, we have to use
-     * the SYNCRONIZE_SERROR to guarantee that the pending SError would
-     * be caught by current vCPU.
-     *
-     * The SKIP_CTXT_SWITCH_SERROR_SYNC will be set to cpu_hwcaps when the
-     * serrors_op is NOT "FORWARD".
-     */
-    SYNCHRONIZE_SERROR(SKIP_CTXT_SWITCH_SERROR_SYNC);
-
     set_current(next);
 
     prev = __context_switch(prev, next);
@@ -381,14 +374,15 @@ void sync_vcpu_execstate(struct vcpu *v)
     /* Nothing to do -- no lazy switching */
 }
 
-#define next_arg(fmt, args) ({                                              \
+#define NEXT_ARG(fmt, args)                                                 \
+({                                                                          \
     unsigned long __arg;                                                    \
     switch ( *(fmt)++ )                                                     \
     {                                                                       \
     case 'i': __arg = (unsigned long)va_arg(args, unsigned int);  break;    \
     case 'l': __arg = (unsigned long)va_arg(args, unsigned long); break;    \
     case 'h': __arg = (unsigned long)va_arg(args, void *);        break;    \
-    default:  __arg = 0; BUG();                                             \
+    default:  goto bad_fmt;                                                 \
     }                                                                       \
     __arg;                                                                  \
 })
@@ -403,9 +397,6 @@ unsigned long hypercall_create_continuation(
     unsigned int i;
     va_list args;
 
-    /* All hypercalls take at least one argument */
-    BUG_ON( !p || *p == '\0' );
-
     current->hcall_preempted = true;
 
     va_start(args, format);
@@ -413,7 +404,7 @@ unsigned long hypercall_create_continuation(
     if ( mcs->flags & MCSF_in_multicall )
     {
         for ( i = 0; *p != '\0'; i++ )
-            mcs->call.args[i] = next_arg(p, args);
+            mcs->call.args[i] = NEXT_ARG(p, args);
 
         /* Return value gets written back to mcs->call.result */
         rc = mcs->call.result;
@@ -429,7 +420,7 @@ unsigned long hypercall_create_continuation(
 
             for ( i = 0; *p != '\0'; i++ )
             {
-                arg = next_arg(p, args);
+                arg = NEXT_ARG(p, args);
 
                 switch ( i )
                 {
@@ -452,7 +443,7 @@ unsigned long hypercall_create_continuation(
 
             for ( i = 0; *p != '\0'; i++ )
             {
-                arg = next_arg(p, args);
+                arg = NEXT_ARG(p, args);
 
                 switch ( i )
                 {
@@ -473,7 +464,16 @@ unsigned long hypercall_create_continuation(
     va_end(args);
 
     return rc;
+
+ bad_fmt:
+    va_end(args);
+    gprintk(XENLOG_ERR, "Bad hypercall continuation format '%c'\n", *p);
+    ASSERT_UNREACHABLE();
+    domain_crash(current->domain);
+    return 0;
 }
+
+#undef NEXT_ARG
 
 void startup_cpu_idle_loop(void)
 {
@@ -1017,7 +1017,7 @@ void arch_dump_vcpu_info(struct vcpu *v)
 
 void vcpu_mark_events_pending(struct vcpu *v)
 {
-    int already_pending = test_and_set_bit(
+    bool already_pending = guest_test_and_set_bit(v->domain,
         0, (unsigned long *)&vcpu_info(v, evtchn_upcall_pending));
 
     if ( already_pending )

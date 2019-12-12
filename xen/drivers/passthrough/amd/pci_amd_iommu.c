@@ -222,7 +222,7 @@ static int __must_check allocate_domain_resources(struct domain_iommu *hd)
     return rc;
 }
 
-static int get_paging_mode(unsigned long entries)
+int amd_iommu_get_paging_mode(unsigned long entries)
 {
     int level = 1;
 
@@ -242,9 +242,17 @@ static int amd_iommu_domain_init(struct domain *d)
 {
     struct domain_iommu *hd = dom_iommu(d);
 
-    /* For pv and dom0, stick with get_paging_mode(max_page)
-     * For HVM dom0, use 2 level page table at first */
-    hd->arch.paging_mode = is_hvm_domain(d) ? 2 : get_paging_mode(max_page);
+    /*
+     * Choose the number of levels for the IOMMU page tables.
+     * - PV needs 3 or 4, depending on whether there is RAM (including hotplug
+     *   RAM) above the 512G boundary.
+     * - HVM could in principle use 3 or 4 depending on how much guest
+     *   physical address space we give it, but this isn't known yet so use 4
+     *   unilaterally.
+     */
+    hd->arch.paging_mode = is_hvm_domain(d)
+        ? 4 : amd_iommu_get_paging_mode(get_upper_mfn_bound());
+
     return 0;
 }
 
@@ -363,7 +371,7 @@ static int amd_iommu_assign_device(struct domain *d, u8 devfn,
             ivrs_mappings[req_id].read_permission);
     }
 
-    return reassign_device(hardware_domain, d, devfn, pdev);
+    return reassign_device(pdev->domain, d, devfn, pdev);
 }
 
 static void deallocate_next_page_table(struct page_info *pg, int level)
@@ -573,6 +581,7 @@ static void amd_dump_p2m_table(struct domain *d)
 static const struct iommu_ops __initconstrel amd_iommu_ops = {
     .init = amd_iommu_domain_init,
     .hwdom_init = amd_iommu_hwdom_init,
+    .quarantine_init = amd_iommu_quarantine_init,
     .add_device = amd_iommu_add_device,
     .remove_device = amd_iommu_remove_device,
     .assign_device  = amd_iommu_assign_device,

@@ -475,7 +475,7 @@ static unsigned int iommu_msi_startup(struct irq_desc *desc)
 static void iommu_msi_end(struct irq_desc *desc, u8 vector)
 {
     iommu_msi_unmask(desc);
-    ack_APIC_irq();
+    end_nonmaskable_irq(desc, vector);
 }
 
 
@@ -508,7 +508,7 @@ static void iommu_maskable_msi_shutdown(struct irq_desc *desc)
  * maskable flavors here, as we want the ACK to be issued in ->end().
  */
 #define iommu_maskable_msi_ack ack_nonmaskable_msi_irq
-#define iommu_maskable_msi_end end_nonmaskable_msi_irq
+#define iommu_maskable_msi_end end_nonmaskable_irq
 
 static hw_irq_controller iommu_maskable_msi_type = {
     .typename = "IOMMU-M-MSI",
@@ -909,7 +909,35 @@ static void enable_iommu(struct amd_iommu *iommu)
 
     iommu->enabled = 1;
     spin_unlock_irqrestore(&iommu->lock, flags);
+}
 
+static void disable_iommu(struct amd_iommu *iommu)
+{
+    unsigned long flags;
+
+    spin_lock_irqsave(&iommu->lock, flags);
+
+    if ( !iommu->enabled )
+    {
+        spin_unlock_irqrestore(&iommu->lock, flags);
+        return;
+    }
+
+    amd_iommu_msi_enable(iommu, IOMMU_CONTROL_DISABLED);
+    set_iommu_command_buffer_control(iommu, IOMMU_CONTROL_DISABLED);
+    set_iommu_event_log_control(iommu, IOMMU_CONTROL_DISABLED);
+
+    if ( amd_iommu_has_feature(iommu, IOMMU_EXT_FEATURE_PPRSUP_SHIFT) )
+        set_iommu_ppr_log_control(iommu, IOMMU_CONTROL_DISABLED);
+
+    if ( amd_iommu_has_feature(iommu, IOMMU_EXT_FEATURE_GTSUP_SHIFT) )
+        set_iommu_guest_translation_control(iommu, IOMMU_CONTROL_DISABLED);
+
+    set_iommu_translation_control(iommu, IOMMU_CONTROL_DISABLED);
+
+    iommu->enabled = 0;
+
+    spin_unlock_irqrestore(&iommu->lock, flags);
 }
 
 static void __init deallocate_buffer(void *buf, uint32_t sz)
@@ -1045,12 +1073,12 @@ static void __init amd_iommu_init_cleanup(void)
     {
         list_del(&iommu->list);
         if ( iommu->enabled )
-        {
-            deallocate_ring_buffer(&iommu->cmd_buffer);
-            deallocate_ring_buffer(&iommu->event_log);
-            deallocate_ring_buffer(&iommu->ppr_log);
-            unmap_iommu_mmio_region(iommu);
-        }
+            disable_iommu(iommu);
+
+        deallocate_ring_buffer(&iommu->cmd_buffer);
+        deallocate_ring_buffer(&iommu->event_log);
+        deallocate_ring_buffer(&iommu->ppr_log);
+        unmap_iommu_mmio_region(iommu);
         xfree(iommu);
     }
 
@@ -1295,36 +1323,6 @@ int __init amd_iommu_init(void)
 error_out:
     amd_iommu_init_cleanup();
     return rc;
-}
-
-static void disable_iommu(struct amd_iommu *iommu)
-{
-    unsigned long flags;
-
-    spin_lock_irqsave(&iommu->lock, flags);
-
-    if ( !iommu->enabled )
-    {
-        spin_unlock_irqrestore(&iommu->lock, flags); 
-        return;
-    }
-
-    amd_iommu_msi_enable(iommu, IOMMU_CONTROL_DISABLED);
-    set_iommu_command_buffer_control(iommu, IOMMU_CONTROL_DISABLED);
-    set_iommu_event_log_control(iommu, IOMMU_CONTROL_DISABLED);
-
-    if ( amd_iommu_has_feature(iommu, IOMMU_EXT_FEATURE_PPRSUP_SHIFT) )
-        set_iommu_ppr_log_control(iommu, IOMMU_CONTROL_DISABLED);
-
-    if ( amd_iommu_has_feature(iommu, IOMMU_EXT_FEATURE_GTSUP_SHIFT) )
-        set_iommu_guest_translation_control(iommu, IOMMU_CONTROL_DISABLED);
-
-    set_iommu_translation_control(iommu, IOMMU_CONTROL_DISABLED);
-
-    iommu->enabled = 0;
-
-    spin_unlock_irqrestore(&iommu->lock, flags);
-
 }
 
 static void invalidate_all_domain_pages(void)

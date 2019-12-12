@@ -59,9 +59,22 @@ void nvmx_cpu_dead(unsigned int cpu)
 
 int nvmx_vcpu_initialise(struct vcpu *v)
 {
+    struct domain *d = v->domain;
     struct nestedvmx *nvmx = &vcpu_2_nvmx(v);
     struct nestedvcpu *nvcpu = &vcpu_nestedhvm(v);
     struct page_info *pg = alloc_domheap_page(NULL, 0);
+
+    /*
+     * Gross bodge.  The nested p2m logic can't cope with the CVE-2018-12207
+     * workaround of using NX EPT superpages, and livelocks.  Nested HVM isn't
+     * security supported, so disable the workaround until the nested p2m
+     * logic can be improved.
+     */
+    if ( !d->arch.hvm.vmx.exec_sp )
+    {
+        d->arch.hvm.vmx.exec_sp = true;
+        p2m_change_entry_type_global(d, p2m_ram_rw, p2m_ram_rw);
+    }
 
     if ( !pg )
     {
@@ -1020,11 +1033,11 @@ static void load_shadow_guest_state(struct vcpu *v)
     nvcpu->guest_cr[0] = get_vvmcs(v, CR0_READ_SHADOW);
     nvcpu->guest_cr[4] = get_vvmcs(v, CR4_READ_SHADOW);
 
-    rc = hvm_set_cr0(get_vvmcs(v, GUEST_CR0), true);
+    rc = hvm_set_cr4(get_vvmcs(v, GUEST_CR4), true);
     if ( rc == X86EMUL_EXCEPTION )
         hvm_inject_hw_exception(TRAP_gp_fault, 0);
 
-    rc = hvm_set_cr4(get_vvmcs(v, GUEST_CR4), true);
+    rc = hvm_set_cr0(get_vvmcs(v, GUEST_CR0), true);
     if ( rc == X86EMUL_EXCEPTION )
         hvm_inject_hw_exception(TRAP_gp_fault, 0);
 
@@ -1234,11 +1247,11 @@ static void load_vvmcs_host_state(struct vcpu *v)
         __vmwrite(vmcs_h2g_field[i].guest_field, r);
     }
 
-    rc = hvm_set_cr0(get_vvmcs(v, HOST_CR0), true);
+    rc = hvm_set_cr4(get_vvmcs(v, HOST_CR4), true);
     if ( rc == X86EMUL_EXCEPTION )
         hvm_inject_hw_exception(TRAP_gp_fault, 0);
 
-    rc = hvm_set_cr4(get_vvmcs(v, HOST_CR4), true);
+    rc = hvm_set_cr0(get_vvmcs(v, HOST_CR0), true);
     if ( rc == X86EMUL_EXCEPTION )
         hvm_inject_hw_exception(TRAP_gp_fault, 0);
 
@@ -2487,6 +2500,7 @@ int nvmx_n2_vmexit_handler(struct cpu_user_regs *regs,
             nvcpu->nv_vmexit_pending = 1;
         break;
     case EXIT_REASON_RDTSC:
+    case EXIT_REASON_RDTSCP:
         ctrl = __n2_exec_control(v);
         if ( ctrl & CPU_BASED_RDTSC_EXITING )
             nvcpu->nv_vmexit_pending = 1;
@@ -2497,6 +2511,8 @@ int nvmx_n2_vmexit_handler(struct cpu_user_regs *regs,
              * avoiding changing guest_tsc and messing up timekeeping in L1
              */
             msr_split(regs, hvm_get_guest_tsc(v) + get_vvmcs(v, TSC_OFFSET));
+            if ( exit_reason == EXIT_REASON_RDTSCP )
+                regs->rcx = v->arch.msrs->tsc_aux;
             update_guest_eip();
 
             return 1;
