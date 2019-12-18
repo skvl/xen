@@ -5083,6 +5083,21 @@ void hvm_toggle_singlestep(struct vcpu *v)
     v->arch.hvm.single_step = !v->arch.hvm.single_step;
 }
 
+void hvm_fast_singlestep(struct vcpu *v, uint16_t p2midx)
+{
+    ASSERT(atomic_read(&v->pause_count));
+
+    if ( !hvm_is_singlestep_supported() )
+        return;
+
+    if ( p2midx >= MAX_ALTP2M )
+        return;
+
+    v->arch.hvm.single_step = true;
+    v->arch.hvm.fast_single_step.enabled = true;
+    v->arch.hvm.fast_single_step.p2midx = p2midx;
+}
+
 void hvm_domain_soft_reset(struct domain *d)
 {
     hvm_destroy_all_ioreq_servers(d);
