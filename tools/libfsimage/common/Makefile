@@ -3,7 +3,7 @@ include $(XEN_ROOT)/tools/libfsimage/Rules.mk
 
 CFLAGS += -DFSDIR="\"$(LIBEXEC_LIB)/fs\""
 
-MAJOR = 4.12
+MAJOR = 4.13
 MINOR = 0
 
 LDFLAGS-$(CONFIG_SunOS) = -Wl,-M -Wl,mapfile-SunOS

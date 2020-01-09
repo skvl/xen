@@ -285,7 +285,7 @@ int __init dom0_construct_pv(struct domain *d,
                              module_t *initrd,
                              char *cmdline)
 {
-    int i, cpu, rc, compatible, compat32, order, machine;
+    int i, rc, compatible, order, machine;
     struct cpu_user_regs *regs;
     unsigned long pfn, mfn;
     unsigned long nr_pages;
@@ -345,23 +345,28 @@ int __init dom0_construct_pv(struct domain *d,
 
     if ( (rc = elf_init(&elf, image_start, image_len)) != 0 )
         return rc;
-#ifdef CONFIG_VERBOSE_DEBUG
-    elf_set_verbose(&elf);
-#endif
+
+    if ( opt_dom0_verbose )
+        elf_set_verbose(&elf);
+
     elf_parse_binary(&elf);
     if ( (rc = elf_xen_parse(&elf, &parms)) != 0 )
         goto out;
 
     /* compatibility check */
     compatible = 0;
-    compat32   = 0;
     machine = elf_uval(&elf, elf.ehdr, e_machine);
     printk(" Xen  kernel: 64-bit, lsb, compat32\n");
     if ( elf_32bit(&elf) && parms.pae == XEN_PAE_BIMODAL )
         parms.pae = XEN_PAE_EXTCR3;
     if ( elf_32bit(&elf) && parms.pae && machine == EM_386 )
     {
-        compat32 = 1;
+        if ( unlikely(rc = switch_compat(d)) )
+        {
+            printk("Dom0 failed to switch to compat: %d\n", rc);
+            return rc;
+        }
+
         compatible = 1;
     }
     if (elf_64bit(&elf) && machine == EM_X86_64)
@@ -392,16 +397,6 @@ int __init dom0_construct_pv(struct domain *d,
         }
     }
 
-    if ( compat32 )
-    {
-        d->arch.is_32bit_pv = d->arch.has_32bit_shinfo = 1;
-        d->arch.pv.xpti = false;
-        d->arch.pv.pcid = false;
-        v->vcpu_info = (void *)&d->shared_info->compat.vcpu_info[0];
-        if ( setup_compat_arg_xlat(v) != 0 )
-            BUG();
-    }
-
     nr_pages = dom0_compute_nr_pages(d, &parms, initrd_len);
 
     if ( parms.pae == XEN_PAE_EXTCR3 )
@@ -424,8 +419,6 @@ int __init dom0_construct_pv(struct domain *d,
         printk(XENLOG_WARNING "P2M table base ignored\n");
         parms.p2m_base = UNSET_ADDR;
     }
-
-    domain_set_alloc_bitsize(d);
 
     /*
      * Why do we need this? The number of page-table frames depends on the
@@ -606,23 +599,19 @@ int __init dom0_construct_pv(struct domain *d,
     {
         maddr_to_page(mpt_alloc)->u.inuse.type_info = PGT_l4_page_table;
         l4start = l4tab = __va(mpt_alloc); mpt_alloc += PAGE_SIZE;
+        clear_page(l4tab);
+        init_xen_l4_slots(l4tab, _mfn(virt_to_mfn(l4start)),
+                          d, INVALID_MFN, true);
+        v->arch.guest_table = pagetable_from_paddr(__pa(l4start));
     }
     else
     {
-        page = alloc_domheap_page(d, MEMF_no_owner | MEMF_no_scrub);
-        if ( !page )
-            panic("Not enough RAM for domain 0 PML4\n");
-        page->u.inuse.type_info = PGT_l4_page_table|PGT_validated|1;
-        l4start = l4tab = page_to_virt(page);
+        /* Monitor table already created by switch_compat(). */
+        l4start = l4tab = __va(pagetable_get_paddr(v->arch.guest_table));
+        /* See public/xen.h on why the following is needed. */
         maddr_to_page(mpt_alloc)->u.inuse.type_info = PGT_l3_page_table;
         l3start = __va(mpt_alloc); mpt_alloc += PAGE_SIZE;
     }
-    clear_page(l4tab);
-    init_xen_l4_slots(l4tab, _mfn(virt_to_mfn(l4start)),
-                      d, INVALID_MFN, true);
-    v->arch.guest_table = pagetable_from_paddr(__pa(l4start));
-    if ( is_pv_32bit_domain(d) )
-        v->arch.guest_table_user = v->arch.guest_table;
 
     l4tab += l4_table_offset(v_start);
     pfn = alloc_spfn;
@@ -705,16 +694,8 @@ int __init dom0_construct_pv(struct domain *d,
 
     printk("Dom%u has maximum %u VCPUs\n", d->domain_id, d->max_vcpus);
 
-    cpu = v->processor;
-    for ( i = 1; i < d->max_vcpus; i++ )
-    {
-        const struct vcpu *p = dom0_setup_vcpu(d, i, cpu);
+    sched_setup_dom0_vcpus(d);
 
-        if ( p )
-            cpu = p->processor;
-    }
-
-    domain_update_node_affinity(d);
     d->arch.paging.mode = 0;
 
     /* Set up CR3 value for write_ptbase */
@@ -747,11 +728,10 @@ int __init dom0_construct_pv(struct domain *d,
             mapcache_override_current(NULL);
             switch_cr3_cr4(current->arch.cr3, read_cr4());
             printk("Invalid HYPERCALL_PAGE field in ELF notes.\n");
-            rc = -1;
+            rc = -EINVAL;
             goto out;
         }
-        hypercall_page_initialise(
-            d, (void *)(unsigned long)parms.virt_hypercall);
+        init_hypercall_page(d, _p(parms.virt_hypercall));
     }
 
     /* Free temporary buffers. */
@@ -915,21 +895,24 @@ int __init dom0_construct_pv(struct domain *d,
     rc = dom0_setup_permissions(d);
     BUG_ON(rc != 0);
 
-    if ( elf_check_broken(&elf) )
-        printk(" Xen warning: dom0 kernel broken ELF: %s\n",
-               elf_check_broken(&elf));
-
     if ( d->domain_id == hardware_domid )
         iommu_hwdom_init(d);
+
+    /* Activate shadow mode, if requested.  Reuse the pv_l1tf tasklet. */
+#ifdef CONFIG_SHADOW_PAGING
+    if ( opt_dom0_shadow )
+    {
+        printk("Switching dom0 to using shadow paging\n");
+        tasklet_schedule(&d->arch.paging.shadow.pv_l1tf_tasklet);
+    }
+#endif
 
     v->is_initialised = 1;
     clear_bit(_VPF_down, &v->pause_flags);
 
-    return 0;
-
 out:
     if ( elf_check_broken(&elf) )
-        printk(" Xen dom0 kernel broken ELF: %s\n",
+        printk(XENLOG_WARNING "Dom0 kernel broken ELF: %s\n",
                elf_check_broken(&elf));
 
     return rc;

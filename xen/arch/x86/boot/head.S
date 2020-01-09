@@ -2,11 +2,10 @@
 #include <xen/multiboot2.h>
 #include <public/xen.h>
 #include <asm/asm_defns.h>
-#include <asm/desc.h>
 #include <asm/fixmap.h>
 #include <asm/page.h>
 #include <asm/processor.h>
-#include <asm/msr.h>
+#include <asm/msr-index.h>
 #include <asm/cpufeature.h>
 #include <public/elfnote.h>
 
@@ -130,7 +129,7 @@ multiboot2_header:
 
         .word   0
 gdt_boot_descr:
-        .word   7*8-1
+        .word   .Ltrampoline_gdt_end - trampoline_gdt - 1
 gdt_boot_base:
         .long   sym_offs(trampoline_gdt)
         .long   0 /* Needed for 64-bit lgdt */
@@ -557,24 +556,17 @@ trampoline_setup:
         /*
          * Called on legacy BIOS and EFI platforms.
          *
-         * Initialize bits 0-15 of BOOT_FS segment descriptor base address.
+         * Set the BOOT_FS descriptor base address to %esi.
          */
-        mov     %si,BOOT_FS+2+sym_esi(trampoline_gdt)
+        mov     %esi, %edx
+        shr     $16, %edx
+        mov     %si, BOOT_FS + 2 + sym_esi(trampoline_gdt) /* Bits  0-15 */
+        mov     %dl, BOOT_FS + 4 + sym_esi(trampoline_gdt) /* Bits 16-23 */
+        mov     %dh, BOOT_FS + 7 + sym_esi(trampoline_gdt) /* Bits 24-31 */
 
-        /* Initialize bits 16-23 of BOOT_FS segment descriptor base address. */
-        shld    $16,%esi,%edx
-        mov     %dl,BOOT_FS+4+sym_esi(trampoline_gdt)
-
-        /* Initialize bits 24-31 of BOOT_FS segment descriptor base address. */
-        mov     %dh,BOOT_FS+7+sym_esi(trampoline_gdt)
-
-        /*
-         * Initialize %fs and later use it to access Xen data where possible.
-         * According to Intel 64 and IA-32 Architectures Software Developer's
-         * Manual it is safe to do that without reloading GDTR before.
-         */
-        mov     $BOOT_FS,%edx
-        mov     %edx,%fs
+        /* Load %fs to allow for access to Xen data. */
+        mov     $BOOT_FS, %edx
+        mov     %edx, %fs
 
         /* Save Xen image load base address for later use. */
         mov     %esi,sym_fs(xen_phys_start)
@@ -638,6 +630,10 @@ trampoline_setup:
 
 1:
         /* Interrogate CPU extended features via CPUID. */
+        mov     $1, %eax
+        cpuid
+        mov     %ecx, sym_fs(boot_cpu_data) + CPUINFO_FEATURE_OFFSET(X86_FEATURE_HYPERVISOR)
+
         mov     $0x80000000,%eax
         cpuid
         shld    $16,%eax,%ecx
@@ -648,8 +644,13 @@ trampoline_setup:
         jbe     1f
         mov     $0x80000001,%eax
         cpuid
-1:      mov     %edx,sym_fs(cpuid_ext_features)
-        mov     %edx,sym_fs(boot_cpu_data)+CPUINFO_FEATURE_OFFSET(X86_FEATURE_LM)
+1:      mov     %edx, sym_fs(boot_cpu_data) + CPUINFO_FEATURE_OFFSET(X86_FEATURE_LM)
+
+        /* Check for NX. Adjust EFER setting if available. */
+        bt      $cpufeat_bit(X86_FEATURE_NX), %edx
+        jnc     1f
+        orb     $EFER_NX >> 8, 1 + sym_esi(trampoline_efer)
+1:
 
         /* Check for availability of long mode. */
         bt      $cpufeat_bit(X86_FEATURE_LM),%edx

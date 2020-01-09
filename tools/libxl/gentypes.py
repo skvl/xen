@@ -1,5 +1,7 @@
 #!/usr/bin/python
 
+from __future__ import print_function
+
 import sys
 import re
 
@@ -163,6 +165,19 @@ def libxl_init_members(ty, nesting = 0):
     else:
         return []
     
+def libxl_C_type_do_init(ty, pass_arg, need_zero=True, indent="    "):
+    s=indent
+    if ty.init_val is not None:
+        s+= "%s = %s;\n" % (pass_arg(idl.PASS_BY_VALUE), ty.init_val)
+    elif ty.init_fn is not None:
+        s+= "%s(%s);\n" % (ty.init_fn, pass_arg(idl.PASS_BY_REFERENCE))
+    elif need_zero:
+        ptr = pass_arg(idl.PASS_BY_REFERENCE)
+        s+= "memset(%s, 0, sizeof(*%s));\n" % (ptr, ptr)
+    else:
+        s=""
+    return s
+
 def _libxl_C_type_init(ty, v, indent = "    ", parent = None, subinit=False):
     s = ""
     if isinstance(ty, idl.KeyedUnion):
@@ -285,10 +300,10 @@ def libxl_C_type_copy_deprecated(field, v, indent = "    ", vparent = None):
         if field.type.check_default_fn is None:
             raise Exception(
 "Deprecated field %s type doesn't have a default value checker" % field.name)
-        field_val = field.type.pass_arg(v, vparent is None,
-                                        passby=idl.PASS_BY_VALUE)
-        field_ptr = field.type.pass_arg(v, vparent is None,
-                                        passby=idl.PASS_BY_REFERENCE)
+        field_pass = lambda by: field.type.pass_arg(v, vparent is None,
+                                                    passby=by)
+        field_val = field_pass(idl.PASS_BY_VALUE)
+        field_ptr = field_pass(idl.PASS_BY_REFERENCE)
         s+= "if (!%s(&p->%s) && !%s(%s))\n" % (field.type.check_default_fn,
                                                field.deprecated_by,
                                                field.type.check_default_fn,
@@ -307,15 +322,7 @@ def libxl_C_type_copy_deprecated(field, v, indent = "    ", vparent = None):
         if field.type.dispose_fn is not None:
             s+= "    %s(%s);\n" % (field.type.dispose_fn,
                                    field.type.pass_arg(v, vparent is None))
-
-        s+= "    "
-        if field.type.init_fn is not None:
-            s+= "%s(%s);\n" % (field.type.init_fn, field_ptr)
-        elif field.type.init_val is not None:
-            s+= "%s = %s;\n" % (field_val, field.type.init_val)
-        else:
-            s+= "memset(%s, 0, sizeof(*%s));\n" % (field_ptr, field_ptr)
-
+        s+=libxl_C_type_do_init(field.type, field_pass)
         s+= "}\n"
 
     if s != "":
@@ -454,6 +461,10 @@ def libxl_C_type_parse_json(ty, w, v, indent = "    ", parent = None, discrimina
         s += "        goto out;\n"
         s += "    }\n"
         s += "    for (i=0; (t=libxl__json_array_get(x,i)); i++) {\n"
+        s += libxl_C_type_do_init(ty.elem_type,
+                    lambda by: ("&" if by == idl.PASS_BY_REFERENCE else "")+
+                               ("%s[i]" % v),
+                                  need_zero=False, indent=indent+"    ")
         s += libxl_C_type_parse_json(ty.elem_type, "t", v+"[i]",
                                      indent + "    ", parent)
         s += "    }\n"
@@ -576,14 +587,14 @@ def libxl_C_enum_from_string(ty, str, e, indent = "    "):
 
 if __name__ == '__main__':
     if len(sys.argv) != 6:
-        print >>sys.stderr, "Usage: gentypes.py <idl> <header> <header-private> <header-json> <implementation>"
+        print("Usage: gentypes.py <idl> <header> <header-private> <header-json> <implementation>", file=sys.stderr)
         sys.exit(1)
 
     (_, idlname, header, header_private, header_json, impl) = sys.argv
 
     (builtins,types) = idl.parse(idlname)
 
-    print "outputting libxl type definitions to %s" % header
+    print("outputting libxl type definitions to %s" % header)
 
     f = open(header, "w")
 
@@ -633,7 +644,7 @@ if __name__ == '__main__':
     f.write("""#endif /* %s */\n""" % (header_define))
     f.close()
 
-    print "outputting libxl JSON definitions to %s" % header_json
+    print("outputting libxl JSON definitions to %s" % header_json)
 
     f = open(header_json, "w")
 
@@ -657,7 +668,7 @@ if __name__ == '__main__':
     f.write("""#endif /* %s */\n""" % header_json_define)
     f.close()
 
-    print "outputting libxl type internal definitions to %s" % header_private
+    print("outputting libxl type internal definitions to %s" % header_private)
 
     f = open(header_private, "w")
 
@@ -683,7 +694,7 @@ if __name__ == '__main__':
     f.write("""#endif /* %s */\n""" % header_json_define)
     f.close()
 
-    print "outputting libxl type implementations to %s" % impl
+    print("outputting libxl type implementations to %s" % impl)
 
     f = open(impl, "w")
     f.write("""

@@ -3,8 +3,6 @@
 
 #include "msr-index.h"
 
-#ifndef __ASSEMBLY__
-
 #include <xen/types.h>
 #include <xen/percpu.h>
 #include <xen/errno.h>
@@ -124,6 +122,14 @@ static inline uint64_t rdtsc_ordered(void)
 			  : "=a" (low), "=d" (high) \
 			  : "c" (counter))
 
+/*
+ * On hardware supporting FSGSBASE, the value loaded into hardware is the
+ * guest kernel's choice for 64bit PV guests (Xen's choice for Idle, HVM and
+ * 32bit PV).
+ *
+ * Therefore, the {RD,WR}{FS,GS}BASE instructions are only safe to use if
+ * %cr4.fsgsbase is set.
+ */
 static inline unsigned long __rdfsbase(void)
 {
     unsigned long base;
@@ -154,7 +160,7 @@ static inline unsigned long rdfsbase(void)
 {
     unsigned long base;
 
-    if ( cpu_has_fsgsbase )
+    if ( read_cr4() & X86_CR4_FSGSBASE )
         return __rdfsbase();
 
     rdmsrl(MSR_FS_BASE, base);
@@ -166,7 +172,7 @@ static inline unsigned long rdgsbase(void)
 {
     unsigned long base;
 
-    if ( cpu_has_fsgsbase )
+    if ( read_cr4() & X86_CR4_FSGSBASE )
         return __rdgsbase();
 
     rdmsrl(MSR_GS_BASE, base);
@@ -178,7 +184,7 @@ static inline unsigned long rdgsshadow(void)
 {
     unsigned long base;
 
-    if ( cpu_has_fsgsbase )
+    if ( read_cr4() & X86_CR4_FSGSBASE )
     {
         asm volatile ( "swapgs" );
         base = __rdgsbase();
@@ -192,7 +198,7 @@ static inline unsigned long rdgsshadow(void)
 
 static inline void wrfsbase(unsigned long base)
 {
-    if ( cpu_has_fsgsbase )
+    if ( read_cr4() & X86_CR4_FSGSBASE )
 #ifdef HAVE_AS_FSGSBASE
         asm volatile ( "wrfsbase %0" :: "r" (base) );
 #else
@@ -204,7 +210,7 @@ static inline void wrfsbase(unsigned long base)
 
 static inline void wrgsbase(unsigned long base)
 {
-    if ( cpu_has_fsgsbase )
+    if ( read_cr4() & X86_CR4_FSGSBASE )
 #ifdef HAVE_AS_FSGSBASE
         asm volatile ( "wrgsbase %0" :: "r" (base) );
 #else
@@ -216,7 +222,7 @@ static inline void wrgsbase(unsigned long base)
 
 static inline void wrgsshadow(unsigned long base)
 {
-    if ( cpu_has_fsgsbase )
+    if ( read_cr4() & X86_CR4_FSGSBASE )
     {
         asm volatile ( "swapgs\n\t"
 #ifdef HAVE_AS_FSGSBASE
@@ -288,6 +294,11 @@ struct vcpu_msrs
         };
     } misc_features_enables;
 
+    /* 0x00000da0 - MSR_IA32_XSS */
+    struct {
+        uint64_t raw;
+    } xss;
+
     /*
      * 0xc0000103 - MSR_TSC_AUX
      *
@@ -320,9 +331,7 @@ int init_vcpu_msr_policy(struct vcpu *v);
  * These functions are also used by the migration logic, so need to cope with
  * being used outside of v's context.
  */
-int guest_rdmsr(const struct vcpu *v, uint32_t msr, uint64_t *val);
+int guest_rdmsr(struct vcpu *v, uint32_t msr, uint64_t *val);
 int guest_wrmsr(struct vcpu *v, uint32_t msr, uint64_t val);
-
-#endif /* !__ASSEMBLY__ */
 
 #endif /* __ASM_MSR_H */

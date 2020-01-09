@@ -264,7 +264,7 @@ int xenstat_collect_networks(xenstat_node * node)
 {
 	/* Helper variables for parseNetDevLine() function defined above */
 	int i;
-	char line[512] = { 0 }, iface[16] = { 0 }, devBridge[16] = { 0 }, devNoBridge[16] = { 0 };
+	char line[512] = { 0 }, iface[16] = { 0 }, devBridge[16] = { 0 }, devNoBridge[17] = { 0 };
 	unsigned long long rxBytes, rxPackets, rxErrs, rxDrops, txBytes, txPackets, txErrs, txDrops;
 
 	struct priv_data *priv = get_priv_data(node->handle);
@@ -304,7 +304,7 @@ int xenstat_collect_networks(xenstat_node * node)
 
 	/* We get the bridge devices for use with bonding interface to get bonding interface stats */
 	getBridge("vir", devBridge, sizeof(devBridge));
-	snprintf(devNoBridge, 16, "p%s", devBridge);
+	snprintf(devNoBridge, sizeof(devNoBridge), "p%s", devBridge);
 
 	while (fgets(line, 512, priv->procnetdev)) {
 		xenstat_domain *domain;
@@ -436,13 +436,15 @@ int xenstat_collect_vbds(xenstat_node * node)
 		ret = sscanf(dp->d_name, "%3s-%u-%u", buf, &domid, &vbd.dev);
 		if (ret != 3)
 			continue;
+		if (!(strstr(buf, "vbd")) && !(strstr(buf, "tap")))
+			continue;
 
 		if (strcmp(buf,"vbd") == 0)
 			vbd.back_type = 1;
 		else if (strcmp(buf,"tap") == 0)
 			vbd.back_type = 2;
 		else
-			continue;
+			vbd.back_type = 0;
 
 		domain = xenstat_node_domain(node, domid);
 		if (domain == NULL) {
@@ -453,36 +455,29 @@ int xenstat_collect_vbds(xenstat_node * node)
 			continue;
 		}
 
-		if((read_attributes_vbd(dp->d_name, "statistics/oo_req", buf, 256)<=0)
-		   || ((ret = sscanf(buf, "%llu", &vbd.oo_reqs)) != 1))
+		if (vbd.back_type == 1 || vbd.back_type == 2)
 		{
-			continue;
-		}
 
-		if((read_attributes_vbd(dp->d_name, "statistics/rd_req", buf, 256)<=0)
-		   || ((ret = sscanf(buf, "%llu", &vbd.rd_reqs)) != 1))
+			vbd.error = 0;
+
+			if ((read_attributes_vbd(dp->d_name, "statistics/oo_req", buf, 256)<=0) ||
+				((ret = sscanf(buf, "%llu", &vbd.oo_reqs)) != 1) ||
+				(read_attributes_vbd(dp->d_name, "statistics/rd_req", buf, 256)<=0) ||
+				((ret = sscanf(buf, "%llu", &vbd.rd_reqs)) != 1) ||
+				(read_attributes_vbd(dp->d_name, "statistics/wr_req", buf, 256)<=0) ||
+				((ret = sscanf(buf, "%llu", &vbd.wr_reqs)) != 1) ||
+				(read_attributes_vbd(dp->d_name, "statistics/rd_sect", buf, 256)<=0) ||
+				((ret = sscanf(buf, "%llu", &vbd.wr_sects)) != 1) ||
+				(read_attributes_vbd(dp->d_name, "statistics/wr_sect", buf, 256)<=0) ||
+				((ret = sscanf(buf, "%llu", &vbd.wr_sects)) != 1))
+			{
+				vbd.error = 1;
+			}
+		}
+		else
 		{
-			continue;
+			vbd.error = 1;
 		}
-
-		if((read_attributes_vbd(dp->d_name, "statistics/wr_req", buf, 256)<=0)
-		   || ((ret = sscanf(buf, "%llu", &vbd.wr_reqs)) != 1))
-		{
-			continue;
-		}
-
-		if((read_attributes_vbd(dp->d_name, "statistics/rd_sect", buf, 256)<=0)
-		   || ((ret = sscanf(buf, "%llu", &vbd.rd_sects)) != 1))
-		{
-			continue;
-		}
-
-		if((read_attributes_vbd(dp->d_name, "statistics/wr_sect", buf, 256)<=0)
-		   || ((ret = sscanf(buf, "%llu", &vbd.wr_sects)) != 1))
-		{
-			continue;
-		}
-
 		if ((xenstat_save_vbd(domain, &vbd)) == NULL) {
 			perror("Allocation error");
 			return 0;

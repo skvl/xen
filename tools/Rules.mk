@@ -27,7 +27,6 @@ XEN_XENLIGHT       = $(XEN_ROOT)/tools/libxl
 XEN_XLUTIL         = $(XEN_XENLIGHT)
 XEN_XENSTORE       = $(XEN_ROOT)/tools/xenstore
 XEN_LIBXENSTAT     = $(XEN_ROOT)/tools/xenstat/libxenstat/src
-XEN_BLKTAP2        = $(XEN_ROOT)/tools/blktap2
 XEN_LIBVCHAN       = $(XEN_ROOT)/tools/libvchan
 
 CFLAGS_xeninclude = -I$(XEN_INCLUDE)
@@ -35,7 +34,7 @@ CFLAGS_xeninclude = -I$(XEN_INCLUDE)
 XENSTORE_XENSTORED ?= y
 
 # A debug build of tools?
-debug ?= y
+debug ?= n
 debug_symbols ?= $(debug)
 
 # Set CONFIG_GOLANG=y in .config (or in make) to build golang
@@ -176,21 +175,8 @@ else
 CFLAGS += -O2 -fomit-frame-pointer
 endif
 
-ifeq ($(CONFIG_BLKTAP2),y)
-CFLAGS_libblktapctl = -I$(XEN_BLKTAP2)/control -I$(XEN_BLKTAP2)/include $(CFLAGS_xeninclude)
-SHDEPS_libblktapctl =
-LDLIBS_libblktapctl = $(SHDEPS_libblktapctl) $(XEN_BLKTAP2)/control/libblktapctl$(libextension)
-SHLIB_libblktapctl  = $(SHDEPS_libblktapctl) -Wl,-rpath-link=$(XEN_BLKTAP2)/control
-else
-CFLAGS_libblktapctl =
-SHDEPS_libblktapctl =
-LDLIBS_libblktapctl =
-SHLIB_libblktapctl  =
-PKG_CONFIG_REMOVE += xenblktapctl
-endif
-
 CFLAGS_libxenlight = -I$(XEN_XENLIGHT) $(CFLAGS_libxenctrl) $(CFLAGS_xeninclude)
-SHDEPS_libxenlight = $(SHLIB_libxenctrl) $(SHLIB_libxenstore) $(SHLIB_libblktapctl)
+SHDEPS_libxenlight = $(SHLIB_libxenctrl) $(SHLIB_libxenstore)
 LDLIBS_libxenlight = $(SHDEPS_libxenlight) $(XEN_XENLIGHT)/libxenlight$(libextension)
 SHLIB_libxenlight  = $(SHDEPS_libxenlight) -Wl,-rpath-link=$(XEN_XENLIGHT)
 
@@ -264,7 +250,7 @@ PKG_CONFIG_DIR ?= $(XEN_ROOT)/tools/pkg-config
 
 PKG_CONFIG_FILTER = $(foreach l,$(PKG_CONFIG_REMOVE),-e 's!\([ ,]\)$(l),!\1!g' -e 's![ ,]$(l)$$!!g')
 
-$(PKG_CONFIG_DIR)/%.pc: %.pc.in Makefile
+$(PKG_CONFIG_DIR)/%.pc: %.pc.in Makefile $(XEN_ROOT)/tools/Rules.mk
 	mkdir -p $(PKG_CONFIG_DIR)
 	@sed -e 's!@@version@@!$(PKG_CONFIG_VERSION)!g' \
 	     -e 's!@@prefix@@!$(PKG_CONFIG_PREFIX)!g' \
@@ -273,10 +259,10 @@ $(PKG_CONFIG_DIR)/%.pc: %.pc.in Makefile
 	     -e 's!@@firmwaredir@@!$(XENFIRMWAREDIR)!g' \
 	     -e 's!@@libexecbin@@!$(LIBEXEC_BIN)!g' \
 	     -e 's!@@cflagslocal@@!$(PKG_CONFIG_CFLAGS_LOCAL)!g' \
-	     -e 's!@@libsflag@@!-Wl,-rpath-link=!g' \
+	     -e 's!@@libsflag@@\([^ ]*\)!-L\1 -Wl,-rpath-link=\1!g' \
 	     $(PKG_CONFIG_FILTER) < $< > $@
 
-%.pc: %.pc.in Makefile
+%.pc: %.pc.in Makefile $(XEN_ROOT)/tools/Rules.mk
 	@sed -e 's!@@version@@!$(PKG_CONFIG_VERSION)!g' \
 	     -e 's!@@prefix@@!$(PKG_CONFIG_PREFIX)!g' \
 	     -e 's!@@incdir@@!$(PKG_CONFIG_INCDIR)!g' \

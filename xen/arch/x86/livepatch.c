@@ -10,9 +10,49 @@
 #include <xen/vmap.h>
 #include <xen/livepatch_elf.h>
 #include <xen/livepatch.h>
+#include <xen/sched.h>
 
 #include <asm/nmi.h>
 #include <asm/livepatch.h>
+
+static bool has_active_waitqueue(const struct vm_event_domain *ved)
+{
+    /* ved may be xzalloc()'d without INIT_LIST_HEAD() yet. */
+    return (ved && !list_head_is_null(&ved->wq.list) &&
+            !list_empty(&ved->wq.list));
+}
+
+/*
+ * x86's implementation of waitqueue violates the livepatching safey principle
+ * of having unwound every CPUs stack before modifying live content.
+ *
+ * Search through every domain and check that no vCPUs have an active
+ * waitqueue.
+ */
+int arch_livepatch_safety_check(void)
+{
+    struct domain *d;
+
+    for_each_domain ( d )
+    {
+#ifdef CONFIG_MEM_SHARING
+        if ( has_active_waitqueue(d->vm_event_share) )
+            goto fail;
+#endif
+#ifdef CONFIG_MEM_PAGING
+        if ( has_active_waitqueue(d->vm_event_paging) )
+            goto fail;
+#endif
+        if ( has_active_waitqueue(d->vm_event_monitor) )
+            goto fail;
+    }
+
+    return 0;
+
+ fail:
+    printk(XENLOG_ERR LIVEPATCH "%pd found with active waitqueue\n", d);
+    return -EBUSY;
+}
 
 int arch_livepatch_quiesce(void)
 {
@@ -126,8 +166,8 @@ int arch_livepatch_verify_elf(const struct livepatch_elf *elf)
          hdr->e_ident[EI_CLASS] != ELFCLASS64 ||
          hdr->e_ident[EI_DATA] != ELFDATA2LSB )
     {
-        dprintk(XENLOG_ERR, LIVEPATCH "%s: Unsupported ELF Machine type!\n",
-                elf->name);
+        printk(XENLOG_ERR LIVEPATCH "%s: Unsupported ELF Machine type\n",
+               elf->name);
         return -EOPNOTSUPP;
     }
 
@@ -152,8 +192,8 @@ int arch_livepatch_perform_rel(struct livepatch_elf *elf,
                                const struct livepatch_elf_sec *base,
                                const struct livepatch_elf_sec *rela)
 {
-    dprintk(XENLOG_ERR, LIVEPATCH "%s: SHT_REL relocation unsupported\n",
-            elf->name);
+    printk(XENLOG_ERR LIVEPATCH "%s: SHT_REL relocation unsupported\n",
+           elf->name);
     return -EOPNOTSUPP;
 }
 
@@ -172,20 +212,20 @@ int arch_livepatch_perform_rela(struct livepatch_elf *elf,
 
         if ( symndx == STN_UNDEF )
         {
-            dprintk(XENLOG_ERR, LIVEPATCH "%s: Encountered STN_UNDEF\n",
-                    elf->name);
+            printk(XENLOG_ERR LIVEPATCH "%s: Encountered STN_UNDEF\n",
+                   elf->name);
             return -EOPNOTSUPP;
         }
         else if ( symndx >= elf->nsym )
         {
-            dprintk(XENLOG_ERR, LIVEPATCH "%s: Relative relocation wants symbol@%u which is past end!\n",
-                    elf->name, symndx);
+            printk(XENLOG_ERR LIVEPATCH "%s: Relative relocation wants symbol@%u which is past end\n",
+                   elf->name, symndx);
             return -EINVAL;
         }
         else if ( !elf->sym[symndx].sym )
         {
-            dprintk(XENLOG_ERR, LIVEPATCH "%s: No symbol@%u\n",
-                    elf->name, symndx);
+            printk(XENLOG_ERR LIVEPATCH "%s: No symbol@%u\n",
+                   elf->name, symndx);
             return -EINVAL;
         }
 
@@ -222,15 +262,15 @@ int arch_livepatch_perform_rela(struct livepatch_elf *elf,
             *(int32_t *)dest = val;
             if ( (int64_t)val != *(int32_t *)dest )
             {
-                dprintk(XENLOG_ERR, LIVEPATCH "%s: Overflow in relocation %u in %s for %s!\n",
-                        elf->name, i, rela->name, base->name);
+                printk(XENLOG_ERR LIVEPATCH "%s: Overflow in relocation %u in %s for %s\n",
+                       elf->name, i, rela->name, base->name);
                 return -EOVERFLOW;
             }
             break;
 
         default:
-            dprintk(XENLOG_ERR, LIVEPATCH "%s: Unhandled relocation %lu\n",
-                    elf->name, ELF64_R_TYPE(r->r_info));
+            printk(XENLOG_ERR LIVEPATCH "%s: Unhandled relocation %lu\n",
+                   elf->name, ELF64_R_TYPE(r->r_info));
             return -EOPNOTSUPP;
         }
     }
@@ -238,8 +278,8 @@ int arch_livepatch_perform_rela(struct livepatch_elf *elf,
     return 0;
 
  bad_offset:
-    dprintk(XENLOG_ERR, LIVEPATCH "%s: Relative relocation offset is past %s section!\n",
-            elf->name, base->name);
+    printk(XENLOG_ERR LIVEPATCH "%s: Relative relocation offset is past %s section\n",
+           elf->name, base->name);
     return -EINVAL;
 }
 

@@ -25,6 +25,11 @@ enum XLU_ConfigValueType {
     XLU_LIST,
 };
 
+enum XLU_Operation {
+    XLU_OP_ASSIGNMENT = 0,
+    XLU_OP_ADDITION,
+};
+
 /* Unless otherwise stated, all functions return an errno value. */
 typedef struct XLU_Config XLU_Config;
 typedef struct XLU_ConfigList XLU_ConfigList;
@@ -58,6 +63,8 @@ int xlu_cfg_replace_string(const XLU_Config *cfg, const char *n,
                            char **value_r, int dont_warn);
 int xlu_cfg_get_long(const XLU_Config*, const char *n, long *value_r,
                      int dont_warn);
+int xlu_cfg_get_bounded_long(const XLU_Config*, const char *n, long min,
+                             long max, long *value_r, int dont_warn);
 int xlu_cfg_get_defbool(const XLU_Config*, const char *n, libxl_defbool *b,
                      int dont_warn);
 

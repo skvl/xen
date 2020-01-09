@@ -96,10 +96,6 @@ void *memmove(void *, const void *, size_t);
 #define memmove(d, s, n) __builtin_memmove(d, s, n)
 #endif
 
-#ifndef __HAVE_ARCH_MEMSCAN
-void *memscan(void *, int, size_t);
-#endif
-
 #ifndef __HAVE_ARCH_MEMCMP
 int memcmp(const void *, const void *, size_t);
 #define memcmp(s1, s2, n) __builtin_memcmp(s1, s2, n)
@@ -109,6 +105,8 @@ int memcmp(const void *, const void *, size_t);
 void *memchr(const void *, int, size_t);
 #define memchr(s, c, n) __builtin_memchr(s, c, n)
 #endif
+
+void *memchr_inv(const void *, int, size_t);
 
 #define is_char_array(x) __builtin_types_compatible_p(typeof(x), char[])
 
