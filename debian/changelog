@@ -1,8 +1,12 @@
-xen (4.12.0~rc3-1) UNRELEASED; urgency=medium
+xen (4.13-1) UNRELEASED; urgency=medium
 
+  [ Hans van Kranenburg ]
   * Update to new upstream version 4.12.0~rc3.
 
- -- Hans van Kranenburg <hans@knorrie.org>  Sun, 24 Feb 2019 18:48:01 +0100
+  [ Dmitry Isaykin ]
+  * Update to new upstream version 4.13.
+
+ -- Dmitry Isaykin <disaykin@ptsecurity.com>  Thu, 09 Jan 2020 14:07:18 +0000
 
 xen (4.11.1+26-g87f51bf366-2) unstable; urgency=medium
 
