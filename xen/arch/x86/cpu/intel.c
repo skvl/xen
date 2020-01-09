@@ -15,6 +15,36 @@
 #include "cpu.h"
 
 /*
+ * Processors which have self-snooping capability can handle conflicting
+ * memory type across CPUs by snooping its own cache. However, there exists
+ * CPU models in which having conflicting memory types still leads to
+ * unpredictable behavior, machine check errors, or hangs. Clear this
+ * feature to prevent its use on machines with known erratas.
+ */
+static void __init check_memory_type_self_snoop_errata(void)
+{
+	if (!boot_cpu_has(X86_FEATURE_SS))
+		return;
+
+	switch (boot_cpu_data.x86_model) {
+	case 0x0f: /* Merom */
+	case 0x16: /* Merom L */
+	case 0x17: /* Penryn */
+	case 0x1d: /* Dunnington */
+	case 0x1e: /* Nehalem */
+	case 0x1f: /* Auburndale / Havendale */
+	case 0x1a: /* Nehalem EP */
+	case 0x2e: /* Nehalem EX */
+	case 0x25: /* Westmere */
+	case 0x2c: /* Westmere EP */
+	case 0x2a: /* SandyBridge */
+		return;
+	}
+
+	setup_force_cpu_cap(X86_FEATURE_XEN_SELFSNOOP);
+}
+
+/*
  * Set caps in expected_levelling_cap, probe a specific masking MSR, and set
  * caps in levelling_caps if it is found, or clobber the MSR index if missing.
  * If preset, reads the default value into msr_val.
@@ -240,6 +270,7 @@ static void early_init_intel(struct cpuinfo_x86 *c)
 	if (disable) {
 		wrmsrl(MSR_IA32_MISC_ENABLE, misc_enable & ~disable);
 		bootsym(trampoline_misc_enable_off) |= disable;
+		bootsym(trampoline_efer) |= EFER_NX;
 	}
 
 	if (disable & MSR_IA32_MISC_ENABLE_LIMIT_CPUID)
@@ -256,8 +287,11 @@ static void early_init_intel(struct cpuinfo_x86 *c)
 	    (boot_cpu_data.x86_mask == 3 || boot_cpu_data.x86_mask == 4))
 		paddr_bits = 36;
 
-	if (c == &boot_cpu_data)
+	if (c == &boot_cpu_data) {
+		check_memory_type_self_snoop_errata();
+
 		intel_init_levelling();
+	}
 
 	ctxt_switch_levelling(NULL);
 }
@@ -286,6 +320,9 @@ static void Intel_errata_workarounds(struct cpuinfo_x86 *c)
 	if (c->x86 == 6 && cpu_has_clflush &&
 	    (c->x86_model == 29 || c->x86_model == 46 || c->x86_model == 47))
 		__set_bit(X86_FEATURE_CLFLUSH_MONITOR, c->x86_capability);
+
+	if (cpu_has_tsx_force_abort && opt_rtm_abort)
+		wrmsrl(MSR_TSX_FORCE_ABORT, TSX_FORCE_ABORT_RTM);
 }
 
 
@@ -345,18 +382,7 @@ static void init_intel(struct cpuinfo_x86 *c)
 		__set_bit(X86_FEATURE_ARAT, c->x86_capability);
 }
 
-static const struct cpu_dev intel_cpu_dev = {
-	.c_vendor	= "Intel",
-	.c_ident 	= { "GenuineIntel" },
+const struct cpu_dev intel_cpu_dev = {
 	.c_early_init	= early_init_intel,
 	.c_init		= init_intel,
 };
-
-int __init intel_cpu_init(void)
-{
-	cpu_devs[X86_VENDOR_INTEL] = &intel_cpu_dev;
-	return 0;
-}
-
-// arch_initcall(intel_cpu_init);
-

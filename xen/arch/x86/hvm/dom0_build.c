@@ -152,6 +152,8 @@ static int __init pvh_populate_memory_range(struct domain *d,
 
         order = get_order_from_pages(end - start + 1);
         order = min(order ? order - 1 : 0, max_order);
+        /* The order allocated and populated must be aligned to the address. */
+        order = min(order, start ? find_first_set_bit(start) : MAX_ORDER);
         page = alloc_domheap_pages(d, order, dom0_memflags | MEMF_no_scrub);
         if ( page == NULL )
         {
@@ -407,14 +409,10 @@ static __init void pvh_setup_e820(struct domain *d, unsigned long nr_pages)
     ASSERT(cur_pages == nr_pages);
 }
 
-static int __init pvh_setup_p2m(struct domain *d)
+static void __init pvh_init_p2m(struct domain *d)
 {
-    struct vcpu *v = d->vcpu[0];
     unsigned long nr_pages = dom0_compute_nr_pages(d, NULL, 0);
-    unsigned int i;
-    int rc;
     bool preempted;
-#define MB1_PAGES PFN_DOWN(MB(1))
 
     pvh_setup_e820(d, nr_pages);
     do {
@@ -423,6 +421,14 @@ static int __init pvh_setup_p2m(struct domain *d)
                               &preempted);
         process_pending_softirqs();
     } while ( preempted );
+}
+
+static int __init pvh_populate_p2m(struct domain *d)
+{
+    struct vcpu *v = d->vcpu[0];
+    unsigned int i;
+    int rc;
+#define MB1_PAGES PFN_DOWN(MB(1))
 
     /*
      * Memory below 1MB is identity mapped initially. RAM regions are
@@ -478,7 +484,7 @@ static int __init pvh_setup_p2m(struct domain *d)
             return rc;
     }
 
-    if ( dom0_verbose )
+    if ( opt_dom0_verbose )
         print_order_stats(d);
 
     return 0;
@@ -608,7 +614,6 @@ static int __init pvh_setup_cpus(struct domain *d, paddr_t entry,
                                  paddr_t start_info)
 {
     struct vcpu *v = d->vcpu[0];
-    unsigned int cpu = v->processor, i;
     int rc;
     /*
      * This sets the vCPU state according to the state described in
@@ -629,15 +634,7 @@ static int __init pvh_setup_cpus(struct domain *d, paddr_t entry,
         .cpu_regs.x86_32.tr_ar = 0x8b,
     };
 
-    for ( i = 1; i < d->max_vcpus; i++ )
-    {
-        const struct vcpu *p = dom0_setup_vcpu(d, i, cpu);
-
-        if ( p )
-            cpu = p->processor;
-    }
-
-    domain_update_node_affinity(d);
+    sched_setup_dom0_vcpus(d);
 
     rc = arch_set_info_hvm_guest(v, &cpu_ctx);
     if ( rc )
@@ -1132,13 +1129,6 @@ int __init dom0_construct_pvh(struct domain *d, const module_t *image,
 
     printk(XENLOG_INFO "*** Building a PVH Dom%d ***\n", d->domain_id);
 
-    rc = pvh_setup_p2m(d);
-    if ( rc )
-    {
-        printk("Failed to setup Dom0 physical memory map\n");
-        return rc;
-    }
-
     /*
      * NB: MMCFG initialization needs to be performed before iommu
      * initialization so the iommu code can fetch the MMCFG regions used by the
@@ -1146,7 +1136,21 @@ int __init dom0_construct_pvh(struct domain *d, const module_t *image,
      */
     pvh_setup_mmcfg(d);
 
+    /*
+     * Craft dom0 physical memory map and set the paging allocation. This must
+     * be done before the iommu initializion, since iommu initialization code
+     * will likely add mappings required by devices to the p2m (ie: RMRRs).
+     */
+    pvh_init_p2m(d);
+
     iommu_hwdom_init(d);
+
+    rc = pvh_populate_p2m(d);
+    if ( rc )
+    {
+        printk("Failed to setup Dom0 physical memory map\n");
+        return rc;
+    }
 
     rc = pvh_load_kernel(d, image, image_headroom, initrd, bootstrap_map(image),
                          cmdline, &entry, &start_info);

@@ -13,6 +13,7 @@
 #include <xen/smp.h>
 #include <xen/softirq.h>
 #include <xen/bitops.h>
+#include <xen/nospec.h>
 #include <asm/event.h>
 
 /*
@@ -90,9 +91,6 @@ int guest_enabled_event(struct vcpu *v, uint32_t virq);
 /* Notify remote end of a Xen-attached event channel.*/
 void notify_via_xen_event_channel(struct domain *ld, int lport);
 
-/* Inject an event channel notification into the guest */
-void arch_evtchn_inject(struct vcpu *v);
-
 /*
  * Internal event channel object storage.
  *
@@ -103,7 +101,7 @@ void arch_evtchn_inject(struct vcpu *v);
  * The first bucket is directly accessed via d->evtchn.
  */
 #define group_from_port(d, p) \
-    ((d)->evtchn_group[(p) / EVTCHNS_PER_GROUP])
+    array_access_nospec((d)->evtchn_group, (p) / EVTCHNS_PER_GROUP)
 #define bucket_from_port(d, p) \
     ((group_from_port(d, p))[((p) % EVTCHNS_PER_GROUP) / EVTCHNS_PER_BUCKET])
 
@@ -117,7 +115,7 @@ static inline bool_t port_is_valid(struct domain *d, unsigned int p)
 static inline struct evtchn *evtchn_from_port(struct domain *d, unsigned int p)
 {
     if ( p < EVTCHNS_PER_BUCKET )
-        return &d->evtchn[p];
+        return &d->evtchn[array_index_nospec(p, EVTCHNS_PER_BUCKET)];
     return bucket_from_port(d, p) + (p % EVTCHNS_PER_BUCKET);
 }
 

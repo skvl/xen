@@ -137,8 +137,13 @@ struct nestedvcpu {
 #define vcpu_nestedhvm(v) ((v)->arch.hvm.nvcpu)
 
 struct altp2mvcpu {
+    /*
+     * #VE information page.  This pointer being non-NULL indicates that a
+     * VMCS's VIRT_EXCEPTION_INFO field is pointing to the page, and an extra
+     * page reference is held.
+     */
+    struct page_info *veinfo_pg;
     uint16_t    p2midx;         /* alternate p2m index */
-    gfn_t       veinfo_gfn;     /* #VE information page gfn */
 };
 
 #define vcpu_altp2m(v) ((v)->arch.hvm.avcpu)
@@ -171,7 +176,6 @@ struct hvm_vcpu {
     struct hvm_vcpu_asid n1asid;
 
     u64                 msr_tsc_adjust;
-    u64                 msr_xss;
 
     union {
         struct vmx_vcpu vmx;
@@ -200,7 +204,7 @@ struct hvm_vcpu {
     /* Pending hw/sw interrupt (.vector = -1 means nothing pending). */
     struct x86_event     inject_event;
 
-    struct viridian_vcpu viridian;
+    struct viridian_vcpu *viridian;
 };
 
 #endif /* __ASM_X86_HVM_VCPU_H__ */

@@ -23,6 +23,7 @@
 #include <xen/domain.h>
 #include <xen/domain_page.h>
 #include <xen/event.h>
+#include <xen/nospec.h>
 #include <xen/trace.h>
 #include <xen/lib.h>
 #include <xen/sched.h>
@@ -64,12 +65,6 @@ static const unsigned int vlapic_lvt_mask[VLAPIC_LVT_NUM] =
      /* LVTERR */
      LVT_MASK
 };
-
-#define vlapic_lvt_vector(vlapic, lvt_type)                     \
-    (vlapic_get_reg(vlapic, lvt_type) & APIC_VECTOR_MASK)
-
-#define vlapic_lvt_dm(vlapic, lvt_type)                         \
-    (vlapic_get_reg(vlapic, lvt_type) & APIC_MODE_MASK)
 
 #define vlapic_lvtt_period(vlapic)                              \
     ((vlapic_get_reg(vlapic, APIC_LVTT) & APIC_TIMER_MODE_MASK) \
@@ -113,8 +108,7 @@ static void vlapic_clear_irr(int vector, struct vlapic *vlapic)
 
 static int vlapic_find_highest_irr(struct vlapic *vlapic)
 {
-    if ( hvm_funcs.sync_pir_to_irr )
-        hvm_funcs.sync_pir_to_irr(vlapic_vcpu(vlapic));
+    vlapic_sync_pir_to_irr(vlapic_vcpu(vlapic));
 
     return vlapic_find_highest_vector(&vlapic->regs->data[APIC_IRR]);
 }
@@ -143,7 +137,7 @@ bool vlapic_test_irq(const struct vlapic *vlapic, uint8_t vec)
         return false;
 
     if ( hvm_funcs.test_pir &&
-         hvm_funcs.test_pir(const_vlapic_vcpu(vlapic), vec) )
+         alternative_call(hvm_funcs.test_pir, const_vlapic_vcpu(vlapic), vec) )
         return true;
 
     return vlapic_test_vector(vec, &vlapic->regs->data[APIC_IRR]);
@@ -165,10 +159,10 @@ void vlapic_set_irq(struct vlapic *vlapic, uint8_t vec, uint8_t trig)
         vlapic_clear_vector(vec, &vlapic->regs->data[APIC_TMR]);
 
     if ( hvm_funcs.update_eoi_exit_bitmap )
-        hvm_funcs.update_eoi_exit_bitmap(target, vec, trig);
+        alternative_vcall(hvm_funcs.update_eoi_exit_bitmap, target, vec, trig);
 
     if ( hvm_funcs.deliver_posted_intr )
-        hvm_funcs.deliver_posted_intr(target, vec);
+        alternative_vcall(hvm_funcs.deliver_posted_intr, target, vec);
     else if ( !vlapic_test_and_set_irr(vec, vlapic) )
         vcpu_kick(target);
 }
@@ -448,7 +442,8 @@ void vlapic_EOI_set(struct vlapic *vlapic)
     vlapic_clear_vector(vector, &vlapic->regs->data[APIC_ISR]);
 
     if ( hvm_funcs.handle_eoi )
-        hvm_funcs.handle_eoi(vector, vlapic_find_highest_isr(vlapic));
+        alternative_vcall(hvm_funcs.handle_eoi, vector,
+                          vlapic_find_highest_isr(vlapic));
 
     vlapic_handle_EOI(vlapic, vector);
 
@@ -461,10 +456,15 @@ void vlapic_EOI_set(struct vlapic *vlapic)
 
 void vlapic_handle_EOI(struct vlapic *vlapic, u8 vector)
 {
-    struct domain *d = vlapic_domain(vlapic);
+    struct vcpu *v = vlapic_vcpu(vlapic);
+    struct domain *d = v->domain;
+
+    /* All synic SINTx vectors are edge triggered */
 
     if ( vlapic_test_vector(vector, &vlapic->regs->data[APIC_TMR]) )
         vioapic_update_EOI(d, vector);
+    else if ( has_viridian_synic(d) )
+        viridian_synic_ack_sint(v, vector);
 
     hvm_dpci_msi_eoi(d, vector);
 }
@@ -665,7 +665,7 @@ int guest_rdmsr_x2apic(const struct vcpu *v, uint32_t msr, uint64_t *val)
     };
     const struct vlapic *vlapic = vcpu_vlapic(v);
     uint64_t high = 0;
-    uint32_t reg = msr - MSR_X2APIC_FIRST, offset = reg << 4;
+    uint32_t reg = msr - MSR_X2APIC_FIRST, offset;
 
     /*
      * The read side looks as if it might be safe to use outside of current
@@ -675,9 +675,14 @@ int guest_rdmsr_x2apic(const struct vcpu *v, uint32_t msr, uint64_t *val)
     ASSERT(v == current);
 
     if ( !vlapic_x2apic_mode(vlapic) ||
-         (reg >= sizeof(readable) * 8) || !test_bit(reg, readable) )
+         (reg >= sizeof(readable) * 8) )
         return X86EMUL_EXCEPTION;
 
+    reg = array_index_nospec(reg, sizeof(readable) * 8);
+    if ( !test_bit(reg, readable) )
+        return X86EMUL_EXCEPTION;
+
+    offset = reg << 4;
     if ( offset == APIC_ICR )
         high = (uint64_t)vlapic_read_aligned(vlapic, APIC_ICR2) << 32;
 
@@ -856,7 +861,7 @@ void vlapic_reg_write(struct vcpu *v, unsigned int reg, uint32_t val)
     case APIC_LVTERR:       /* LVT Error Reg */
         if ( vlapic_sw_disabled(vlapic) )
             val |= APIC_LVT_MASKED;
-        val &= vlapic_lvt_mask[(reg - APIC_LVTT) >> 4];
+        val &= array_access_nospec(vlapic_lvt_mask, (reg - APIC_LVTT) >> 4);
         vlapic_set_reg(vlapic, reg, val);
         if ( reg == APIC_LVT0 )
         {
@@ -946,7 +951,7 @@ static int vlapic_mmio_write(struct vcpu *v, unsigned long address,
 int vlapic_apicv_write(struct vcpu *v, unsigned int offset)
 {
     struct vlapic *vlapic = vcpu_vlapic(v);
-    uint32_t val = vlapic_get_reg(vlapic, offset);
+    uint32_t val = vlapic_get_reg(vlapic, offset & ~0xf);
 
     if ( vlapic_x2apic_mode(vlapic) )
     {
@@ -982,6 +987,7 @@ int guest_wrmsr_x2apic(struct vcpu *v, uint32_t msr, uint64_t msr_content)
 
     case APIC_SPIV:
         if ( msr_content & ~(APIC_VECTOR_MASK | APIC_SPIV_APIC_ENABLED |
+                             APIC_SPIV_FOCUS_DISABLED |
                              (VLAPIC_VERSION & APIC_LVR_DIRECTED_EOI
                               ? APIC_SPIV_DIRECTED_EOI : 0)) )
             return X86EMUL_EXCEPTION;
@@ -1042,7 +1048,7 @@ int guest_wrmsr_x2apic(struct vcpu *v, uint32_t msr, uint64_t msr_content)
         }
     }
 
-    vlapic_reg_write(v, offset, msr_content);
+    vlapic_reg_write(v, array_index_nospec(offset, PAGE_SIZE), msr_content);
 
     return X86EMUL_OKAY;
 }
@@ -1301,6 +1307,13 @@ int vlapic_has_pending_irq(struct vcpu *v)
     if ( !vlapic_enabled(vlapic) )
         return -1;
 
+    /*
+     * Poll the viridian message queues before checking the IRR since
+     * a synthetic interrupt may be asserted during the poll.
+     */
+    if ( has_viridian_synic(v->domain) )
+        viridian_synic_poll(v);
+
     irr = vlapic_find_highest_irr(vlapic);
     if ( irr == -1 )
         return -1;
@@ -1360,8 +1373,12 @@ int vlapic_ack_pending_irq(struct vcpu *v, int vector, bool_t force_ack)
     }
 
  done:
-    vlapic_set_vector(vector, &vlapic->regs->data[APIC_ISR]);
+    if ( !has_viridian_synic(v->domain) ||
+         !viridian_synic_is_auto_eoi_sint(v, vector) )
+        vlapic_set_vector(vector, &vlapic->regs->data[APIC_ISR]);
+
     vlapic_clear_irr(vector, vlapic);
+
     return 1;
 }
 
@@ -1471,8 +1488,7 @@ static int lapic_save_regs(struct vcpu *v, hvm_domain_context_t *h)
     if ( !has_vlapic(v->domain) )
         return 0;
 
-    if ( hvm_funcs.sync_pir_to_irr )
-        hvm_funcs.sync_pir_to_irr(v);
+    vlapic_sync_pir_to_irr(v);
 
     return hvm_save_entry(LAPIC_REGS, v->vcpu_id, h, vcpu_vlapic(v)->regs);
 }
@@ -1568,7 +1584,8 @@ static int lapic_load_regs(struct domain *d, hvm_domain_context_t *h)
         lapic_load_fixup(s);
 
     if ( hvm_funcs.process_isr )
-        hvm_funcs.process_isr(vlapic_find_highest_isr(s), v);
+        alternative_vcall(hvm_funcs.process_isr,
+                          vlapic_find_highest_isr(s), v);
 
     vlapic_adjust_i8259_target(d);
     lapic_rearm(s);

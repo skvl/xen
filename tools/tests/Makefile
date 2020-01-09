@@ -5,11 +5,9 @@ CFLAGS  += $(CFLAGS_libxenctrl)
 LDLIBS += $(LDLIBS_libxenctrl)
 
 SUBDIRS-y :=
+SUBDIRS-$(CONFIG_X86) += cpu-policy
 SUBDIRS-$(CONFIG_X86) += mce-test
 SUBDIRS-y += mem-sharing
-ifeq ($(XEN_TARGET_ARCH),__fixme__)
-SUBDIRS-y += regression
-endif
 ifneq ($(clang),y)
 SUBDIRS-$(CONFIG_X86) += x86_emulator
 endif

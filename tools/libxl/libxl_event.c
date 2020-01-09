@@ -915,6 +915,15 @@ int libxl__ev_devstate_wait(libxl__ao *ao, libxl__ev_devstate *ds,
 }
 
 /*
+ * immediate non-reentrant callback
+ */
+
+void libxl__ev_immediate_register(libxl__egc *egc, libxl__ev_immediate *ei)
+{
+    LIBXL_STAILQ_INSERT_TAIL(&egc->ev_immediates, ei, entry);
+}
+
+/*
  * domain death/destruction
  */
 
@@ -1395,6 +1404,17 @@ static void egc_run_callbacks(libxl__egc *egc)
     EGC_GC;
     libxl_event *ev, *ev_tmp;
     libxl__aop_occurred *aop, *aop_tmp;
+    libxl__ev_immediate *ei;
+
+    while (!LIBXL_STAILQ_EMPTY(&egc->ev_immediates)) {
+        ei = LIBXL_STAILQ_FIRST(&egc->ev_immediates);
+        LIBXL_STAILQ_REMOVE_HEAD(&egc->ev_immediates, entry);
+        CTX_LOCK;
+        /* This callback is internal to libxl and expects CTX to be
+         * locked. */
+        ei->callback(egc, ei);
+        CTX_UNLOCK;
+    }
 
     LIBXL_TAILQ_FOREACH_SAFE(ev, &egc->occurred_for_callback, link, ev_tmp) {
         LIBXL_TAILQ_REMOVE(&egc->occurred_for_callback, ev, link);
@@ -1878,6 +1898,9 @@ void libxl__ao_complete(libxl__egc *egc, libxl__ao *ao, int rc)
     ao->complete = 1;
     ao->rc = rc;
     LIBXL_LIST_REMOVE(ao, inprogress_entry);
+    if (ao->outstanding_killed_child)
+        LOG(DEBUG, "ao %p: .. but waiting for %d fork to exit",
+            ao, ao->outstanding_killed_child);
     libxl__ao_complete_check_progress_reports(egc, ao);
 }
 
@@ -1891,7 +1914,8 @@ static bool ao_work_outstanding(libxl__ao *ao)
      * decrement progress_reports_outstanding, and call
      * libxl__ao_complete_check_progress_reports.
      */
-    return !ao->complete || ao->progress_reports_outstanding;
+    return !ao->complete || ao->progress_reports_outstanding
+        || ao->outstanding_killed_child;
 }
 
 void libxl__ao_complete_check_progress_reports(libxl__egc *egc, libxl__ao *ao)
