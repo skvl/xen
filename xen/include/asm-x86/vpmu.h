@@ -52,6 +52,7 @@ struct arch_vpmu_ops {
 int core2_vpmu_init(void);
 int vmx_vpmu_initialise(struct vcpu *);
 int amd_vpmu_init(void);
+int hygon_vpmu_init(void);
 int svm_vpmu_initialise(struct vcpu *);
 
 struct vpmu_struct {
@@ -125,6 +126,7 @@ static inline int vpmu_do_rdmsr(unsigned int msr, uint64_t *msr_content)
 
 extern unsigned int vpmu_mode;
 extern unsigned int vpmu_features;
+extern bool opt_rtm_abort;
 
 /* Context switch */
 static inline void vpmu_switch_from(struct vcpu *prev)

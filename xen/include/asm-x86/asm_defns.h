@@ -7,7 +7,6 @@
 #include <asm/asm-offsets.h>
 #endif
 #include <asm/bug.h>
-#include <asm/percpu.h>
 #include <asm/x86-defns.h>
 #include <xen/stringify.h>
 #include <asm/cpufeature.h>
@@ -25,6 +24,19 @@ asm ( "\t.equ CONFIG_INDIRECT_THUNK, "
 
 #ifndef __ASSEMBLY__
 void ret_from_intr(void);
+
+/*
+ * This output constraint should be used for any inline asm which has a "call"
+ * instruction.  Otherwise the asm may be inserted before the frame pointer
+ * gets set up by the containing function.
+ */
+#ifdef CONFIG_FRAME_POINTER
+register unsigned long current_stack_pointer asm("rsp");
+# define ASM_CALL_CONSTRAINT , "+r" (current_stack_pointer)
+#else
+# define ASM_CALL_CONSTRAINT
+#endif
+
 #endif
 
 #ifndef NDEBUG
@@ -373,5 +385,11 @@ static always_inline void stac(void)
 3:  desc                /* desc   */      ; \
 4:  .p2align 2                            ; \
     .popsection
+
+#define ASM_INT(label, val)                 \
+    .p2align 2;                             \
+label: .long (val);                         \
+    .size label, . - label;                 \
+    .type label, @object
 
 #endif /* __X86_ASM_DEFNS_H__ */

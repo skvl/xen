@@ -265,7 +265,7 @@ struct p2m_domain {
                                                   unsigned long last_gfn);
     void               (*memory_type_changed)(struct p2m_domain *p2m);
     
-    void               (*write_p2m_entry)(struct p2m_domain *p2m,
+    int                (*write_p2m_entry)(struct p2m_domain *p2m,
                                           unsigned long gfn, l1_pgentry_t *p,
                                           l1_pgentry_t new, unsigned int level);
     long               (*audit_p2m)(struct p2m_domain *p2m);
@@ -506,13 +506,27 @@ static inline struct page_info *get_page_from_gfn(
 }
 
 /* General conversion function from mfn to gfn */
-static inline unsigned long mfn_to_gfn(struct domain *d, mfn_t mfn)
+static inline gfn_t mfn_to_gfn(const struct domain *d, mfn_t mfn)
 {
     if ( paging_mode_translate(d) )
-        return get_gpfn_from_mfn(mfn_x(mfn));
+        return _gfn(get_gpfn_from_mfn(mfn_x(mfn)));
     else
-        return mfn_x(mfn);
+        return _gfn(mfn_x(mfn));
 }
+
+#ifdef CONFIG_HVM
+#define AP2MGET_prepopulate true
+#define AP2MGET_query false
+
+/*
+ * Looks up altp2m entry. If the entry is not found it looks up the entry in
+ * hostp2m.
+ * The prepopulate param is used to set the found entry in altp2m.
+ */
+int altp2m_get_effective_entry(struct p2m_domain *ap2m, gfn_t gfn, mfn_t *mfn,
+                               p2m_type_t *t, p2m_access_t *a,
+                               bool prepopulate);
+#endif
 
 /* Deadlock-avoidance scheme when calling get_gfn on different gfn's */
 struct two_gfns {
@@ -587,14 +601,9 @@ int guest_physmap_add_entry(struct domain *d, gfn_t gfn,
                             mfn_t mfn, unsigned int page_order,
                             p2m_type_t t);
 
-/* Untyped version for RAM only, for compatibility */
-static inline int guest_physmap_add_page(struct domain *d,
-                                         gfn_t gfn,
-                                         mfn_t mfn,
-                                         unsigned int page_order)
-{
-    return guest_physmap_add_entry(d, gfn, mfn, page_order, p2m_ram_rw);
-}
+/* Untyped version for RAM only, for compatibility and PV. */
+int guest_physmap_add_page(struct domain *d, gfn_t gfn, mfn_t mfn,
+                           unsigned int page_order);
 
 /* Set a p2m range as populate-on-demand */
 int guest_physmap_mark_populate_on_demand(struct domain *d, unsigned long gfn,
@@ -837,7 +846,7 @@ void p2m_flush_nestedp2m(struct domain *d);
 /* Flushes the np2m specified by np2m_base (if it exists) */
 void np2m_flush_base(struct vcpu *v, unsigned long np2m_base);
 
-void nestedp2m_write_p2m_entry(struct p2m_domain *p2m, unsigned long gfn,
+int nestedp2m_write_p2m_entry(struct p2m_domain *p2m, unsigned long gfn,
     l1_pgentry_t *p, l1_pgentry_t new, unsigned int level);
 
 /*
@@ -867,8 +876,9 @@ void p2m_altp2m_check(struct vcpu *v, uint16_t idx);
 void p2m_flush_altp2m(struct domain *d);
 
 /* Alternate p2m paging */
-bool_t p2m_altp2m_lazy_copy(struct vcpu *v, paddr_t gpa,
-    unsigned long gla, struct npfec npfec, struct p2m_domain **ap2m);
+bool p2m_altp2m_get_or_propagate(struct p2m_domain *ap2m, unsigned long gfn_l,
+                                 mfn_t *mfn, p2m_type_t *p2mt,
+                                 p2m_access_t *p2ma, unsigned int page_order);
 
 /* Make a specific alternate p2m valid */
 int p2m_init_altp2m_by_id(struct domain *d, unsigned int idx);
@@ -931,6 +941,65 @@ int p2m_set_ioreq_server(struct domain *d, unsigned int flags,
                          struct hvm_ioreq_server *s);
 struct hvm_ioreq_server *p2m_get_ioreq_server(struct domain *d,
                                               unsigned int *flags);
+
+static inline int p2m_entry_modify(struct p2m_domain *p2m, p2m_type_t nt,
+                                   p2m_type_t ot, mfn_t nfn, mfn_t ofn,
+                                   unsigned int level)
+{
+    BUG_ON(!level);
+    BUG_ON(level > 1 && (nt == p2m_ioreq_server || nt == p2m_map_foreign));
+
+    if ( level != 1 || (nt == ot && mfn_eq(nfn, ofn)) )
+        return 0;
+
+    switch ( nt )
+    {
+    case p2m_ioreq_server:
+        /*
+         * p2m_ioreq_server is only used for 4K pages, so
+         * the count is only done for level 1 entries.
+         */
+        p2m->ioreq.entry_count++;
+        break;
+
+    case p2m_map_foreign:
+        if ( !mfn_valid(nfn) )
+        {
+            ASSERT_UNREACHABLE();
+            return -EINVAL;
+        }
+
+        if ( !page_get_owner_and_reference(mfn_to_page(nfn)) )
+            return -EBUSY;
+
+        break;
+
+    default:
+        break;
+    }
+
+    switch ( ot )
+    {
+    case p2m_ioreq_server:
+        ASSERT(p2m->ioreq.entry_count > 0);
+        p2m->ioreq.entry_count--;
+        break;
+
+    case p2m_map_foreign:
+        if ( !mfn_valid(ofn) )
+        {
+            ASSERT_UNREACHABLE();
+            return -EINVAL;
+        }
+        put_page(mfn_to_page(ofn));
+        break;
+
+    default:
+        break;
+    }
+
+    return 0;
+}
 
 #endif /* _XEN_ASM_X86_P2M_H */
 

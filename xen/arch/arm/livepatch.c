@@ -18,6 +18,11 @@
 
 void *vmap_of_xen_text;
 
+int arch_livepatch_safety_check(void)
+{
+    return 0;
+}
+
 int arch_livepatch_quiesce(void)
 {
     mfn_t text_mfn;
@@ -88,7 +93,8 @@ void arch_livepatch_revert(const struct livepatch_func *func)
 
 void arch_livepatch_post_action(void)
 {
-    /* arch_livepatch_revive has nuked the instruction cache. */
+    /* Discard any stale instructions that may have been fetched. */
+    isb();
 }
 
 void arch_livepatch_mask(void)

@@ -32,6 +32,10 @@
 #define EFER_KNOWN_MASK		(EFER_SCE | EFER_LME | EFER_LMA | EFER_NX | \
 				 EFER_SVME | EFER_FFXSE)
 
+#define MSR_INTEL_CORE_THREAD_COUNT     0x00000035
+#define MSR_CTC_THREAD_MASK             0x0000ffff
+#define MSR_CTC_CORE_MASK               0xffff0000
+
 /* Speculation Controls. */
 #define MSR_SPEC_CTRL			0x00000048
 #define SPEC_CTRL_IBRS			(_AC(1, ULL) << 0)
@@ -42,14 +46,25 @@
 #define PRED_CMD_IBPB			(_AC(1, ULL) << 0)
 
 #define MSR_ARCH_CAPABILITIES		0x0000010a
-#define ARCH_CAPABILITIES_RDCL_NO	(_AC(1, ULL) << 0)
-#define ARCH_CAPABILITIES_IBRS_ALL	(_AC(1, ULL) << 1)
+#define ARCH_CAPS_RDCL_NO		(_AC(1, ULL) << 0)
+#define ARCH_CAPS_IBRS_ALL		(_AC(1, ULL) << 1)
 #define ARCH_CAPS_RSBA			(_AC(1, ULL) << 2)
 #define ARCH_CAPS_SKIP_L1DFL		(_AC(1, ULL) << 3)
 #define ARCH_CAPS_SSB_NO		(_AC(1, ULL) << 4)
+#define ARCH_CAPS_MDS_NO		(_AC(1, ULL) << 5)
+#define ARCH_CAPS_IF_PSCHANGE_MC_NO	(_AC(1, ULL) << 6)
+#define ARCH_CAPS_TSX_CTRL		(_AC(1, ULL) << 7)
+#define ARCH_CAPS_TAA_NO		(_AC(1, ULL) << 8)
 
 #define MSR_FLUSH_CMD			0x0000010b
 #define FLUSH_CMD_L1D			(_AC(1, ULL) << 0)
+
+#define MSR_TSX_FORCE_ABORT             0x0000010f
+#define TSX_FORCE_ABORT_RTM             (_AC(1, ULL) <<  0)
+
+#define MSR_TSX_CTRL                    0x00000122
+#define TSX_CTRL_RTM_DISABLE            (_AC(1, ULL) <<  0)
+#define TSX_CTRL_CPUID_CLEAR            (_AC(1, ULL) <<  1)
 
 /* Intel MSRs. Some also available on other CPUs */
 #define MSR_IA32_PERFCTR0		0x000000c1

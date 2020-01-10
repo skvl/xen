@@ -185,7 +185,7 @@ int libxl_cpuid_parse_config(libxl_cpuid_policy_list *cpuid, const char* str)
         {"rdseed",       0x00000007,  0, CPUID_REG_EBX, 18,  1},
         {"adx",          0x00000007,  0, CPUID_REG_EBX, 19,  1},
         {"smap",         0x00000007,  0, CPUID_REG_EBX, 20,  1},
-        {"avx512ifma",   0x00000007,  0, CPUID_REG_EBX, 21,  1},
+        {"avx512-ifma",  0x00000007,  0, CPUID_REG_EBX, 21,  1},
         {"clflushopt",   0x00000007,  0, CPUID_REG_EBX, 23,  1},
         {"clwb",         0x00000007,  0, CPUID_REG_EBX, 24,  1},
         {"avx512pf",     0x00000007,  0, CPUID_REG_EBX, 26,  1},
@@ -195,18 +195,31 @@ int libxl_cpuid_parse_config(libxl_cpuid_policy_list *cpuid, const char* str)
         {"avx512bw",     0x00000007,  0, CPUID_REG_EBX, 30,  1},
         {"avx512vl",     0x00000007,  0, CPUID_REG_EBX, 31,  1},
 
-        {"avx512vbmi",   0x00000007,  0, CPUID_REG_ECX,  1,  1},
+        {"prefetchwt1",  0x00000007,  0, CPUID_REG_ECX,  0,  1},
+        {"avx512-vbmi",  0x00000007,  0, CPUID_REG_ECX,  1,  1},
         {"umip",         0x00000007,  0, CPUID_REG_ECX,  2,  1},
         {"pku",          0x00000007,  0, CPUID_REG_ECX,  3,  1},
         {"ospke",        0x00000007,  0, CPUID_REG_ECX,  4,  1},
+        {"avx512-vbmi2", 0x00000007,  0, CPUID_REG_ECX,  6,  1},
+        {"gfni",         0x00000007,  0, CPUID_REG_ECX,  8,  1},
+        {"vaes",         0x00000007,  0, CPUID_REG_ECX,  9,  1},
+        {"vpclmulqdq",   0x00000007,  0, CPUID_REG_ECX, 10,  1},
+        {"avx512-vnni",  0x00000007,  0, CPUID_REG_ECX, 11,  1},
+        {"avx512-bitalg",0x00000007,  0, CPUID_REG_ECX, 12,  1},
+        {"avx512-vpopcntdq",0x00000007,0,CPUID_REG_ECX, 14,  1},
+        {"rdpid",        0x00000007,  0, CPUID_REG_ECX, 22,  1},
+        {"cldemote",     0x00000007,  0, CPUID_REG_ECX, 25,  1},
 
         {"avx512-4vnniw",0x00000007,  0, CPUID_REG_EDX,  2,  1},
         {"avx512-4fmaps",0x00000007,  0, CPUID_REG_EDX,  3,  1},
+        {"md-clear",     0x00000007,  0, CPUID_REG_EDX, 10,  1},
         {"ibrsb",        0x00000007,  0, CPUID_REG_EDX, 26,  1},
         {"stibp",        0x00000007,  0, CPUID_REG_EDX, 27,  1},
         {"l1d-flush",    0x00000007,  0, CPUID_REG_EDX, 28,  1},
         {"arch-caps",    0x00000007,  0, CPUID_REG_EDX, 29,  1},
         {"ssbd",         0x00000007,  0, CPUID_REG_EDX, 31,  1},
+
+        {"avx512-bf16",  0x00000007,  1, CPUID_REG_EAX,  5,  1},
 
         {"lahfsahf",     0x80000001, NA, CPUID_REG_ECX,  0,  1},
         {"cmplegacy",    0x80000001, NA, CPUID_REG_ECX,  1,  1},
@@ -244,7 +257,11 @@ int libxl_cpuid_parse_config(libxl_cpuid_policy_list *cpuid, const char* str)
 
         {"invtsc",       0x80000007, NA, CPUID_REG_EDX,  8,  1},
 
+        {"clzero",       0x80000008, NA, CPUID_REG_EBX,  0,  1},
+        {"rstr-fp-err-ptrs", 0x80000008, NA, CPUID_REG_EBX, 2, 1},
+        {"wbnoinvd",     0x80000008, NA, CPUID_REG_EBX,  9,  1},
         {"ibpb",         0x80000008, NA, CPUID_REG_EBX, 12,  1},
+
         {"nc",           0x80000008, NA, CPUID_REG_ECX,  0,  8},
         {"apicidsize",   0x80000008, NA, CPUID_REG_ECX, 12,  4},
 

@@ -9,13 +9,13 @@ for the definitions of the support status levels etc.
 
 # Release Support
 
-    Xen-Version: 4.12-rc
-    Initial-Release: n/a
-    Supported-Until: TBD
-    Security-Support-Until: Unreleased - not yet security-supported
+    Xen-Version: 4.13
+    Initial-Release: 2019-12-18
+    Supported-Until: 2021-06-18
+    Security-Support-Until: 2022-12-18
 
 Release Notes
-: <a href="https://wiki.xenproject.org/wiki/Xen_Project_X.YY_Release_Notes">RN</a>
+: <a href="https://wiki.xenproject.org/wiki/Xen_Project_4.13_Release_Notes">RN</a>
 
 # Feature Support
 
@@ -64,6 +64,7 @@ supported in this document.
     Status, Intel VT-d: Supported
     Status, ARM SMMUv1: Supported
     Status, ARM SMMUv2: Supported
+    Status, Renesas IPMMU-VMSA: Tech Preview
 
 ### ARM/GICv3 ITS
 
@@ -236,16 +237,6 @@ Allow pages belonging to guests to be paged to disk
 
     Status, x86 HVM: Experimenal
 
-### Transcendent Memory
-
-Transcendent Memory (tmem) allows the creation of hypervisor memory pools
-which guests can use to store memory
-rather than caching in its own memory or swapping to disk.
-Having these in the hypervisor
-can allow more efficient aggregate use of memory across VMs.
-
-    Status: Experimental
-
 ### Alternative p2m
 
 Alternative p2m (altp2m) allows external monitoring of guest memory
@@ -263,6 +254,14 @@ with each pool having the capability
 of using different schedulers and scheduling properties.
 
     Status: Supported
+
+### Core Scheduling
+
+Allows to group virtual cpus into virtual cores which are scheduled on the
+physical cores. This results in never running different guests at the same
+time on the same physical core.
+
+    Status, x86: Experimental
 
 ### Credit Scheduler
 
@@ -382,6 +381,12 @@ Guest-side driver capable of speaking the Xen PV Framebuffer protocol
 
     Status, Linux (xen-fbfront): Supported
 
+### PV display (frontend)
+
+Guest-side driver capable of speaking the Xen PV display protocol
+
+    Status, Linux: Supported
+
 ### PV Console (frontend)
 
 Guest-side driver capable of speaking the Xen PV console protocol
@@ -394,7 +399,8 @@ Guest-side driver capable of speaking the Xen PV console protocol
 ### PV keyboard (frontend)
 
 Guest-side driver capable of speaking the Xen PV keyboard protocol.
-Note that the "keyboard protocol" includes mouse / pointer support as well.
+Note that the "keyboard protocol" includes mouse / pointer /
+multi-touch support as well.
 
     Status, Linux (xen-kbdfront): Supported
 
@@ -426,6 +432,12 @@ Guest-side driver capable of speaking the Xen 9pfs protocol
 Guest-side driver capable of making pv system calls
 
     Status, Linux: Tech Preview
+
+### PV sound (frontend)
+
+Guest-side driver capable of speaking the Xen PV sound protocol
+
+    Status, Linux: Supported
 
 ## Virtual device support, host side
 
@@ -669,6 +681,10 @@ No support for QEMU backends in a 16K or 64K domain.
 ### ARM: Guest ACPI support
 
     Status: Supported
+
+### Arm: OP-TEE Mediator
+
+    Status: Tech Preview
 
 ## Virtual Hardware, QEMU
 

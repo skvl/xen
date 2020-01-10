@@ -16,6 +16,17 @@
 # error "unknown ARM variant"
 #endif
 
+#define RODATA_STR(label, msg)                  \
+.pushsection .rodata.str, "aMS", %progbits, 1 ; \
+label:  .asciz msg;                             \
+.popsection
+
+#define ASM_INT(label, val)                 \
+    .p2align 2;                             \
+label: .long (val);                         \
+    .size label, . - label;                 \
+    .type label, %object
+
 #endif /* __ARM_ASM_DEFNS_H__ */
 /*
  * Local variables:

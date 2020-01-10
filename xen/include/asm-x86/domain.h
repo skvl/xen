@@ -83,7 +83,7 @@ void cpuid_policy_updated(struct vcpu *v);
  * Initialise a hypercall-transfer page. The given pointer must be mapped
  * in Xen virtual address space (accesses are not validated or checked).
  */
-void hypercall_page_initialise(struct domain *d, void *);
+void init_hypercall_page(struct domain *d, void *);
 
 /************************************************/
 /*          shadow paging extension             */
@@ -115,7 +115,6 @@ struct shadow_domain {
 
     /* OOS */
     bool_t oos_active;
-    bool_t oos_off;
 
     /* Has this domain ever used HVMOP_pagetable_dying? */
     bool_t pagetable_dying_op;
@@ -133,8 +132,6 @@ struct shadow_vcpu {
     l3_pgentry_t l3table[4] __attribute__((__aligned__(32)));
     /* PAE guests: per-vcpu cache of the top-level *guest* entries */
     l3_pgentry_t gl3e[4] __attribute__((__aligned__(32)));
-    /* Non-PAE guests: pointer to guest top-level pagetable */
-    void *guest_vtable;
     /* Last MFN that we emulated a write to as unshadow heuristics. */
     unsigned long last_emulated_mfn_for_unshadow;
     /* MFN of the last shadow that we shot a writeable mapping in */
@@ -298,10 +295,6 @@ struct arch_domain
     uint32_t pci_cf8;
     uint8_t cmos_idx;
 
-    bool_t s3_integrity;
-
-    struct list_head pdev_list;
-
     union {
         struct pv_domain pv;
         struct hvm_domain hvm;
@@ -309,20 +302,12 @@ struct arch_domain
 
     struct paging_domain paging;
     struct p2m_domain *p2m;
-    /* To enforce lock ordering in the pod code wrt the 
+    /* To enforce lock ordering in the pod code wrt the
      * page_alloc lock */
     int page_alloc_unlock_level;
 
     /* Continuable domain_relinquish_resources(). */
-    enum {
-        RELMEM_not_started,
-        RELMEM_shared,
-        RELMEM_xen,
-        RELMEM_l4,
-        RELMEM_l3,
-        RELMEM_l2,
-        RELMEM_done,
-    } relmem;
+    unsigned int rel_priv;
     struct page_list_head relmem_list;
 
     const struct arch_csw {
@@ -350,9 +335,6 @@ struct arch_domain
     bool_t is_32bit_pv;
     /* Is shared-info page in 32-bit format? */
     bool_t has_32bit_shinfo;
-
-    /* Domain cannot handle spurious page faults? */
-    bool_t suppress_spurious_page_faults;
 
     /* Is PHYSDEVOP_eoi to automatically unmask the event channel? */
     bool_t auto_unmask;
@@ -486,8 +468,6 @@ struct arch_domain
 #define has_pirq(d)        (!!((d)->arch.emulation_flags & X86_EMU_USE_PIRQ))
 #define has_vpci(d)        (!!((d)->arch.emulation_flags & X86_EMU_VPCI))
 
-#define has_arch_pdevs(d)    (!list_empty(&(d)->arch.pdev_list))
-
 #define gdt_ldt_pt_idx(v) \
       ((v)->vcpu_id >> (PAGETABLE_ORDER - GDT_LDT_VCPU_SHIFT))
 #define pv_gdt_ptes(v) \
@@ -591,6 +571,8 @@ struct arch_vcpu
     struct page_info *old_guest_table;  /* partially destructed pagetable */
     struct page_info *old_guest_ptpg;   /* containing page table of the */
                                         /* former, if any */
+    bool old_guest_table_partial;       /* Are we dropping a type ref, or just
+                                         * finishing up a partial de-validation? */
     /* guest_table holds a ref to the page, and also a type-count unless
      * shadow refcounts are in use */
     pagetable_t shadow_table[4];        /* (MFN) shadow(s) of guest */
@@ -652,17 +634,6 @@ bool update_secondary_system_time(struct vcpu *,
 
 void vcpu_show_execution_state(struct vcpu *);
 void vcpu_show_registers(const struct vcpu *);
-
-/* Clean up CR4 bits that are not under guest control. */
-unsigned long pv_guest_cr4_fixup(const struct vcpu *, unsigned long guest_cr4);
-
-/* Convert between guest-visible and real CR4 values. */
-unsigned long pv_guest_cr4_to_real_cr4(const struct vcpu *v);
-
-#define real_cr4_to_pv_guest_cr4(c)                         \
-    ((c) & ~(X86_CR4_PGE | X86_CR4_PSE | X86_CR4_TSD |      \
-             X86_CR4_OSXSAVE | X86_CR4_SMEP |               \
-             X86_CR4_FSGSBASE | X86_CR4_SMAP | X86_CR4_PCIDE))
 
 static inline struct vcpu_guest_context *alloc_vcpu_guest_context(void)
 {

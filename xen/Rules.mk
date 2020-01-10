@@ -41,6 +41,9 @@ ALL_OBJS-y               += $(BASEDIR)/xsm/built_in.o
 ALL_OBJS-y               += $(BASEDIR)/arch/$(TARGET_ARCH)/built_in.o
 ALL_OBJS-$(CONFIG_CRYPTO)   += $(BASEDIR)/crypto/built_in.o
 
+# Initialise some variables
+CFLAGS_UBSAN :=
+
 ifeq ($(CONFIG_DEBUG),y)
 CFLAGS += -O1
 else
@@ -138,7 +141,10 @@ $(filter-out %.init.o $(nocov-y),$(obj-y) $(obj-bin-y) $(extra-y)): CFLAGS += $(
 endif
 
 ifeq ($(CONFIG_UBSAN),y)
-$(filter-out %.init.o $(noubsan-y),$(obj-y) $(obj-bin-y) $(extra-y)): CFLAGS += -fsanitize=undefined
+CFLAGS_UBSAN += -fsanitize=undefined
+# Any -fno-sanitize= options need to come after any -fsanitize= options
+$(filter-out %.init.o $(noubsan-y),$(obj-y) $(obj-bin-y) $(extra-y)): \
+CFLAGS += $(filter-out -fno-%,$(CFLAGS_UBSAN)) $(filter -fno-%,$(CFLAGS_UBSAN))
 endif
 
 ifeq ($(CONFIG_LTO),y)
@@ -188,12 +194,24 @@ FORCE:
 
 .PHONY: clean
 clean:: $(addprefix _clean_, $(subdir-all))
-	rm -f *.o *~ core $(DEPS_RM)
+	rm -f *.o .*.o.tmp *~ core $(DEPS_RM)
 _clean_%/: FORCE
 	$(MAKE) -f $(BASEDIR)/Rules.mk -C $* clean
 
+SRCPATH := $(patsubst $(BASEDIR)/%,%,$(CURDIR))
+
 %.o: %.c Makefile
+ifeq ($(CONFIG_ENFORCE_UNIQUE_SYMBOLS),y)
+	$(CC) $(CFLAGS) -c $< -o $(@D)/.$(@F).tmp
+ifeq ($(clang),y)
+	$(OBJCOPY) --redefine-sym $<=$(SRCPATH)/$< $(@D)/.$(@F).tmp $@
+else
+	$(OBJCOPY) --redefine-sym $(<F)=$(SRCPATH)/$< $(@D)/.$(@F).tmp $@
+endif
+	rm -f $(@D)/.$(@F).tmp
+else
 	$(CC) $(CFLAGS) -c $< -o $@
+endif
 
 %.o: %.S Makefile
 	$(CC) $(AFLAGS) -c $< -o $@

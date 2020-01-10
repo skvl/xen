@@ -70,12 +70,22 @@
 #include "x86_mca.h"
 #include "mce_amd.h"
 #include "mcaction.h"
-#include "mce_quirks.h"
 #include "vmce.h"
 
-#define ANY -1
+#define ANY (~0U)
 
-static const struct mce_quirkdata mce_amd_quirks[] = {
+enum mcequirk_amd_flags {
+    MCEQUIRK_NONE,
+    MCEQUIRK_K8_GART,
+    MCEQUIRK_F10_GART,
+};
+
+static const struct mce_quirkdata {
+    unsigned int cpu_family;
+    unsigned int cpu_model;
+    unsigned int cpu_stepping;
+    enum mcequirk_amd_flags quirk;
+} mce_amd_quirks[] = {
     { 0xf /* cpu family */, ANY /* all models */, ANY /* all steppings */,
       MCEQUIRK_K8_GART },
     { 0x10 /* cpu family */, ANY /* all models */, ANY /* all steppings */,
@@ -157,10 +167,10 @@ bool mc_amd_addrcheck(uint64_t status, uint64_t misc, int addrtype)
 }
 
 /* MC quirks */
-enum mcequirk_amd_flags
-mcequirk_lookup_amd_quirkdata(struct cpuinfo_x86 *c)
+static enum mcequirk_amd_flags
+mcequirk_lookup_amd_quirkdata(const struct cpuinfo_x86 *c)
 {
-    int i;
+    unsigned int i;
 
     BUG_ON(c->x86_vendor != X86_VENDOR_AMD);
 
@@ -176,10 +186,11 @@ mcequirk_lookup_amd_quirkdata(struct cpuinfo_x86 *c)
                 continue;
         return mce_amd_quirks[i].quirk;
     }
-    return 0;
+
+    return MCEQUIRK_NONE;
 }
 
-int mcequirk_amd_apply(enum mcequirk_amd_flags flags)
+static void mcequirk_amd_apply(enum mcequirk_amd_flags flags)
 {
     uint64_t val;
 
@@ -197,11 +208,12 @@ int mcequirk_amd_apply(enum mcequirk_amd_flags flags)
 
     case MCEQUIRK_F10_GART:
         if ( rdmsr_safe(MSR_AMD64_MCx_MASK(4), val) == 0 )
-                wrmsr_safe(MSR_AMD64_MCx_MASK(4), val | (1 << 10));
+            wrmsr_safe(MSR_AMD64_MCx_MASK(4), val | (1 << 10));
         break;
-    }
 
-    return 0;
+    default:
+        ASSERT(flags == MCEQUIRK_NONE);
+    }
 }
 
 static struct mcinfo_extended *
@@ -274,7 +286,10 @@ enum mcheck_type
 amd_mcheck_init(struct cpuinfo_x86 *ci)
 {
     uint32_t i;
-    enum mcequirk_amd_flags quirkflag = mcequirk_lookup_amd_quirkdata(ci);
+    enum mcequirk_amd_flags quirkflag = 0;
+
+    if ( ci->x86_vendor != X86_VENDOR_HYGON )
+        quirkflag = mcequirk_lookup_amd_quirkdata(ci);
 
     /* Assume that machine check support is available.
      * The minimum provided support is at least the K8. */
@@ -282,7 +297,7 @@ amd_mcheck_init(struct cpuinfo_x86 *ci)
     x86_mce_vector_register(mcheck_cmn_handler);
     mce_need_clearbank_register(amd_need_clearbank_scan);
 
-    for ( i = 0; i < nr_mce_banks; i++ )
+    for ( i = 0; i < this_cpu(nr_mce_banks); i++ )
     {
         if ( quirkflag == MCEQUIRK_K8_GART && i == 4 )
             mcequirk_amd_apply(quirkflag);

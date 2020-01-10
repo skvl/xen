@@ -20,6 +20,8 @@
 #ifndef XENSTAT_H
 #define XENSTAT_H
 
+#include <stdbool.h>
+
 /* Opaque handles */
 typedef struct xenstat_handle xenstat_handle;
 typedef struct xenstat_domain xenstat_domain;
@@ -27,7 +29,6 @@ typedef struct xenstat_node xenstat_node;
 typedef struct xenstat_vcpu xenstat_vcpu;
 typedef struct xenstat_network xenstat_network;
 typedef struct xenstat_vbd xenstat_vbd;
-typedef struct xenstat_tmem xenstat_tmem;
 
 /* Initialize the xenstat library.  Returns a handle to be used with
  * subsequent calls to the xenstat library, or NULL if an error occurs. */
@@ -69,9 +70,6 @@ unsigned long long xenstat_node_tot_mem(xenstat_node * node);
 
 /* Get amount of free memory on a node */
 unsigned long long xenstat_node_free_mem(xenstat_node * node);
-
-/* Get amount of tmem freeable memory (in MiB) on a node */
-long xenstat_node_freeable_mb(xenstat_node * node);
 
 /* Find the number of domains existing on a node */
 unsigned int xenstat_node_num_domains(xenstat_node * node);
@@ -133,9 +131,6 @@ unsigned int xenstat_domain_num_vbds(xenstat_domain *);
 xenstat_vbd *xenstat_domain_vbd(xenstat_domain * domain,
 				    unsigned int vbd);
 
-/* Get the tmem information for a given domain */
-xenstat_tmem *xenstat_domain_tmem(xenstat_domain * domain);
-
 /*
  * VCPU functions - extract information from a xenstat_vcpu
  */
@@ -193,12 +188,7 @@ unsigned long long xenstat_vbd_wr_reqs(xenstat_vbd * vbd);
 unsigned long long xenstat_vbd_rd_sects(xenstat_vbd * vbd);
 unsigned long long xenstat_vbd_wr_sects(xenstat_vbd * vbd);
 
-/*
- * Tmem functions - extract tmem information
- */
-unsigned long long xenstat_tmem_curr_eph_pages(xenstat_tmem *tmem);
-unsigned long long xenstat_tmem_succ_eph_gets(xenstat_tmem *tmem);
-unsigned long long xenstat_tmem_succ_pers_puts(xenstat_tmem *tmem);
-unsigned long long xenstat_tmem_succ_pers_gets(xenstat_tmem *tmem);
+/* Returns error while getting stats (1 if error happened, 0 otherwise) */
+bool xenstat_vbd_error(xenstat_vbd * vbd);
 
 #endif /* XENSTAT_H */

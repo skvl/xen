@@ -18,7 +18,7 @@ include $(XEN_ROOT)/tools/Rules.mk
 LDCONFIG=ldconfig
 MAKE_LINK=ln -sf
 
-MAJOR=4.12
+MAJOR=4.13
 MINOR=0
 
 LIB=src/libxenstat.a
@@ -31,7 +31,7 @@ OBJECTS-$(CONFIG_NetBSD) += src/xenstat_netbsd.o
 OBJECTS-$(CONFIG_FreeBSD) += src/xenstat_freebsd.o
 SONAME_FLAGS=-Wl,$(SONAME_LDFLAG) -Wl,libxenstat.so.$(MAJOR)
 
-CFLAGS+=-fPIC
+CFLAGS+=-fPIC -Werror
 CFLAGS+=-Isrc $(CFLAGS_libxenctrl) $(CFLAGS_libxenstore) $(CFLAGS_xeninclude) -include $(XEN_ROOT)/tools/config.h
 
 LDLIBS-y = $(LDLIBS_libxenstore) $(LDLIBS_libxenctrl) -lyajl

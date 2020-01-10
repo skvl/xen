@@ -11,7 +11,15 @@
 
 #ifndef __ASSEMBLY__
 #include <xen/compiler.h>
+
+#if defined(CONFIG_ENFORCE_UNIQUE_SYMBOLS) || defined(__clang__)
+# define EMIT_FILE asm ( "" )
+#else
+# define EMIT_FILE asm ( ".file \"" __FILE__ "\"" )
 #endif
+
+#endif
+
 #include <asm/config.h>
 
 #define EXPORT_SYMBOL(var)
@@ -84,6 +92,11 @@
 
 #ifndef CONFIG_DEBUG
 #define NDEBUG
+#endif
+
+#ifndef ZERO_BLOCK_PTR
+/* Return value for zero-size allocation, distinguished from NULL. */
+#define ZERO_BLOCK_PTR ((void *)-1L)
 #endif
 
 #endif /* __XEN_CONFIG_H__ */

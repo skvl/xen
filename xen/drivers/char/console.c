@@ -36,7 +36,8 @@
 #ifdef CONFIG_X86
 #include <xen/consoled.h>
 #include <asm/guest.h>
-#else
+#endif
+#ifdef CONFIG_SBSA_VUART_CONSOLE
 #include <asm/vpl011.h>
 #endif
 
@@ -256,16 +257,14 @@ static void do_dec_thresh(unsigned char key, struct cpu_user_regs *regs)
  * ********************************************************
  */
 
-static void conring_puts(const char *str)
+static void conring_puts(const char *str, size_t len)
 {
-    char c;
-
     ASSERT(spin_is_locked(&console_lock));
 
-    while ( (c = *str++) != '\0' )
-        conring[CONRING_IDX_MASK(conringp++)] = c;
+    while ( len-- )
+        conring[CONRING_IDX_MASK(conringp++)] = *str++;
 
-    if ( (uint32_t)(conringp - conringc) > conring_size )
+    if ( conringp - conringc > conring_size )
         conringc = conringp - conring_size;
 }
 
@@ -325,9 +324,9 @@ long read_console_ring(struct xen_sysctl_readconsole *op)
 static char serial_rx_ring[SERIAL_RX_SIZE];
 static unsigned int serial_rx_cons, serial_rx_prod;
 
-static void (*serial_steal_fn)(const char *) = early_puts;
+static void (*serial_steal_fn)(const char *, size_t nr) = early_puts;
 
-int console_steal(int handle, void (*fn)(const char *))
+int console_steal(int handle, void (*fn)(const char *, size_t nr))
 {
     if ( (handle == -1) || (handle != sercon_handle) )
         return 0;
@@ -345,15 +344,15 @@ void console_giveback(int id)
         serial_steal_fn = NULL;
 }
 
-static void sercon_puts(const char *s)
+void console_serial_puts(const char *s, size_t nr)
 {
     if ( serial_steal_fn != NULL )
-        (*serial_steal_fn)(s);
+        serial_steal_fn(s, nr);
     else
-        serial_puts(sercon_handle, s);
+        serial_puts(sercon_handle, s, nr);
 
     /* Copy all serial output into PV console */
-    pv_console_puts(s);
+    pv_console_puts(s, nr);
 }
 
 static void dump_console_ring_key(unsigned char key)
@@ -386,10 +385,9 @@ static void dump_console_ring_key(unsigned char key)
         sofar += len;
         c += len;
     }
-    buf[sofar] = '\0';
 
-    sercon_puts(buf);
-    video_puts(buf);
+    console_serial_puts(buf, sofar);
+    video_puts(buf, sofar);
 
     free_xenheap_pages(buf, order);
 }
@@ -524,10 +522,11 @@ static inline void xen_console_write_debug_port(const char *buf, size_t len)
 }
 #endif
 
-static long guest_console_write(XEN_GUEST_HANDLE_PARAM(char) buffer, int count)
+static long guest_console_write(XEN_GUEST_HANDLE_PARAM(char) buffer,
+                                unsigned int count)
 {
     char kbuf[128];
-    int kcount = 0;
+    unsigned int kcount = 0;
     struct domain *cd = current->domain;
 
     while ( count > 0 )
@@ -537,34 +536,31 @@ static long guest_console_write(XEN_GUEST_HANDLE_PARAM(char) buffer, int count)
                 __HYPERVISOR_console_io, "iih",
                 CONSOLEIO_write, count, buffer);
 
-        kcount = min_t(int, count, sizeof(kbuf)-1);
+        kcount = min((size_t)count, sizeof(kbuf) - 1);
         if ( copy_from_guest(kbuf, buffer, kcount) )
             return -EFAULT;
-        kbuf[kcount] = '\0';
 
         if ( is_hardware_domain(cd) )
         {
             /* Use direct console output as it could be interactive */
             spin_lock_irq(&console_lock);
 
-            sercon_puts(kbuf);
-            video_puts(kbuf);
+            console_serial_puts(kbuf, kcount);
+            video_puts(kbuf, kcount);
 
 #ifdef CONFIG_X86
             if ( opt_console_xen )
             {
-                size_t len = strlen(kbuf);
-
                 if ( xen_guest )
-                    xen_hypercall_console_write(kbuf, len);
+                    xen_hypercall_console_write(kbuf, kcount);
                 else
-                    xen_console_write_debug_port(kbuf, len);
+                    xen_console_write_debug_port(kbuf, kcount);
             }
 #endif
 
             if ( opt_console_to_ring )
             {
-                conring_puts(kbuf);
+                conring_puts(kbuf, kcount);
                 tasklet_schedule(&notify_dom0_con_ring_tasklet);
             }
 
@@ -575,28 +571,24 @@ static long guest_console_write(XEN_GUEST_HANDLE_PARAM(char) buffer, int count)
             char *kin = kbuf, *kout = kbuf, c;
 
             /* Strip non-printable characters */
-            for ( ; ; )
+            do
             {
                 c = *kin++;
-                if ( c == '\0' || c == '\n' )
+                if ( c == '\n' )
                     break;
                 if ( isprint(c) || c == '\t' )
                     *kout++ = c;
-            }
+            } while ( --kcount > 0 );
+
             *kout = '\0';
             spin_lock(&cd->pbuf_lock);
-            if ( c == '\n' )
-            {
-                kcount = kin - kbuf;
-                cd->pbuf[cd->pbuf_idx] = '\0';
-                guest_printk(cd, XENLOG_G_DEBUG "%s%s\n", cd->pbuf, kbuf);
-                cd->pbuf_idx = 0;
-            }
-            else if ( cd->pbuf_idx + kcount < (DOMAIN_PBUF_SIZE - 1) )
+            kcount = kin - kbuf;
+            if ( c != '\n' &&
+                 (cd->pbuf_idx + (kout - kbuf) < (DOMAIN_PBUF_SIZE - 1)) )
             {
                 /* buffer the output until a newline */
-                memcpy(cd->pbuf + cd->pbuf_idx, kbuf, kcount);
-                cd->pbuf_idx += kcount;
+                memcpy(cd->pbuf + cd->pbuf_idx, kbuf, kout - kbuf);
+                cd->pbuf_idx += (kout - kbuf);
             }
             else
             {
@@ -614,7 +606,8 @@ static long guest_console_write(XEN_GUEST_HANDLE_PARAM(char) buffer, int count)
     return 0;
 }
 
-long do_console_io(int cmd, int count, XEN_GUEST_HANDLE_PARAM(char) buffer)
+long do_console_io(unsigned int cmd, unsigned int count,
+                   XEN_GUEST_HANDLE_PARAM(char) buffer)
 {
     long rc;
     unsigned int idx, len;
@@ -629,6 +622,15 @@ long do_console_io(int cmd, int count, XEN_GUEST_HANDLE_PARAM(char) buffer)
         rc = guest_console_write(buffer, count);
         break;
     case CONSOLEIO_read:
+        /*
+         * The return value is either the number of characters read or
+         * a negative value in case of error. So we need to prevent
+         * overlap between the two sets.
+         */
+        rc = -E2BIG;
+        if ( count > INT_MAX )
+            break;
+
         rc = 0;
         while ( (serial_rx_cons != serial_rx_prod) && (rc < count) )
         {
@@ -666,16 +668,16 @@ static bool_t console_locks_busted;
 
 static void __putstr(const char *str)
 {
+    size_t len = strlen(str);
+
     ASSERT(spin_is_locked(&console_lock));
 
-    sercon_puts(str);
-    video_puts(str);
+    console_serial_puts(str, len);
+    video_puts(str, len);
 
 #ifdef CONFIG_X86
     if ( opt_console_xen )
     {
-        size_t len = strlen(str);
-
         if ( xen_guest )
             xen_hypercall_console_write(str, len);
         else
@@ -683,7 +685,7 @@ static void __putstr(const char *str)
     }
 #endif
 
-    conring_puts(str);
+    conring_puts(str, len);
 
     if ( !console_locks_busted )
         tasklet_schedule(&notify_dom0_con_ring_tasklet);
@@ -934,6 +936,9 @@ void __init console_init_preirq(void)
            xen_compiler(), debug_build() ? 'y' : 'n', xen_compile_date());
     printk("Latest ChangeSet: %s\n", xen_changeset());
 
+    /* Locate and print the buildid, if applicable. */
+    xen_build_init();
+
     if ( opt_sync_console )
     {
         serial_start_sync(sercon_handle);
@@ -1153,159 +1158,7 @@ int printk_ratelimit(void)
 
 /*
  * **************************************************************
- * *************** Serial console ring buffer *******************
- * **************************************************************
- */
-
-#ifdef DEBUG_TRACE_DUMP
-
-/* Send output direct to console, or buffer it? */
-static volatile int debugtrace_send_to_console;
-
-static char        *debugtrace_buf; /* Debug-trace buffer */
-static unsigned int debugtrace_prd; /* Producer index     */
-static unsigned int debugtrace_kilobytes = 128, debugtrace_bytes;
-static unsigned int debugtrace_used;
-static DEFINE_SPINLOCK(debugtrace_lock);
-integer_param("debugtrace", debugtrace_kilobytes);
-
-static void debugtrace_dump_worker(void)
-{
-    if ( (debugtrace_bytes == 0) || !debugtrace_used )
-        return;
-
-    printk("debugtrace_dump() starting\n");
-
-    /* Print oldest portion of the ring. */
-    ASSERT(debugtrace_buf[debugtrace_bytes - 1] == 0);
-    sercon_puts(&debugtrace_buf[debugtrace_prd]);
-
-    /* Print youngest portion of the ring. */
-    debugtrace_buf[debugtrace_prd] = '\0';
-    sercon_puts(&debugtrace_buf[0]);
-
-    memset(debugtrace_buf, '\0', debugtrace_bytes);
-
-    printk("debugtrace_dump() finished\n");
-}
-
-static void debugtrace_toggle(void)
-{
-    unsigned long flags;
-
-    watchdog_disable();
-    spin_lock_irqsave(&debugtrace_lock, flags);
-
-    /*
-     * Dump the buffer *before* toggling, in case the act of dumping the
-     * buffer itself causes more printk() invocations.
-     */
-    printk("debugtrace_printk now writing to %s.\n",
-           !debugtrace_send_to_console ? "console": "buffer");
-    if ( !debugtrace_send_to_console )
-        debugtrace_dump_worker();
-
-    debugtrace_send_to_console = !debugtrace_send_to_console;
-
-    spin_unlock_irqrestore(&debugtrace_lock, flags);
-    watchdog_enable();
-
-}
-
-void debugtrace_dump(void)
-{
-    unsigned long flags;
-
-    watchdog_disable();
-    spin_lock_irqsave(&debugtrace_lock, flags);
-
-    debugtrace_dump_worker();
-
-    spin_unlock_irqrestore(&debugtrace_lock, flags);
-    watchdog_enable();
-}
-
-void debugtrace_printk(const char *fmt, ...)
-{
-    static char    buf[1024];
-    static u32 count;
-
-    va_list       args;
-    char         *p;
-    unsigned long flags;
-
-    if ( debugtrace_bytes == 0 )
-        return;
-
-    debugtrace_used = 1;
-
-    spin_lock_irqsave(&debugtrace_lock, flags);
-
-    ASSERT(debugtrace_buf[debugtrace_bytes - 1] == 0);
-
-    snprintf(buf, sizeof(buf), "%u ", ++count);
-
-    va_start(args, fmt);
-    (void)vsnprintf(buf + strlen(buf), sizeof(buf) - strlen(buf), fmt, args);
-    va_end(args);
-
-    if ( debugtrace_send_to_console )
-    {
-        serial_puts(sercon_handle, buf);
-    }
-    else
-    {
-        for ( p = buf; *p != '\0'; p++ )
-        {
-            debugtrace_buf[debugtrace_prd++] = *p;            
-            /* Always leave a nul byte at the end of the buffer. */
-            if ( debugtrace_prd == (debugtrace_bytes - 1) )
-                debugtrace_prd = 0;
-        }
-    }
-
-    spin_unlock_irqrestore(&debugtrace_lock, flags);
-}
-
-static void debugtrace_key(unsigned char key)
-{
-    debugtrace_toggle();
-}
-
-static int __init debugtrace_init(void)
-{
-    int order;
-    unsigned int kbytes, bytes;
-
-    /* Round size down to next power of two. */
-    while ( (kbytes = (debugtrace_kilobytes & (debugtrace_kilobytes-1))) != 0 )
-        debugtrace_kilobytes = kbytes;
-
-    bytes = debugtrace_kilobytes << 10;
-    if ( bytes == 0 )
-        return 0;
-
-    order = get_order_from_bytes(bytes);
-    debugtrace_buf = alloc_xenheap_pages(order, 0);
-    ASSERT(debugtrace_buf != NULL);
-
-    memset(debugtrace_buf, '\0', bytes);
-
-    debugtrace_bytes = bytes;
-
-    register_keyhandler('T', debugtrace_key,
-                        "toggle debugtrace to console/buffer", 0);
-
-    return 0;
-}
-__initcall(debugtrace_init);
-
-#endif /* !NDEBUG */
-
-
-/*
- * **************************************************************
- * *************** Debugging/tracing/error-report ***************
+ * ********************** Error-report **************************
  * **************************************************************
  */
 
@@ -1315,7 +1168,9 @@ void panic(const char *fmt, ...)
     unsigned long flags;
     static DEFINE_SPINLOCK(lock);
     static char buf[128];
-    
+
+    spin_debug_disable();
+    spinlock_profile_printall('\0');
     debugtrace_dump();
 
     /* Protects buf[] and ensure multi-line message prints atomically. */
@@ -1357,7 +1212,7 @@ void panic(const char *fmt, ...)
  * **************************************************************
  */
 
-static void suspend_steal_fn(const char *str) { }
+static void suspend_steal_fn(const char *str, size_t nr) { }
 static int suspend_steal_id;
 
 int console_suspend(void)

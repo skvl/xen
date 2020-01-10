@@ -238,7 +238,7 @@ static void __init noreturn efi_arch_post_exit_boot(void)
     asm volatile("pushq $0\n\tpopfq");
     rdmsrl(MSR_EFER, efer);
     efer |= EFER_SCE;
-    if ( cpuid_ext_features & cpufeat_mask(X86_FEATURE_NX) )
+    if ( cpu_has_nx )
         efer |= EFER_NX;
     wrmsrl(MSR_EFER, efer);
     write_cr0(X86_CR0_PE | X86_CR0_MP | X86_CR0_ET | X86_CR0_NE | X86_CR0_WP |
@@ -250,7 +250,7 @@ static void __init noreturn efi_arch_post_exit_boot(void)
                    "mov    %[cr4], %%cr4\n\t"
 #endif
                    "movabs $__start_xen, %[rip]\n\t"
-                   "lgdt   gdt_descr(%%rip)\n\t"
+                   "lgdt   boot_gdtr(%%rip)\n\t"
                    "mov    stack_start(%%rip), %%rsp\n\t"
                    "mov    %[ds], %%ss\n\t"
                    "mov    %[ds], %%ds\n\t"
@@ -528,9 +528,10 @@ static void __init efi_arch_video_init(EFI_GRAPHICS_OUTPUT_PROTOCOL *gop,
         bpp = set_color(mode_info->PixelInformation.BlueMask, bpp,
                         &vga_console_info.u.vesa_lfb.blue_pos,
                         &vga_console_info.u.vesa_lfb.blue_size);
-        bpp = set_color(mode_info->PixelInformation.ReservedMask, bpp,
-                        &vga_console_info.u.vesa_lfb.rsvd_pos,
-                        &vga_console_info.u.vesa_lfb.rsvd_size);
+        if ( mode_info->PixelInformation.ReservedMask )
+            bpp = set_color(mode_info->PixelInformation.ReservedMask, bpp,
+                            &vga_console_info.u.vesa_lfb.rsvd_pos,
+                            &vga_console_info.u.vesa_lfb.rsvd_size);
         if ( bpp > 0 )
             break;
         /* fall through */
@@ -550,6 +551,7 @@ static void __init efi_arch_video_init(EFI_GRAPHICS_OUTPUT_PROTOCOL *gop,
         vga_console_info.u.vesa_lfb.bytes_per_line =
             (mode_info->PixelsPerScanLine * bpp + 7) >> 3;
         vga_console_info.u.vesa_lfb.lfb_base = gop->Mode->FrameBufferBase;
+        vga_console_info.u.vesa_lfb.ext_lfb_base = gop->Mode->FrameBufferBase >> 32;
         vga_console_info.u.vesa_lfb.lfb_size =
             (gop->Mode->FrameBufferSize + 0xffff) >> 16;
     }
@@ -635,12 +637,16 @@ static void __init efi_arch_handle_module(struct file *file, const CHAR16 *name,
 static void __init efi_arch_cpu(void)
 {
     uint32_t eax = cpuid_eax(0x80000000);
+    uint32_t *caps = boot_cpu_data.x86_capability;
+
+    caps[cpufeat_word(X86_FEATURE_HYPERVISOR)] = cpuid_ecx(1);
 
     if ( (eax >> 16) == 0x8000 && eax > 0x80000000 )
     {
-        cpuid_ext_features = cpuid_edx(0x80000001);
-        boot_cpu_data.x86_capability[cpufeat_word(X86_FEATURE_SYSCALL)]
-            = cpuid_ext_features;
+        caps[cpufeat_word(X86_FEATURE_SYSCALL)] = cpuid_edx(0x80000001);
+
+        if ( cpu_has_nx )
+            trampoline_efer |= EFER_NX;
     }
 }
 
